@@ -57,6 +57,14 @@ def _registered_commands() -> dict[str, object]:
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     assert runner.invoke(app, ["init"]).exit_code == 0
+    # The probe verb below is `relate a references b`. A commit-phase verb
+    # (ADR-0036) takes the lock only after it has resolved its arguments, so
+    # the two concepts must exist for the run to reach the commit at all.
+    for concept in ("a", "b"):
+        (tmp_path / "bundle" / f"{concept}.md").write_text(
+            f"---\ntype: Concept\ntitle: {concept.upper()}\n---\n\nBody.\n",
+            encoding="utf-8",
+        )
 
 
 def test_every_command_is_classified() -> None:
@@ -153,7 +161,7 @@ def test_a_mutating_command_refuses_while_another_process_holds_the_lock(
         assert holder.stdout is not None
         assert holder.stdout.readline().strip() == "ACQUIRED"
 
-        result = runner.invoke(app, ["relate", "a", "references", "b"])
+        result = runner.invoke(app, ["relate", "a", "references", "b", "--auto"])
 
         assert result.exit_code == 3
         assert "another OpenKOS process is modifying this workspace" in result.stderr
@@ -258,7 +266,7 @@ def test_an_untrusted_lock_directory_is_a_refusal_with_exit_1_not_a_traceback(
     directory.mkdir()
     directory.chmod(0o755)
 
-    result = runner.invoke(app, ["relate", "a", "references", "b"])
+    result = runner.invoke(app, ["relate", "a", "references", "b", "--auto"])
 
     assert result.exit_code == 1
     assert result.exception is None or isinstance(result.exception, SystemExit)
@@ -293,7 +301,7 @@ def test_derived_store_contention_in_a_locked_verb_exits_3_with_the_neutral_mess
         "openkos.cli.main.application_lifecycle.resolve_concept_path", _raise_locked
     )
 
-    result = runner.invoke(app, ["relate", "a", "references", "b"])
+    result = runner.invoke(app, ["relate", "a", "references", "b", "--auto"])
 
     assert result.exit_code == 3
     assert result.stderr == _DERIVED_STORE_MESSAGE
@@ -313,7 +321,7 @@ def test_a_non_contention_operational_error_in_a_locked_verb_is_not_exit_3(
         "openkos.cli.main.application_lifecycle.resolve_concept_path", _raise
     )
 
-    result = runner.invoke(app, ["relate", "a", "references", "b"])
+    result = runner.invoke(app, ["relate", "a", "references", "b", "--auto"])
 
     assert result.exit_code != 3
     assert isinstance(result.exception, sqlite3.OperationalError)
@@ -378,7 +386,9 @@ def test_a_bad_wait_value_is_a_usage_error_before_any_work(
 ) -> None:
     _init_workspace(tmp_path, monkeypatch)
 
-    result = runner.invoke(app, ["relate", "a", "references", "b", "--wait", value])
+    result = runner.invoke(
+        app, ["relate", "a", "references", "b", "--auto", "--wait", value]
+    )
 
     assert result.exit_code == 2
     assert "Invalid value for '--wait'" in result.output
@@ -400,8 +410,10 @@ def test_wait_zero_equals_the_default_fail_fast(
         assert holder.stdout is not None
         assert holder.stdout.readline().strip() == "ACQUIRED"
 
-        default = runner.invoke(app, ["relate", "a", "references", "b"])
-        zero = runner.invoke(app, ["relate", "a", "references", "b", "--wait", "0"])
+        default = runner.invoke(app, ["relate", "a", "references", "b", "--auto"])
+        zero = runner.invoke(
+            app, ["relate", "a", "references", "b", "--auto", "--wait", "0"]
+        )
 
         assert default.exit_code == zero.exit_code == 3
         assert zero.stderr == default.stderr
@@ -427,7 +439,9 @@ def test_an_expired_wait_exits_3_with_one_waiting_line(
         assert holder.stdout is not None
         assert holder.stdout.readline().strip() == "ACQUIRED"
 
-        result = runner.invoke(app, ["relate", "a", "references", "b", "--wait", "1"])
+        result = runner.invoke(
+            app, ["relate", "a", "references", "b", "--auto", "--wait", "1"]
+        )
 
         assert result.exit_code == 3
         assert "another OpenKOS process is modifying this workspace" in result.stderr
@@ -445,7 +459,7 @@ def test_a_wait_succeeds_once_the_holder_releases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _init_workspace(tmp_path, monkeypatch)
-    free = runner.invoke(app, ["relate", "a", "references", "b"])
+    free = runner.invoke(app, ["relate", "a", "references", "b", "--auto"])
     assert free.exit_code != 3, free.stderr
     holder = subprocess.Popen(  # noqa: S603
         [sys.executable, "-c", _TIMED_HOLDER, str(tmp_path), "1"],
@@ -457,7 +471,9 @@ def test_a_wait_succeeds_once_the_holder_releases(
         assert holder.stdout is not None
         assert holder.stdout.readline().strip() == "ACQUIRED"
 
-        result = runner.invoke(app, ["relate", "a", "references", "b", "--wait", "10"])
+        result = runner.invoke(
+            app, ["relate", "a", "references", "b", "--auto", "--wait", "10"]
+        )
 
         # The body ran (not a lock refusal) and ended as it does when unheld.
         assert result.exit_code == free.exit_code

@@ -35,6 +35,19 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- `merge`, `unmerge`, `forget`, `relate`, `set-sensitivity` and
+  `set-volatility` no longer hold the workspace lock while they wait at a
+  confirmation prompt or on a model call: they plan and ask with no lock and
+  take it only to write, so another OpenKOS process is not refused while you
+  read a preview. Because nothing excludes other writers during that window,
+  the write step now also re-checks the documents the plan only read -- the
+  bundle scan behind `forget`'s inbound-reference gate and `merge`'s link
+  rewrites, a Source's descendants for `set-sensitivity`, the target of a
+  `relate` -- and refuses with exit `3` (nothing written, safe to re-run) when
+  one changed or a new document appeared. `unmerge` likewise refuses with exit
+  `3`, before writing anything, when a file appears at the path it was about to
+  restore, where it used to stop partway through
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - A derived-store lock contention (`vectors.db`, `fts.db`, `graph.db` or
   `findings.db` still busy after the busy timeout) now exits `3`, the
   retry-safe refusal, instead of `1`, for `reindex` and every other locked

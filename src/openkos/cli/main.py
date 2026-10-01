@@ -1,5 +1,6 @@
 """Typer application object exposed as the `openkos` console script."""
 
+import contextvars
 import dataclasses
 import functools
 import glob
@@ -12,7 +13,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
@@ -26,6 +27,7 @@ from rich.console import Console
 from openkos import config, fsio, lock, read_outcome, source_date, source_title
 from openkos import lint as lint_check
 from openkos.application import backends as application_backends
+from openkos.application import commit_phase as application_commit_phase
 from openkos.application import (
     contradictions_service,
     duplicates_service,
@@ -402,10 +404,49 @@ def _add_wait_option(wrapper: Callable[..., object], fn: Callable[..., object]) 
     wrapper.__annotations__ = {**fn.__annotations__, _WAIT_PARAM: int}
 
 
+_COMMIT_SECTION: contextvars.ContextVar[lock_wait.CommitSection | None] = (
+    contextvars.ContextVar("openkos_commit_section", default=None)
+)
+"""The `CommitSection` the guard built for the verb now running (ADR-0036).
+
+Set only for a verb declared `commit_phase=True`: such a verb computes its plan
+and asks its questions with NO lock, then enters this section for its commit
+phase alone. A context variable, not a parameter, because Typer reads the
+wrapper's signature and the body must not see a hidden argument."""
+
+
+def _commit_section() -> lock_wait.CommitSection:
+    """The commit section of the running `commit_phase` verb, bound to its
+    `--wait` policy. Calling it outside such a verb is a programming error, not
+    a silent unlocked write."""
+    section = _COMMIT_SECTION.get()
+    if section is None:
+        raise RuntimeError(
+            "no commit section: only a verb guarded with commit_phase=True may "
+            "enter one"
+        )
+    return section
+
+
+def _commit_phase() -> AbstractContextManager[None]:
+    """Enter the running verb's commit phase: `with _commit_phase():` holds the
+    workspace lock (under this run's `--wait` policy) for the block and nothing
+    else. A busy lock raises `WorkspaceBusyError` before the block runs, which
+    the guard maps to exit 3."""
+    return _commit_section()()
+
+
 def _guard_workspace_lock(
-    command_name: str,
+    command_name: str, *, commit_phase: bool = False
 ) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
     """Hold the workspace's exclusive mutation lock for one command's body (#925).
+
+    With `commit_phase=True` the lock is NOT held for the body (ADR-0036): the
+    guard instead publishes a `CommitSection` (`_commit_section()`) that takes
+    the lock under this run's `--wait` policy, and the verb enters it around
+    its commit phase only -- so a confirmation prompt or a model call never
+    blocks another writer. Every refusal below still applies, because a busy
+    lock now surfaces from inside the body.
 
     Applied UNDER `@app.command(...)`, so Typer registers the wrapper and reads
     its signature through `functools.wraps` -- options, arguments, and the
@@ -433,6 +474,16 @@ def _guard_workspace_lock(
             wait = cast(int, kwargs.pop(_WAIT_PARAM, 0))
             root = Path.cwd()
             if config.require_workspace(root) is not None:
+                if commit_phase:
+                    # No workspace, so the body refuses before any commit
+                    # phase; the section it asks for is never entered.
+                    token = _COMMIT_SECTION.set(
+                        application_commit_phase.unlocked_section
+                    )
+                    try:
+                        return fn(*args, **kwargs)
+                    finally:
+                        _COMMIT_SECTION.reset(token)
                 return fn(*args, **kwargs)
 
             def announce_wait() -> None:
@@ -443,6 +494,16 @@ def _guard_workspace_lock(
                 )
 
             try:
+                if commit_phase:
+                    token = _COMMIT_SECTION.set(
+                        lock_wait.locked_commit_section(
+                            root, wait_seconds=wait, on_wait=announce_wait
+                        )
+                    )
+                    try:
+                        return fn(*args, **kwargs)
+                    finally:
+                        _COMMIT_SECTION.reset(token)
                 with lock_wait.acquire_with_backoff(
                     root, wait_seconds=wait, on_wait=announce_wait
                 ):
@@ -479,6 +540,7 @@ def _guard_workspace_lock(
 
         _add_wait_option(wrapper, fn)
         wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
+        wrapper.__openkos_commit_phase__ = commit_phase  # type: ignore[attr-defined]
         return wrapper
 
     return decorate
@@ -1176,6 +1238,30 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
         )
         touched.append(decisions_path)
     return touched
+
+
+def _refresh_derived_after_write_quietly(root: Path, verb: str) -> None:
+    """The `after_commit` port of a service-backed verb: the #640 derived
+    refresh, whose freshness verdict the service has no use for. `cfg=None` --
+    these verbs never read config; the helper reads its own copy inside the
+    vector stage's fail-open envelope."""
+    _refresh_derived_after_write(config.WorkspaceLayout(root), None, verb=verb)
+
+
+def _reject_read_drift(
+    layout: config.WorkspaceLayout,
+    dependencies: application_commit_phase.ReadDependencies,
+    verb: str,
+) -> None:
+    """Refuse the whole run (exit 3, nothing written) when a document the plan
+    only READ changed, vanished or newly appeared since it was computed
+    (ADR-0036). The decision lives in `application.commit_phase`; this wrapper
+    prints it and exits, exactly like `_reject_drifted_targets`."""
+    message = application_commit_phase.describe_read_drift(layout, dependencies, verb)
+    if message is None:
+        return
+    typer.echo(message, err=True)
+    raise typer.Exit(code=3)
 
 
 def _reject_drifted_targets(
@@ -4836,7 +4922,7 @@ _ForgetScope = Literal["self", "source"]
     ),
     rich_help_panel="Remove",
 )
-@_guard_workspace_lock("forget")
+@_guard_workspace_lock("forget", commit_phase=True)
 def forget(
     concept_id: str = typer.Argument(
         ..., help="Bundle-relative concept id (path minus '.md') to remove."
@@ -5127,156 +5213,188 @@ def forget(
             typer.echo(plan.confirmation.non_tty_refusal, err=True)
             raise typer.Exit(code=1)
 
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    #
-    # The DELETE targets are in here too, not just the two `write_atomic`
-    # ones -- and this comment is the ONE copy of the why (#320: three
-    # copies of this rationale each over-claimed). `forget` picks its purge
-    # set from the Phase-A bundle snapshot and then unlinks those exact
-    # paths, so an edit landing during the prompt is destroyed outright --
-    # strictly worse than being overwritten, since nothing survives to
-    # recover from -- and a `provenance:` edit on a member is drift in that
-    # member's own claim to purge-set membership. Either alone justifies
-    # guarding the delete targets. It is also ALL the guard delivers: it
-    # re-reads only this mapping's paths, so an inbound reference gained
-    # during the prompt -- which lives in a REFERRER file, by construction
-    # outside the purge set, since the gate above drops intra-set referrers
-    # -- is not caught, and neither is a brand-new `.md` file created
-    # during the prompt: additive drift has no baseline here.
-    _reject_drifted_targets(
-        layout,
-        {
-            index_path: plan.index_bytes,
-            log_path: plan.log_bytes,
-            concept_path: plan.concept_bytes,
-            **{
-                # Defensive fail-closed lookup (see `_require_member_baseline`):
-                # today the key exists by construction, but a missing baseline
-                # must refuse cleanly, never `KeyError` mid-gate.
-                layout.bundle_dir / f"{member}.md": _require_member_baseline(
-                    "forget", plan.other_bytes, member
-                )
-                for member in plan.purge_ids
-                if member != canonical_id
+    with _commit_phase():
+        # Issue #313: every byte below was computed from a pre-prompt read, so
+        # re-validate each target now -- after the gate, before the first write.
+        #
+        # The DELETE targets are in here too, not just the two `write_atomic`
+        # ones -- and this comment is the ONE copy of the why (#320: three
+        # copies of this rationale each over-claimed). `forget` picks its purge
+        # set from the Phase-A bundle snapshot and then unlinks those exact
+        # paths, so an edit landing during the prompt is destroyed outright --
+        # strictly worse than being overwritten, since nothing survives to
+        # recover from -- and a `provenance:` edit on a member is drift in that
+        # member's own claim to purge-set membership. Either alone justifies
+        # guarding the delete targets. It is also ALL this guard delivers: it
+        # re-reads only this mapping's paths, so an inbound reference gained
+        # during the prompt -- which lives in a REFERRER file, by construction
+        # outside the purge set, since the gate above drops intra-set referrers
+        # -- is not caught here, and neither is a brand-new `.md` file created
+        # during the prompt: additive drift has no baseline in this mapping.
+        # Both are caught by the read-dependency check below (ADR-0036).
+        _reject_drifted_targets(
+            layout,
+            {
+                index_path: plan.index_bytes,
+                log_path: plan.log_bytes,
+                concept_path: plan.concept_bytes,
+                **{
+                    # Defensive fail-closed lookup (see `_require_member_baseline`):
+                    # today the key exists by construction, but a missing baseline
+                    # must refuse cleanly, never `KeyError` mid-gate.
+                    layout.bundle_dir / f"{member}.md": _require_member_baseline(
+                        "forget", plan.other_bytes, member
+                    )
+                    for member in plan.purge_ids
+                    if member != canonical_id
+                },
+                # deprecated-status-export (issue #1075): every resurrection
+                # target this run will REWRITE is also a write target, so its
+                # pre-prompt baseline joins the guard exactly like a purge-set
+                # member's does.
+                **{
+                    layout.bundle_dir
+                    / f"{withdrawal.target}.md": _require_member_baseline(
+                        "forget", plan.other_bytes, withdrawal.target
+                    )
+                    for withdrawal in plan.status_withdrawals
+                },
             },
-            # deprecated-status-export (issue #1075): every resurrection
-            # target this run will REWRITE is also a write target, so its
-            # pre-prompt baseline joins the guard exactly like a purge-set
-            # member's does.
-            **{
-                layout.bundle_dir / f"{withdrawal.target}.md": _require_member_baseline(
-                    "forget", plan.other_bytes, withdrawal.target
-                )
-                for withdrawal in plan.status_withdrawals
-            },
-        },
-        "forget",
-        # #319: the purge-set members are UNLINKED below, not written --
-        # `deletes` is what makes the refusal say so. Built the same way the
-        # unlink loop builds its paths (`bundle_dir / f"{member}.md"`, with
-        # `concept_path` standing in for the canonical root), so the labels
-        # track Phase B by construction.
-        deletes=frozenset(
-            {concept_path}
-            | {
-                layout.bundle_dir / f"{member}.md"
-                for member in plan.purge_ids
-                if member != canonical_id
-            }
-        ),
-    )
-
-    ledger_touched: list[Path] = []
-    decisions_touched: list[Path] = []
-    try:
-        application_lifecycle.forget_core(layout, plan)
-        # Merge-ledger sidecar privacy sweep (forget-command spec:
-        # "Deletion Sweep Includes Ledger Storage"), same Phase B write:
-        # a purge-set member's content must not survive `forget` merely
-        # because it was previously absorbed into (or is the survivor of)
-        # a merge. Stays adapter-side (shared with `purge`'s own Phase B),
-        # so it runs immediately after `forget_core`'s write, inside the
-        # SAME try/except.
-        ledger_touched = _sweep_ledger_sidecars_for_ids(
-            layout.bundle_dir, plan.purge_ids
-        )
-        # Pending-work decision sweep (forget-command spec: "Forget Sweeps
-        # Live Decision Entries Referencing The Purge Set"), same Phase B
-        # write: a purge-set member's contradiction decision must not
-        # survive `forget` merely because the record lives under a
-        # different (live) concept's sidecar. `forget` performs no history
-        # rewrite, so this call IS the entire sweep for it (unlike
-        # `purge`, which also puts these paths into `expunge_targets`).
-        decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, plan.purge_ids)
-        # Persisted-findings privacy sweep (#685 item 1), same Phase B:
-        # a derived cache only (never autocommitted), and it degrades to a
-        # loud warning internally rather than raising into this block --
-        # the bundle deletes above must not be reported as failed over a
-        # recomputable cache.
-        _sweep_findings_for_ids(layout, plan.purge_ids)
-    except (OSError, ValueError) as exc:
-        message = f"openkos forget: failed while writing the forget -- {exc}."
-        # K-of-N observability on a mid-cascade unlink failure (`--scope
-        # source`): only enrich when there is more than one purge-set
-        # member to report on, so the `self`/single-member message stays
-        # byte-identical. `forget_core` carries the exact count out on
-        # `PartialForgetWrite`; anything else reaching this arm came from
-        # the three sweeps BELOW `forget_core`, by which point every unlink
-        # had already succeeded -- hence the full-count default. Do not
-        # re-derive this by probing the filesystem here: `Path.exists()`
-        # re-raises `EACCES` (see `_purge_store_is_gone`), and a probe
-        # inside this handler would replace the operator's diagnosis with a
-        # traceback in exactly the permission failure that opened it.
-        if len(plan.purge_ids) > 1:
-            unlinked_count = getattr(exc, "unlinked_count", len(plan.purge_ids))
-            remaining = len(plan.purge_ids) - unlinked_count
-            message += (
-                f" removed {unlinked_count} of {len(plan.purge_ids)} concept(s) "
-                f"before failing; {remaining} remain (recover with git or "
-                "'openkos lint')."
-            )
-        typer.echo(message, err=True)
-        raise typer.Exit(code=1) from exc
-
-    if scope == "source":
-        deleted_paths = ", ".join(f"bundle/{member}.md" for member in plan.purge_ids)
-        typer.echo(
-            f"openkos forget: removed {len(plan.purge_ids)} concept(s) "
-            f"({deleted_paths}) ({index_path.name}, {log_path.name} updated)."
-        )
-    else:
-        typer.echo(
-            f"openkos forget: removed 'bundle/{canonical_id}.md' "
-            f"({index_path.name}, {log_path.name} updated)."
-        )
-
-    forget_message = f"openkos: forget {canonical_id}"
-    if len(plan.purge_ids) > 1:
-        forget_message += f" (+{len(plan.purge_ids) - 1} descendants)"
-    forget_sha = _autocommit(
-        root,
-        [
-            "bundle/index.md",
-            "bundle/log.md",
-            *(f"bundle/{member}.md" for member in plan.purge_ids),
-            *(
-                f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
-                for p in (*ledger_touched, *decisions_touched)
+            "forget",
+            # #319: the purge-set members are UNLINKED below, not written --
+            # `deletes` is what makes the refusal say so. Built the same way the
+            # unlink loop builds its paths (`bundle_dir / f"{member}.md"`, with
+            # `concept_path` standing in for the canonical root), so the labels
+            # track Phase B by construction.
+            deletes=frozenset(
+                {concept_path}
+                | {
+                    layout.bundle_dir / f"{member}.md"
+                    for member in plan.purge_ids
+                    if member != canonical_id
+                }
             ),
-        ],
-        forget_message,
-    )
-    # #800: after the removal line above, never instead of it -- `forget`
-    # echoes what it removed before `_autocommit` runs, so this reads as the
-    # postscript it is. Silent when `_autocommit` degraded: a workspace with
-    # no git identity must not be sent after a commit that was never made.
-    if forget_sha is not None:
-        _echo_commit_disclosure(forget_sha, prefix="openkos forget: ")
+        )
 
-    # #640: also prunes the forgotten concept(s) from `vectors.db` via the
-    # vector stage's prune pass, not only the manifest-gated stores.
-    _refresh_derived_after_write(layout, cfg, verb="forget")
+        # ADR-0036: the reference scan above read EVERY other bundle document, and
+        # the whole-verb lock no longer keeps another writer from changing one. A
+        # referrer that lands during the prompt lives outside the drift targets
+        # (the gate drops intra-set referrers), so it is declared a read
+        # dependency here, and a document that appeared since the snapshot -- which
+        # has no baseline -- is refused too.
+        _written_ids = set(plan.purge_ids) | {
+            withdrawal.target for withdrawal in plan.status_withdrawals
+        }
+        _reject_read_drift(
+            layout,
+            application_commit_phase.ReadDependencies(
+                present={
+                    layout.bundle_dir / rel: data
+                    for rel, data in plan.other_bytes.items()
+                    if rel.removesuffix(".md") not in _written_ids
+                },
+                documents=frozenset(
+                    {concept_path}
+                    | {layout.bundle_dir / rel for rel in plan.other_bytes}
+                ),
+            ),
+            "forget",
+        )
+
+        ledger_touched: list[Path] = []
+        decisions_touched: list[Path] = []
+        try:
+            application_lifecycle.forget_core(layout, plan)
+            # Merge-ledger sidecar privacy sweep (forget-command spec:
+            # "Deletion Sweep Includes Ledger Storage"), same Phase B write:
+            # a purge-set member's content must not survive `forget` merely
+            # because it was previously absorbed into (or is the survivor of)
+            # a merge. Stays adapter-side (shared with `purge`'s own Phase B),
+            # so it runs immediately after `forget_core`'s write, inside the
+            # SAME try/except.
+            ledger_touched = _sweep_ledger_sidecars_for_ids(
+                layout.bundle_dir, plan.purge_ids
+            )
+            # Pending-work decision sweep (forget-command spec: "Forget Sweeps
+            # Live Decision Entries Referencing The Purge Set"), same Phase B
+            # write: a purge-set member's contradiction decision must not
+            # survive `forget` merely because the record lives under a
+            # different (live) concept's sidecar. `forget` performs no history
+            # rewrite, so this call IS the entire sweep for it (unlike
+            # `purge`, which also puts these paths into `expunge_targets`).
+            decisions_touched = _sweep_decisions_for_ids(
+                layout.bundle_dir, plan.purge_ids
+            )
+            # Persisted-findings privacy sweep (#685 item 1), same Phase B:
+            # a derived cache only (never autocommitted), and it degrades to a
+            # loud warning internally rather than raising into this block --
+            # the bundle deletes above must not be reported as failed over a
+            # recomputable cache.
+            _sweep_findings_for_ids(layout, plan.purge_ids)
+        except (OSError, ValueError) as exc:
+            message = f"openkos forget: failed while writing the forget -- {exc}."
+            # K-of-N observability on a mid-cascade unlink failure (`--scope
+            # source`): only enrich when there is more than one purge-set
+            # member to report on, so the `self`/single-member message stays
+            # byte-identical. `forget_core` carries the exact count out on
+            # `PartialForgetWrite`; anything else reaching this arm came from
+            # the three sweeps BELOW `forget_core`, by which point every unlink
+            # had already succeeded -- hence the full-count default. Do not
+            # re-derive this by probing the filesystem here: `Path.exists()`
+            # re-raises `EACCES` (see `_purge_store_is_gone`), and a probe
+            # inside this handler would replace the operator's diagnosis with a
+            # traceback in exactly the permission failure that opened it.
+            if len(plan.purge_ids) > 1:
+                unlinked_count = getattr(exc, "unlinked_count", len(plan.purge_ids))
+                remaining = len(plan.purge_ids) - unlinked_count
+                message += (
+                    f" removed {unlinked_count} of {len(plan.purge_ids)} concept(s) "
+                    f"before failing; {remaining} remain (recover with git or "
+                    "'openkos lint')."
+                )
+            typer.echo(message, err=True)
+            raise typer.Exit(code=1) from exc
+
+        if scope == "source":
+            deleted_paths = ", ".join(
+                f"bundle/{member}.md" for member in plan.purge_ids
+            )
+            typer.echo(
+                f"openkos forget: removed {len(plan.purge_ids)} concept(s) "
+                f"({deleted_paths}) ({index_path.name}, {log_path.name} updated)."
+            )
+        else:
+            typer.echo(
+                f"openkos forget: removed 'bundle/{canonical_id}.md' "
+                f"({index_path.name}, {log_path.name} updated)."
+            )
+
+        forget_message = f"openkos: forget {canonical_id}"
+        if len(plan.purge_ids) > 1:
+            forget_message += f" (+{len(plan.purge_ids) - 1} descendants)"
+        forget_sha = _autocommit(
+            root,
+            [
+                "bundle/index.md",
+                "bundle/log.md",
+                *(f"bundle/{member}.md" for member in plan.purge_ids),
+                *(
+                    f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
+                    for p in (*ledger_touched, *decisions_touched)
+                ),
+            ],
+            forget_message,
+        )
+        # #800: after the removal line above, never instead of it -- `forget`
+        # echoes what it removed before `_autocommit` runs, so this reads as the
+        # postscript it is. Silent when `_autocommit` degraded: a workspace with
+        # no git identity must not be sent after a commit that was never made.
+        if forget_sha is not None:
+            _echo_commit_disclosure(forget_sha, prefix="openkos forget: ")
+
+        # #640: also prunes the forgotten concept(s) from `vectors.db` via the
+        # vector stage's prune pass, not only the manifest-gated stores.
+        _refresh_derived_after_write(layout, cfg, verb="forget")
 
 
 _PurgeScope = Literal["self", "source"]
@@ -6108,7 +6226,7 @@ def purge(
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("relate")
+@_guard_workspace_lock("relate", commit_phase=True)
 def relate(
     source_id: str = typer.Argument(
         ...,
@@ -6212,6 +6330,13 @@ def relate(
                 f"resolved to {source_canonical!r}"
             )
         rel_type = validate_relation_type(rel)
+        # ADR-0036: the resolve above proved the target EXISTS, which is all a
+        # plain relation depends on (a `supersedes` edge also reads it as a
+        # write target). Its bytes are the baseline the commit phase
+        # re-validates, so a target forgotten during the prompt is refused
+        # rather than left as a dangling relation. Read BEFORE the plan, so a
+        # change landing in between compares unequal (fail closed).
+        target_baseline, _ = fsio.snapshot_read(target_path)
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos relate: refusing to relate -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
@@ -6272,42 +6397,51 @@ def relate(
 
     # Issue #313: every byte below was computed from a pre-prompt read, so
     # re-validate each target now -- after the gate, before the first write.
-    drift_baselines = {
-        source_path: prepared.source_bytes,
-        log_path: prepared.log_bytes,
-    }
-    if prepared.target_bytes is not None:
-        drift_baselines[target_path] = prepared.target_bytes
-    _reject_drifted_targets(layout, drift_baselines, "relate")
+    with _commit_phase():
+        drift_baselines = {
+            source_path: prepared.source_bytes,
+            log_path: prepared.log_bytes,
+        }
+        if prepared.target_bytes is not None:
+            drift_baselines[target_path] = prepared.target_bytes
+        _reject_drifted_targets(layout, drift_baselines, "relate")
+        if prepared.target_bytes is None:
+            _reject_read_drift(
+                layout,
+                application_commit_phase.ReadDependencies(
+                    present={target_path: target_baseline}
+                ),
+                "relate",
+            )
 
-    try:
-        application_lifecycle.relate_core(
-            source_path, log_path, prepared, target_path=target_path
-        )
-    except (OSError, ValueError) as exc:
+        try:
+            application_lifecycle.relate_core(
+                source_path, log_path, prepared, target_path=target_path
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos relate: failed while writing the relate -- {exc}.", err=True
+            )
+            raise typer.Exit(code=1) from exc
+
         typer.echo(
-            f"openkos relate: failed while writing the relate -- {exc}.", err=True
+            f"openkos relate: added a {prepared.rel_type!r} relation from "
+            f"'bundle/{prepared.source_canonical}.md' to "
+            f"'bundle/{prepared.target_canonical}.md' ({log_path.name} updated)."
         )
-        raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos relate: added a {prepared.rel_type!r} relation from "
-        f"'bundle/{prepared.source_canonical}.md' to "
-        f"'bundle/{prepared.target_canonical}.md' ({log_path.name} updated)."
-    )
+        commit_paths = [f"bundle/{prepared.source_canonical}.md", "bundle/log.md"]
+        if prepared.new_target_text is not None:
+            commit_paths.insert(1, f"bundle/{prepared.target_canonical}.md")
+        _autocommit(
+            root,
+            commit_paths,
+            f"openkos: relate {prepared.source_canonical} -> "
+            f"{prepared.target_canonical} ({prepared.rel_type})",
+        )
 
-    commit_paths = [f"bundle/{prepared.source_canonical}.md", "bundle/log.md"]
-    if prepared.new_target_text is not None:
-        commit_paths.insert(1, f"bundle/{prepared.target_canonical}.md")
-    _autocommit(
-        root,
-        commit_paths,
-        f"openkos: relate {prepared.source_canonical} -> "
-        f"{prepared.target_canonical} ({prepared.rel_type})",
-    )
-
-    # #640: `cfg=None` -- `relate` never reads config at this layer.
-    _refresh_derived_after_write(layout, None, verb="relate")
+        # #640: `cfg=None` -- `relate` never reads config at this layer.
+        _refresh_derived_after_write(layout, None, verb="relate")
 
 
 @app.command(
@@ -6320,7 +6454,7 @@ def relate(
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("set-sensitivity")
+@_guard_workspace_lock("set-sensitivity", commit_phase=True)
 def set_sensitivity_cmd(
     concept_id: str = typer.Argument(
         ...,
@@ -6622,124 +6756,153 @@ def set_sensitivity_cmd(
 
     # Issue #306: every byte below was computed from a pre-prompt read, so
     # re-validate each target now -- after the gate, before the first write.
-    _reject_drifted_targets(
-        layout,
-        {
-            **{
-                layout.bundle_dir / f"{descendant_raise.concept_id}.md": bundle_bytes[
-                    f"{descendant_raise.concept_id}.md"
-                ]
-                for descendant_raise in descendant_raises
-            },
-            concept_path: concept_bytes,
-            log_path: log_bytes,
+    # ADR-0036: the descendant closure was resolved from a whole-bundle
+    # snapshot. A document that changed since (a bystander that began citing
+    # this Source) or newly appeared (a derived concept with no baseline) would
+    # escape the raise and sit BELOW the Source's new level, so the snapshot is
+    # the read-dependency set. Empty when no scan ran (a lowering, or a
+    # non-Source target).
+    _raised_ids = {
+        descendant_raise.concept_id for descendant_raise in descendant_raises
+    }
+    sensitivity_dependencies = application_commit_phase.ReadDependencies(
+        present={
+            layout.bundle_dir / rel: data
+            for rel, data in bundle_bytes.items()
+            if rel.removesuffix(".md") not in _raised_ids
         },
-        "set-sensitivity",
+        documents=(
+            frozenset(
+                {concept_path} | {layout.bundle_dir / rel for rel in bundle_bytes}
+            )
+            if metadata.get("type") == "Source" and direction == "raise"
+            else None
+        ),
     )
 
-    landed: list[str] = []
-    try:
-        # Write order: descendants BEFORE the target concept BEFORE
-        # `log.md` (design: "Descendants are written BEFORE the target
-        # concept"). A mid-way failure then leaves the bundle
-        # over-classified, never under-classified -- there is no
-        # cross-file rollback, matching `relate`/`merge`. `landed` records
-        # each path only AFTER its `write_atomic` call returns, so a
-        # failure names exactly the paths already on disk (design D9,
-        # issue #233).
-        for descendant_raise in descendant_raises:
-            descendant_path = f"bundle/{descendant_raise.concept_id}.md"
-            fsio.write_atomic(
-                layout.bundle_dir / f"{descendant_raise.concept_id}.md",
-                descendant_raise.content,
-            )
-            landed.append(descendant_path)
-        fsio.write_atomic(concept_path, new_concept_text)
-        landed.append(f"bundle/{canonical_id}.md")
-        fsio.write_atomic(log_path, new_log_text)
-        landed.append("bundle/log.md")
-    except (OSError, ValueError) as exc:
-        # Distinct from the two phases above on purpose: this one is
-        # reached only after the write phase began, so the concept file may
-        # already be on disk while `log.md` is not. "refusing" would tell an
-        # operator nothing happened, which is exactly wrong here.
-        landed_suffix = (
-            f"Already written (left over-classified, not rolled back): "
-            f"{', '.join(landed)}."
-            if landed
-            else "No path was written."
+    with _commit_phase():
+        _reject_drifted_targets(
+            layout,
+            {
+                **{
+                    layout.bundle_dir
+                    / f"{descendant_raise.concept_id}.md": bundle_bytes[
+                        f"{descendant_raise.concept_id}.md"
+                    ]
+                    for descendant_raise in descendant_raises
+                },
+                concept_path: concept_bytes,
+                log_path: log_bytes,
+            },
+            "set-sensitivity",
         )
-        typer.echo(
-            f"openkos set-sensitivity: failed while writing the "
-            f"set-sensitivity -- {exc}. {landed_suffix}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
+        _reject_read_drift(layout, sensitivity_dependencies, "set-sensitivity")
 
-    if descendant_raises:
-        propagated = ", ".join(
-            f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
-            for descendant_raise in descendant_raises
-        )
-        typer.echo(
-            f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
-            f"sensitivity to {level} ({log_path.name} updated). Also raised "
-            f"{len(descendant_raises)} provenance descendant(s): "
-            f"{propagated}."
-        )
-    else:
-        typer.echo(
-            f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
-            f"sensitivity to {level} ({log_path.name} updated). Only this "
-            "concept was changed; no sibling or derived object was touched."
-        )
-        # #571: raising a DERIVED object protects one file while extraction
-        # replicated its content into siblings -- the ADR-0009 containment
-        # lever is the Source, whose raise-only propagation covers every
-        # descendant. Name that lever, or the success message implies a
-        # protection the user did not get. Raise-only: on a lowering the
-        # note would read as advice to lower the Source too.
-        raw_provenance = metadata.get("provenance")
-        provenance_sources = [
-            entry
-            for entry in (raw_provenance if isinstance(raw_provenance, list) else [])
-            if isinstance(entry, str) and entry.startswith("sources/")
-        ]
-        if (
-            direction == "raise"
-            and metadata.get("type") != "Source"
-            and provenance_sources
-        ):
-            named = ", ".join(provenance_sources)
-            if len(provenance_sources) == 1:
-                lever = (
-                    "raise the Source: openkos set-sensitivity "
-                    f"{provenance_sources[0]} {level}"
+        landed: list[str] = []
+        try:
+            # Write order: descendants BEFORE the target concept BEFORE
+            # `log.md` (design: "Descendants are written BEFORE the target
+            # concept"). A mid-way failure then leaves the bundle
+            # over-classified, never under-classified -- there is no
+            # cross-file rollback, matching `relate`/`merge`. `landed` records
+            # each path only AFTER its `write_atomic` call returns, so a
+            # failure names exactly the paths already on disk (design D9,
+            # issue #233).
+            for descendant_raise in descendant_raises:
+                descendant_path = f"bundle/{descendant_raise.concept_id}.md"
+                fsio.write_atomic(
+                    layout.bundle_dir / f"{descendant_raise.concept_id}.md",
+                    descendant_raise.content,
                 )
-            else:
-                lever = f"raise each Source: {named}"
-            typer.echo(
-                f"openkos set-sensitivity: note -- '{canonical_id}' was "
-                f"derived from {named}; raising it does not contain content "
-                "its source(s) replicated into sibling objects. To contain "
-                f"everything derived from them, {lever}. For every Source "
-                "that reaches this object, including through intermediate "
-                f"objects: openkos list --sources {canonical_id}."
+                landed.append(descendant_path)
+            fsio.write_atomic(concept_path, new_concept_text)
+            landed.append(f"bundle/{canonical_id}.md")
+            fsio.write_atomic(log_path, new_log_text)
+            landed.append("bundle/log.md")
+        except (OSError, ValueError) as exc:
+            # Distinct from the two phases above on purpose: this one is
+            # reached only after the write phase began, so the concept file may
+            # already be on disk while `log.md` is not. "refusing" would tell an
+            # operator nothing happened, which is exactly wrong here.
+            landed_suffix = (
+                f"Already written (left over-classified, not rolled back): "
+                f"{', '.join(landed)}."
+                if landed
+                else "No path was written."
             )
+            typer.echo(
+                f"openkos set-sensitivity: failed while writing the "
+                f"set-sensitivity -- {exc}. {landed_suffix}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-    _autocommit(
-        root,
-        [
-            f"bundle/{descendant_raise.concept_id}.md"
-            for descendant_raise in descendant_raises
-        ]
-        + [f"bundle/{canonical_id}.md", "bundle/log.md"],
-        f"openkos: set-sensitivity {canonical_id} -> {level}",
-    )
+        if descendant_raises:
+            propagated = ", ".join(
+                f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
+                for descendant_raise in descendant_raises
+            )
+            typer.echo(
+                f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
+                f"sensitivity to {level} ({log_path.name} updated). Also raised "
+                f"{len(descendant_raises)} provenance descendant(s): "
+                f"{propagated}."
+            )
+        else:
+            typer.echo(
+                f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
+                f"sensitivity to {level} ({log_path.name} updated). Only this "
+                "concept was changed; no sibling or derived object was touched."
+            )
+            # #571: raising a DERIVED object protects one file while extraction
+            # replicated its content into siblings -- the ADR-0009 containment
+            # lever is the Source, whose raise-only propagation covers every
+            # descendant. Name that lever, or the success message implies a
+            # protection the user did not get. Raise-only: on a lowering the
+            # note would read as advice to lower the Source too.
+            raw_provenance = metadata.get("provenance")
+            provenance_sources = [
+                entry
+                for entry in (
+                    raw_provenance if isinstance(raw_provenance, list) else []
+                )
+                if isinstance(entry, str) and entry.startswith("sources/")
+            ]
+            if (
+                direction == "raise"
+                and metadata.get("type") != "Source"
+                and provenance_sources
+            ):
+                named = ", ".join(provenance_sources)
+                if len(provenance_sources) == 1:
+                    lever = (
+                        "raise the Source: openkos set-sensitivity "
+                        f"{provenance_sources[0]} {level}"
+                    )
+                else:
+                    lever = f"raise each Source: {named}"
+                typer.echo(
+                    f"openkos set-sensitivity: note -- '{canonical_id}' was "
+                    f"derived from {named}; raising it does not contain content "
+                    "its source(s) replicated into sibling objects. To contain "
+                    f"everything derived from them, {lever}. For every Source "
+                    "that reaches this object, including through intermediate "
+                    f"objects: openkos list --sources {canonical_id}."
+                )
 
-    # #640: a frontmatter-only write is a vector cache-hit (#554 excludes
-    # frontmatter from embeddings), so this costs FTS+graph rebuilds only.
-    _refresh_derived_after_write(layout, cfg, verb="set-sensitivity")
+        _autocommit(
+            root,
+            [
+                f"bundle/{descendant_raise.concept_id}.md"
+                for descendant_raise in descendant_raises
+            ]
+            + [f"bundle/{canonical_id}.md", "bundle/log.md"],
+            f"openkos: set-sensitivity {canonical_id} -> {level}",
+        )
+
+        # #640: a frontmatter-only write is a vector cache-hit (#554 excludes
+        # frontmatter from embeddings), so this costs FTS+graph rebuilds only.
+        _refresh_derived_after_write(layout, cfg, verb="set-sensitivity")
 
 
 @app.command(
@@ -7748,7 +7911,7 @@ def backfill_source_titles_cmd(
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("set-volatility")
+@_guard_workspace_lock("set-volatility", commit_phase=True)
 def set_volatility_cmd(
     concept_type: str = typer.Argument(
         ..., help="Exact PascalCase REGISTRY type name, e.g. 'Person'."
@@ -7886,26 +8049,29 @@ def set_volatility_cmd(
     # possibly a safety setting like `review:` or `default_sensitivity:` --
     # would be silently reverted by the whole-file write below. Re-validate
     # the one target now -- after the gate, before the write.
-    _reject_drifted_targets(
-        layout, {layout.config_path: prepared.config_bytes}, "set-volatility"
-    )
+    with _commit_phase():
+        _reject_drifted_targets(
+            layout, {layout.config_path: prepared.config_bytes}, "set-volatility"
+        )
 
-    try:
-        application_lifecycle.set_volatility_core(layout.config_path, prepared)
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos set-volatility: failed while writing -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
+        try:
+            application_lifecycle.set_volatility_core(layout.config_path, prepared)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos set-volatility: failed while writing -- {exc}.", err=True
+            )
+            raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos set-volatility: set {concept_type} -> {tier} in "
-        f"{layout.config_path.name}."
-    )
+        typer.echo(
+            f"openkos set-volatility: set {concept_type} -> {tier} in "
+            f"{layout.config_path.name}."
+        )
 
-    _autocommit(
-        root,
-        ["openkos.yaml"],
-        f"openkos: set-volatility {concept_type} -> {tier}",
-    )
+        _autocommit(
+            root,
+            ["openkos.yaml"],
+            f"openkos: set-volatility {concept_type} -> {tier}",
+        )
 
 
 @dataclass(frozen=True)
@@ -8078,7 +8244,7 @@ class _CliMergeObserver(merge_service.MergeObserver):
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("merge")
+@_guard_workspace_lock("merge", commit_phase=True)
 def merge(
     survivor_id: str = typer.Argument(
         ...,
@@ -8245,6 +8411,12 @@ def merge(
             verb="merge",
         ),
         clock=lambda: datetime.now(UTC),
+        commit_section=_commit_section(),
+        # #640, ADR-0036: the derived refresh runs inside the commit section,
+        # after the auto-commit, so it cannot race another writer's burst.
+        # `cfg=None` -- `merge` never reads config; the helper reads its own
+        # copy inside the vector stage's fail-open envelope.
+        after_commit=lambda: _refresh_derived_after_write_quietly(root, "merge"),
     )
     try:
         merge_service.merge_concepts(
@@ -8263,10 +8435,6 @@ def merge(
         )
     except write_gate.WriteRefused as exc:
         _exit_for_write_refusal(exc)
-
-    # #640: `cfg=None` -- `merge` never reads config; the helper reads its
-    # own copy inside the vector stage's fail-open envelope.
-    _refresh_derived_after_write(config.WorkspaceLayout(root), None, verb="merge")
 
 
 class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
@@ -8386,7 +8554,7 @@ in those two places too."""
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("unmerge")
+@_guard_workspace_lock("unmerge", commit_phase=True)
 def unmerge(
     survivor_id: str = typer.Argument(
         ...,
@@ -8526,6 +8694,11 @@ def unmerge(
     ports = unmerge_service.UnmergePorts(
         autocommit=lambda root, paths, message: _autocommit(root, paths, message),
         clock=lambda: datetime.now(UTC),
+        commit_section=_commit_section(),
+        # #640, ADR-0036: refreshed inside each step's commit section, after
+        # its auto-commit, so a chain that stops later leaves every completed
+        # step's derived stores fresh.
+        after_commit=lambda: _refresh_derived_after_write_quietly(root, "unmerge"),
     )
     observer = _CliUnmergeObserver()
     try:
@@ -8569,11 +8742,6 @@ def unmerge(
         ) from exc
     except write_gate.WriteRefused as exc:
         _exit_for_write_refusal(exc)
-
-    # #640: once per invocation, after the single step -- or the WHOLE chain --
-    # completed. A stopped chain raised above and leaves the stale-index
-    # warnings as its safety net.
-    _refresh_derived_after_write(config.WorkspaceLayout(root), None, verb="unmerge")
 
 
 @app.command(

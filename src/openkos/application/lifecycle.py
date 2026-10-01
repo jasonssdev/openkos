@@ -63,6 +63,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from openkos import config, fsio, lifecycle, sensitivity
+from openkos.application import commit_phase
 from openkos.application.consent import (
     BooleanConfirmation,
     TypedChallengeConfirmation,
@@ -311,6 +312,14 @@ class PreparedMerge:
     state, or `None` when the projection outcome was `UNCHANGED` (nothing
     to disclose). The change itself is already folded into
     `plan.merged_survivor`; this field exists only for the preview."""
+    read_dependencies: commit_phase.ReadDependencies = dataclasses.field(
+        default_factory=commit_phase.ReadDependencies
+    )
+    """The documents the whole-bundle scan READ but the merge will not write
+    (ADR-0036): the scan decided which documents reference the absorbed
+    concept and which supersede what, so the commit phase re-validates them
+    beside the drift targets. Touched files are not repeated here -- they are
+    drift targets (`touched_bytes`)."""
 
 
 @dataclass(frozen=True)
@@ -543,6 +552,16 @@ def prepare_merge(
         | set(provenance_rewritten_files)
     )
     touched_bytes = {rel: other_bytes[rel] for rel in touched_files}
+    read_dependencies = commit_phase.ReadDependencies(
+        present={
+            bundle_dir / rel: data
+            for rel, data in other_bytes.items()
+            if rel not in touched_bytes
+        },
+        documents=frozenset(
+            {survivor_path, absorbed_path} | {bundle_dir / rel for rel in other_bytes}
+        ),
+    )
     sensitivity_before = plan.ledger_entry.sensitivity_before or "(none)"
     sensitivity_after = plan.ledger_entry.sensitivity_after
 
@@ -575,6 +594,7 @@ def prepare_merge(
         absorbed_bytes=absorbed_bytes,
         touched_bytes=touched_bytes,
         status_outcome=status_outcome,
+        read_dependencies=read_dependencies,
     )
 
 
@@ -786,6 +806,12 @@ class PreparedUnmerge:
     """`unmerge`'s gate, same shape and same reason as `PreparedMerge`'s
     (#918). Both unmerge forms -- classic and `--to` -- drive this one
     request."""
+    read_dependencies: commit_phase.ReadDependencies = dataclasses.field(
+        default_factory=commit_phase.ReadDependencies
+    )
+    """What the plan read but will not write (ADR-0036): the bystander
+    documents whose relations decided the post-unmerge supersession walk, and
+    the absorbed path, which the restore assumed free."""
 
 
 @dataclass(frozen=True)
@@ -1100,6 +1126,15 @@ def prepare_unmerge(
     restored_absorbed_metadata, restored_absorbed_body = okf.load_frontmatter(
         plan.restored_absorbed
     )
+    # ADR-0036: the walk below reads every bystander's relations, so each is a
+    # read dependency of the commit phase. Their bytes are taken BEFORE the
+    # walk, so a change landing between the two compares unequal at commit
+    # time (fail closed). The absorbed path was checked free above; that too
+    # is an assumption the commit phase re-validates.
+    read_dependencies = commit_phase.capture_bundle_documents(
+        layout.bundle_dir,
+        exclude={survivor_path, *(layout.bundle_dir / rel for rel in rewrite_bytes)},
+    ).merged_with(commit_phase.ReadDependencies(absent=frozenset({absorbed_path})))
     post_unmerge_metadata: dict[str, Mapping[str, object] | None] = {}
     for scan in okf._iter_docs(layout.bundle_dir):
         cid = okf.concept_id_for(scan.path, layout.bundle_dir)
@@ -1184,6 +1219,7 @@ def prepare_unmerge(
         log_bytes=log_bytes,
         survivor_bytes=survivor_bytes,
         rewrite_bytes=rewrite_bytes,
+        read_dependencies=read_dependencies,
     )
 
 
