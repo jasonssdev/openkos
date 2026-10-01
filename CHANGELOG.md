@@ -72,6 +72,13 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   you to read both bodies first and unmerge only if they truly conflict.
   Refs #1223.
 
+- **An auto-commit left a decomposed-Unicode file name staged but uncommitted.**
+  On macOS an inbox file named with decomposed accents (`o` + combining accent)
+  was listed by the version control layer in its composed form, so the
+  auto-commit dropped its `raw/` copy from the commit pathspec and left it
+  staged, with nothing recorded for the daemon's commit retry. Names are now
+  compared in NFC. (#1219)
+
 ## [0.3.1] - 2026-10-01
 
 MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a

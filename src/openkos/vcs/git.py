@@ -22,6 +22,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import unicodedata
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
@@ -547,12 +548,19 @@ def _known_rel_paths(
         # ls-tree fails on an unborn HEAD (the first commit): nothing there.
         if result.returncode == 0:
             listed.extend(name for name in result.stdout.split("\0") if name)
+    # Compared in NFC: on macOS an inbox name can arrive decomposed (NFD) while
+    # git, with `core.precomposeunicode` (its macOS default), lists the same
+    # file composed. A byte comparison dropped such a path from the commit
+    # pathspec, so the commit landed without the `raw/` copy and left it staged
+    # (#1219). The ORIGINAL spelling is what is returned and handed to git.
+    listed_nfc = [unicodedata.normalize("NFC", name) for name in listed]
     return [
         path
         for path in rel_paths
         if any(
-            name == path.rstrip("/") or name.startswith(path.rstrip("/") + "/")
-            for name in listed
+            name == unicodedata.normalize("NFC", path.rstrip("/"))
+            or name.startswith(unicodedata.normalize("NFC", path.rstrip("/")) + "/")
+            for name in listed_nfc
         )
     ]
 
