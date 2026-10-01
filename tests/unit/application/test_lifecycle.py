@@ -1311,6 +1311,50 @@ def test_ordered_merge_pair_picks_the_richer_body(tmp_path: Path) -> None:
     assert criterion == "richer body"
 
 
+def test_ordered_merge_pair_keeps_the_canonical_id_of_a_suffix_family(
+    tmp_path: Path,
+) -> None:
+    """#1228: when the members are a base/`-N` family the un-suffixed Concept
+    ID survives even though the `-N` member has the richer body -- the
+    ingest-time disambiguator must not become the permanent identity."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "people/ana-ruiz", title="Ana", body="x")
+    _write_concept(
+        layout.bundle_dir,
+        "people/ana-ruiz-2",
+        title="Ana",
+        body="much longer body. " * 5,
+    )
+
+    for members in (
+        ("people/ana-ruiz", "people/ana-ruiz-2"),
+        ("people/ana-ruiz-2", "people/ana-ruiz"),
+    ):
+        survivor, absorbed, criterion = lifecycle_service.ordered_merge_pair(
+            layout.bundle_dir, members
+        )
+        assert (survivor, absorbed) == ("people/ana-ruiz", "people/ana-ruiz-2")
+        assert criterion == "canonical id (base of a -N family)"
+
+
+def test_ordered_merge_pair_suffix_family_needs_a_numeric_suffix_and_same_dir(
+    tmp_path: Path,
+) -> None:
+    """#776's richer-body rule still decides every non-family pair: a
+    non-numeric suffix or a different directory is not a family."""
+    layout = _workspace(tmp_path)
+    _write_concept(layout.bundle_dir, "people/ana", title="A", body="x")
+    _write_concept(layout.bundle_dir, "people/ana-b", title="B", body="long " * 9)
+    _write_concept(layout.bundle_dir, "orgs/ana-2", title="C", body="long " * 9)
+
+    assert lifecycle_service.ordered_merge_pair(
+        layout.bundle_dir, ("people/ana", "people/ana-b")
+    )[:2] == ("people/ana-b", "people/ana")
+    assert lifecycle_service.ordered_merge_pair(
+        layout.bundle_dir, ("people/ana", "orgs/ana-2")
+    )[:2] == ("orgs/ana-2", "people/ana")
+
+
 def test_ordered_merge_pair_ties_keep_ascending_id_order(tmp_path: Path) -> None:
     """Equal body length (including two unreadable members) keeps today's
     ascending-id convention, and the criterion says so."""

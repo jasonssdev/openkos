@@ -2722,11 +2722,29 @@ def member_body_length(bundle_dir: Path, member_id: str) -> int:
     return len(body.strip())
 
 
+_SUFFIX_FAMILY_CRITERION = "canonical id (base of a -N family)"
+
+
+def _is_suffix_family(base_id: str, other_id: str) -> bool:
+    """Whether `other_id` is `base_id` plus an ingest-time `-N` disambiguator
+    (digits only, same directory) -- the collision suffix `ingest` appends to
+    a slug that is already taken (#1228)."""
+    prefix = f"{base_id}-"
+    return other_id.startswith(prefix) and other_id[len(prefix) :].isdecimal()
+
+
 def ordered_merge_pair(
     bundle_dir: Path, member_ids: tuple[str, ...]
 ) -> tuple[str, str, str]:
-    """`(survivor, absorbed, criterion)` for one 2-member SAME group
-    (#776): the member with the RICHER BODY survives, so a permanent
+    """`(survivor, absorbed, criterion)` for one 2-member SAME group.
+
+    Identity first (#1228): when the members are a base/`-N` family the
+    un-suffixed Concept ID survives whatever the bodies weigh -- the Concept
+    ID is the entity's identity under OKF, and the ingest-time `-N`
+    disambiguator must not become permanent. The absorbed (possibly richer)
+    body is not lost: the merge stacks and reconciles both bodies.
+
+    Otherwise (#776): the member with the RICHER BODY survives, so a permanent
     Concept ID is no longer decided by `f` sorting before `o`. Ties
     (including two unreadable members, which `-1 == -1` here and
     `prepare_one_merge` then reports as unresolved) keep today's
@@ -2734,6 +2752,10 @@ def ordered_merge_pair(
     preview can state it. Moved verbatim from `cli/main.py`'s
     `_ordered_merge_pair`."""
     first, second = member_ids
+    if _is_suffix_family(first, second):
+        return first, second, _SUFFIX_FAMILY_CRITERION
+    if _is_suffix_family(second, first):
+        return second, first, _SUFFIX_FAMILY_CRITERION
     first_length = member_body_length(bundle_dir, first)
     second_length = member_body_length(bundle_dir, second)
     if second_length > first_length:
