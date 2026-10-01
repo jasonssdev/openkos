@@ -1,8 +1,8 @@
 """Advisory interprocess workspace lock (#925).
 
-A leaf module: it imports nothing from `openkos`, mirroring `fsio.py`, so it
-can be used from `config`, `cli`, or a future application service without
-creating a layering dependency.
+A leaf module: it imports only other leaf modules (`userstate`), mirroring
+`fsio.py`, so it can be used from `config`, `cli`, or a future application
+service without creating a layering dependency.
 
 **The gap this closes.** The drift guards (#313/#319/#322/#334/#335) protect a
 single process's read -> confirm -> write window by re-reading every target
@@ -43,8 +43,10 @@ import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
-LOCK_DIR_PREFIX = "openkos-locks"
-"""Per-user directory under the OS temp dir holding one lock file per workspace.
+from openkos import userstate
+
+LEGACY_LOCK_DIR_PREFIX = "openkos-locks"
+"""Name prefix of the pre-ADR-0036 per-user lock directory under the OS temp dir.
 
 **The lock lives OUTSIDE the workspace, deliberately.** The obvious home is
 `<root>/.openkos/workspace.lock`, and it was the first design. It is wrong for
@@ -54,19 +56,17 @@ identical, and `tests/unit/cli/conftest.py`'s snapshot records DIRECTORIES too,
 explicitly so a refusal that created a stray `.git` is caught. Creating
 `.openkos/` and a lock file to then refuse breaks that guarantee literally --
 96 tests went red -- and the honest reading is that they were right: a run that
-refuses really should write nothing at all. Excluding the lock from the snapshot
-would have traded a real product guarantee for a convenient one.
+refuses really should write nothing at all.
 
-A lock is process rendezvous state, not workspace data. Keeping it out of the
-tree also means a read-only or network-mounted workspace can still be locked,
-and nothing new needs to be gitignored.
+**The current home is the per-user state directory** (`userstate.locks_dir()`,
+ADR-0036), resolved from the account database and never from the environment,
+because a temp reaper that deletes a held lock lets a second process lock a
+fresh inode -- harmless for a CLI's short holds, not for a long-lived runner.
 
-**The tradeoff being accepted:** if the OS clears its temp directory while a
-lock is held, a second process creates a fresh file and does not see the first
-one's lock. Temp reapers act on boot or on files idle for days; a lock here is
-held for the duration of ONE command. `openkos` is a CLI, not a daemon, so that
-window is not reachable in practice -- but it is the reason this is not simply
-"the obviously correct place", and a long-lived MVP 3 adapter should revisit it.
+**The temp-directory lock is kept for one transitional release.** An older
+`openkos` takes only that one; a newer run also takes it (after the
+state-directory lock, both non-blocking) so the two still exclude each other.
+Remove it, and this constant, in the follow-up release.
 """
 
 
@@ -120,19 +120,16 @@ else:
         fcntl.flock(fd, fcntl.LOCK_UN)
 
 
-def _lock_dir() -> Path:
-    """The per-user lock directory, created on demand with owner-only access.
+def _ensure_private_dir(directory: Path, *, create_parent: bool = False) -> None:
+    """Create `directory` owner-only if it is missing.
 
-    `tempfile.gettempdir()` is already per-user on macOS (`/var/folders/...`)
-    and Windows (`%LOCALAPPDATA%\\Temp`), but NOT on Linux, where `/tmp` is
-    shared -- so the uid goes in the name there and the mode is `0o700`. Without
-    that, one user could create the path first and either squat the name or make
-    it unopenable for everyone else.
+    `Path.mkdir(mode=..., parents=True)` applies `mode` to the LAST component
+    only, so the immediate parent is created explicitly when asked: the OpenKOS
+    state directory above `locks` must be owner-only too.
     """
-    geteuid = getattr(os, "geteuid", None)
-    suffix = "" if geteuid is None else f"-{geteuid()}"
-    directory = Path(tempfile.gettempdir()) / f"{LOCK_DIR_PREFIX}{suffix}"
     try:
+        if create_parent:
+            directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory.mkdir(mode=0o700, exist_ok=True)
     except OSError as exc:
         raise WorkspaceLockUnavailableError(
@@ -140,8 +137,30 @@ def _lock_dir() -> Path:
             f"nothing was read or written by this run -- remove or fix "
             f"{directory} and try again"
         ) from exc
+    geteuid = getattr(os, "geteuid", None)
     if geteuid is not None:
         _verify_lock_dir(directory, geteuid())
+
+
+def _lock_dir() -> Path:
+    """The state-directory `locks` directory, created on demand owner-only and
+    verified to be ours (#1134)."""
+    directory = Path(userstate.locks_dir())
+    _ensure_private_dir(directory, create_parent=True)
+    return directory
+
+
+def _legacy_lock_dir() -> Path:
+    """The pre-ADR-0036 per-user directory under the OS temp dir.
+
+    `tempfile.gettempdir()` is already per-user on macOS and Windows but NOT on
+    Linux, where `/tmp` is shared -- so the uid goes in the name there and the
+    mode is `0o700`, with the same ownership checks as the current directory.
+    """
+    geteuid = getattr(os, "geteuid", None)
+    suffix = "" if geteuid is None else f"-{geteuid()}"
+    directory = Path(tempfile.gettempdir()) / f"{LEGACY_LOCK_DIR_PREFIX}{suffix}"
+    _ensure_private_dir(directory)
     return directory
 
 
@@ -181,6 +200,12 @@ def _verify_lock_dir(directory: Path, euid: int) -> None:
         )
 
 
+def _digest(root: Path) -> str:
+    return hashlib.sha256(
+        os.path.realpath(root).encode("utf-8", "surrogateescape")
+    ).hexdigest()
+
+
 def lock_path_for(root: Path) -> Path:
     """The lock file for the workspace at `root`. Creates the containing
     directory, never the file.
@@ -190,26 +215,26 @@ def lock_path_for(root: Path) -> Path:
     deliberately still allows -- resolves to one lock rather than two that
     cannot see each other.
     """
-    digest = hashlib.sha256(
-        os.path.realpath(root).encode("utf-8", "surrogateescape")
-    ).hexdigest()
-    return _lock_dir() / f"{digest}.lock"
+    return _lock_dir() / f"{_digest(root)}.lock"
+
+
+def legacy_lock_path_for(root: Path) -> Path:
+    """The transitional temp-directory lock file for `root` (see
+    `LEGACY_LOCK_DIR_PREFIX`). Creates the containing directory, never the
+    file."""
+    return _legacy_lock_dir() / f"{_digest(root)}.lock"
 
 
 @contextlib.contextmanager
-def workspace_lock(root: Path) -> Iterator[Path]:
-    """Hold this workspace's exclusive mutation lock for the whole block.
+def _hold(path: Path) -> Iterator[Path]:
+    """Hold the exclusive non-blocking lock on one lock file for the block.
 
-    Raises `WorkspaceBusyError` immediately if another process holds it. The
-    lock is released on the way out of the block -- on success, on an
-    exception, and on process death, the last of which is the kernel's doing
-    rather than this code's.
+    Raises `WorkspaceBusyError` immediately on contention.
 
     Exactly ONE byte (offset 0) is locked, because that is the intersection of
     what `fcntl.flock` and `msvcrt.locking` both express portably; the file's
     contents are irrelevant and stay empty.
     """
-    path = lock_path_for(root)
     try:
         fd = os.open(
             path,
@@ -242,3 +267,21 @@ def workspace_lock(root: Path) -> Iterator[Path]:
             _release(fd)
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def workspace_lock(root: Path) -> Iterator[Path]:
+    """Hold this workspace's exclusive mutation lock for the whole block.
+
+    Takes the state-directory lock, then the legacy temp-directory lock (both
+    non-blocking), and yields the state-directory lock's path. Raises
+    `WorkspaceBusyError` immediately if another process holds EITHER; a
+    refusal on the second releases the first. Both are released on the way out
+    of the block -- on success, on an exception, and on process death, the
+    last of which is the kernel's doing rather than this code's.
+    """
+    with (
+        _hold(lock_path_for(root)) as path,
+        _hold(legacy_lock_path_for(root)),
+    ):
+        yield path

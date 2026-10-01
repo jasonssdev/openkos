@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from openkos import lock
+from openkos import lock, userstate
 
 pytestmark = pytest.mark.cross_platform_smoke
 """Selects this whole module into the reduced macOS/Windows CI job (#929).
@@ -43,7 +43,9 @@ _HOLDER = textwrap.dedent(
     """
     import sys
     from pathlib import Path
-    from openkos import lock
+    from openkos import lock, userstate
+
+    userstate.locks_dir = lambda *a, **k: Path(sys.argv[2])
 
     with lock.workspace_lock(Path(sys.argv[1])):
         print("ACQUIRED", flush=True)
@@ -58,7 +60,9 @@ _CONTENDER = textwrap.dedent(
     """
     import sys
     from pathlib import Path
-    from openkos import lock
+    from openkos import lock, userstate
+
+    userstate.locks_dir = lambda *a, **k: Path(sys.argv[2])
 
     try:
         with lock.workspace_lock(Path(sys.argv[1])):
@@ -76,7 +80,7 @@ _CONTENDER = textwrap.dedent(
 # and it cannot be faked in-process.
 def _spawn(script: str, root: Path) -> subprocess.Popen[str]:
     return subprocess.Popen(  # noqa: S603
-        [sys.executable, "-c", script, str(root)],
+        [sys.executable, "-c", script, str(root), str(userstate.locks_dir())],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -87,7 +91,7 @@ def _spawn(script: str, root: Path) -> subprocess.Popen[str]:
 
 def _run_contender(root: Path) -> str:
     result = subprocess.run(  # noqa: S603
-        [sys.executable, "-c", _CONTENDER, str(root)],
+        [sys.executable, "-c", _CONTENDER, str(root), str(userstate.locks_dir())],
         capture_output=True,
         text=True,
         cwd=Path(__file__).resolve().parents[2],
@@ -278,7 +282,9 @@ _FD_LEAK_PROBE = textwrap.dedent(
     """
     import os, sys
     from pathlib import Path
-    from openkos import lock
+    from openkos import lock, userstate
+
+    userstate.locks_dir = lambda *a, **k: Path(sys.argv[2])
 
     def count():
         for c in (Path(f"/proc/{os.getpid()}/fd"), Path("/dev/fd")):
@@ -327,7 +333,13 @@ def test_no_file_descriptor_is_leaked_across_acquires(tmp_path: Path) -> None:
         assert holder.stdout.readline().strip() == "ACQUIRED"
 
         probe = subprocess.run(  # noqa: S603
-            [sys.executable, "-c", _FD_LEAK_PROBE, str(tmp_path)],
+            [
+                sys.executable,
+                "-c",
+                _FD_LEAK_PROBE,
+                str(tmp_path),
+                str(userstate.locks_dir()),
+            ],
             capture_output=True,
             text=True,
             cwd=Path(__file__).resolve().parents[2],
@@ -359,10 +371,13 @@ _POSIX_ONLY = pytest.mark.skipif(
 
 
 def _isolated_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the lock's temp-dir lookup at a private directory, and return the
-    per-user lock directory path the lock will use inside it."""
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
-    return tmp_path / f"{lock.LOCK_DIR_PREFIX}-{os.geteuid()}"
+    """Return the state-directory `locks` path the lock will use (the suite's
+    autouse fixture already points it at a private per-test location), and
+    move the LEGACY temp-dir lookup somewhere private too."""
+    legacy_tmp = tmp_path.parent / f"{tmp_path.name}-legacy-tmp"
+    legacy_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(legacy_tmp))
+    return Path(userstate.locks_dir())
 
 
 @_POSIX_ONLY
@@ -407,11 +422,10 @@ def test_a_lock_directory_owned_by_someone_else_is_refused(
 ) -> None:
     # Cannot chown in a test, so the process claims to be a different user:
     # the directory the lock computes is then named for, but not owned by, it.
-    other_uid = os.geteuid() + 1
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
-    monkeypatch.setattr(os, "geteuid", lambda: other_uid)
-    directory = tmp_path / f"{lock.LOCK_DIR_PREFIX}-{other_uid}"
+    directory = _isolated_tmp(tmp_path, monkeypatch)
     directory.mkdir(mode=0o700)
+    other_uid = os.geteuid() + 1
+    monkeypatch.setattr(os, "geteuid", lambda: other_uid)
 
     with (
         pytest.raises(lock.WorkspaceLockUnavailableError) as excinfo,
@@ -481,3 +495,155 @@ def test_an_unopenable_lock_file_is_a_clean_refusal_not_a_traceback(
         pytest.fail("unreachable")
 
     assert str(lock_file) in str(excinfo.value)
+
+
+# --- the lock lives in the per-user state directory, not the OS temp dir (ADR-0036) ---
+
+# An "older openkos": holds ONLY the legacy temp-directory lock, the way a
+# release before the relocation does.
+_LEGACY_HOLDER = textwrap.dedent(
+    """
+    import sys
+    from pathlib import Path
+    from openkos import lock
+
+    with lock._hold(lock.legacy_lock_path_for(Path(sys.argv[1]))):
+        print("ACQUIRED", flush=True)
+        sys.stdin.read()
+    """
+)
+
+
+def test_the_lock_file_lives_in_the_state_directory_locks_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Named by the sha256 of the real path, inside `userstate.locks_dir()`,
+    and NOT in the legacy temp-directory lock directory.
+
+    The OS temp directory is deliberately made an ANCESTOR of the redirected
+    state directory (as on Linux, where pytest's tmp_path is under `/tmp`), so
+    "not under the temp directory" would be false by construction; the property
+    that matters is that this is not the legacy directory.
+    """
+    import hashlib
+
+    monkeypatch.setattr(
+        tempfile, "gettempdir", lambda: str(userstate.locks_dir().parent)
+    )
+    digest = hashlib.sha256(os.path.realpath(tmp_path).encode()).hexdigest()
+    with lock.workspace_lock(tmp_path) as path:
+        assert path == Path(userstate.locks_dir()) / f"{digest}.lock"
+        assert path.is_file()
+        assert path.parent != lock.legacy_lock_path_for(tmp_path).parent
+
+
+@_POSIX_ONLY
+def test_missing_state_directories_are_created_owner_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `locks` directory AND the OpenKOS state directory above it are
+    created owner-only, even under a permissive umask."""
+    state = tmp_path.parent / f"{tmp_path.name}-state" / "openkos"
+    monkeypatch.setattr(userstate, "locks_dir", lambda *a, **k: state / "locks")
+    old = os.umask(0o000)
+    try:
+        with lock.workspace_lock(tmp_path):
+            pass
+    finally:
+        os.umask(old)
+
+    assert stat.S_IMODE((state / "locks").stat().st_mode) == 0o700
+    assert stat.S_IMODE(state.stat().st_mode) == 0o700
+
+
+def test_a_symlinked_workspace_root_shares_one_lock_across_processes(
+    tmp_path: Path,
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(real)
+    holder = _spawn(_HOLDER, real)
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ACQUIRED"
+
+        assert _run_contender(linked) == "BUSY"
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=60)
+
+
+def test_an_older_openkos_holding_only_the_legacy_lock_still_excludes(
+    tmp_path: Path,
+) -> None:
+    holder = _spawn(_LEGACY_HOLDER, tmp_path)
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ACQUIRED"
+        # Precondition: the legacy holder never touched the state-directory lock.
+        assert not lock.lock_path_for(tmp_path).exists()
+
+        with pytest.raises(lock.WorkspaceBusyError), lock.workspace_lock(tmp_path):
+            pytest.fail("the legacy lock was held; this must refuse")
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=60)
+
+
+def test_a_refusal_for_the_legacy_lock_leaves_the_state_lock_free(
+    tmp_path: Path,
+) -> None:
+    """Contention on the second lock must release the first, or one refused run
+    would wedge the workspace for every newer process."""
+    holder = _spawn(_LEGACY_HOLDER, tmp_path)
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ACQUIRED"
+        with pytest.raises(lock.WorkspaceBusyError), lock.workspace_lock(tmp_path):
+            pass
+
+        with lock._hold(lock.lock_path_for(tmp_path)):
+            pass  # the state-directory lock was released by the refused run
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=60)
+
+
+def test_a_held_acquisition_holds_both_locks_and_releases_both(
+    tmp_path: Path,
+) -> None:
+    with lock.workspace_lock(tmp_path):
+        for path in (
+            lock.lock_path_for(tmp_path),
+            lock.legacy_lock_path_for(tmp_path),
+        ):
+            with pytest.raises(lock.WorkspaceBusyError), lock._hold(path):
+                pass
+
+    for path in (lock.lock_path_for(tmp_path), lock.legacy_lock_path_for(tmp_path)):
+        with lock._hold(path):
+            pass
+
+
+@_POSIX_ONLY
+def test_an_untrusted_legacy_lock_directory_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_tmp = tmp_path.parent / f"{tmp_path.name}-legacy"
+    legacy_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(legacy_tmp))
+    directory = legacy_tmp / f"{lock.LEGACY_LOCK_DIR_PREFIX}-{os.geteuid()}"
+    directory.mkdir()
+    directory.chmod(0o755)
+
+    with (
+        pytest.raises(lock.WorkspaceLockUnavailableError) as excinfo,
+        lock.workspace_lock(tmp_path),
+    ):
+        pytest.fail("unreachable")
+
+    assert str(directory) in str(excinfo.value)

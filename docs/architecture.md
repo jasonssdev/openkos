@@ -78,7 +78,7 @@ openkos/
 │   ├── lint.py  lifecycle.py  sensitivity.py
 │   ├── event_dates.py  source_date.py  # bounded event-date resolver; a Source's event_date from evidence
 │   ├── read_outcome.py           # shared "a read verb's check could not run" vocabulary
-│   ├── fsio.py  lock.py          # filesystem primitives; interprocess lock
+│   ├── fsio.py  lock.py  userstate.py  # filesystem primitives; interprocess lock; per-user state/lock/log directories
 │   ├── prompt_budget.py  source_title.py
 │   └── py.typed
 ├── tests/                        # unit/ (incl. unit/e2e) · smoke/ (packaging)
@@ -108,7 +108,7 @@ A few conventions keep the repository clean as it grows:
 - **Ship types.** Include an empty `src/openkos/py.typed` marker so type information is published to tools and to packages that extend OpenKOS.
 - **Internal seams are `typing.Protocol`.** Structural typing lets an implementation satisfy a seam without importing or subclassing it. Today this is used inside the engine (the graph, vector, LLM, and embedding seams); publishing any of it as a third-party extension point is a roadmap item and would need its own ADR.
 - **The core is synchronous.** The CLI, the application services, the extraction pipeline, and the stores are plain sync code. The `mcp` adapter is the one async edge over that core today: it owns the only event loop reaching into `mcp/`, and each tool call runs the synchronous application services on its own worker thread (ADR-0021, ADR-0027). A future local API would form its async edge the same way; parallel work such as batch embedding also uses a thread pool from sync code. The core itself is not made async — which is why ADR-0018's services are specified as synchronous.
-- **Layering is a followed convention, partially guarded by AST tests.** The canonical layer (`model`, `bundle`, `vcs`) does not depend on the derived layer (`state`, `retrieval`, `graph`); derived depends on canonical, never the reverse. `fsio` and `lock` are leaf modules that import nothing from `openkos`, so either layer may use them. AST import guards pin parts of it: `tests/unit/bundle/test_layering.py`, `tests/unit/resolution/test_layering.py`, `tests/unit/retrieval/test_layering.py`, `tests/unit/mcp/test_layering.py`, and the canonical-layer check in `tests/unit/graph/test_base.py`. The rest is not automated; a tool such as import-linter would guard every boundary in CI and is not wired.
+- **Layering is a followed convention, partially guarded by AST tests.** The canonical layer (`model`, `bundle`, `vcs`) does not depend on the derived layer (`state`, `retrieval`, `graph`); derived depends on canonical, never the reverse. `fsio`, `lock` and `userstate` are leaf modules that import only other leaf modules (`userstate` imports nothing from `openkos`), so either layer may use them. AST import guards pin parts of it: `tests/unit/bundle/test_layering.py`, `tests/unit/resolution/test_layering.py`, `tests/unit/retrieval/test_layering.py`, `tests/unit/mcp/test_layering.py`, and the canonical-layer check in `tests/unit/graph/test_base.py`. The rest is not automated; a tool such as import-linter would guard every boundary in CI and is not wired.
 - **The OKF adapter is one seam.** Everything that knows the on-disk shape of the format — parsing and emitting frontmatter, the reserved-file structure, the conformance rules of §11 — lives in `model/okf.py` and nowhere else. The rest of the engine works with Knowledge Objects and never touches the format directly. This is deliberate risk containment: OKF is pre-1.0 (v0.2), and §12 permits a major version to rename required fields or change reserved filenames. Keeping the format behind one module makes a spec revision a contained change to one file instead of a search across the codebase, and it is the reason we can adopt a young standard without betting the engine on it.
 
 These conventions describe the code as it stands; they change when a decision changes, and a change worth keeping becomes an ADR.
@@ -276,11 +276,16 @@ which is exactly why `query --save` degrades to "could not check for
 near-duplicates" and files the insight anyway rather than refusing.
 
 **Ephemeral, outside the workspace entirely.** The interprocess mutation lock
-([#925](https://github.com/jasonssdev/openkos/issues/925)) lives in a per-user
-temp directory keyed by the workspace's real path, not under `.openkos/`. It
-holds no content and survives nothing; a refusing command must leave the
-workspace byte- and structure-identical, and a lock file created inside it would
-break that.
+([#925](https://github.com/jasonssdev/openkos/issues/925)) lives in a `locks`
+directory under the account's OpenKOS state directory (`userstate.py`), keyed
+by the workspace's real path, not under `.openkos/`. The directory is resolved
+from the account database rather than the environment, because a lock is a
+rendezvous that every process of the user must find in the same place. It holds
+no content and survives nothing; a refusing command must leave the workspace
+byte- and structure-identical, and a lock file created inside it would break
+that. A lock run also takes the earlier temp-directory lock for one transitional
+release, so an older `openkos` still excludes a newer one
+([ADR-0036](adr/0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md)).
 
 ## How the layers arrived
 

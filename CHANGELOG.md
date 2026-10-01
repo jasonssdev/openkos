@@ -37,6 +37,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   names the verb you ran and says another OpenKOS process is using the
   workspace's derived stores and that a re-run is safe.
 
+- The workspace lock file moved from the OS temp directory to a per-user state
+  directory (`~/.local/state/openkos/locks/` on Linux,
+  `~/Library/Application Support/openkos/locks/` on macOS,
+  `%LOCALAPPDATA%\openkos\locks\` on Windows), resolved from the account
+  database rather than `$HOME` or `$XDG_STATE_HOME`
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)). For one
+  transitional release a run also takes the old temp-directory lock, so an
+  older `openkos` still excludes a newer one. The owner-only checks on the
+  directory are unchanged.
+
 ### Fixed
 
 - `suggest-volatility` no longer tells an `openai-compatible` workspace to start

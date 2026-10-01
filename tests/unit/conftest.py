@@ -114,6 +114,7 @@ from typing import Any
 
 import pytest
 
+from openkos import userstate
 from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import (
     BackendHostLocality,
@@ -297,6 +298,24 @@ def _no_network_by_default(
         )
     for function in BLOCKED_SOCKET_FUNCTIONS:
         monkeypatch.setattr(socket, function, _refusal(request, function, bound=False))
+
+
+@pytest.fixture(autouse=True)
+def _private_lock_directory(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point the workspace lock's state directory at a private per-test path
+    (ADR-0036).
+
+    The real location is under the developer's home, where a suite that locks
+    workspaces would leave lock files behind and share them across tests. It is
+    redirected by patching `userstate.locks_dir`, never through `HOME` or
+    `XDG_STATE_HOME`: the lock deliberately ignores both, so setting them would
+    prove nothing and move nothing. Tests that spawn a second process pass the
+    directory on explicitly (see `tests/unit/test_lock.py`).
+    """
+    directory = tmp_path_factory.mktemp("userstate") / "locks"
+    monkeypatch.setattr(userstate, "locks_dir", lambda *a, **k: directory)
 
 
 @pytest.fixture(autouse=True)
