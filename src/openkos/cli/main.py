@@ -1,5 +1,7 @@
 """Typer application object exposed as the `openkos` console script."""
 
+import contextlib
+import contextvars
 import dataclasses
 import functools
 import glob
@@ -12,7 +14,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
@@ -402,8 +404,27 @@ def _add_wait_option(wrapper: Callable[..., object], fn: Callable[..., object]) 
     wrapper.__annotations__ = {**fn.__annotations__, _WAIT_PARAM: int}
 
 
+_COMMIT_SECTION: contextvars.ContextVar[lock_wait.CommitSection | None] = (
+    contextvars.ContextVar("openkos_commit_section", default=None)
+)
+"""The `CommitSection` the running verb enters around its commit phase (#1137,
+ADR-0036). Set by `_guard_workspace_lock(..., commit_phase=True)` for the
+duration of the verb's body and read by `_commit_section()`."""
+
+
+def _commit_section() -> AbstractContextManager[None]:
+    """Enter the workspace lock for one commit phase, under the `--wait` policy
+    the verb was invoked with. Outside a commit-phase verb (a unit test calling
+    a helper directly, or a run with no usable workspace, which refuses before
+    reaching a commit phase) it holds nothing."""
+    factory = _COMMIT_SECTION.get()
+    return factory() if factory is not None else contextlib.nullcontext()
+
+
 def _guard_workspace_lock(
     command_name: str,
+    *,
+    commit_phase: bool = False,
 ) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
     """Hold the workspace's exclusive mutation lock for one command's body (#925).
 
@@ -425,6 +446,13 @@ def _guard_workspace_lock(
     plain re-run is exactly equivalent once the other process finishes. That is
     precisely a busy workspace's contract, so it reuses the code scripts
     already treat as retryable rather than inventing a second one.
+
+    `commit_phase=True` is the split verb (#1137, ADR-0036): the guard takes no
+    lock around the body. It publishes the `--wait`-policy `CommitSection` the
+    body enters, with `_commit_section()`, around its commit phase only, so a
+    model call or a question to the operator never holds the lock. Contention
+    and a derived store's busy timeout raised from inside the commit phase
+    reach the same refusals below.
     """
 
     def decorate(fn: Callable[..., _T]) -> Callable[..., _T]:
@@ -443,9 +471,20 @@ def _guard_workspace_lock(
                 )
 
             try:
-                with lock_wait.acquire_with_backoff(
-                    root, wait_seconds=wait, on_wait=announce_wait
-                ):
+                with contextlib.ExitStack() as held:
+                    if commit_phase:
+                        token = _COMMIT_SECTION.set(
+                            lock_wait.locked_commit_section(
+                                root, wait_seconds=wait, on_wait=announce_wait
+                            )
+                        )
+                        held.callback(_COMMIT_SECTION.reset, token)
+                    else:
+                        held.enter_context(
+                            lock_wait.acquire_with_backoff(
+                                root, wait_seconds=wait, on_wait=announce_wait
+                            )
+                        )
                     return fn(*args, **kwargs)
             except lock.WorkspaceBusyError as exc:
                 typer.echo(
@@ -6973,7 +7012,7 @@ def backfill_sensitivity_cmd(
     ),
     rich_help_panel="Maintain",
 )
-@_guard_workspace_lock("sync-tags")
+@_guard_workspace_lock("sync-tags", commit_phase=True)
 def sync_tags_cmd(
     source_id: str | None = typer.Argument(
         None,
@@ -7114,34 +7153,44 @@ def sync_tags_cmd(
             typer.echo(prepared.confirmation.non_tty_refusal, err=True)
             raise typer.Exit(code=1)
 
-    # Issue #306: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    _reject_drifted_targets(
-        layout,
-        {root / rel: content for rel, content in prepared.baselines.items()},
-        "sync-tags",
-    )
-
-    try:
-        landed = application_lifecycle.sync_tags_core(layout, prepared)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos sync-tags: failed while writing the sync-tags -- {exc}.",
-            err=True,
+    # The commit phase (#1137): everything above ran without the workspace lock.
+    with _commit_section():
+        # Issue #306: every byte below was computed from a pre-prompt read, so
+        # re-validate each target now -- after the gate, before the first
+        # write. The read dependencies ride along: a member that stopped being
+        # grounded in its Source while the prompt waited must not be tagged.
+        _reject_drifted_targets(
+            layout,
+            {
+                root / rel: content
+                for rel, content in (
+                    *prepared.read_dependencies.items(),
+                    *prepared.baselines.items(),
+                )
+            },
+            "sync-tags",
         )
-        raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos sync-tags: added tags to {len(prepared.additions)} "
-        f"concept(s) ({log_path.name} updated)."
-    )
+        try:
+            landed = application_lifecycle.sync_tags_core(layout, prepared)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos sync-tags: failed while writing the sync-tags -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-    commit_subject = (
-        f"openkos: sync-tags {prepared.roots[0]}"
-        if source_id is not None
-        else "openkos: sync-tags --all"
-    )
-    _autocommit(root, landed, commit_subject)
+        typer.echo(
+            f"openkos sync-tags: added tags to {len(prepared.additions)} "
+            f"concept(s) ({log_path.name} updated)."
+        )
+
+        commit_subject = (
+            f"openkos: sync-tags {prepared.roots[0]}"
+            if source_id is not None
+            else "openkos: sync-tags --all"
+        )
+        _autocommit(root, landed, commit_subject)
 
     # #640: `cfg` already read above -- a tag write changes the embedding
     # input (design Decision 7), so this is not suppressed.
@@ -7156,7 +7205,7 @@ def sync_tags_cmd(
     ),
     rich_help_panel="Maintain",
 )
-@_guard_workspace_lock("normalize-names")
+@_guard_workspace_lock("normalize-names", commit_phase=True)
 def normalize_names_cmd(
     auto: bool = typer.Option(
         False,
@@ -7323,159 +7372,162 @@ def normalize_names_cmd(
             )
             raise typer.Exit(code=1)
 
-    try:
-        log_bytes, log_text = _snapshot_read(log_path)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos normalize-names: failed while reading {log_path.name} -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    # Issue #306-style guard: `log.md` is re-validated against its
-    # pre-prompt snapshot immediately before the first write.
-    _reject_drifted_targets(layout, {log_path: log_bytes}, "normalize-names")
-
-    # Purpose-built drift re-check (design D4), immediately before Phase
-    # B: nothing here rewrites file BYTES, so `_reject_drifted_targets`'
-    # bytes-comparison contract does not apply to the rename targets
-    # themselves. Each planned entry is re-validated against current
-    # on-disk state; any failure demotes it to a reported skip, never a
-    # crash.
-    final_renames: list[lint_check.NonNfcEntry] = []
-    drift_skips: list[tuple[lint_check.NonNfcEntry, str, str]] = []
-    for entry in planned:
+    # The commit phase (#1137): the scan, the preview and the prompt above held
+    # no workspace lock.
+    with _commit_section():
         try:
-            current_listing = os.listdir(entry.path.parent)  # noqa: PTH208
-        except OSError:
-            drift_skips.append((entry, "vanished", "vanished"))
-            continue
-        if entry.raw_name not in current_listing:
-            drift_skips.append((entry, "vanished", "vanished"))
-            continue
-        if entry.nfc_name in current_listing:
-            drift_skips.append(
-                (entry, "collision", f"{entry.nfc_name!r} already exists")
+            log_bytes, log_text = _snapshot_read(log_path)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos normalize-names: failed while reading {log_path.name} -- {exc}.",
+                err=True,
             )
-            continue
+            raise typer.Exit(code=1) from exc
+
+        # Issue #306-style guard: `log.md` is re-validated against its
+        # pre-prompt snapshot immediately before the first write.
+        _reject_drifted_targets(layout, {log_path: log_bytes}, "normalize-names")
+
+        # Purpose-built drift re-check (design D4), immediately before Phase
+        # B: nothing here rewrites file BYTES, so `_reject_drifted_targets`'
+        # bytes-comparison contract does not apply to the rename targets
+        # themselves. Each planned entry is re-validated against current
+        # on-disk state; any failure demotes it to a reported skip, never a
+        # crash.
+        final_renames: list[lint_check.NonNfcEntry] = []
+        drift_skips: list[tuple[lint_check.NonNfcEntry, str, str]] = []
+        for entry in planned:
+            try:
+                current_listing = os.listdir(entry.path.parent)  # noqa: PTH208
+            except OSError:
+                drift_skips.append((entry, "vanished", "vanished"))
+                continue
+            if entry.raw_name not in current_listing:
+                drift_skips.append((entry, "vanished", "vanished"))
+                continue
+            if entry.nfc_name in current_listing:
+                drift_skips.append(
+                    (entry, "collision", f"{entry.nfc_name!r} already exists")
+                )
+                continue
+            try:
+                drifted_to_symlink = entry.path.is_symlink()
+            except OSError:
+                drifted_to_symlink = False
+            if drifted_to_symlink:
+                drift_skips.append((entry, "symlink", "symlink"))
+                continue
+            final_renames.append(entry)
+
+        if not final_renames:
+            typer.echo(
+                "openkos normalize-names: every planned rename drifted away "
+                "before it could be applied -- nothing was written, no log "
+                "entry was appended, and no commit was created."
+            )
+            return
+
+        all_skips = skips + drift_skips
+        pairs = ", ".join(
+            f"{entry.rel_posix!r} -> {entry.nfc_name!r}" for entry in final_renames
+        )
+        skip_kind_counts = Counter(kind for _entry, kind, _reason in all_skips)
+        skip_detail = ", ".join(
+            f"{kind}: {count}" for kind, count in sorted(skip_kind_counts.items())
+        )
+        # Design D6's bounded log line: counts always; the renamed pairs are
+        # listed inline only for a small batch (<= 5 total entries), so the
+        # line stays single (`insert_log_entry` rejects newlines) and never
+        # grows unbounded with the batch size (Key Decisions Recorded, b).
+        total_entries = len(final_renames) + len(all_skips)
+        if total_entries <= 5:
+            log_line = (
+                f"**Normalize-names**: Renamed {len(final_renames)} on-disk "
+                f"name(s) to NFC: {pairs}. Skipped {len(all_skips)}"
+                + (f" ({skip_detail})" if all_skips else "")
+                + "."
+            )
+        else:
+            log_line = (
+                f"**Normalize-names**: Renamed {len(final_renames)} on-disk "
+                f"name(s) to NFC. Skipped {len(all_skips)}"
+                + (f" ({skip_detail})" if all_skips else "")
+                + "."
+            )
         try:
-            drifted_to_symlink = entry.path.is_symlink()
-        except OSError:
-            drifted_to_symlink = False
-        if drifted_to_symlink:
-            drift_skips.append((entry, "symlink", "symlink"))
-            continue
-        final_renames.append(entry)
-
-    if not final_renames:
-        typer.echo(
-            "openkos normalize-names: every planned rename drifted away "
-            "before it could be applied -- nothing was written, no log "
-            "entry was appended, and no commit was created."
-        )
-        return
-
-    all_skips = skips + drift_skips
-    pairs = ", ".join(
-        f"{entry.rel_posix!r} -> {entry.nfc_name!r}" for entry in final_renames
-    )
-    skip_kind_counts = Counter(kind for _entry, kind, _reason in all_skips)
-    skip_detail = ", ".join(
-        f"{kind}: {count}" for kind, count in sorted(skip_kind_counts.items())
-    )
-    # Design D6's bounded log line: counts always; the renamed pairs are
-    # listed inline only for a small batch (<= 5 total entries), so the
-    # line stays single (`insert_log_entry` rejects newlines) and never
-    # grows unbounded with the batch size (Key Decisions Recorded, b).
-    total_entries = len(final_renames) + len(all_skips)
-    if total_entries <= 5:
-        log_line = (
-            f"**Normalize-names**: Renamed {len(final_renames)} on-disk "
-            f"name(s) to NFC: {pairs}. Skipped {len(all_skips)}"
-            + (f" ({skip_detail})" if all_skips else "")
-            + "."
-        )
-    else:
-        log_line = (
-            f"**Normalize-names**: Renamed {len(final_renames)} on-disk "
-            f"name(s) to NFC. Skipped {len(all_skips)}"
-            + (f" ({skip_detail})" if all_skips else "")
-            + "."
-        )
-    try:
-        new_log_text = bundle_log.insert_log_entry(
-            log_text, datetime.now(UTC).astimezone().date(), log_line
-        )
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos normalize-names: failed while preparing the "
-            f"normalize-names -- {exc}.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    landed: list[str] = []
-    applied_raw_rels: list[str] = []
-    try:
-        for entry in final_renames:
-            # `entry.path` is the RAW spelling captured at Phase A/scan
-            # time; `entry.rel_posix` is already NFC-normalized (design
-            # D1), so it names the entry's NEW path, never its old one --
-            # using it for `old_rel` would stage the wrong pathspec.
-            old_rel = entry.path.relative_to(root).as_posix()
-            fsio.rename_two_step(entry.path, entry.nfc_name)
-            landed.append(old_rel)
-            applied_raw_rels.append(old_rel)
-        # New paths are resolved only AFTER the whole batch: the path
-        # `rename_two_step` returns names the entry under its ancestors'
-        # spellings AT RENAME TIME, and deepest-first means a later
-        # ancestor rename carries the entry along, so that momentary
-        # spelling goes stale before `_autocommit` ever sees it (review
-        # R3-001). The final spelling normalizes exactly the segments
-        # whose own rename APPLIED -- never a blanket NFC over the whole
-        # path, because an ancestor skipped at drift time (collision)
-        # keeps its raw spelling, and its NFC twin names the COLLIDING
-        # sibling, not this entry.
-        applied = set(applied_raw_rels)
-
-        def _final_rel(raw_rel: str) -> str:
-            parts = raw_rel.split("/")
-            return "/".join(
-                unicodedata.normalize("NFC", part)
-                if "/".join(parts[: index + 1]) in applied
-                else part
-                for index, part in enumerate(parts)
+            new_log_text = bundle_log.insert_log_entry(
+                log_text, datetime.now(UTC).astimezone().date(), log_line
             )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos normalize-names: failed while preparing the "
+                f"normalize-names -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-        # Strictly AFTER the write (issue #495): `landed` doubles as the
-        # failure report, which promises OLD paths only, and as
-        # `_autocommit`'s staging scope, which needs the final spellings
-        # too. Extending before the write let a failure AT the write
-        # report both spellings for the same entry.
-        fsio.write_atomic(log_path, new_log_text)
-        landed.extend(_final_rel(raw_rel) for raw_rel in applied_raw_rels)
-        landed.append("bundle/log.md")
-    except (OSError, ValueError) as exc:
-        landed_suffix = (
-            f"Already landed (left renamed, not rolled back): {', '.join(landed)}."
-            if landed
-            else "No path was written."
-        )
+        landed: list[str] = []
+        applied_raw_rels: list[str] = []
+        try:
+            for entry in final_renames:
+                # `entry.path` is the RAW spelling captured at Phase A/scan
+                # time; `entry.rel_posix` is already NFC-normalized (design
+                # D1), so it names the entry's NEW path, never its old one --
+                # using it for `old_rel` would stage the wrong pathspec.
+                old_rel = entry.path.relative_to(root).as_posix()
+                fsio.rename_two_step(entry.path, entry.nfc_name)
+                landed.append(old_rel)
+                applied_raw_rels.append(old_rel)
+            # New paths are resolved only AFTER the whole batch: the path
+            # `rename_two_step` returns names the entry under its ancestors'
+            # spellings AT RENAME TIME, and deepest-first means a later
+            # ancestor rename carries the entry along, so that momentary
+            # spelling goes stale before `_autocommit` ever sees it (review
+            # R3-001). The final spelling normalizes exactly the segments
+            # whose own rename APPLIED -- never a blanket NFC over the whole
+            # path, because an ancestor skipped at drift time (collision)
+            # keeps its raw spelling, and its NFC twin names the COLLIDING
+            # sibling, not this entry.
+            applied = set(applied_raw_rels)
+
+            def _final_rel(raw_rel: str) -> str:
+                parts = raw_rel.split("/")
+                return "/".join(
+                    unicodedata.normalize("NFC", part)
+                    if "/".join(parts[: index + 1]) in applied
+                    else part
+                    for index, part in enumerate(parts)
+                )
+
+            # Strictly AFTER the write (issue #495): `landed` doubles as the
+            # failure report, which promises OLD paths only, and as
+            # `_autocommit`'s staging scope, which needs the final spellings
+            # too. Extending before the write let a failure AT the write
+            # report both spellings for the same entry.
+            fsio.write_atomic(log_path, new_log_text)
+            landed.extend(_final_rel(raw_rel) for raw_rel in applied_raw_rels)
+            landed.append("bundle/log.md")
+        except (OSError, ValueError) as exc:
+            landed_suffix = (
+                f"Already landed (left renamed, not rolled back): {', '.join(landed)}."
+                if landed
+                else "No path was written."
+            )
+            typer.echo(
+                f"openkos normalize-names: failed while writing the "
+                f"normalize-names -- {exc}. {landed_suffix}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
         typer.echo(
-            f"openkos normalize-names: failed while writing the "
-            f"normalize-names -- {exc}. {landed_suffix}",
-            err=True,
+            f"openkos normalize-names: renamed {len(final_renames)} on-disk "
+            f"name(s) ({log_path.name} updated): {pairs}."
         )
-        raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos normalize-names: renamed {len(final_renames)} on-disk "
-        f"name(s) ({log_path.name} updated): {pairs}."
-    )
+        _autocommit(root, landed, "openkos: normalize-names")
 
-    _autocommit(root, landed, "openkos: normalize-names")
-
-    # #640: a rename changes concept ids, which every derived store keys on.
+        # #640: a rename changes concept ids, which every derived store keys on.
     _refresh_derived_after_write(layout, cfg, verb="normalize-names")
 
 
@@ -13608,7 +13660,7 @@ def doctor() -> None:
     ),
     rich_help_panel="Maintain",
 )
-@_guard_workspace_lock("repair")
+@_guard_workspace_lock("repair", commit_phase=True)
 def repair() -> None:
     """Read-write migration verb, thin over `application.repair` (ADR-0018,
     okf-v02-migration Phase 6): extracts every survivor's OWN frontmatter-
@@ -13716,105 +13768,112 @@ def repair() -> None:
             err=True,
         )
 
-    # Issue #313's precedent: every byte in `plan.baselines` was computed
-    # from `plan_repair`'s own reads, so re-validate each target now --
-    # before the first write -- exactly like every other mutating verb.
-    _reject_drifted_targets(layout, plan.baselines, "repair")
-
-    try:
-        outcome = application_repair.apply_repair(root, plan)
-    except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos repair: failed while writing the migration -- {exc}.", err=True
-        )
-        raise typer.Exit(code=1) from exc
-
-    if plan.extraction:
-        n = len(plan.extraction)
-        typer.echo(
-            f"openkos repair: migrated {n} ledger{'s' if n != 1 else ''} to "
-            "bundle/.state/ledger/."
-        )
-    # A rewrite whose ONLY change is its deprecated-status export (issue
-    # #1075) touched no OKF v0.1->v0.2 migration rule at all, so it must
-    # not inflate this "migrated N documents to OKF 0.2" count -- filtered
-    # to rewrites where at least one migration rule actually fired.
-    migrated_rewrites = [
-        rewrite
-        for rewrite in plan.document_rewrites
-        if rewrite.changes.generated
-        or rewrite.changes.status
-        or rewrite.changes.sources
-        or rewrite.changes.citations_removed
-    ]
-    if migrated_rewrites:
-        n = len(migrated_rewrites)
-        generated = sum(rewrite.changes.generated for rewrite in migrated_rewrites)
-        status = sum(rewrite.changes.status for rewrite in migrated_rewrites)
-        sources = sum(rewrite.changes.sources for rewrite in migrated_rewrites)
-        citations_removed = sum(
-            rewrite.changes.citations_removed for rewrite in migrated_rewrites
-        )
-        typer.echo(
-            f"openkos repair: migrated {n} document{'s' if n != 1 else ''} to "
-            f"OKF 0.2 (generated: {generated}, status: {status}, sources: "
-            f"{sources}, empty # Citations removed: {citations_removed})."
-        )
-    exported = sum(
-        1
-        for rewrite in plan.document_rewrites
-        if rewrite.changes.export is okf.ExportOutcome.EXPORT
-    )
-    withdrawn = sum(
-        1
-        for rewrite in plan.document_rewrites
-        if rewrite.changes.export is okf.ExportOutcome.WITHDRAW
-    )
-    dropped_marker = sum(
-        1
-        for rewrite in plan.document_rewrites
-        if rewrite.changes.export is okf.ExportOutcome.DROP_MARKER
-    )
-    if exported or withdrawn or dropped_marker:
-        typer.echo(
-            f"openkos repair: deprecated-status export -- {exported} "
-            f"exported, {withdrawn} withdrawn, {dropped_marker} marker(s) "
-            "dropped."
-        )
-    if plan.sidecar_rewrites:
-        n = len(plan.sidecar_rewrites)
-        typer.echo(
-            f"openkos repair: migrated {n} merge-ledger sidecar"
-            f"{'s' if n != 1 else ''} to OKF 0.2."
-        )
-    if plan.index_new_text is not None:
-        typer.echo("openkos repair: okf_version 0.1 -> 0.2 in bundle/index.md.")
-    if plan.legacy_citations_ids:
-        n = len(plan.legacy_citations_ids)
-        noun = "document" if n == 1 else "documents"
-        verb = "keeps" if n == 1 else "keep"
-        typer.echo(
-            f"openkos repair: left in place -- {n} {noun} {verb} a "
-            "hand-written # Citations list (legacy, OKF 0.2 section 13.1): "
-            f"{', '.join(plan.legacy_citations_ids)}"
+    # The commit phase (#1137): `plan_repair`'s whole-bundle walk above held no
+    # workspace lock. Issue #313's precedent: every byte in `plan.baselines`
+    # was computed from `plan_repair`'s own reads, so re-validate each target
+    # now -- before the first write -- exactly like every other mutating verb;
+    # the read dependencies (the documents whose `supersedes` edges decided an
+    # export) are re-validated with them.
+    with _commit_section():
+        _reject_drifted_targets(
+            layout, {**plan.read_dependencies, **plan.baselines}, "repair"
         )
 
-    parts: list[str] = []
-    if plan.extraction:
-        parts.append(
-            f"migrate {len(plan.extraction)} ledger(s) to bundle/.state/ledger/"
-        )
-    if (
-        plan.document_rewrites
-        or plan.sidecar_rewrites
-        or plan.index_new_text is not None
-    ):
-        parts.append(
-            f"migrate {len(plan.document_rewrites)} document(s) and "
-            f"{len(plan.sidecar_rewrites)} ledger sidecar(s) to OKF 0.2"
-        )
+        try:
+            outcome = application_repair.apply_repair(root, plan)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos repair: failed while writing the migration -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-    _autocommit(root, outcome.touched, f"openkos: repair ({'; '.join(parts)})")
+        if plan.extraction:
+            n = len(plan.extraction)
+            typer.echo(
+                f"openkos repair: migrated {n} ledger{'s' if n != 1 else ''} to "
+                "bundle/.state/ledger/."
+            )
+        # A rewrite whose ONLY change is its deprecated-status export (issue
+        # #1075) touched no OKF v0.1->v0.2 migration rule at all, so it must
+        # not inflate this "migrated N documents to OKF 0.2" count -- filtered
+        # to rewrites where at least one migration rule actually fired.
+        migrated_rewrites = [
+            rewrite
+            for rewrite in plan.document_rewrites
+            if rewrite.changes.generated
+            or rewrite.changes.status
+            or rewrite.changes.sources
+            or rewrite.changes.citations_removed
+        ]
+        if migrated_rewrites:
+            n = len(migrated_rewrites)
+            generated = sum(rewrite.changes.generated for rewrite in migrated_rewrites)
+            status = sum(rewrite.changes.status for rewrite in migrated_rewrites)
+            sources = sum(rewrite.changes.sources for rewrite in migrated_rewrites)
+            citations_removed = sum(
+                rewrite.changes.citations_removed for rewrite in migrated_rewrites
+            )
+            typer.echo(
+                f"openkos repair: migrated {n} document{'s' if n != 1 else ''} to "
+                f"OKF 0.2 (generated: {generated}, status: {status}, sources: "
+                f"{sources}, empty # Citations removed: {citations_removed})."
+            )
+        exported = sum(
+            1
+            for rewrite in plan.document_rewrites
+            if rewrite.changes.export is okf.ExportOutcome.EXPORT
+        )
+        withdrawn = sum(
+            1
+            for rewrite in plan.document_rewrites
+            if rewrite.changes.export is okf.ExportOutcome.WITHDRAW
+        )
+        dropped_marker = sum(
+            1
+            for rewrite in plan.document_rewrites
+            if rewrite.changes.export is okf.ExportOutcome.DROP_MARKER
+        )
+        if exported or withdrawn or dropped_marker:
+            typer.echo(
+                f"openkos repair: deprecated-status export -- {exported} "
+                f"exported, {withdrawn} withdrawn, {dropped_marker} marker(s) "
+                "dropped."
+            )
+        if plan.sidecar_rewrites:
+            n = len(plan.sidecar_rewrites)
+            typer.echo(
+                f"openkos repair: migrated {n} merge-ledger sidecar"
+                f"{'s' if n != 1 else ''} to OKF 0.2."
+            )
+        if plan.index_new_text is not None:
+            typer.echo("openkos repair: okf_version 0.1 -> 0.2 in bundle/index.md.")
+        if plan.legacy_citations_ids:
+            n = len(plan.legacy_citations_ids)
+            noun = "document" if n == 1 else "documents"
+            verb = "keeps" if n == 1 else "keep"
+            typer.echo(
+                f"openkos repair: left in place -- {n} {noun} {verb} a "
+                "hand-written # Citations list (legacy, OKF 0.2 section 13.1): "
+                f"{', '.join(plan.legacy_citations_ids)}"
+            )
+
+        parts: list[str] = []
+        if plan.extraction:
+            parts.append(
+                f"migrate {len(plan.extraction)} ledger(s) to bundle/.state/ledger/"
+            )
+        if (
+            plan.document_rewrites
+            or plan.sidecar_rewrites
+            or plan.index_new_text is not None
+        ):
+            parts.append(
+                f"migrate {len(plan.document_rewrites)} document(s) and "
+                f"{len(plan.sidecar_rewrites)} ledger sidecar(s) to OKF 0.2"
+            )
+
+        _autocommit(root, outcome.touched, f"openkos: repair ({'; '.join(parts)})")
     _refresh_derived_after_write(layout, None, verb="repair")
 
 

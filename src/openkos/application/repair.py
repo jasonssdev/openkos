@@ -58,7 +58,7 @@ idempotent, so a re-run completes it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from openkos import config, fsio, lifecycle
@@ -186,6 +186,12 @@ class RepairPlan:
     legacy_citations_ids: tuple[str, ...]
     blocked_export_ids: tuple[str, ...] = ()
     skipped_withdrawal_ids: tuple[str, ...] = ()
+    read_dependencies: dict[Path, bytes] = field(default_factory=dict)
+    """Every concept document the plan READ and does not write: the
+    deprecated-status export is decided from the whole bundle's `relations:`
+    edges (who supersedes whom, and whether that walk was complete), so a
+    document that is only an edge holder is an input (#1137, ADR-0036). The
+    commit phase re-validates them with `baselines`; disjoint from it."""
 
     @property
     def has_work(self) -> bool:
@@ -385,6 +391,12 @@ def plan_repair(bundle_dir: Path) -> RepairPlan | RepairRefusal:
             index_new_text = okf.dump_frontmatter(new_index_metadata, index_body)
             baselines[index_path] = index_bytes
 
+    read_dependencies = {
+        path: raw_bytes_by_id[concept_id]
+        for concept_id, path in paths_by_id.items()
+        if path not in baselines
+    }
+
     return RepairPlan(
         extraction=unmigrated,
         document_rewrites=list(document_rewrites.values()),
@@ -395,6 +407,7 @@ def plan_repair(bundle_dir: Path) -> RepairPlan | RepairRefusal:
         legacy_citations_ids=tuple(sorted(set(legacy_citations_ids))),
         blocked_export_ids=tuple(sorted(blocked_export_ids)),
         skipped_withdrawal_ids=tuple(sorted(skipped_withdrawal_ids)),
+        read_dependencies=read_dependencies,
     )
 
 
