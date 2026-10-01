@@ -16,7 +16,7 @@ import math
 import os
 import re
 import unicodedata
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
@@ -713,6 +713,47 @@ def parse_frontmatter_fragment(text: str) -> object:
     try:
         return yaml.safe_load(text)
     except yaml.YAMLError as exc:
+        raise FrontmatterError(str(exc)) from exc
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """`yaml.SafeLoader` that refuses a mapping repeating a key.
+
+    PyYAML silently keeps the LAST duplicate, so which value is in effect
+    would be invisible to the operator (#1233).
+    """
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[object, object]:
+    seen: set[object] = set()
+    for key_node, _value_node in node.value:
+        key = loader.construct_object(key_node, deep=True)
+        if isinstance(key, Hashable) and key in seen:
+            raise FrontmatterError(f"duplicate key {key!r}")
+        seen.add(key)
+    return loader.construct_mapping(node, deep=deep)
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping
+)
+
+
+def load_unique_key_yaml(text: str) -> object:
+    """Parse a whole YAML document with the safe loader, refusing duplicate keys.
+
+    For engine-owned YAML (`openkos.yaml`), NOT bundle frontmatter: OKF does
+    not forbid a repeated frontmatter key, so `load_frontmatter` keeps its
+    tolerant parse. Raises `FrontmatterError` on invalid YAML or a duplicate
+    key (the message names the key).
+    """
+    try:
+        return yaml.load(text, Loader=_UniqueKeyLoader)  # noqa: S506 -- SafeLoader subclass
+    except FrontmatterError:
+        raise
+    except _PARSE_ERRORS as exc:
         raise FrontmatterError(str(exc)) from exc
 
 

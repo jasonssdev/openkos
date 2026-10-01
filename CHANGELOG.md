@@ -15,6 +15,14 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Fixed
+
+- `openkos.yaml` with a repeated key (top-level or nested) is now refused, and
+  `openkos doctor` prints `[FAIL] Config valid` naming the key, instead of
+  `[PASS]` over a file whose last duplicate silently won
+  ([#1233](https://github.com/jasonssdev/openkos/issues/1233)). Bundle
+  frontmatter parsing is unchanged.
+
 ## [0.3.1] - 2026-10-01
 
 MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a

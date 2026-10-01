@@ -72,6 +72,13 @@ bundle-readable check at all.
 - THEN both the config-valid and Ollama-reachable checks print `[FAIL]`,
   and every other applicable check still prints its own result
 
+#### Scenario: A duplicated config key fails the config-valid check
+
+- GIVEN an initialized workspace whose `openkos.yaml` repeats a key
+- WHEN `openkos doctor` runs
+- THEN the config-valid check prints `[FAIL]` with a detail naming the
+  duplicated key, rather than `[PASS]` over the last duplicate
+
 #### Scenario: A raising bundle-readable check is reported not-run without discarding the rest
 
 - GIVEN an initialized workspace where `okf.survey_bundle` raises an

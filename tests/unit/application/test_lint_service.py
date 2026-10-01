@@ -21,6 +21,7 @@ property to preserve here, so one function is the whole service, not two."""
 
 import ast
 import inspect
+import re
 from pathlib import Path
 
 import pytest
@@ -194,11 +195,14 @@ def test_build_lint_report_combines_window_and_skip_notices(
     unparseable file must BOTH appear, exactly as the pre-extraction
     command body's single concatenation did."""
     layout = _workspace(tmp_path)
-    layout.config_path.write_text(
-        layout.config_path.read_text(encoding="utf-8")
-        + "freshness_window: not-a-duration\n",
-        encoding="utf-8",
+    # Replace the template's `freshness_window:` line: appending a second one
+    # would be a duplicate key, which `read_config` refuses (#1233).
+    cfg_text = re.sub(
+        r"(?m)^freshness_window:.*$",
+        "freshness_window: not-a-duration",
+        layout.config_path.read_text(encoding="utf-8"),
     )
+    layout.config_path.write_text(cfg_text, encoding="utf-8")
     concepts_dir = layout.bundle_dir / "concepts"
     concepts_dir.mkdir()
     (concepts_dir / "broken.md").write_text(

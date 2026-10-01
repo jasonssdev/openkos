@@ -242,6 +242,27 @@ def test_doctor_malformed_config_fails_and_exits_one(
     assert "[FAIL] Config valid" in result.stdout
 
 
+def test_doctor_duplicate_config_key_fails_naming_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A repeated top-level key in `openkos.yaml` prints `[FAIL] Config
+    valid` naming the key, not a silent `[PASS]` (#1233)."""
+    _init_workspace(tmp_path, monkeypatch)
+    cfg = tmp_path / "openkos.yaml"
+    cfg.write_text(cfg.read_text(encoding="utf-8") + "review: true\nreview: false\n")
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL]),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "[FAIL] Config valid" in result.stdout
+    assert "duplicate" in result.stdout
+    assert "'review'" in result.stdout
+
+
 def test_doctor_non_str_model_fails_and_exits_one_without_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
