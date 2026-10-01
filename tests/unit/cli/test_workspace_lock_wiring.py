@@ -107,6 +107,16 @@ def test_a_command_belongs_to_exactly_one_class() -> None:
     assert set(commands) >= _SELF_LOCKING_COMMANDS
 
 
+def test_daemon_is_the_self_locking_command_and_is_not_wrapped_in_the_lock() -> None:
+    """`daemon` runs for hours: wrapping it in the whole-verb lock would refuse
+    every person's command for as long as it lives. It takes the lock per commit
+    phase through the runner instead."""
+    commands = _registered_commands()
+
+    assert frozenset({"daemon"}) == _SELF_LOCKING_COMMANDS
+    assert getattr(commands["daemon"], "__openkos_locked_command__", None) is None
+
+
 def test_the_declared_lock_name_matches_the_registered_name() -> None:
     """The decorator's string is what the refusal prints, so a copy-paste slip
     would report the wrong verb to the operator. Cross-check it against the
