@@ -12603,7 +12603,7 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
     ),
     rich_help_panel="Explore",
 )
-@_guard_workspace_lock("query")
+@_guard_workspace_lock("query", commit_phase=True)
 def query(
     question: str = typer.Argument(
         ..., help="Natural-language question to answer from the bundle."
@@ -13327,99 +13327,112 @@ def query(
             )
             raise typer.Exit(code=1)
 
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write.
-    # `plan.path` is absent by necessity, not oversight -- see the docstring.
-    _reject_drifted_targets(
-        layout,
-        {save_index_path: index_bytes, save_log_path: log_bytes},
-        "query",
-    )
+    # The commit phase (#1137): everything above -- retrieval, the model call,
+    # the duplicate scan, the preview and the prompt -- ran with no lock held.
+    # Only the re-validation and the writes below hold it, so a human reading
+    # the preview never starves another writer.
+    with _commit_section_for(root)():
+        # Read dependencies first: the insight's level was folded from the
+        # cited concepts' sensitivity at staging, and a concurrent raise is
+        # not a drifted WRITE target, so the guard below cannot see it.
+        cited_drift = application_query.describe_cited_drift(plan, layout.bundle_dir)
+        if cited_drift is not None:
+            typer.echo(cited_drift, err=True)
+            raise typer.Exit(code=3)
 
-    answer_rel = f"bundle/{plan.link_dir}/{plan.slug}.md"
-    landed: list[str] = []
-    try:
-        # Write order: answer document BEFORE `index.md` BEFORE `log.md`
-        # (content before catalog, mirroring `ingest`'s D3): a mid-sequence
-        # failure can leave an uncataloged file on disk, never a catalog
-        # entry pointing at a file that does not exist. There is no
-        # cross-file rollback, matching every other mutating verb's
-        # documented limitation. `landed` records each path only AFTER its
-        # write returns, so a failure names exactly the paths already on
-        # disk (#331, mirroring `set-sensitivity`'s D9 shape).
-        plan.path.parent.mkdir(parents=True, exist_ok=True)
-        fsio.write_exclusive(plan.path, plan.content)
-        landed.append(answer_rel)
-        fsio.write_atomic(save_index_path, new_index_text)
-        landed.append("bundle/index.md")
-        fsio.write_atomic(save_log_path, new_log_text)
-        landed.append("bundle/log.md")
-    except (OSError, ValueError) as exc:
-        # Distinct from the refusal phases above on purpose (#234): this is
-        # reached only after the write phase began, so the answer document
-        # may already be on disk while the catalog is not. "refusing" would
-        # tell an operator nothing happened, which is exactly wrong here.
-        landed_suffix = (
-            f"Already written (left partially filed, not rolled back): "
-            f"{', '.join(landed)}."
-            if landed
-            else "No path was written."
+        # Issue #313: every byte below was computed from a pre-prompt read, so
+        # re-validate each target now -- after the gate, before the first write.
+        # `plan.path` is absent by necessity, not oversight -- see the docstring.
+        _reject_drifted_targets(
+            layout,
+            {save_index_path: index_bytes, save_log_path: log_bytes},
+            "query",
         )
-        typer.echo(
-            f"openkos query: failed while saving the answer -- {exc}. {landed_suffix}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos query: filed answer as bundle/{plan.link_dir}/{plan.slug}.md "
-        f"({save_index_path.name}, {save_log_path.name} updated)."
-    )
-    # Write-Time Advisory (issue #669, design D4): the spec-required
-    # success-message advisory, the `query --save` mirror of ingest's
-    # run-summary line -- fires even when `--auto` skips the confirmation
-    # prompt, since the preview block above can, in principle, be bypassed
-    # in ways the success message must never depend on. stdout, like
-    # `query`'s own success line -- `query --save` has no batch stdout
-    # contract to protect (unlike ingest's stderr notices, #349).
-    if plan.type_floor_raised:
-        typer.echo(
-            f"openkos query: 1 concept was born above the workspace "
-            f"sensitivity floor by type default ({save_type} -> "
-            f"{plan.sensitivity})."
-        )
-        if plan.sensitivity == "confidential":
-            typer.echo(
-                "openkos query: confidential concepts are excluded from "
-                "query, contradictions, and suggest-relations against a "
-                "non-local backend (#569)."
+        answer_rel = f"bundle/{plan.link_dir}/{plan.slug}.md"
+        landed: list[str] = []
+        try:
+            # Write order: answer document BEFORE `index.md` BEFORE `log.md`
+            # (content before catalog, mirroring `ingest`'s D3): a mid-sequence
+            # failure can leave an uncataloged file on disk, never a catalog
+            # entry pointing at a file that does not exist. There is no
+            # cross-file rollback, matching every other mutating verb's
+            # documented limitation. `landed` records each path only AFTER its
+            # write returns, so a failure names exactly the paths already on
+            # disk (#331, mirroring `set-sensitivity`'s D9 shape).
+            plan.path.parent.mkdir(parents=True, exist_ok=True)
+            fsio.write_exclusive(plan.path, plan.content)
+            landed.append(answer_rel)
+            fsio.write_atomic(save_index_path, new_index_text)
+            landed.append("bundle/index.md")
+            fsio.write_atomic(save_log_path, new_log_text)
+            landed.append("bundle/log.md")
+        except (OSError, ValueError) as exc:
+            # Distinct from the refusal phases above on purpose (#234): this is
+            # reached only after the write phase began, so the answer document
+            # may already be on disk while the catalog is not. "refusing" would
+            # tell an operator nothing happened, which is exactly wrong here.
+            landed_suffix = (
+                f"Already written (left partially filed, not rolled back): "
+                f"{', '.join(landed)}."
+                if landed
+                else "No path was written."
             )
+            typer.echo(
+                f"openkos query: failed while saving the answer -- {exc}. {landed_suffix}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
 
-    # #331: `query --save` was the ONE mutating path without the
-    # workspace-autocommit safety net, for no documented reason -- the
-    # Slice-2 exclusion list (workspace-autocommit spec: "Exclusions and
-    # Unconditional Behavior") names `reindex` output, `init`, and
-    # read-only verbs only, and `query --save` simply postdated the
-    # planning that produced the six-verb roster. Same call shape as every
-    # sibling: the exact Phase-B paths, workspace-relative POSIX, scoped
-    # `git add -- <paths>`, best-effort and non-fatal.
-    _autocommit(
-        root,
-        [answer_rel, "bundle/index.md", "bundle/log.md"],
-        f"openkos: query --save {plan.link_dir}/{plan.slug}",
-    )
+        typer.echo(
+            f"openkos query: filed answer as bundle/{plan.link_dir}/{plan.slug}.md "
+            f"({save_index_path.name}, {save_log_path.name} updated)."
+        )
+        # Write-Time Advisory (issue #669, design D4): the spec-required
+        # success-message advisory, the `query --save` mirror of ingest's
+        # run-summary line -- fires even when `--auto` skips the confirmation
+        # prompt, since the preview block above can, in principle, be bypassed
+        # in ways the success message must never depend on. stdout, like
+        # `query`'s own success line -- `query --save` has no batch stdout
+        # contract to protect (unlike ingest's stderr notices, #349).
+        if plan.type_floor_raised:
+            typer.echo(
+                f"openkos query: 1 concept was born above the workspace "
+                f"sensitivity floor by type default ({save_type} -> "
+                f"{plan.sensitivity})."
+            )
+            if plan.sensitivity == "confidential":
+                typer.echo(
+                    "openkos query: confidential concepts are excluded from "
+                    "query, contradictions, and suggest-relations against a "
+                    "non-local backend (#569)."
+                )
 
-    # #640: this verb used to end with "Run `openkos reindex` to make it
-    # searchable." -- with the write-time refresh, that instruction is FALSE
-    # on the success path, so searchability is claimed only when the refresh
-    # actually completed; the degrade path's advisory (inside the helper)
-    # carries the manual `openkos reindex` pointer instead.
-    # `query` printed the advisory before it embedded the question (#199),
-    # so the refresh must not repeat it (#353 item 4).
-    if _refresh_derived_after_write(
-        layout, cfg, verb="query", warn_nonlocal_host=False
-    ):
-        typer.echo("openkos query: the filed insight is indexed and searchable.")
+        # #331: `query --save` was the ONE mutating path without the
+        # workspace-autocommit safety net, for no documented reason -- the
+        # Slice-2 exclusion list (workspace-autocommit spec: "Exclusions and
+        # Unconditional Behavior") names `reindex` output, `init`, and
+        # read-only verbs only, and `query --save` simply postdated the
+        # planning that produced the six-verb roster. Same call shape as every
+        # sibling: the exact Phase-B paths, workspace-relative POSIX, scoped
+        # `git add -- <paths>`, best-effort and non-fatal.
+        _autocommit(
+            root,
+            [answer_rel, "bundle/index.md", "bundle/log.md"],
+            f"openkos: query --save {plan.link_dir}/{plan.slug}",
+        )
+
+        # #640: this verb used to end with "Run `openkos reindex` to make it
+        # searchable." -- with the write-time refresh, that instruction is FALSE
+        # on the success path, so searchability is claimed only when the refresh
+        # actually completed; the degrade path's advisory (inside the helper)
+        # carries the manual `openkos reindex` pointer instead.
+        # `query` printed the advisory before it embedded the question (#199),
+        # so the refresh must not repeat it (#353 item 4).
+        if _refresh_derived_after_write(
+            layout, cfg, verb="query", warn_nonlocal_host=False
+        ):
+            typer.echo("openkos query: the filed insight is indexed and searchable.")
 
 
 @app.command(

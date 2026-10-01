@@ -35,6 +35,12 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- `query` no longer blocks behind a running writer: a plain `query` takes no
+  workspace lock, and `query --save` holds it only for the filing itself, not
+  for retrieval, the model call or the confirmation prompt. The filing refuses
+  with exit `3`, writing nothing, when a cited concept's sensitivity changed
+  while the answer was computed
+
 - `merge`, `unmerge`, `forget`, `relate`, `set-sensitivity` and
   `set-volatility` no longer hold the workspace lock while they wait at a
   confirmation prompt or on a model call: they plan and ask with no lock and
