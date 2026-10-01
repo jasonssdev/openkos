@@ -20,12 +20,18 @@ account database for the effective uid, never from `$HOME`, and
 Every function takes the platform (and, where the environment legitimately
 matters, the environment and home) as an optional argument so each OS's
 layout is testable from any OS; the defaults read the running process.
+
+The path logic runs in the injected platform's own path semantics
+(`PurePosixPath` for POSIX, `PureWindowsPath` for `win32`), never the host's,
+and the functions return those pure paths: whether `/xdg/state` is absolute is
+a property of the platform being described, not of the machine running the
+test. A caller that touches the real filesystem wraps the result in `Path`.
 """
 
 import os
 import sys
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 
 APP_DIR_NAME = "openkos"
 LOCKS_DIR_NAME = "locks"
@@ -35,30 +41,42 @@ def _platform(platform: str | None) -> str:
     return sys.platform if platform is None else platform
 
 
-def _account_home() -> Path:
+def _flavour(platform: str) -> type[PurePath]:
+    return PureWindowsPath if platform == "win32" else PurePosixPath
+
+
+def _account_home(platform: str) -> PurePath:
     """The effective uid's home directory from the account database (POSIX),
-    never `$HOME`. Windows has no account database home; `Path.home()` is used
-    there, and only as the fallback when `%LOCALAPPDATA%` is unset."""
+    never `$HOME`. Windows has no account database home; the user profile is
+    used there, and only as the fallback when `%LOCALAPPDATA%` is unset."""
     if sys.platform == "win32":  # pragma: no cover - not exercised by Linux CI
-        return Path.home()
+        from pathlib import Path
+
+        return _flavour(platform)(str(Path.home()))
     import pwd
 
-    return Path(pwd.getpwuid(os.geteuid()).pw_dir)
+    return _flavour(platform)(pwd.getpwuid(os.geteuid()).pw_dir)
 
 
-def _windows_local_app_data(environ: Mapping[str, str], home: Path) -> Path:
+def _resolve_home(platform: str, home: PurePath | None) -> PurePath:
+    if home is None:
+        return _account_home(platform)
+    return _flavour(platform)(home)
+
+
+def _windows_local_app_data(environ: Mapping[str, str], home: PurePath) -> PurePath:
     configured = environ.get("LOCALAPPDATA")
     if configured:
-        return Path(configured)
+        return PureWindowsPath(configured)
     return home / "AppData" / "Local"
 
 
 def state_dir(
     platform: str | None = None,
     *,
-    home: Path | None = None,
+    home: PurePath | None = None,
     environ: Mapping[str, str] | None = None,
-) -> Path:
+) -> PurePath:
     """The account's OpenKOS state directory.
 
     `~/.local/state/openkos` on Linux and other POSIX systems,
@@ -67,7 +85,7 @@ def state_dir(
     the account database's, so `$HOME` and `$XDG_STATE_HOME` cannot move it.
     """
     name = _platform(platform)
-    resolved_home = _account_home() if home is None else home
+    resolved_home = _resolve_home(name, home)
     if name == "win32":
         env = os.environ if environ is None else environ
         return _windows_local_app_data(env, resolved_home) / APP_DIR_NAME
@@ -79,9 +97,9 @@ def state_dir(
 def locks_dir(
     platform: str | None = None,
     *,
-    home: Path | None = None,
+    home: PurePath | None = None,
     environ: Mapping[str, str] | None = None,
-) -> Path:
+) -> PurePath:
     """The directory holding one lock file per workspace."""
     return state_dir(platform, home=home, environ=environ) / LOCKS_DIR_NAME
 
@@ -89,9 +107,9 @@ def locks_dir(
 def log_dir(
     platform: str | None = None,
     *,
-    home: Path | None = None,
+    home: PurePath | None = None,
     environ: Mapping[str, str] | None = None,
-) -> Path:
+) -> PurePath:
     """The directory holding one log file per workspace.
 
     `${XDG_STATE_HOME:-~/.local/state}/openkos/logs` on Linux and other POSIX
@@ -101,15 +119,15 @@ def log_dir(
     """
     name = _platform(platform)
     env = os.environ if environ is None else environ
-    resolved_home = _account_home() if home is None else home
+    resolved_home = _resolve_home(name, home)
     if name == "win32":
         return _windows_local_app_data(env, resolved_home) / APP_DIR_NAME / "Logs"
     if name == "darwin":
         return resolved_home / "Library" / "Logs" / APP_DIR_NAME
     xdg = env.get("XDG_STATE_HOME", "")
-    xdg_base = Path(xdg) if xdg else None
+    xdg_base = PurePosixPath(xdg) if xdg else None
     if xdg_base is not None and xdg_base.is_absolute():
-        base = xdg_base
+        base: PurePath = xdg_base
     else:
         base = resolved_home / ".local" / "state"
     return base / APP_DIR_NAME / "logs"

@@ -10,7 +10,7 @@ directory honours `XDG_STATE_HOME`.
 
 import os
 import sys
-from pathlib import Path
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -19,7 +19,8 @@ from openkos import userstate
 
 pytestmark = pytest.mark.cross_platform_smoke
 
-_HOME = Path("/home/someone")
+_HOME = PurePosixPath("/home/someone")
+_WIN_HOME = PureWindowsPath("C:/Users/someone")
 
 
 @pytest.fixture(autouse=True)
@@ -48,22 +49,42 @@ def test_macos_state_and_locks_dirs() -> None:
 
 
 def test_windows_state_and_locks_dirs_use_localappdata() -> None:
-    env = {"LOCALAPPDATA": "/appdata/local"}
-    root = Path("/appdata/local") / "openkos"
-    assert userstate.state_dir("win32", home=_HOME, environ=env) == root
-    assert userstate.locks_dir("win32", home=_HOME, environ=env) == root / "locks"
+    env = {"LOCALAPPDATA": "C:\\Users\\someone\\AppData\\Local"}
+    root = PureWindowsPath("C:/Users/someone/AppData/Local/openkos")
+    assert userstate.state_dir("win32", home=_WIN_HOME, environ=env) == root
+    assert userstate.locks_dir("win32", home=_WIN_HOME, environ=env) == root / "locks"
 
 
 def test_windows_without_localappdata_falls_back_under_home() -> None:
-    assert (
-        userstate.state_dir("win32", home=_HOME, environ={})
-        == _HOME / "AppData" / "Local" / "openkos"
+    assert userstate.state_dir("win32", home=_WIN_HOME, environ={}) == (
+        _WIN_HOME / "AppData" / "Local" / "openkos"
     )
+
+
+@pytest.mark.parametrize(
+    ("platform", "flavour"),
+    [
+        ("linux", PurePosixPath),
+        ("darwin", PurePosixPath),
+        ("win32", PureWindowsPath),
+    ],
+)
+def test_every_result_uses_the_injected_platforms_path_semantics(
+    platform: str, flavour: type[PurePath]
+) -> None:
+    """Whether `/xdg/state` is absolute is a property of the platform being
+    described, not of the host running the test: results are pure paths in the
+    injected platform's flavour, whatever the host is."""
+    home = _WIN_HOME if platform == "win32" else _HOME
+    env = {"LOCALAPPDATA": "C:/local", "XDG_STATE_HOME": "/xdg/state"}
+    for function in (userstate.state_dir, userstate.locks_dir, userstate.log_dir):
+        result = function(platform, home=home, environ=env)
+        assert type(result) is flavour
 
 
 def test_linux_logs_honour_xdg_state_home() -> None:
     env = {"XDG_STATE_HOME": "/xdg/state"}
-    assert userstate.log_dir("linux", home=_HOME, environ=env) == Path(
+    assert userstate.log_dir("linux", home=_HOME, environ=env) == PurePosixPath(
         "/xdg/state/openkos/logs"
     )
 
@@ -83,12 +104,12 @@ def test_linux_logs_ignore_an_empty_or_relative_xdg_state_home(value: str) -> No
 
 
 def test_macos_and_windows_log_dirs() -> None:
-    env = {"LOCALAPPDATA": "/appdata/local", "XDG_STATE_HOME": "/xdg"}
+    env = {"LOCALAPPDATA": "C:/local", "XDG_STATE_HOME": "/xdg"}
     assert userstate.log_dir("darwin", home=_HOME, environ=env) == (
         _HOME / "Library/Logs/openkos"
     )
-    assert userstate.log_dir("win32", home=_HOME, environ=env) == Path(
-        "/appdata/local/openkos/Logs"
+    assert userstate.log_dir("win32", home=_WIN_HOME, environ=env) == (
+        PureWindowsPath("C:/local/openkos/Logs")
     )
 
 
@@ -101,7 +122,7 @@ def test_the_lock_dir_ignores_the_environment_on_posix(
     The account database's home is a sentinel no environment variable contains."""
     sentinel = "/sentinel-account-home"
     monkeypatch.setattr("pwd.getpwuid", lambda uid: SimpleNamespace(pw_dir=sentinel))
-    expected = Path(sentinel) / ".local/state/openkos/locks"
+    expected = PurePosixPath(sentinel) / ".local/state/openkos/locks"
 
     monkeypatch.setenv("HOME", "/env-one")
     monkeypatch.setenv("XDG_STATE_HOME", "/env-one/xdg")
@@ -126,5 +147,5 @@ def test_the_account_home_is_looked_up_for_the_effective_uid(
     monkeypatch.setattr("pwd.getpwuid", fake_getpwuid)
     monkeypatch.setattr(os, "geteuid", lambda: 4242)
 
-    assert userstate.state_dir("linux") == Path("/acct/.local/state/openkos")
+    assert userstate.state_dir("linux") == PurePosixPath("/acct/.local/state/openkos")
     assert seen == [4242]

@@ -145,7 +145,7 @@ def _ensure_private_dir(directory: Path, *, create_parent: bool = False) -> None
 def _lock_dir() -> Path:
     """The state-directory `locks` directory, created on demand owner-only and
     verified to be ours (#1134)."""
-    directory = userstate.locks_dir()
+    directory = Path(userstate.locks_dir())
     _ensure_private_dir(directory, create_parent=True)
     return directory
 

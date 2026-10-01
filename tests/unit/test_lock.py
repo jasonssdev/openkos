@@ -377,7 +377,7 @@ def _isolated_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     legacy_tmp = tmp_path.parent / f"{tmp_path.name}-legacy-tmp"
     legacy_tmp.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(legacy_tmp))
-    return userstate.locks_dir()
+    return Path(userstate.locks_dir())
 
 
 @_POSIX_ONLY
@@ -515,17 +515,26 @@ _LEGACY_HOLDER = textwrap.dedent(
 
 
 def test_the_lock_file_lives_in_the_state_directory_locks_dir(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Named by the sha256 of the real path, inside `userstate.locks_dir()`,
-    and nowhere under the OS temp directory."""
+    and NOT in the legacy temp-directory lock directory.
+
+    The OS temp directory is deliberately made an ANCESTOR of the redirected
+    state directory (as on Linux, where pytest's tmp_path is under `/tmp`), so
+    "not under the temp directory" would be false by construction; the property
+    that matters is that this is not the legacy directory.
+    """
     import hashlib
 
+    monkeypatch.setattr(
+        tempfile, "gettempdir", lambda: str(userstate.locks_dir().parent)
+    )
     digest = hashlib.sha256(os.path.realpath(tmp_path).encode()).hexdigest()
     with lock.workspace_lock(tmp_path) as path:
-        assert path == userstate.locks_dir() / f"{digest}.lock"
+        assert path == Path(userstate.locks_dir()) / f"{digest}.lock"
         assert path.is_file()
-        assert Path(tempfile.gettempdir()) not in path.parents
+        assert path.parent != lock.legacy_lock_path_for(tmp_path).parent
 
 
 @_POSIX_ONLY
