@@ -1370,6 +1370,11 @@ def _echo_commit_disclosure(sha: str, *, prefix: str = "") -> None:
     per-item stages use the two-space indent their `  rationale:` lines
     already use, since their commit is per accepted item.
 
+    The wording is deliberately conditional (issue #1221): every commit
+    appends to `bundle/log.md`, so reverting anything but the tip conflicts
+    there and leaves the bundle unparseable mid-revert. Advertising a bare
+    `git revert` for every commit would hand the user an unsafe undo.
+
     Only ever called with a real sha. `_autocommit` returns `None` on every
     degradation (not a repo, identity unset, commit failed, sha unreadable),
     and a caller that printed this anyway would be pointing the user at a
@@ -1386,7 +1391,10 @@ def _echo_commit_disclosure(sha: str, *, prefix: str = "") -> None:
     guarantee for five lines. The guard also puts the degradation where the
     output is composed, which is where a reader looks to see what a verb
     does and does not print."""
-    typer.echo(f"{prefix}committed as {sha} -- undo with `git revert {sha}`.")
+    typer.echo(
+        f"{prefix}committed as {sha} -- `git revert {sha}` undoes it only "
+        "while it is the latest commit."
+    )
 
 
 def _autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:

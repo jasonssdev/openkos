@@ -1380,7 +1380,7 @@ def test_invalid_scope_value_refuses(
 
 
 _COMMIT_DISCLOSURE_RE = re.compile(
-    r"committed as [0-9a-f]{7,40} -- undo with `git revert [0-9a-f]{7,40}`"
+    r"committed as [0-9a-f]{7,40} -- `git revert [0-9a-f]{7,40}` undoes it only while it is the latest commit."
 )
 """The auto-commit disclosure, with its two shas left as capture-free hex
 runs -- the ONE place a byte-for-byte parity comparison must tolerate a
@@ -1401,7 +1401,8 @@ def _mask_commit_sha(output: str) -> str:
     tolerance to the one difference that is legitimate: two runs in two
     DIFFERENT repositories necessarily write two different shas."""
     return _COMMIT_DISCLOSURE_RE.sub(
-        "committed as <sha> -- undo with `git revert <sha>`", output
+        "committed as <sha> -- `git revert <sha>` undoes it only while it is the latest commit.",
+        output,
     )
 
 
@@ -1422,11 +1423,11 @@ def test_mask_commit_sha_tolerates_only_the_disclosure_it_is_written_for() -> No
     pattern too."""
     left = (
         "openkos forget: removed 'concepts/deadbeef1234567'.\n"
-        "openkos forget: committed as 1a2b3c4 -- undo with `git revert 1a2b3c4`.\n"
+        "openkos forget: committed as 1a2b3c4 -- `git revert 1a2b3c4` undoes it only while it is the latest commit.\n"
     )
     right = (
         "openkos forget: removed 'concepts/cafebabe7654321'.\n"
-        "openkos forget: committed as 9f8e7d6 -- undo with `git revert 9f8e7d6`.\n"
+        "openkos forget: committed as 9f8e7d6 -- `git revert 9f8e7d6` undoes it only while it is the latest commit.\n"
     )
 
     assert _mask_commit_sha(left) != _mask_commit_sha(right)

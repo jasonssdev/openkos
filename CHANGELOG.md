@@ -37,6 +37,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   ([#1233](https://github.com/jasonssdev/openkos/issues/1233)). Bundle
   frontmatter parsing is unchanged.
 
+- The per-commit disclosure printed by `forget`, `merge` and `curate` no longer
+  advertises `git revert <sha>` as an unconditional undo. Every commit appends to
+  `bundle/log.md`, so reverting anything but the latest commit conflicts there; the
+  line now says the revert applies only while that commit is the latest.
 
 ## [0.3.1] - 2026-10-01
 

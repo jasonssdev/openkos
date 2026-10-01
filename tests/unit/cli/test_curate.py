@@ -1342,8 +1342,9 @@ def test_identity_applied_merge_names_the_commit_and_the_way_back(
 
     assert result.exit_code == 0
     sha = _head_short_sha(tmp_path)
-    assert f"  committed as {sha} -- undo with `git revert {sha}`." in _lines(
-        result.stdout
+    assert (
+        f"  committed as {sha} -- `git revert {sha}` undoes it only while it is the latest commit."
+        in _lines(result.stdout)
     )
 
 
@@ -1441,8 +1442,9 @@ def test_structure_applied_edge_names_the_commit_and_the_way_back(
 
     assert result.exit_code == 0
     sha = _head_short_sha(tmp_path)
-    assert f"  committed as {sha} -- undo with `git revert {sha}`." in _lines(
-        result.stdout
+    assert (
+        f"  committed as {sha} -- `git revert {sha}` undoes it only while it is the latest commit."
+        in _lines(result.stdout)
     )
 
 
@@ -1499,8 +1501,9 @@ def test_metadata_applied_tier_names_the_commit_and_the_way_back(
 
     assert result.exit_code == 0
     sha = _head_short_sha(tmp_path)
-    assert f"  committed as {sha} -- undo with `git revert {sha}`." in _lines(
-        result.stdout
+    assert (
+        f"  committed as {sha} -- `git revert {sha}` undoes it only while it is the latest commit."
+        in _lines(result.stdout)
     )
 
 
