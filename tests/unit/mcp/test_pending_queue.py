@@ -127,7 +127,7 @@ def test_row_naming_a_confidential_concept_is_withheld_whole(
         {
             "kind": "identity",
             "targets": ["concepts/open-a", "concepts/open-b"],
-            "resolve": "openkos duplicates",
+            "resolve": "openkos duplicates --keep-distinct",
         }
     ]
     # No count of withheld rows, in the queue block or anywhere else.

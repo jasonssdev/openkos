@@ -108,6 +108,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   granularity and the missed person in the same report are model behavior and
   stay open.
 
+- **A pair `adjudicate` judged DIFFERENT no longer stays pending.** A persisted
+  DIFFERENT verdict that is still servable (members unedited, same judgment
+  rubric) now closes the pair's open identity row, keeps `curate` and the
+  daemon from enqueueing it again, and drops it from `status`'s "candidate
+  group with identical titles" count and from `next`. Editing a member brings
+  the group back. An identity row's `resolve:` hint in `openkos pending` now
+  names a verb that can close it (`openkos adjudicate --apply` for a group
+  judged the same, `openkos duplicates --keep-distinct <ids>` otherwise)
+  instead of the read-only `openkos duplicates`.
+
 ## [0.3.1] - 2026-10-01
 
 MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a

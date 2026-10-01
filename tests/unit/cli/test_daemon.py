@@ -27,6 +27,7 @@ from openkos.application.runtime import StopToken
 from openkos.cli import daemon as daemon_module
 from openkos.cli import observability
 from openkos.cli.main import app
+from openkos.resolution import adjudication
 from openkos.resolution import candidates as cand
 from openkos.resolution.volatility_typing import TierSuggestion, TierSuggestionBatch
 from openkos.state import jobs
@@ -931,3 +932,73 @@ def test_the_relations_observer_reports_per_edge_progress_on_a_tty(
     assert "".join(writes).count("untyped edge") == 2
     monkeypatch.setattr("sys.stderr", io.StringIO())
     daemon_module._DaemonRelationsObserver().edge_progress(1, 1, object())
+
+
+def _identity_rows(root: Path) -> list[tuple[str, str]]:
+    conn = sqlite3.connect(config.WorkspaceLayout(root).findings_db_path)
+    try:
+        return [
+            (i.status, i.resolution or "")
+            for i in pq.all_items(conn)
+            if i.kind == "identity"
+        ]
+    finally:
+        conn.close()
+
+
+def _judge_pair(root: Path, verdict: str) -> None:
+    from openkos.application import pending as application_pending
+    from openkos.state import adjudications as store
+    from openkos.state import derived
+
+    layout = config.WorkspaceLayout(root)
+    digest_of = application_pending.current_finding_digest(layout.bundle_dir)
+    members = ("concepts/a", "concepts/b")
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        store.record_adjudications(
+            conn,
+            [
+                store.Adjudication(
+                    member_ids=members,
+                    verdict=verdict,
+                    confidence=0.9,
+                    rationale="Judged.",
+                    include_confidential=False,
+                    input_digests=tuple(
+                        store.InputDigest(m, str(digest_of(m))) for m in members
+                    ),
+                    rubric_digest=adjudication.rubric_digest(),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+
+def test_daemon_retires_an_identity_row_once_the_group_is_judged_different(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_doc(root, "concepts/a", {"type": "Concept", "title": "Alpha"})
+    write_doc(root, "concepts/b", {"type": "Concept", "title": "Alpha"})
+    group = cand.CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=cand.Tier.HIGH,
+        trigger="alpha",
+    )
+    monkeypatch.setattr(
+        "openkos.resolution.find_candidates_report",
+        lambda bundle_dir, **kw: cand.CandidateGroupReport(
+            groups=(group,), produced=1, retained=1
+        ),
+    )
+    assert cli.invoke(app, ["daemon", "--once"]).exit_code == 0
+    assert _identity_rows(root) == [("pending", "")]
+
+    _judge_pair(root, "different")
+    # Maintenance is not due again right after a run; forget that it ran.
+    config.WorkspaceLayout(root).jobs_db_path.unlink()
+    assert cli.invoke(app, ["daemon", "--once"]).exit_code == 0
+
+    assert _identity_rows(root) == [("stale", "stale")]

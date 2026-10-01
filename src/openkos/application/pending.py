@@ -73,12 +73,15 @@ off `pair_ids[0]` exactly as given, unsorted."""
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from openkos import config
 from openkos.bundle import decisions as bundle_decisions
 from openkos.model import okf
+from openkos.resolution import adjudication
+from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
 from openkos.state.vectorstore import content_hash
 
@@ -107,8 +110,8 @@ def persisted_findings(
     layout: config.WorkspaceLayout,
 ) -> tuple[findings.PersistedFinding, ...]:
     """Every persisted finding, with `stale` resolved against current
-    bundle bytes -- the single read of `.openkos/findings.db` this module
-    owns, shared by every adapter that needs the open/stale/declined
+    bundle bytes -- the single read of `.openkos/findings.db`
+    this module owns, shared by every adapter that needs the open/stale/declined
     predicate (`cli.main`'s `--declined` view, `status` (#598), and
     `cli.next_action`'s `open_contradictions`) so it is never reimplemented
     per caller.
@@ -125,11 +128,12 @@ def persisted_findings(
         return ()
     conn = derived.open_derived_connection(layout.findings_db_path)
     try:
-        return findings.open_findings(
+        persisted = findings.open_findings(
             conn, current_digest=current_finding_digest(layout.bundle_dir)
         )
     finally:
         conn.close()
+    return persisted
 
 
 def is_contradiction_declined(
@@ -176,3 +180,48 @@ def is_group_kept_distinct(
         if record.decision_key == key:
             return record.state == "declined"
     return False
+
+
+def judged_different_groups(
+    layout: config.WorkspaceLayout,
+) -> frozenset[tuple[str, ...]]:
+    """The sorted member sets the model judged DIFFERENT and whose verdict is
+    still servable (#1226): the group's latest persisted adjudication says
+    `different`, was computed under THIS build's rubric, names exactly the
+    group's members, and every member still hashes to what was judged.
+
+    A servable DIFFERENT verdict is a settled answer, so the pending-work queue
+    and `status` stop offering the group as identity work. It is deliberately
+    not a human ruling: it never writes a decision sidecar, `--reopen` has
+    nothing to reopen, and the group returns on its own the moment a member is
+    edited or the rubric changes. `include_confidential` is not compared: the
+    callers hide a pair, they never serve the verdict's rationale.
+
+    Never creates `.openkos/findings.db`, and an unreadable store hides
+    nothing: a cache that cannot be read must not suppress pending work."""
+    if not layout.findings_db_path.exists():
+        return frozenset()
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            persisted = adjudications_store.open_adjudications(conn)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return frozenset()
+    latest: dict[str, adjudications_store.Adjudication] = {}
+    for row in persisted:
+        latest[adjudications_store.group_key_for(row.member_ids)] = row
+    current_digest = current_finding_digest(layout.bundle_dir)
+    current_rubric = adjudication.rubric_digest()
+    judged: set[tuple[str, ...]] = set()
+    for row in latest.values():
+        if (
+            row.verdict != adjudication.Verdict.DIFFERENT.value
+            or row.rubric_digest != current_rubric
+            or {d.input_ref for d in row.input_digests} != set(row.member_ids)
+            or any(current_digest(d.input_ref) != d.digest for d in row.input_digests)
+        ):
+            continue
+        judged.add(tuple(sorted(row.member_ids)))
+    return frozenset(judged)

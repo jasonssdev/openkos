@@ -155,7 +155,8 @@ def test_open_rows_are_grouped_by_kind_with_their_resolving_command(
         "\n"
         "identity (1)\n"
         "  - concepts/a, concepts/b [pending]\n"
-        "    resolve: openkos duplicates\n"
+        "    resolve: openkos duplicates --keep-distinct concepts/a"
+        " --keep-distinct concepts/b\n"
         "\n"
         "contradiction (1)\n"
         "  - concepts/x, concepts/y [pending]\n"
@@ -184,7 +185,8 @@ def test_all_also_lists_resolved_declined_and_stale_rows(
         "\n"
         "identity (4)\n"
         "  - concepts/a, concepts/b [pending]\n"
-        "    resolve: openkos duplicates\n"
+        "    resolve: openkos duplicates --keep-distinct concepts/a"
+        " --keep-distinct concepts/b\n"
         "  - concepts/c, concepts/d [applied]\n"
         "  - concepts/e, concepts/f [declined]\n"
         "  - concepts/g, concepts/h [stale]\n"
@@ -291,7 +293,8 @@ def test_unattended_outcomes_needing_attention_follow_the_queue(
         "\n"
         "identity (1)\n"
         "  - concepts/a, concepts/b [pending]\n"
-        "    resolve: openkos duplicates\n"
+        "    resolve: openkos duplicates --keep-distinct concepts/a"
+        " --keep-distinct concepts/b\n"
         "\n"
         "Needs attention (unattended jobs):\n"
         "  maintenance job 2: budget_exhausted (max_sources_per_pass),"
@@ -388,3 +391,21 @@ def test_an_unreadable_queue_file_refuses_without_claiming_empty(
     assert result.exit_code == 1
     assert "not available" in result.output
     assert "nothing" not in result.output.lower()
+
+
+def test_an_identity_row_judged_same_points_at_the_merge_walk(
+    workspace: WorkspaceLayout,
+) -> None:
+    conn = _queue(workspace)
+    _enqueue(
+        conn,
+        workspace,
+        "identity",
+        ("concepts/a", "concepts/b"),
+        payload='{"adjudication": {"verdict": "same"}}',
+    )
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert "    resolve: openkos adjudicate --apply\n" in result.output

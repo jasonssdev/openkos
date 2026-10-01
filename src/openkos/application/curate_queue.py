@@ -31,7 +31,7 @@ from openkos.application import queue_producers
 from openkos.application.lock_wait import CommitSection
 from openkos.model import types
 from openkos.model.relations import validate_relation_type
-from openkos.resolution.adjudication import AdjudicatedCandidate
+from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup
 from openkos.resolution.contradiction import (
     ContradictionVerdict,
@@ -286,6 +286,10 @@ def _enqueue_missing(
         conn.close()
 
 
+def _judged_different(result: AdjudicatedCandidate | None) -> bool:
+    return result is not None and result.verdict is Verdict.DIFFERENT
+
+
 def enqueue_identity(
     layout: config.WorkspaceLayout,
     groups: Sequence[CandidateGroup],
@@ -303,6 +307,8 @@ def enqueue_identity(
         proposal
         for group in groups
         if _unchanged_since_pinned(pinned, current, group.member_ids)
+        # #1226: a DIFFERENT verdict answers the group; nothing is left to review.
+        and not _judged_different(by_members.get(tuple(sorted(group.member_ids))))
         and (
             proposal := queue_producers.identity_group_proposal(
                 group,

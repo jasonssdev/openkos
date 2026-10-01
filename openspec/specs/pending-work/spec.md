@@ -311,6 +311,22 @@ resolving it.
 - WHEN the operator merges A into B through `openkos merge`
 - THEN the row is `applied`
 
+#### Scenario: A different verdict closes the identity row
+
+- GIVEN an open identity row for A and B
+- WHEN `openkos adjudicate` (or `curate`) persists a DIFFERENT verdict for
+  exactly A and B
+- THEN the row is `declined`
+- AND no identity decision sidecar is written, so the group is offered again
+  if a member is edited or the judgment rubric changes
+
+#### Scenario: A servable different verdict keeps the group out of the queue
+
+- GIVEN a persisted DIFFERENT verdict for A and B that is still servable
+- WHEN the identity advisor runs, and when `status` counts identical-title
+  groups
+- THEN neither offers the group as identity work
+
 #### Scenario: The runner never resolves a row
 
 - GIVEN any open row

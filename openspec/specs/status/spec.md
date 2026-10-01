@@ -188,6 +188,15 @@ a non-zero exit.
 - THEN no duplicate-groups entry appears under "needs attention" for that
   group, and the command still exits 0
 
+#### Scenario: A group the model judged different is not counted
+
+- GIVEN a bundle whose only exact-title-match duplicate group has a persisted
+  DIFFERENT adjudication that is still servable (members unedited, same
+  judgment rubric)
+- WHEN `openkos status` runs
+- THEN no duplicate-groups entry appears for that group, and it is counted
+  again as soon as a member is edited
+
 ### Requirement: Needs-Attention Surfaces Missing Vector Index
 
 `openkos status` MUST report, under "needs attention", whether the

@@ -8,9 +8,12 @@ nothing pending when nothing has looked would be a false all-clear.
 
 Only a row's kind, status, target ids and the resolving command are rendered.
 A row's payload is never put in the report, because proposal text can carry a
-person's words.
+person's words. One payload field is read for the listing only: an identity
+row's adjudication verdict, which decides the verb that can close it.
 """
 
+import json
+import shlex
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,7 +41,7 @@ ABSENT_QUEUE_NOTICE = (
 )
 
 _RESOLVING_COMMAND = {
-    "identity": "openkos duplicates",
+    "identity": "openkos duplicates --keep-distinct",
     "relation_type": "openkos curate",
     "volatility": "openkos curate",
     "contradiction": "openkos contradictions",
@@ -48,8 +51,32 @@ _RESOLVING_COMMAND = {
 
 
 def resolving_command(kind: str) -> str:
-    """The command that resolves a row of `kind`."""
+    """The command that resolves a row of `kind`, with no row-specific
+    arguments: the form the MCP gate discloses."""
     return _RESOLVING_COMMAND[kind]
+
+
+def _payload(row: pq.PendingItem) -> dict[str, object]:
+    try:
+        decoded = json.loads(row.payload)
+    except ValueError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def row_resolving_command(row: pq.PendingItem) -> str:
+    """The command that resolves THIS row. `openkos duplicates` only lists
+    groups, so an identity row names the verb that can close it: the merge walk
+    for a group judged the same, a keep-distinct ruling over its members
+    otherwise."""
+    payload = _payload(row)
+    if row.kind == "identity" and row.targets:
+        adjudication = payload.get("adjudication")
+        if isinstance(adjudication, dict) and adjudication.get("verdict") == "same":
+            return "openkos adjudicate --apply"
+        flags = " ".join(f"--keep-distinct {shlex.quote(t)}" for t in row.targets)
+        return f"openkos duplicates {flags}"
+    return _RESOLVING_COMMAND[row.kind]
 
 
 class QueueUnavailableError(Exception):
@@ -155,7 +182,7 @@ def _listing_lines(report: PendingReport, *, include_all: bool) -> list[str]:
                 f"  - {', '.join(row.targets)} [{'pending' if is_open else row.status}]"
             )
             if is_open:
-                lines.append(f"    resolve: {_RESOLVING_COMMAND[kind]}")
+                lines.append(f"    resolve: {row_resolving_command(row)}")
     return lines
 
 

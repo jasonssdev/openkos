@@ -379,10 +379,15 @@ def build_status_report(layout: config.WorkspaceLayout) -> StatusReport:
         if message not in warnings:
             warnings.append(message)
 
+    # #1226: a group the model judged DIFFERENT (verdict still servable) is a
+    # settled answer, not pending work -- the same predicate the pending-work
+    # queue's identity producer applies.
+    judged_different = application_pending.judged_different_groups(layout)
     exact_title_group_count = sum(
         1
         for group in find_exact_title_groups(layout.bundle_dir)
-        if not application_pending.is_group_kept_distinct(
+        if tuple(sorted(group.member_ids)) not in judged_different
+        and not application_pending.is_group_kept_distinct(
             layout, group.member_ids, on_warning=_note
         )
     )

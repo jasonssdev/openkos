@@ -236,6 +236,17 @@ def _identity_stage(ctx: StageContext) -> StageResult:
             *a, **k
         ),
     )
+    # #1226: a group the model judged DIFFERENT (verdict still servable) is
+    # settled; leaving it out lets the complete pass retire its open row.
+    judged_different = application_pending.judged_different_groups(ctx.layout)
+    report = dataclasses.replace(
+        report,
+        groups=tuple(
+            group
+            for group in report.groups
+            if tuple(sorted(group.member_ids)) not in judged_different
+        ),
+    )
     producers.enqueue_identity(
         ctx.queue(),
         report,
