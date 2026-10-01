@@ -178,6 +178,10 @@ class SuggestRelationsRequest:
     edge_offset: int = 0
     skip_confirmation: bool = False
     """`--auto`: skip the cost question."""
+    max_calls: int | None = None
+    """The most edges (one chat call each) this run may type -- a budgeted,
+    runner-started run passes what it has left. `None` is unbounded: the only
+    value a CLI run passes, and byte-identical to a run without the bound."""
 
 
 @dataclass(frozen=True)
@@ -292,6 +296,9 @@ class SuggestRelationsOutcome:
     batch: EdgeSuggestionBatch | None = None
     cfg: config.Config | None = None
     """The run's config, so a partial-batch message words the backend."""
+    deferred_by_bound: int = 0
+    """Untyped edges a `max_calls` bound left for a later pass. They are in
+    `total` but have no suggestion yet, and nothing is persisted for them."""
 
 
 @dataclass(frozen=True)
@@ -530,6 +537,8 @@ def suggest_relations(
     batch (#441) and is carried on the outcome: the completed suggestions are
     never discarded. The raise-path ladder is retained around the call for an
     injected backend that raises outside `llm.chat`'s guarded seam."""
+    if request.max_calls is not None and request.max_calls < 0:
+        raise ValueError(f"max_calls must be >= 0, got {request.max_calls}")
     reason = config.require_workspace(root)
     if reason is not None:
         raise workspace_refusal(_VERB, reason)
@@ -655,6 +664,13 @@ def suggest_relations(
             model=cfg.model,
         )
 
+    # The unattended budget's bound truncates the edges still to type, in
+    # candidate order: what was typed is persisted below and served next pass.
+    deferred = 0
+    if request.max_calls is not None and len(to_type) > request.max_calls:
+        deferred = len(to_type) - request.max_calls
+        to_type = to_type[: request.max_calls]
+
     try:
         # Still called with an empty `to_type` (a fully-served run): zero edges
         # means zero `llm.chat` calls by construction.
@@ -713,6 +729,7 @@ def suggest_relations(
         model=cfg.model,
         batch=batch,
         cfg=cfg,
+        deferred_by_bound=deferred,
     )
 
 
