@@ -30,6 +30,7 @@ once for all its pairs, never per pair (#655).
 
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ from typing import Literal
 from openkos import config, fsio
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
+from openkos.application.lock_wait import CommitSection
 from openkos.application.write_gate import (
     ConfirmCallback,
     DriftDetected,
@@ -275,6 +277,12 @@ class ReconcilePorts:
     text (the plan's input), taken together (#318)."""
 
     clock: Callable[[], datetime] = _utc_now
+
+    commit_section: CommitSection = contextlib.nullcontext
+    """Entered around the commit phase -- the drift re-validation, the writes
+    and the auto-commit -- and nothing before it: Phase A and the confirmation
+    prompt hold no workspace lock (#1137, ADR-0036). An adapter that owns the
+    lock passes a section that takes it; the default holds nothing."""
 
 
 @dataclass(frozen=True)
@@ -761,46 +769,48 @@ def reconcile_pair(
     if not auto and cfg.review:
         require_confirmation(confirm, CONFIRM_PROMPT, NOT_A_TTY_REFUSAL)
 
-    # Issue #313: every byte below was computed from a pre-prompt read, so
-    # re-validate each target now -- after the gate, before the first write --
-    # and unconditionally, because `--auto` and `review: false` skip the
-    # prompt but not the window it stood in.
-    drift = application_drift.describe_drift(
-        layout,
-        {
-            pair.path_a: prepared.bytes_a,
-            pair.path_b: prepared.bytes_b,
-            log_path: prepared.log_bytes,
-        },
-        "reconcile",
-    )
-    if drift is not None:
-        raise DriftDetected(drift)
-
-    try:
-        fsio.write_atomic(pair.path_a, prepared.new_text_a)
-        fsio.write_atomic(pair.path_b, prepared.new_text_b)
-        fsio.write_atomic(log_path, prepared.new_log_text)
-    except (OSError, ValueError) as exc:
-        raise Refused(
-            f"openkos reconcile: failed while writing the reconcile -- {exc}."
-        ) from exc
-
-    obs.written(ReconcileWritten(pair=pair, log_name=log_path.name))
-
-    if holder_canonical is None:
-        reconcile_message = f"openkos: reconcile {canonical_a} <-> {canonical_b}"
-    elif edge_type == "supersedes":
-        reconcile_message = (
-            f"openkos: reconcile {holder_canonical} supersedes {target_canonical}"
+    with ports.commit_section():
+        # Issue #313: every byte below was computed from a pre-prompt read, so
+        # re-validate each target now -- after the gate, before the first write --
+        # and unconditionally, because `--auto` and `review: false` skip the
+        # prompt but not the window it stood in.
+        drift = application_drift.describe_drift(
+            layout,
+            {
+                pair.path_a: prepared.bytes_a,
+                pair.path_b: prepared.bytes_b,
+                log_path: prepared.log_bytes,
+            },
+            "reconcile",
         )
-    else:
-        reconcile_message = (
-            f"openkos: reconcile {holder_canonical} revises {target_canonical}"
+        if drift is not None:
+            raise DriftDetected(drift)
+
+        try:
+            fsio.write_atomic(pair.path_a, prepared.new_text_a)
+            fsio.write_atomic(pair.path_b, prepared.new_text_b)
+            fsio.write_atomic(log_path, prepared.new_log_text)
+        except (OSError, ValueError) as exc:
+            raise Refused(
+                f"openkos reconcile: failed while writing the reconcile -- {exc}."
+            ) from exc
+
+        obs.written(ReconcileWritten(pair=pair, log_name=log_path.name))
+
+        if holder_canonical is None:
+            reconcile_message = f"openkos: reconcile {canonical_a} <-> {canonical_b}"
+        elif edge_type == "supersedes":
+            reconcile_message = (
+                f"openkos: reconcile {holder_canonical} supersedes {target_canonical}"
+            )
+        else:
+            reconcile_message = (
+                f"openkos: reconcile {holder_canonical} revises {target_canonical}"
+            )
+        ports.autocommit(
+            root,
+            [f"bundle/{canonical_a}.md", f"bundle/{canonical_b}.md", "bundle/log.md"],
+            reconcile_message,
         )
-    ports.autocommit(
-        root,
-        [f"bundle/{canonical_a}.md", f"bundle/{canonical_b}.md", "bundle/log.md"],
-        reconcile_message,
-    )
+
     return ReconcileOutcome(changed=prepared.changed)
