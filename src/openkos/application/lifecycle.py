@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -3250,6 +3250,13 @@ class PreparedTagSync:
     new_log_text: str
     baselines: Mapping[str, bytes]
     confirmation: BooleanConfirmation
+    read_dependencies: Mapping[str, bytes] = field(default_factory=dict)
+    """Documents the plan READ to decide what to write but never writes: every
+    invoked Source (its tags and sensitivity floor) and every member of its
+    provenance closure, however it was classified (#1137, ADR-0036). The
+    commit phase re-validates them with the baselines, because a member that
+    stopped being grounded in the Source while the prompt waited must not
+    receive the Source's tags. Disjoint from `baselines` by construction."""
 
 
 def _source_tags_and_level(
@@ -3380,6 +3387,16 @@ def prepare_sync_tags(
         baselines[f"bundle/{root_id}.md"] = bundle_bytes[f"{root_id}.md"]
     baselines["bundle/log.md"] = log_bytes
 
+    read_dependencies: dict[str, bytes] = {}
+    for root_id in root_ids:
+        closure = bundle_provenance.find_provenance_descendants(
+            bundle_snapshot, root_ids={root_id}
+        )
+        for member_id in (root_id, *closure):
+            rel = f"bundle/{member_id}.md"
+            if rel not in baselines and f"{member_id}.md" in bundle_bytes:
+                read_dependencies[rel] = bundle_bytes[f"{member_id}.md"]
+
     return PreparedTagSync(
         roots=tuple(root_ids),
         additions=tuple(final_additions),
@@ -3387,6 +3404,7 @@ def prepare_sync_tags(
         new_log_text=new_log_text,
         baselines=baselines,
         confirmation=boolean_confirmation("sync-tags"),
+        read_dependencies=read_dependencies,
     )
 
 
