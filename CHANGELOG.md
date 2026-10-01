@@ -52,6 +52,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- `merge`, `unmerge`, `forget`, `relate`, `set-sensitivity`, `sync-tags`,
+  `repair`, `reconcile`, `adjudicate --apply` and `suggest-relations --apply`
+  no longer refuse with exit `3` because another process appended to `index.md`
+  or `log.md` while they waited: at commit time they re-apply their own entries
+  to the files' current text, so both writers' entries are kept. A concept the
+  run writes or deletes, or an input it read, that changed still refuses with
+  exit `3`, as does a catalog the entries cannot be re-applied to (and an
+  `unmerge` of a merge recorded as whole-file snapshots, which cannot be
+  re-applied) ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - `query` no longer blocks behind a running writer: a plain `query` takes no
   workspace lock, and `query --save` holds it only for the filing itself, not
   for retrieval, the model call or the confirmation prompt. The filing refuses

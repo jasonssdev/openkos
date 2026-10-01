@@ -1977,7 +1977,6 @@ def test_baselines_include_roots_and_log(tmp_path: Path) -> None:
     assert set(prepared.baselines.keys()) == {
         "bundle/concepts/a.md",
         "bundle/sources/notes.md",
-        "bundle/log.md",
     }
 
 
