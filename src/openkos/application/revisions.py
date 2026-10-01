@@ -689,6 +689,9 @@ class RevisionOutcome:
     results: tuple[decision_revision.RevisionVerdict, ...]
     failure: BackendError | None = None
     failed_index: int | None = None
+    deferred_by_bound: int = 0
+    """Pairs a `max_calls` bound left unjudged: still in `plan.to_judge`, with
+    no verdict and nothing persisted, so the next run judges exactly those."""
 
 
 def _revision_finding_from_verdict(
@@ -732,6 +735,7 @@ def judge_revisions(
     effective_confidential: bool,
     on_progress: Callable[[int, int, decision_revision.RevisionVerdict], None]
     | None = None,
+    max_calls: int | None = None,
 ) -> RevisionOutcome:
     """Judge every `plan.to_judge` candidate through the Phase A leaf's
     `judge_pairs` (design.md's Phase B re-plan Data flow: "judge_revisions
@@ -753,9 +757,21 @@ def judge_revisions(
     `DecisionDate`s `plan_revisions` already resolved once) and `_load_doc`
     (this module's own sensitivity re-check) over the concept ids named by
     `plan.to_judge` -- never over `plan.served`'s pairs, which need no
-    judge call at all."""
+    judge call at all.
+
+    `max_calls` (the unattended budget's per-stage bound) judges only the first
+    that many `plan.to_judge` pairs, one chat call each, and reports the rest
+    in `RevisionOutcome.deferred_by_bound`. `None` -- the default, and the only
+    value a CLI run passes -- judges them all, exactly as before."""
+    if max_calls is not None and max_calls < 0:
+        raise ValueError(f"max_calls must be >= 0, got {max_calls}")
+    to_judge = plan.to_judge
+    deferred = 0
+    if max_calls is not None and len(to_judge) > max_calls:
+        deferred = len(to_judge) - max_calls
+        to_judge = to_judge[:max_calls]
     decision_ids = sorted(
-        {concept_id for candidate in plan.to_judge for concept_id in candidate.pair_ids}
+        {concept_id for candidate in to_judge for concept_id in candidate.pair_ids}
     )
     dates = resolve_decision_dates(layout, decision_ids)
     sides: dict[str, decision_revision.JudgeSide] = {}
@@ -769,7 +785,7 @@ def judge_revisions(
 
     pairs = [
         (sides[id_a], sides[id_b])
-        for id_a, id_b in (candidate.pair_ids for candidate in plan.to_judge)
+        for id_a, id_b in (candidate.pair_ids for candidate in to_judge)
     ]
     batch = decision_revision.judge_pairs(pairs, llm=llm, on_progress=on_progress)
 
@@ -792,6 +808,7 @@ def judge_revisions(
         results=tuple(batch.results),
         failure=batch.failure,
         failed_index=batch.failed_index,
+        deferred_by_bound=deferred,
     )
 
 
@@ -901,6 +918,10 @@ class RevisionsRequest:
     """`--auto`: skip the pair-judgment question."""
     include_confidential: bool = False
     fresh: bool = False
+    max_calls: int | None = None
+    """The most pairs (one chat call each) this run may judge -- a budgeted,
+    runner-started run passes what it has left. `None` is unbounded: the only
+    value a CLI run passes."""
 
 
 ConfirmationAnswer = Literal["proceed", "declined", "unavailable"]
@@ -1084,6 +1105,7 @@ def run_revisions(
         llm=llm,
         effective_confidential=effective_confidential,
         on_progress=observer.progress_callback(),
+        max_calls=request.max_calls,
     )
     return RevisionsRun(
         status="completed",

@@ -24,7 +24,15 @@ from typing import Final, Literal, NamedTuple, NoReturn, TypedDict, TypeVar, cas
 import typer
 from rich.console import Console
 
-from openkos import config, fsio, lock, read_outcome, source_date, source_title
+from openkos import (
+    config,
+    fsio,
+    lock,
+    logsetup,
+    read_outcome,
+    source_date,
+    source_title,
+)
 from openkos import lint as lint_check
 from openkos.application import backends as application_backends
 from openkos.application import (
@@ -330,6 +338,7 @@ def callback(
     ),
 ) -> None:
     """openkos: local-first engine that compiles text into a portable knowledge base."""
+    logsetup.configure_logging("cli")
 
 
 _READ_ONLY_COMMANDS = frozenset(
@@ -403,66 +412,6 @@ def _add_wait_option(wrapper: Callable[..., object], fn: Callable[..., object]) 
     wrapper.__annotations__ = {**fn.__annotations__, _WAIT_PARAM: int}
 
 
-class _LockRefused(Exception):
-    """A lock-related refusal already reported on stderr, carrying its exit code."""
-
-    def __init__(self, code: int) -> None:
-        super().__init__(code)
-        self.code = code
-
-
-def _wait_announcer(command_name: str, wait: int) -> Callable[[], None]:
-    def announce_wait() -> None:
-        typer.echo(
-            f"openkos {command_name}: the workspace is busy; "
-            f"waiting up to {wait} s for it.",
-            err=True,
-        )
-
-    return announce_wait
-
-
-@contextlib.contextmanager
-def _lock_refusals(command_name: str) -> Iterator[None]:
-    """Turn the lock's refusals into their stderr line and exit code.
-
-    Shared by the whole-body guard and the commit-phase guard, so a refusal
-    reads the same wherever the lock was taken. Raises `_LockRefused` (the
-    line is already printed); any other error passes through unchanged.
-    """
-    try:
-        yield
-    except lock.WorkspaceBusyError as exc:
-        typer.echo(
-            f"openkos {command_name}: refusing to run -- {exc}.",
-            err=True,
-        )
-        raise _LockRefused(3) from exc
-    except lock.WorkspaceLockUnavailableError as exc:
-        # Exit 1, not 3: a re-run refuses again until the directory is
-        # fixed, so the retry-safe code would be a false promise.
-        typer.echo(
-            f"openkos {command_name}: refusing to run -- {exc}.",
-            err=True,
-        )
-        raise _LockRefused(1) from exc
-    except sqlite3.OperationalError as exc:
-        # The one place a derived store's lock contention (a writer or
-        # opener still blocked after `busy_timeout`) becomes a
-        # refusal, for every locked verb, so no verb has to remember
-        # its own handler. A verb that handles the error itself
-        # (`reindex`'s ladders, the persist-time advisories) never
-        # reaches here. Any other operational failure is re-raised
-        # unchanged.
-        if not derived.is_lock_contention(exc):
-            raise
-        typer.echo(
-            _LOCK_CONTENTION_TEMPLATE.format(command=command_name),
-            err=True,
-        )
-        raise _LockRefused(3) from exc
-
-
 def _guard_workspace_lock(
     command_name: str,
 ) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
@@ -496,73 +445,49 @@ def _guard_workspace_lock(
             if config.require_workspace(root) is not None:
                 return fn(*args, **kwargs)
 
+            def announce_wait() -> None:
+                typer.echo(
+                    f"openkos {command_name}: the workspace is busy; "
+                    f"waiting up to {wait} s for it.",
+                    err=True,
+                )
+
             try:
-                with (
-                    _lock_refusals(command_name),
-                    lock_wait.acquire_with_backoff(
-                        root,
-                        wait_seconds=wait,
-                        on_wait=_wait_announcer(command_name, wait),
-                    ),
+                with lock_wait.acquire_with_backoff(
+                    root, wait_seconds=wait, on_wait=announce_wait
                 ):
                     return fn(*args, **kwargs)
-            except _LockRefused as refused:
-                raise typer.Exit(code=refused.code) from refused.__cause__
+            except lock.WorkspaceBusyError as exc:
+                typer.echo(
+                    f"openkos {command_name}: refusing to run -- {exc}.",
+                    err=True,
+                )
+                raise typer.Exit(code=3) from exc
+            except lock.WorkspaceLockUnavailableError as exc:
+                # Exit 1, not 3: a re-run refuses again until the directory is
+                # fixed, so the retry-safe code would be a false promise.
+                typer.echo(
+                    f"openkos {command_name}: refusing to run -- {exc}.",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
+            except sqlite3.OperationalError as exc:
+                # The one place a derived store's lock contention (a writer or
+                # opener still blocked after `busy_timeout`) becomes a
+                # refusal, for every locked verb, so no verb has to remember
+                # its own handler. A verb that handles the error itself
+                # (`reindex`'s ladders, the persist-time advisories) never
+                # reaches here. Any other operational failure is re-raised
+                # unchanged.
+                if not derived.is_lock_contention(exc):
+                    raise
+                typer.echo(
+                    _LOCK_CONTENTION_TEMPLATE.format(command=command_name),
+                    err=True,
+                )
+                raise typer.Exit(code=3) from exc
 
         _add_wait_option(wrapper, fn)
-        wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
-        return wrapper
-
-    return decorate
-
-
-_COMMIT_SECTION_PARAM = "commit_section"
-
-
-def _guard_commit_phase(
-    command_name: str,
-) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
-    """Classify a verb as locked for its COMMIT PHASE only (#1137).
-
-    The verb's body runs with no lock held -- retrieval, the model call, the
-    preview and the confirmation can take minutes -- and enters the
-    `commit_section` this guard injects around the writes that must not
-    interleave with another writer. The section takes the lock under the
-    caller's `--wait` policy; a refusal raised inside it is reported exactly
-    as the whole-body guard reports it (exit 3, nothing written).
-
-    The body declares `commit_section` as a parameter; this guard hides it
-    from the published signature (it is not an option), and adds `--wait`,
-    so the verb stays in the locked class `test_every_command_is_classified`
-    and the `--wait` roster check enforce.
-    """
-
-    def decorate(fn: Callable[..., _T]) -> Callable[..., _T]:
-        @functools.wraps(fn)
-        def wrapper(*args: object, **kwargs: object) -> _T:
-            wait = cast(int, kwargs.pop(_WAIT_PARAM, 0))
-            root = Path.cwd()
-            kwargs[_COMMIT_SECTION_PARAM] = lock_wait.locked_commit_section(
-                root,
-                wait_seconds=wait,
-                on_wait=_wait_announcer(command_name, wait),
-            )
-            try:
-                with _lock_refusals(command_name):
-                    return fn(*args, **kwargs)
-            except _LockRefused as refused:
-                raise typer.Exit(code=refused.code) from refused.__cause__
-
-        _add_wait_option(wrapper, fn)
-        published = inspect.signature(wrapper)
-        wrapper.__signature__ = published.replace(  # type: ignore[attr-defined]
-            parameters=[
-                p
-                for p in published.parameters.values()
-                if p.name != _COMMIT_SECTION_PARAM
-            ]
-        )
-        wrapper.__annotations__.pop(_COMMIT_SECTION_PARAM, None)
         wrapper.__openkos_locked_command__ = command_name  # type: ignore[attr-defined]
         return wrapper
 
