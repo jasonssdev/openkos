@@ -47,7 +47,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from openkos.bundle import decisions as bundle_decisions
 
@@ -262,20 +262,22 @@ def _now() -> datetime:
 def decline_in_force(bundle_dir: Path, proposal: Proposal) -> bool:
     """Whether the proposal's key has a decline in force in
     `bundle/.state/decisions/`. Only `contradiction` and `identity` have a
-    decision sidecar; the sidecar is owned by the sorted-first concept id."""
-    if not proposal.targets:
+    decision sidecar, owned by one of the proposal's named concepts."""
+    if proposal.kind not in ("contradiction", "identity"):
         return False
-    owner = sorted(proposal.targets)[0]
-    if proposal.kind == "contradiction":
-        return any(
-            record.decision_key == proposal.key_body and record.state == "declined"
-            for record in bundle_decisions.read_decisions(owner, bundle_dir)
+    # Every named concept is probed, not only the sorted-first: a merged-body
+    # row also names its absorbed concept, which can sort ahead of the owner.
+    for target in sorted(set(proposal.targets)):
+        records: Sequence[Any] = (
+            bundle_decisions.read_decisions(target, bundle_dir)
+            if proposal.kind == "contradiction"
+            else bundle_decisions.read_identity_decisions(target, bundle_dir)
         )
-    if proposal.kind == "identity":
-        return any(
+        if any(
             record.decision_key == proposal.key_body and record.state == "declined"
-            for record in bundle_decisions.read_identity_decisions(owner, bundle_dir)
-        )
+            for record in records
+        ):
+            return True
     return False
 
 
