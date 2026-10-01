@@ -3591,6 +3591,13 @@ def _render_staging_drop(drop: application_ingest.StagingDrop) -> None:
             "candidate.",
             err=True,
         )
+    elif drop.kind == "run-duplicate":
+        typer.echo(
+            f"openkos ingest: '{drop.slug}' repeats '{drop.kept_slug}' "
+            "(same type, near-match title, same quoted source line); "
+            "keeping the richer one, skipping this candidate.",
+            err=True,
+        )
     elif drop.kind == "already-exists":
         typer.echo(
             f"openkos ingest: '{drop.slug}' already exists; "

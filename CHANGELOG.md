@@ -95,6 +95,13 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   its modification time, so a file copied in with an old timestamp is never
   imported unseen.
 
+- `ingest` no longer writes two objects for one subject when the extraction
+  judge keeps both ([#1230](https://github.com/jasonssdev/openkos/issues/1230)).
+  Two candidates of the same type whose titles near-match and which quote the
+  same source line are collapsed to the one with the longer body before
+  staging, and `ingest` says so on stderr. A pair that quotes different lines,
+  or quotes nothing, is never touched.
+
 ## [0.3.1] - 2026-10-01
 
 MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a

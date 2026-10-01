@@ -52,6 +52,7 @@ from openkos.extraction.concept import (
 from openkos.llm.base import LLMBackend
 from openkos.model import okf
 from openkos.model.types import TYPE_TO_LINK_DIR, TYPE_TO_SECTION
+from openkos.resolution.run_duplicates import collapse_run_duplicates
 from openkos.sensitivity import blocks_llm_send
 
 
@@ -189,6 +190,7 @@ def first_free_disambiguated_slug(
 DropKind = Literal[
     "empty-slug",
     "in-batch-collision",
+    "run-duplicate",
     "already-exists",
     "disambiguated",
     "build-failed",
@@ -413,6 +415,11 @@ class StagingDrop:
     """`str(exc)` from the `ValueError` `okf.build_concept` raised -- set
     only for `"build-failed"`."""
 
+    kept_slug: str | None = None
+    """The slug of the object this candidate was collapsed into -- set only
+    for `"run-duplicate"` (#1230). `slug` is the collapsed candidate's own
+    (never staged) slug."""
+
 
 @dataclass(frozen=True)
 class StagedDerivedObjects:
@@ -625,6 +632,19 @@ def stage_derived_objects(
     drops: list[StagingDrop] = []
     seen_slugs: set[str] = set()
     lost_in_staging = 0
+    # #1230: collapse same-run near-duplicates the judge kept (same type,
+    # near-match titles, same quoted source line) BEFORE staging, so only
+    # the survivor takes a slug. Not a staging loss: the subject is kept.
+    collapse = collapse_run_duplicates(extractions, source_text=raw_content)
+    extractions = collapse.kept
+    for dropped_title, kept_title in collapse.collapsed:
+        drops.append(
+            StagingDrop(
+                kind="run-duplicate",
+                slug=source_titles.slugify(dropped_title),
+                kept_slug=source_titles.slugify(kept_title),
+            )
+        )
     for extraction in extractions:
         derived_slug = source_titles.slugify(extraction.title)
         if not derived_slug:

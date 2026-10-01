@@ -2395,6 +2395,18 @@ key, and carries this notice.
 - AND the Source's `extraction_notice` does NOT carry
   `candidates-dropped-in-staging`
 
+#### Scenario: A same-run near-duplicate is collapsed before staging
+
+- GIVEN a run where two candidates of the same type have near-matching
+  titles and quote the same source line
+- WHEN `openkos ingest <path>` completes
+- THEN only the candidate with the longer body (the first on a tie) is
+  written, and stderr names the collapsed one
+- AND the Source's `extraction_notice` does NOT carry
+  `candidates-dropped-in-staging`
+- AND a pair that quotes different lines, or quotes nothing, is never
+  collapsed
+
 #### Scenario: A single condition stays a bare scalar on disk
 
 - GIVEN a run tripping exactly one disclosure condition
