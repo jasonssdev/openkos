@@ -9,7 +9,7 @@ where the engine's own files live, not the OKF bundle root.
 import math
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Final, NamedTuple
@@ -1047,6 +1047,115 @@ def write_config(
 
 
 @dataclass(frozen=True)
+class UnattendedConfig:
+    """The `unattended:` section of `openkos.yaml`: the spend budget and the
+    folder watch the unattended runner reads. Every default is PROVISIONAL
+    (derived from measured call counts, not yet tuned on real unattended
+    use) and an absent or null section means every default.
+
+    A value of `0` for a call or source limit means unattended runs make no
+    model call or import no source. `inbox` is the resolved absolute path of
+    the watched folder, or `None` (watch off)."""
+
+    max_calls_per_pass: int = 100
+    max_calls_per_day: int = 500
+    max_sources_per_pass: int = 10
+    job_deadline_seconds: int = 1800
+    maintenance_interval_seconds: int = 86400
+    quiet_seconds: int = 30
+    inbox: Path | None = None
+
+
+_UNATTENDED_INT_FLOORS: Final = {
+    "max_calls_per_pass": 0,
+    "max_calls_per_day": 0,
+    "max_sources_per_pass": 0,
+    "job_deadline_seconds": 60,
+    "maintenance_interval_seconds": 300,
+    "quiet_seconds": 1,
+}
+"""Each integer key of `unattended:` and its inclusive lower bound."""
+
+
+def _validate_unattended_inbox(root: Path, value: object, prefix: str) -> Path:
+    """Resolve `unattended.inbox` against `root`, refusing the engine's own
+    trees. Symlinks are resolved first so a link into `raw/` cannot smuggle
+    the engine's own sources back in as an inbox."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"{prefix}: 'unattended.inbox' must be a non-blank path string, "
+            f"got {value!r}"
+        )
+    resolved_root = root.resolve()
+    inbox = (resolved_root / value.strip()).resolve()
+    layout = WorkspaceLayout(resolved_root)
+    forbidden = (
+        ("raw/", layout.raw_dir),
+        ("bundle/", layout.bundle_dir),
+        (".openkos/", layout.openkos_dir),
+    )
+    for label, tree in forbidden:
+        if inbox == tree or tree in inbox.parents:
+            raise ValueError(
+                f"{prefix}: 'unattended.inbox' must not be or sit inside "
+                f"{label} -- the inbox is an external folder the engine "
+                f"copies from, got {value!r}"
+            )
+    if inbox == resolved_root or inbox in resolved_root.parents:
+        raise ValueError(
+            f"{prefix}: 'unattended.inbox' must not be the workspace root "
+            f"or a folder containing it, got {value!r}"
+        )
+    if not inbox.is_dir():
+        raise ValueError(
+            f"{prefix}: 'unattended.inbox' must name an existing directory, "
+            f"got {value!r}"
+        )
+    return inbox
+
+
+def _read_unattended(root: Path, raw: object, prefix: str) -> UnattendedConfig:
+    """Validate the `unattended:` mapping eagerly, following the `models:`
+    precedent: an unknown key, a non-integer (a boolean is NOT an integer),
+    or an out-of-range value refuses the read, naming the key."""
+    if raw is None:
+        return UnattendedConfig()
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"{prefix}: 'unattended' must be a mapping, got {type(raw).__name__}"
+        )
+    known = {*_UNATTENDED_INT_FLOORS, "inbox"}
+    for key in raw:
+        if key not in known:
+            raise ValueError(
+                f"{prefix}: 'unattended' names unknown key {key!r}; valid "
+                f"keys are: {', '.join(sorted(known))}"
+            )
+    ints: dict[str, int] = {}
+    for key, floor in _UNATTENDED_INT_FLOORS.items():
+        value = raw.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                f"{prefix}: 'unattended.{key}' must be an integer, got "
+                f"{type(value).__name__}"
+            )
+        if value < floor:
+            raise ValueError(
+                f"{prefix}: 'unattended.{key}' must be >= {floor}, got {value}"
+            )
+        ints[key] = value
+    inbox_raw = raw.get("inbox")
+    inbox = (
+        _validate_unattended_inbox(root, inbox_raw, prefix)
+        if inbox_raw is not None
+        else None
+    )
+    return UnattendedConfig(**ints, inbox=inbox)
+
+
+@dataclass(frozen=True)
 class Config:
     """The subset of `openkos.yaml` the engine reads back at runtime.
 
@@ -1311,6 +1420,9 @@ class Config:
     Decision 6) -- an OpenAI-compatible embedding model is often served by a
     separate process or port from the chat model. Same validation as
     `base_url`."""
+    unattended: UnattendedConfig = field(default_factory=UnattendedConfig)
+    """The `unattended:` section (spend budget and folder watch); every
+    default when the section is absent. See `UnattendedConfig`."""
 
 
 def read_config(root: Path) -> Config:
@@ -1378,6 +1490,7 @@ def read_config(root: Path) -> Config:
     backend = raw.get("backend")
     base_url = raw.get("base_url")
     embedding_base_url = raw.get("embedding_base_url")
+    unattended = raw.get("unattended")
     if model is not None and not isinstance(model, str):
         raise ValueError(
             f"{layout.config_path.name}: 'model' must be a string, got "
@@ -1837,6 +1950,7 @@ def read_config(root: Path) -> Config:
         backend=resolved_backend,
         base_url=resolved_base_url,
         embedding_base_url=resolved_embedding_base_url,
+        unattended=_read_unattended(root, unattended, layout.config_path.name),
     )
 
 

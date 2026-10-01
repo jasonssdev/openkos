@@ -14,6 +14,19 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- `openkos.yaml` accepts an optional `unattended:` section for the unattended
+  engine: per-pass and per-day chat-call limits, a per-pass source limit, a job
+  deadline, a maintenance interval, and a watched `inbox` folder with its
+  `quiet_seconds` settle window
+  ([#1140](https://github.com/jasonssdev/openkos/issues/1140),
+  [#1142](https://github.com/jasonssdev/openkos/issues/1142)). It is validated
+  when the config is read (unknown keys, booleans and out-of-range values are
+  refused; the inbox may not be `raw/`, `bundle/`, `.openkos/` or the workspace
+  root). The defaults are provisional and absent means all of them; nothing
+  reads the section yet.
+
 ### Changed
 
 - The workspace lock file moved from the OS temp directory to a per-user state
