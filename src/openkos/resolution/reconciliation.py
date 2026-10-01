@@ -174,6 +174,87 @@ def _unwrap_fence(reply: str) -> str:
     return reply
 
 
+_LINK_TARGET_RE: Final = re.compile(r"\]\((?P<target>[^)\s]+)\)")
+"""The target of a bullet's first markdown link: the identity two `Related`
+bullets are deduplicated on, so a model that rewords a bullet's note does not
+get the same link added a second time."""
+
+_BULLET_RE: Final = re.compile(r"^\s*[-*+]\s+\S")
+
+
+def _related_sections(lines: list[str]) -> list[tuple[int, int]]:
+    """`(heading_index, end_index)` for every `Related` section (any heading
+    level, fence-aware): a section runs to the next heading of the same or a
+    shallower level, or to the end of the document."""
+    headings = _heading_levels(lines)
+    sections: list[tuple[int, int]] = []
+    for position, (index, level, rest) in enumerate(headings):
+        if rest.strip().lower() != "related":
+            continue
+        end = len(lines)
+        for next_index, next_level, _next_rest in headings[position + 1 :]:
+            if next_level <= level:
+                end = next_index
+                break
+        sections.append((index, end))
+    return sections
+
+
+def _related_bullets(body: str) -> list[str]:
+    lines = body.split("\n")
+    return [
+        line.strip()
+        for start, end in _related_sections(lines)
+        for line in lines[start + 1 : end]
+        if _BULLET_RE.match(line)
+    ]
+
+
+def _bullet_key(bullet: str) -> str:
+    match = _LINK_TARGET_RE.search(bullet)
+    return match.group("target") if match else bullet
+
+
+def ensure_related_section(body: str, *source_bodies: str) -> str:
+    """Guarantee `body` carries the links of every source body's `Related`
+    section (#1229).
+
+    The reconciliation reply is free text, and a model that rewrites two
+    notes into one may silently drop the `## Related` section -- the
+    backlinks to the Sources the merged object was extracted from -- while
+    frontmatter `provenance` stays intact. Deterministic rather than
+    prompt-asked: the links are facts already in hand.
+
+    Exactly one section results (#811's duplicated `## Related` is not
+    reintroduced): when `body` already has a `Related` section, only the
+    bullets whose link target it lacks are appended to the FIRST one; when
+    it has none, a single `## Related` is appended. Source bodies without a
+    `Related` bullet change nothing, so a bundle without such sections is
+    left exactly as the model wrote it."""
+    wanted: dict[str, str] = {}
+    for source in source_bodies:
+        for bullet in _related_bullets(source):
+            wanted.setdefault(_bullet_key(bullet), bullet)
+    if not wanted:
+        return body
+    lines = body.split("\n")
+    sections = _related_sections(lines)
+    present = {_bullet_key(bullet) for bullet in _related_bullets(body)}
+    missing = [bullet for key, bullet in wanted.items() if key not in present]
+    if not missing:
+        return body
+    if not sections:
+        return body.rstrip("\n") + "\n\n## Related\n\n" + "\n".join(missing)
+    _start, end = sections[0]
+    insert_at = end
+    while insert_at > sections[0][0] + 1 and not lines[insert_at - 1].strip():
+        insert_at -= 1
+    if insert_at == sections[0][0] + 1:
+        missing = ["", *missing]
+    lines[insert_at:insert_at] = missing
+    return "\n".join(lines)
+
+
 def reconcile_merged_body(
     *,
     survivor_title: str,
@@ -191,6 +272,9 @@ def reconcile_merged_body(
     - a reply still carrying the `## Merged content (` stacked heading;
     - a reply shorter than `_MIN_LENGTH_RATIO` of the longer input body
       (content loss, not deduplication).
+
+    A reply that dropped the `Related` links of either input gets them
+    back deterministically (`ensure_related_section`, #1229).
 
     `OllamaError`-family exceptions from `llm.chat` propagate -- the CLI
     caller owns the transport-failure fallback, mirroring how the other
@@ -219,4 +303,5 @@ def reconcile_merged_body(
         return None
     # #695: pin AFTER every refusal gate, so the length floor still scores
     # the model's own reply rather than one this function just edited.
-    return _pin_leading_heading(text, survivor_title)
+    pinned = _pin_leading_heading(text, survivor_title)
+    return ensure_related_section(pinned, survivor_body, absorbed_body)

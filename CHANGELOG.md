@@ -47,6 +47,14 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   compiled concepts that name the answer take the rest, so they reach the model
   instead of a false sufficiency refusal (#1220).
 
+- The survivor rule of `adjudicate` and `curate` no longer lets an
+  ingest-time `-N` suffix become the permanent Concept ID: when the two members
+  are a base/`-N` family the un-suffixed id survives, whichever body is richer
+  (#1228).
+- The merge reconciliation pass no longer drops the `## Related` section: the
+  links of both members are put back deterministically, without a second
+  `## Related` (#1229).
+
 ## [0.3.1] - 2026-10-01
 
 MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a
