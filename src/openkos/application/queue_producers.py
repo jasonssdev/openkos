@@ -53,6 +53,18 @@ PRODUCER_IDENTITY: Final = "duplicates/1"
 PRODUCER_RELATIONS: Final = "suggest-relations/1"
 PRODUCER_VOLATILITY: Final = "suggest-volatility/1"
 PRODUCER_REVISIONS: Final = "revisions/1"
+PRODUCER_WATCH: Final = "watch/1"
+
+REASON_SOURCE_CHANGED: Final = "source changed after import"
+REASON_EXCEEDS_BUDGET: Final = "exceeds per-pass budget"
+_REMEDY: Final = {
+    REASON_SOURCE_CHANGED: (
+        "rename the file in the inbox, or ingest it under a different name"
+    ),
+    REASON_EXCEEDS_BUDGET: (
+        "split the file, raise unattended.max_calls_per_pass, or ingest it by hand"
+    ),
+}
 
 CurrentDigest = Callable[[str], str | None]
 """A concept id to the sha256 of its CURRENT bytes, or `None` when unreadable
@@ -494,4 +506,80 @@ def enqueue_revisions(
         commit_section=commit_section,
         bundle_dir=bundle_dir,
         clock=clock,
+    )
+
+
+# -- watch refusals ---------------------------------------------------------------
+
+
+def watch_refusal_proposal(
+    *, source_id: str, inbox_path: str, digest: str, reason: str
+) -> pq.Proposal:
+    """One row per Source, digested over the inbox file's CURRENT bytes: the same
+    bytes are the same row, a further edit a new one. `inbox_path` is also the
+    input ref, so a removal or a restoration can find the row by the file."""
+    return pq.Proposal(
+        kind="watch_refusal",
+        key_body=pq.watch_refusal_key(source_id),
+        producer=PRODUCER_WATCH,
+        payload=_canonical(
+            {
+                "reason": reason,
+                "inbox_path": inbox_path,
+                "source_id": source_id,
+                "remedy": _REMEDY[reason],
+            }
+        ),
+        targets=(source_id,),
+        input_digests=(pq.InputDigest(inbox_path, digest),),
+    )
+
+
+def enqueue_watch_refusal(
+    conn: Any,
+    *,
+    source_id: str,
+    inbox_path: str,
+    digest: str,
+    reason: str,
+    bundle_dir: Path,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] | None = None,
+) -> ProducerResult:
+    """Upsert the one refusal row. Never retires another source's row: a watch
+    sees one file at a time, so its run is never `complete`."""
+    return publish(
+        conn,
+        "watch_refusal",
+        [
+            watch_refusal_proposal(
+                source_id=source_id,
+                inbox_path=inbox_path,
+                digest=digest,
+                reason=reason,
+            )
+        ],
+        complete=False,
+        commit_section=commit_section,
+        bundle_dir=bundle_dir,
+        clock=clock,
+    )
+
+
+def retire_watch_refusals(
+    conn: Any,
+    inbox_path: str,
+    *,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] | None = None,
+) -> int:
+    """Retire as `stale` the open refusal rows for `inbox_path`: the file left the
+    inbox, or its bytes are importable again."""
+    clock_kwargs: dict[str, Any] = {} if clock is None else {"clock": clock}
+    return pq.retire_open_by_input_ref(
+        conn,
+        "watch_refusal",
+        inbox_path,
+        commit_section=commit_section,
+        **clock_kwargs,
     )

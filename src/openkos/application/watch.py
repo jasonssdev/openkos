@@ -19,9 +19,14 @@ refuses to proceed when the bytes differ from the digest that was admitted:
 nothing is written and the file is deferred, so a save that lands after the
 quiet window is never imported half-seen.
 
-Refusals (`RawImmutabilityRefused`, over-budget sources) are RECORDED as
-observation outcomes here; turning them into `watch_refusal` queue rows is a
-separate unit.
+Refusals (`RawImmutabilityRefused`, over-budget sources) are recorded as
+observation outcomes AND upserted as one `watch_refusal` queue row per source
+(`queue_producers`), so a person sees them in `openkos pending` once rather than
+as an error on every save. A row is retired as `stale` when the file's bytes
+become importable again (a successful import of that path) or the file has been
+gone from the inbox for a whole quiet window (the window is what lets a rename
+land its new name first, so the row can move to `applied` instead); the ingest
+service moves it to `applied` when a raw copy with the refused bytes lands.
 
 Everything a job cannot import for budget, stop, deadline, lock contention or
 a moved file stays a candidate for the next job.
@@ -44,11 +49,14 @@ from typing import TYPE_CHECKING, Final
 from openkos import config, lock
 from openkos.application import budget as budget_module
 from openkos.application import ingest_service as svc
+from openkos.application import queue_producers as producers
 from openkos.application import runner
 from openkos.application.lock_wait import CommitSection
 from openkos.application.runtime import Deadline, Halt, StopToken, check_halt
+from openkos.bundle import source_titles
 from openkos.extraction.concept import estimate_extraction_calls
-from openkos.state import jobs
+from openkos.state import derived, jobs
+from openkos.state import pending_queue as pq
 
 if TYPE_CHECKING:
     from openkos.application.runner import RunnerPorts
@@ -62,6 +70,9 @@ REFUSED: Final = "refused"
 EXCEEDS_BUDGET: Final = "exceeds_budget"
 FAILED: Final = "failed"
 DEFERRED: Final = "deferred"
+GONE: Final = "gone:"
+"""An observation outcome prefix: a refused (or over-budget) file left the
+inbox; the observation is kept for one quiet window before its row is retired."""
 CHANGED: Final = "changed"
 """An observation outcome: `changed` (or `changed:<prior outcome>`) marks a
 stat that moved since the file was last handled and has not settled yet."""
@@ -157,6 +168,11 @@ class _Candidate:
     digest: str
 
 
+def _may_have_row(outcome: str | None) -> bool:
+    """Whether a file with this outcome may own an open `watch_refusal` row."""
+    return (outcome or "").split(":")[-1] in (REFUSED, EXCEEDS_BUDGET)
+
+
 def _poll(
     conn: sqlite3.Connection,
     inbox: Path,
@@ -164,9 +180,10 @@ def _poll(
     quiet_seconds: int,
     ports: RunnerPorts,
     watch: WatchPorts,
-) -> list[_Candidate]:
+) -> tuple[list[_Candidate], list[str]]:
     """Update the observations from one listing; return the settled candidates
-    in path order. Stats every file, reads and hashes none."""
+    in path order, and the inbox paths whose refusal row is due to be retired
+    (gone for a whole quiet window). Stats every file, reads and hashes none."""
     now = ports.now()
     known = {o.path: o for o in jobs.observations(conn)}
     seen: set[str] = set()
@@ -179,6 +196,10 @@ def _poll(
             continue
         seen.add(key)
         obs = known.get(key)
+        if obs is not None and (obs.outcome or "").startswith(GONE):
+            # It came back inside the window: the refusal stands as it was.
+            obs = dataclasses.replace(obs, outcome=(obs.outcome or "")[len(GONE) :])
+            jobs.upsert_observation(conn, obs)
         if obs is None or (obs.size, obs.mtime_ns) != (st.size, st.mtime_ns):
             prior = obs.outcome if obs is not None else None
             if prior is not None and prior.startswith(CHANGED):
@@ -212,10 +233,28 @@ def _poll(
             )
             continue
         candidates.append(_Candidate(path, obs, digest))
-    gone = [k for k in known if k not in seen]
-    if gone:
-        jobs.forget_observations(conn, gone)
-    return candidates
+    forget: list[str] = []
+    expired: list[str] = []
+    for key, obs in known.items():
+        if key in seen:
+            continue
+        outcome = obs.outcome or ""
+        if outcome.startswith(GONE):
+            if (now - _parse(obs.first_stable_at)).total_seconds() >= quiet_seconds:
+                expired.append(key)
+        elif _may_have_row(outcome):
+            base = outcome.split(":")[-1]
+            jobs.upsert_observation(
+                conn,
+                dataclasses.replace(
+                    obs, first_stable_at=_stamp(now), outcome=f"{GONE}{base}"
+                ),
+            )
+        else:
+            forget.append(key)
+    if forget:
+        jobs.forget_observations(conn, forget)
+    return candidates, expired
 
 
 def _resolve_digest(
@@ -244,6 +283,102 @@ def _record(
     jobs.upsert_observation(
         conn, dataclasses.replace(cand.obs, digest=digest, outcome=outcome)
     )
+
+
+class _Queue:
+    """The pending-work queue (`findings.db`) for one watch job, opened lazily so
+    a job that refuses nothing never creates the file."""
+
+    def __init__(self, layout: config.WorkspaceLayout) -> None:
+        self._layout = layout
+        self._conn: sqlite3.Connection | None = None
+
+    @property
+    def bundle_dir(self) -> Path:
+        return self._layout.bundle_dir
+
+    def writer(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = derived.open_derived_connection(self._layout.findings_db_path)
+            pq.ensure_schema(self._conn)
+        return self._conn
+
+    def existing(self) -> sqlite3.Connection | None:
+        """The connection when a queue already exists; never creates one."""
+        if self._conn is None and not self._layout.findings_db_path.is_file():
+            return None
+        return self.writer()
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+
+def _source_id_for(path: Path) -> str:
+    """The Source concept id an ingest of `path` would give it."""
+    return f"sources/{source_titles.slugify(path.stem)}"
+
+
+def _file_refusal(
+    conn: sqlite3.Connection,
+    queue: _Queue,
+    cand: _Candidate,
+    *,
+    reason: str,
+    source_id: str,
+    section: CommitSection,
+    tally: _Tally,
+    rest: int,
+) -> bool:
+    """Upsert the one `watch_refusal` row for `cand`, then record the outcome.
+    `False` when a stop or deadline halted the job (the file stays a
+    candidate)."""
+    outcome = REFUSED if reason == producers.REASON_SOURCE_CHANGED else EXCEEDS_BUDGET
+    try:
+        producers.enqueue_watch_refusal(
+            queue.writer(),
+            source_id=source_id,
+            inbox_path=cand.obs.path,
+            digest=cand.digest,
+            reason=reason,
+            bundle_dir=queue.bundle_dir,
+            commit_section=section,
+        )
+    except runner._Halted as halted:
+        _record(conn, cand, digest=cand.digest, outcome=DEFERRED)
+        tally.halt, tally.deferred = halted.halt, tally.deferred + rest
+        return False
+    except lock.WorkspaceBusyError:
+        _record(conn, cand, digest=cand.digest, outcome=DEFERRED)
+        tally.deferred += 1
+        tally.busy = True
+        return True
+    except (sqlite3.Error, OSError):
+        tally.failure = "queue_unwritable"
+        log.error("watch refusal not queued (%s)", tally.failure)
+        _record(conn, cand, digest=cand.digest, outcome=DEFERRED)
+        return True
+    _record(conn, cand, digest=cand.digest, outcome=outcome)
+    tally.done += 1
+    return True
+
+
+def _retire_rows(
+    queue: _Queue, inbox_paths: Sequence[str], section: CommitSection
+) -> bool:
+    """Retire the open refusal rows for these inbox paths. `False` when it could
+    not be done now (a halt, contention or an unreadable queue): the caller
+    leaves its bookkeeping so the next job retries."""
+    try:
+        conn = queue.existing()
+        if conn is None:
+            return True
+        for path in inbox_paths:
+            producers.retire_watch_refusals(conn, path, commit_section=section)
+    except (runner._Halted, lock.WorkspaceBusyError, sqlite3.Error, OSError):
+        return False
+    return True
 
 
 def _import_one(
@@ -283,6 +418,7 @@ def _run_candidates(
     run_budget: budget_module.BudgetedRun,
     ports: RunnerPorts,
     watch: WatchPorts,
+    queue: _Queue,
     tally: _Tally,
 ) -> None:
     base_section = runner._commit_section(root, ports, stop, deadline)
@@ -305,13 +441,23 @@ def _run_candidates(
         verdict = run_budget.admit(estimate)
         if not verdict.admitted:
             if verdict.never_fits:
-                _record(conn, cand, digest=digest, outcome=EXCEEDS_BUDGET)
-                tally.done += 1
+                if not _file_refusal(
+                    conn,
+                    queue,
+                    cand,
+                    reason=producers.REASON_EXCEEDS_BUDGET,
+                    source_id=_source_id_for(cand.path),
+                    section=base_section,
+                    tally=tally,
+                    rest=rest,
+                ):
+                    return
                 continue
             tally.budget_limit = verdict.limit or budget_module.PASS_LIMIT_KEY
             tally.deferred += rest
             return
         admitted += 1
+        refusal: svc.RawImmutabilityRefused | None = None
         try:
             _import_one(
                 root,
@@ -335,16 +481,29 @@ def _run_candidates(
         except svc.DriftDetected:
             _record(conn, cand, digest=digest, outcome=DEFERRED)
             tally.deferred += 1
-        except svc.RawImmutabilityRefused:
-            _record(conn, cand, digest=digest, outcome=REFUSED)
-            tally.done += 1
+        except svc.RawImmutabilityRefused as refused:
+            refusal = refused
         except Exception as exc:  # noqa: BLE001 -- recorded by class only
             tally.failure = runner._snake(type(exc).__name__)
             log.error("watch import failed (%s)", tally.failure)
             _record(conn, cand, digest=digest, outcome=FAILED)
         else:
+            # The bytes import cleanly again: a row that refused this path is moot.
+            if not _retire_rows(queue, [cand.obs.path], base_section):
+                log.warning("watch refusal row not retired; it stays open")
             _record(conn, cand, digest=digest, outcome=IMPORTED)
             tally.done += 1
+        if refusal is not None and not _file_refusal(
+            conn,
+            queue,
+            cand,
+            reason=producers.REASON_SOURCE_CHANGED,
+            source_id=refusal.source_id or _source_id_for(cand.path),
+            section=base_section,
+            tally=tally,
+            rest=rest,
+        ):
+            return
 
 
 def _outcome(tally: _Tally) -> tuple[str, str | None]:
@@ -376,19 +535,43 @@ def run_watch_job(
     conn = runner._open_job_record(layout)
     if conn is None:
         return runner._unreadable_result("watch")
+    queue = _Queue(layout)
     try:
-        candidates = _poll(
+        candidates, expired = _poll(
             conn,
             inbox,
             quiet_seconds=unattended.quiet_seconds,
             ports=ports,
             watch=watch,
         )
-        if not candidates:
-            return None
-        return _run_job(root, layout, conn, candidates, unattended, stop, ports, watch)
+        result = None
+        if candidates:
+            result = _run_job(
+                root, layout, conn, candidates, unattended, stop, ports, watch, queue
+            )
+        if expired:
+            _retire_gone(root, conn, queue, expired, unattended, stop, ports)
+        return result
     finally:
+        queue.close()
         conn.close()
+
+
+def _retire_gone(
+    root: Path,
+    conn: sqlite3.Connection,
+    queue: _Queue,
+    expired: Sequence[str],
+    unattended: config.UnattendedConfig,
+    stop: StopToken,
+    ports: RunnerPorts,
+) -> None:
+    """Retire the rows of files gone for a whole quiet window, AFTER the imports
+    so a rename's new name has had its chance to land first and apply the row."""
+    deadline = Deadline(unattended.job_deadline_seconds, clock=ports.monotonic)
+    section = runner._commit_section(root, ports, stop, deadline)
+    if _retire_rows(queue, expired, section):
+        jobs.forget_observations(conn, list(expired))
 
 
 def _run_job(
@@ -400,6 +583,7 @@ def _run_job(
     stop: StopToken,
     ports: RunnerPorts,
     watch: WatchPorts,
+    queue: _Queue,
 ) -> runner.JobResult:
     try:
         run_budget = budget_module.start_budgeted_run(layout, unattended, ports.now())
@@ -432,6 +616,7 @@ def _run_job(
         run_budget=run_budget,
         ports=ports,
         watch=watch,
+        queue=queue,
         tally=tally,
     )
     outcome, detail = _outcome(tally)
@@ -464,4 +649,8 @@ def _run_job(
     )
 
 
-__all__ = ["FileStat", "WatchPorts", "run_watch_job"]
+BudgetedRun = budget_module.BudgetedRun
+"""Re-exported so the CLI composition root can type the port it builds without
+importing the budget module (only the runner may install the counting wrapper)."""
+
+__all__ = ["BudgetedRun", "FileStat", "WatchPorts", "run_watch_job"]

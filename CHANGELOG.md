@@ -27,6 +27,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   ([#1139](https://github.com/jasonssdev/openkos/issues/1139),
   [#1140](https://github.com/jasonssdev/openkos/issues/1140),
   [#1141](https://github.com/jasonssdev/openkos/issues/1141)).
+- `openkos daemon` watches the configured `unattended.inbox`: a file that has
+  stayed unchanged for `quiet_seconds` is ingested like a person's `ingest` of
+  it, inside the call budget, and the inbox itself is never written. A file
+  edited after it was imported is not re-ingested; it is queued once as a
+  `watch_refusal` row for `openkos pending` (rename it in the inbox, or ingest it
+  under a different name), as is a file too large for the per-pass budget. The
+  row is retired when the file is removed or its bytes become importable again,
+  and moves to applied when a raw copy with the refused bytes lands
+  ([#1142](https://github.com/jasonssdev/openkos/issues/1142)).
 - `openkos pending` lists the pending-work queue read-only: open rows grouped by
   kind with their target ids and resolving command, then the unattended job
   outcomes that need attention. `--all` adds resolved rows and `--stats` prints

@@ -14,7 +14,7 @@ import signal
 import sqlite3
 import threading
 from collections.abc import Iterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -696,19 +696,94 @@ def test_a_backend_failure_inside_a_stage_is_recorded_as_failed_after_enqueueing
         conn.close()
 
 
-def test_a_configured_inbox_says_the_watcher_is_not_enabled(
-    root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+class _Clock:
+    def __init__(self) -> None:
+        self.now = _NOW
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+class _DecliningModel:
+    """A backend that extracts nothing and counts the calls it receives."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, messages: Sequence[object]) -> str:
+        self.calls += 1
+        return '{"extract": false}'
+
+
+def _configure_inbox(root: Path, *, quiet_seconds: int = 5) -> Path:
     inbox = root.parent / "inbox"
     inbox.mkdir()
     cfg_path = root / "openkos.yaml"
     cfg_path.write_text(
-        cfg_path.read_text(encoding="utf-8") + f"\nunattended:\n  inbox: {inbox}\n",
+        cfg_path.read_text(encoding="utf-8")
+        + f"\nunattended:\n  inbox: {inbox}\n  quiet_seconds: {quiet_seconds}\n",
         encoding="utf-8",
     )
-    _install_ports(monkeypatch, _fake_ports(_Git()))
+    return inbox
+
+
+def _watching_ports(
+    monkeypatch: pytest.MonkeyPatch, clock: _Clock, model: _DecliningModel
+) -> None:
+    """The REAL production ports (so the watch wiring under test is the
+    daemon's own), with only the clock, the derived refresh and the model
+    replaced."""
+    real = daemon_module.production_ports
+
+    def ports(root: Path) -> runner.RunnerPorts:
+        return dataclasses.replace(
+            real(root),
+            now=clock,
+            refresh_derived=lambda r: None,
+            advisor_stages=(),
+        )
+
+    monkeypatch.setattr(daemon_module, "production_ports", ports)
+    monkeypatch.setattr(
+        "openkos.cli.main._chat_client", lambda cfg, *, task=None: model
+    )
+
+
+def test_a_daemon_with_an_inbox_imports_a_settled_file(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inbox = _configure_inbox(root)
+    (inbox / "note.md").write_text("Notes about self-control.\n", encoding="utf-8")
+    clock, model = _Clock(), _DecliningModel()
+    _watching_ports(monkeypatch, clock, model)
+
+    first = cli.invoke(app, ["daemon", "--once"])
+    assert first.exit_code == 0, first.output
+    assert not (root / "raw" / "note.md").exists()  # first sight starts the clock
+    clock.now += timedelta(seconds=6)
+    second = cli.invoke(app, ["daemon", "--once"])
+
+    assert second.exit_code == 0, second.output
+    assert "not enabled" not in second.output
+    assert "daemon: watch: completed" in second.output
+    assert (root / "raw" / "note.md").read_bytes() == b"Notes about self-control.\n"
+    assert model.calls >= 1
+    watch_rows = [r for r in _job_rows(root) if r.kind == "watch"]
+    assert [(r.outcome, r.units_done) for r in watch_rows] == [("completed", 1)]
+    assert watch_rows[0].chat_calls == model.calls  # counted by the budgeted run
+
+
+def test_a_daemon_without_an_inbox_runs_no_watch(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock, model = _Clock(), _DecliningModel()
+    _watching_ports(monkeypatch, clock, model)
 
     result = cli.invoke(app, ["daemon", "--once"])
+    clock.now += timedelta(seconds=6)
+    cli.invoke(app, ["daemon", "--once"])
 
     assert result.exit_code == 0, result.output
-    assert "inbox watcher is not enabled" in result.stderr
+    assert "inbox" not in result.output
+    assert [r.kind for r in _job_rows(root) if r.kind == "watch"] == []
+    assert model.calls == 0
