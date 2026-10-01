@@ -109,8 +109,8 @@ def current_finding_digest(bundle_dir: Path) -> Callable[[str], str | None]:
 def persisted_findings(
     layout: config.WorkspaceLayout,
 ) -> tuple[findings.PersistedFinding, ...]:
-    """Every persisted finding, with `stale` resolved against current
-    bundle bytes -- the single read of `.openkos/findings.db`
+    """The newest persisted finding for each pair, with `stale` resolved
+    against current bundle bytes -- the single read of `.openkos/findings.db`
     this module owns, shared by every adapter that needs the open/stale/declined
     predicate (`cli.main`'s `--declined` view, `status` (#598), and
     `cli.next_action`'s `open_contradictions`) so it is never reimplemented
@@ -133,7 +133,12 @@ def persisted_findings(
         )
     finally:
         conn.close()
-    return persisted
+    # `record_findings` appends, so a pair judged on several runs holds several
+    # rows. Only the newest speaks for the pair -- the row the serve partition
+    # and the pending-work queue both go by -- so a superseded verdict is never
+    # counted (#1227) and a later `consistent` retires an earlier contradiction.
+    latest = {(f.pair_ids, f.merged_absorbed_id): f for f in persisted}
+    return tuple(latest.values())
 
 
 def is_contradiction_declined(

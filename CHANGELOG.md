@@ -117,6 +117,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   names a verb that can close it (`openkos adjudicate --apply` for a group
   judged the same, `openkos duplicates --keep-distinct <ids>` otherwise)
   instead of the read-only `openkos duplicates`.
+- **`openkos pending` no longer prints empty or placeholder text.** A
+  `volatility` row names its concept type (`type Person`) instead of rendering
+  as `-`, and a `watch_refusal` row's `resolve:` hint names the refused file
+  instead of `<the refused file under raw/>`.
+- **`openkos status` no longer over-counts open contradictions.** A pair judged
+  on more than one run (for instance `contradictions --fresh`) holds one row
+  per run, and each fresh row was counted; only the newest finding for a pair
+  now counts, so a later `consistent` verdict retires an earlier
+  `contradicts` one, and `status` agrees with `pending` and
+  `reconcile --from-findings`.
 
 ## [0.3.1] - 2026-10-01
 

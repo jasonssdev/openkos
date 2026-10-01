@@ -438,6 +438,15 @@ and MUST remain informational — its presence MUST NOT cause a non-zero exit.
   finding is reported on a separate line labeled stale rather than folded
   into the open count or silently omitted
 
+#### Scenario: A pair judged on several runs is counted once
+
+- GIVEN a pair whose findings were persisted on two runs (for instance
+  `contradictions --fresh` over unchanged bytes), so the store holds two rows
+  for it
+- WHEN `openkos status` runs
+- THEN the pair is counted once, by its newest finding, and a later
+  `consistent` verdict retires an earlier `contradicts` one
+
 #### Scenario: Declined findings are absent from status
 
 - GIVEN every persisted contradiction finding has been declined by the

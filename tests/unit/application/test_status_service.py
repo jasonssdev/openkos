@@ -459,3 +459,36 @@ def test_status_still_counts_a_group_judged_same(tmp_path: Path) -> None:
     _judge(layout, _twin_events(layout), "same")
 
     assert status_service.build_status_report(layout).exact_title_group_count == 1
+
+
+# --- #1227: one finding per pair, however many runs judged it ---
+
+
+def test_a_pair_judged_on_two_runs_is_counted_once(tmp_path: Path) -> None:
+    """`record_findings` appends, so a pair judged twice (`--fresh`, or a rerun
+    over unchanged bytes) holds two fresh rows. `pending` and `reconcile
+    --from-findings` offer the pair once; `status` must not count it twice."""
+    layout = _workspace(tmp_path)
+    concepts_dir = layout.bundle_dir / "concepts"
+    concepts_dir.mkdir()
+    for name in ("alpha", "beta"):
+        (concepts_dir / f"{name}.md").write_text(
+            f"---\ntype: Concept\ntitle: {name.title()}\n---\nBody.\n",
+            encoding="utf-8",
+        )
+    pair = ("concepts/alpha", "concepts/beta")
+    _record_finding(layout, pair_ids=pair)
+    _record_finding(layout, pair_ids=pair)
+
+    assert status_service.contradiction_finding_counts(layout) == (1, 0)
+
+
+def test_a_later_consistent_verdict_supersedes_an_earlier_contradiction(
+    tmp_path: Path,
+) -> None:
+    layout = _workspace(tmp_path)
+    pair = ("concepts/alpha", "concepts/beta")
+    _record_finding(layout, pair_ids=pair)
+    _record_finding(layout, pair_ids=pair, verdict="consistent")
+
+    assert status_service.contradiction_finding_counts(layout) == (0, 0)

@@ -225,6 +225,6 @@ def test_a_watch_refusal_for_a_confidential_source_is_withheld(
         {
             "kind": "watch_refusal",
             "targets": ["sources/open-note"],
-            "resolve": "openkos ingest <the refused file under raw/>",
+            "resolve": "openkos ingest <the refused file>",
         }
     ]
