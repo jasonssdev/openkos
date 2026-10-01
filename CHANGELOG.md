@@ -35,6 +35,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- `sync-tags`, `normalize-names`, `repair`, `reconcile`, `adjudicate` and
+  `suggest-relations` no longer hold the workspace lock while they wait on the
+  model or on you: the lock is taken only to re-validate, write and commit, so
+  another OpenKOS process is not refused while a confirmation prompt is open.
+  A document the plan only read (a `sync-tags` Source or provenance link, a
+  `repair` superseding edge) changing before the commit refuses the run with
+  exit `3` and nothing written, and `adjudicate` and `suggest-relations` no
+  longer cache a verdict against a document edited while the model was working
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137)).
 - A derived-store lock contention (`vectors.db`, `fts.db`, `graph.db` or
   `findings.db` still busy after the busy timeout) now exits `3`, the
   retry-safe refusal, instead of `1`, for `reindex` and every other locked
