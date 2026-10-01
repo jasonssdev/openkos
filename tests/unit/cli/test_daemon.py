@@ -9,6 +9,7 @@ workspace lock for its lifetime.
 
 import contextlib
 import dataclasses
+import io
 import logging
 import signal
 import sqlite3
@@ -18,12 +19,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config, logsetup, userstate
 from openkos.application import runner
 from openkos.application.runtime import StopToken
 from openkos.cli import daemon as daemon_module
+from openkos.cli import observability
 from openkos.cli.main import app
 from openkos.resolution import candidates as cand
 from openkos.resolution.volatility_typing import TierSuggestion, TierSuggestionBatch
@@ -787,3 +789,145 @@ def test_a_daemon_without_an_inbox_runs_no_watch(
     assert "inbox" not in result.output
     assert [r.kind for r in _job_rows(root) if r.kind == "watch"] == []
     assert model.calls == 0
+
+
+# --- feedback while it works (#1225) -------------------------------------------
+
+
+def _tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+
+
+def test_a_file_that_has_not_settled_is_announced_with_the_quiet_window(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first run only STARTS the clock (observation-based settling, ADR-0038);
+    it must say so instead of finishing silently."""
+    inbox = _configure_inbox(root, quiet_seconds=30)
+    (inbox / "note.md").write_text("Notes about self-control.\n", encoding="utf-8")
+    _watching_ports(monkeypatch, _Clock(), _DecliningModel())
+    _tty(monkeypatch)
+
+    result = cli.invoke(app, ["daemon", "--once"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "openkos daemon: 1 file seen in the inbox; will import after 30s quiet"
+        in result.output
+    )
+    assert not (root / "raw" / "note.md").exists()
+
+
+def test_the_settling_notice_is_silent_when_stderr_is_not_a_tty(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inbox = _configure_inbox(root)
+    (inbox / "note.md").write_text("Notes about self-control.\n", encoding="utf-8")
+    _watching_ports(monkeypatch, _Clock(), _DecliningModel())
+
+    result = cli.invoke(app, ["daemon", "--once"])
+
+    assert "file seen" not in result.output
+
+
+def test_a_maintenance_pass_names_each_stage_as_it_starts(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[str] = []
+    stages = [_stage("alpha", seen), _stage("beta", seen)]
+    _install_ports(monkeypatch, _fake_ports(_Git(), stages))
+    _tty(monkeypatch)
+
+    result = cli.invoke(app, ["daemon", "--once"])
+
+    assert result.exit_code == 0, result.output
+    assert "openkos daemon: maintenance: alpha (1/2)..." in result.output
+    assert "openkos daemon: maintenance: beta (2/2)..." in result.output
+    assert result.output.index("alpha (1/2)") < result.output.index("beta (2/2)")
+
+
+def test_the_production_observers_report_per_item_progress_on_a_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Tty:
+        def isatty(self) -> bool:
+            return True
+
+        def write(self, text: str) -> int:
+            return len(text)
+
+        def flush(self) -> None:
+            return None
+
+    monkeypatch.setattr("sys.stderr", _Tty())
+    observers = (
+        daemon_module._DaemonReindexObserver(),
+        daemon_module._DaemonContradictionsObserver(),
+        daemon_module._DaemonVolatilityObserver(),
+        daemon_module._DaemonRevisionsObserver(),
+    )
+
+    assert all(o.progress_callback() is not None for o in observers)
+    monkeypatch.setattr("sys.stderr", io.StringIO())  # not a TTY
+    assert all(o.progress_callback() is None for o in observers)
+
+
+def test_the_daemon_log_records_an_end_line_for_a_once_run(
+    root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_ports(monkeypatch, _fake_ports(_Git()))
+    assert cli.invoke(app, ["daemon", "--once"]).exit_code == 0
+    logsetup.reset_logging()
+
+    contents = "".join(
+        p.read_text(encoding="utf-8") for p in (tmp_path / "state-logs").glob("*.log")
+    )
+    assert "daemon started (once=True)" in contents
+    assert "daemon finished (once=True)" in contents
+
+
+def test_the_announcer_drops_a_repeat_until_it_is_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lines: list[str] = []
+    monkeypatch.setattr(
+        observability,
+        "stage_notice",
+        lambda verb, message: lines.append(message),
+    )
+    announce = daemon_module._Announcer()
+
+    announce("1 file seen")
+    announce("1 file seen")
+    announce("2 files seen")
+    announce.reset()
+    announce("2 files seen")
+
+    assert lines == ["1 file seen", "2 files seen", "2 files seen"]
+
+
+def test_the_relations_observer_reports_per_edge_progress_on_a_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writes: list[str] = []
+
+    class _Tty:
+        def isatty(self) -> bool:
+            return True
+
+        def write(self, text: str) -> int:
+            writes.append(text)
+            return len(text)
+
+        def flush(self) -> None:
+            return None
+
+    monkeypatch.setattr("sys.stderr", _Tty())
+    observer = daemon_module._DaemonRelationsObserver()
+
+    observer.edge_progress(1, 2, object())
+    observer.edge_progress(2, 2, object())
+
+    assert "".join(writes).count("untyped edge") == 2
+    monkeypatch.setattr("sys.stderr", io.StringIO())
+    daemon_module._DaemonRelationsObserver().edge_progress(1, 1, object())

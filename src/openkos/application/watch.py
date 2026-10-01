@@ -209,14 +209,16 @@ def _poll(
     quiet_seconds: int,
     ports: RunnerPorts,
     watch: WatchPorts,
-) -> tuple[list[_Candidate], list[str]]:
+) -> tuple[list[_Candidate], list[str], int]:
     """Update the observations from one listing; return the settled candidates
-    in path order, and the inbox paths whose refusal row is due to be retired
-    (gone for a whole quiet window). Stats every file, reads and hashes none."""
+    in path order, the inbox paths whose refusal row is due to be retired
+    (gone for a whole quiet window), and how many files are still inside their
+    quiet window. Stats every file, reads and hashes none."""
     now = ports.now()
     known = {o.path: o for o in jobs.observations(conn)}
     seen: set[str] = set()
     candidates: list[_Candidate] = []
+    waiting = 0
     for path in watch.list_files(inbox):
         key = path.relative_to(inbox).as_posix()
         try:
@@ -246,10 +248,12 @@ def _poll(
                     outcome=marker,
                 ),
             )
+            waiting += 1
             continue
         if obs.outcome in _TERMINAL:
             continue
         if (now - _parse(obs.first_stable_at)).total_seconds() < quiet_seconds:
+            waiting += 1
             continue
         try:
             digest, settled_prior = _resolve_digest(path, obs, watch)
@@ -283,7 +287,7 @@ def _poll(
             forget.append(key)
     if forget:
         jobs.forget_observations(conn, forget)
-    return candidates, expired
+    return candidates, expired, waiting
 
 
 def _resolve_digest(
@@ -567,13 +571,15 @@ def run_watch_job(
         return runner._unreadable_result("watch")
     queue = _Queue(layout)
     try:
-        candidates, expired = _poll(
+        candidates, expired, waiting = _poll(
             conn,
             inbox,
             quiet_seconds=unattended.quiet_seconds,
             ports=ports,
             watch=watch,
         )
+        if waiting:
+            _say_waiting(ports, waiting, unattended.quiet_seconds)
         result = None
         if candidates:
             result = _run_job(
@@ -585,6 +591,19 @@ def run_watch_job(
     finally:
         queue.close()
         conn.close()
+
+
+def _say_waiting(ports: RunnerPorts, waiting: int, quiet_seconds: int) -> None:
+    """Say that files were seen but have not settled. Settling stays
+    observation-based (ADR-0038: the same stat for a whole window, seen by this
+    engine), so a first run only starts the clock; without this line it ends
+    silently and looks like a failure to import."""
+    noun = "file" if waiting == 1 else "files"
+    message = (
+        f"{waiting} {noun} seen in the inbox; will import after {quiet_seconds}s quiet"
+    )
+    log.info("watch: %s", message)
+    ports.announce(message)
 
 
 def _retire_gone(

@@ -63,6 +63,19 @@ mismatch as not yet settled, writing nothing for it.
 - WHEN a watch job runs
 - THEN the file is not imported in that job
 
+#### Scenario: A file that has not settled is announced
+
+- GIVEN a new inbox file and a TTY, with the quiet window not yet elapsed since
+  the watch first observed it
+- WHEN a watch job runs
+- THEN nothing is imported and one line says how many files were seen and that
+  they will import after `unattended.quiet_seconds` of quiet
+
+Settling stays observation-based: the quiet window is measured from when the
+watch first saw the current size and modification time, never from the file's
+modification time alone, because a copy that preserves an old timestamp would
+otherwise be imported before the watch ever observed it stable.
+
 #### Scenario: A settled file is imported through the ingest service
 
 - GIVEN a new file unchanged for longer than the quiet window
