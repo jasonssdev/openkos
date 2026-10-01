@@ -14,6 +14,10 @@ This module is the CLI-layer composition root for the runner
 - **Logging.** `logsetup.configure_logging("daemon", root=...)`: a rotating file
   in the per-user log directory, never inside the workspace.
 - **Git.** The four `vcs.git` functions the runner's commit-retry job uses.
+- **The watch job.** `watch_ports()` builds each inbox file's `IngestPorts` around
+  the commit section the watch hands it, with the budgeted run's counted chat
+  client. Its post-commit step is a no-op: the maintenance job's incremental
+  refresh embeds what an import added, so the watch never takes a second lock.
 - **The advisor stages.** Contradictions, duplicates (identity), relation typing,
   volatility and revisions, each computed through its application service with
   `max_calls=ctx.budget.remaining` and a chat client counted by the pass's
@@ -48,10 +52,12 @@ from openkos.application import (
     reindex_service,
     revisions,
 )
+from openkos.application import ingest_service as ingest_svc
 from openkos.application import pending as application_pending
 from openkos.application import queue_producers as producers
 from openkos.application import suggest_relations_service as relations_service
 from openkos.application import suggest_volatility_service as volatility_service
+from openkos.application.lock_wait import CommitSection
 from openkos.application.runner import (
     AdvisorStage,
     JobResult,
@@ -62,6 +68,7 @@ from openkos.application.runner import (
     run_due_jobs,
 )
 from openkos.application.runtime import StopToken
+from openkos.application.watch import BudgetedRun, WatchPorts
 from openkos.graph import sqlite_graph
 from openkos.resolution import contradiction, edge_typing, volatility_typing
 from openkos.state.vectorstore import open_vector_store
@@ -385,9 +392,33 @@ def production_stages() -> tuple[AdvisorStage, ...]:
     )
 
 
+def _ingest_ports(
+    section: CommitSection, run_budget: BudgetedRun
+) -> ingest_svc.IngestPorts:
+    """One inbox file's ingest effects: the extraction client counted into the
+    budgeted run, the engine's auto-commit, and no post-commit embedding (the
+    maintenance job's incremental refresh owns that)."""
+    from openkos.cli import main as cli_main
+
+    return ingest_svc.IngestPorts(
+        chat_client=run_budget.wrap_chat_client(
+            lambda cfg: cli_main._chat_client(cfg, task="extraction")
+        ),
+        autocommit=lambda root, paths, message: cli_main._autocommit(
+            root, paths, message
+        ),
+        after_commit=lambda layout, cfg: None,
+        commit_section=section,
+    )
+
+
+def watch_ports() -> WatchPorts:
+    return WatchPorts(ingest_ports=_ingest_ports)
+
+
 def production_ports(root: Path) -> RunnerPorts:
     """The runner's ports wired to the real effects: the four git functions, the
-    incremental refresh and the production advisor stages."""
+    incremental refresh, the inbox watch and the production advisor stages."""
     return RunnerPorts(
         refresh_derived=_refresh_derived,
         commit_paths=vcs_git.commit_paths,
@@ -395,6 +426,7 @@ def production_ports(root: Path) -> RunnerPorts:
         repo_root=vcs_git.repo_root,
         has_git_identity=vcs_git.has_git_identity,
         advisor_stages=production_stages(),
+        watch=watch_ports(),
     )
 
 
@@ -467,15 +499,6 @@ def serve(
     try:
         wired = ports if ports is not None else production_ports(root)
         log.info("daemon started (once=%s)", once)
-        if cfg.unattended.inbox is not None:
-            # The watch job's ingest wiring ships separately; say so rather than
-            # silently ignoring a configured inbox.
-            log.warning("inbox configured but the watcher is not enabled")
-            typer.echo(
-                "openkos daemon: 'unattended.inbox' is set but the inbox "
-                "watcher is not enabled in this build; no file is imported.",
-                err=True,
-            )
         while True:
             due = maintenance_due(root, cfg.unattended, wired.now())
             results = run_due_jobs(

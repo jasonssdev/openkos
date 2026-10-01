@@ -501,6 +501,40 @@ def resolve_open_by_input_digest(
     return len(ids)
 
 
+def retire_open_by_input_ref(
+    conn: sqlite3.Connection,
+    kind: str,
+    input_ref: str,
+    *,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] = _now,
+) -> int:
+    """Retire as `stale` every open row of `kind` that recorded `input_ref` as
+    one of its inputs (a `watch_refusal` row names the inbox path it refused).
+    Returns how many rows moved. An absent queue answers 0 and is never
+    created."""
+    if not queue_exists(conn):
+        return 0
+    now = clock().isoformat()
+    with _transaction(conn, commit_section):
+        ids = [
+            row[0]
+            for row in conn.execute(
+                "SELECT i.id FROM pending_items i WHERE i.kind = ?"
+                " AND i.status IN ('pending','claimed') AND EXISTS ("
+                "SELECT 1 FROM pending_item_input_digests d"
+                " WHERE d.item_id = i.id AND d.input_ref = ?)",
+                (kind, input_ref),
+            )
+        ]
+        conn.executemany(
+            "UPDATE pending_items SET status='stale', resolution='stale',"
+            " claimed_by=NULL, resolved_at=? WHERE id = ?",
+            [(now, item_id) for item_id in ids],
+        )
+    return len(ids)
+
+
 def _platform() -> str:
     """`sys.platform` read through a function so mypy does not narrow the
     per-OS branches below to the host it runs on (with `warn_unreachable`,

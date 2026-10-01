@@ -14,6 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos import config
+from openkos.application import queue_producers
 from openkos.cli.main import app
 from openkos.llm.base import Embedder, LLMBackend
 from openkos.mcp import tools
@@ -185,3 +186,45 @@ def test_a_volatility_row_names_no_concept_and_is_listed(
         "state": "present",
         "rows": [{"kind": "volatility", "targets": [], "resolve": "openkos curate"}],
     }
+
+
+def _enqueue_watch_refusal(layout: config.WorkspaceLayout, source_id: str) -> None:
+    conn: sqlite3.Connection = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        pq.ensure_schema(conn)
+        queue_producers.enqueue_watch_refusal(
+            conn,
+            source_id=source_id,
+            inbox_path="inbox-file.md",
+            digest="0" * 64,
+            reason=queue_producers.REASON_SOURCE_CHANGED,
+            bundle_dir=layout.bundle_dir,
+            commit_section=_section,
+        )
+    finally:
+        conn.close()
+
+
+def test_a_watch_refusal_for_a_confidential_source_is_withheld(
+    layout: config.WorkspaceLayout,
+) -> None:
+    """The refused Source's id is a target like any other: a confidential Source
+    must not cross the boundary, while a disclosable one is listed."""
+    hidden_source = "sources/zz-sentinel-confidential-9f3a"
+    _concept(layout, "sources/open-note", "private")
+    _concept(layout, hidden_source, "confidential")
+    _enqueue_watch_refusal(layout, "sources/open-note")
+    _enqueue_watch_refusal(layout, hidden_source)
+
+    result = _call(layout)
+
+    assert "zz-sentinel" not in json.dumps(result)
+    queue = result["queue"]
+    assert isinstance(queue, dict)
+    assert queue["rows"] == [
+        {
+            "kind": "watch_refusal",
+            "targets": ["sources/open-note"],
+            "resolve": "openkos ingest <the refused file under raw/>",
+        }
+    ]

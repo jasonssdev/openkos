@@ -88,7 +88,13 @@ class NotAWorkspace(IngestRefused):
 
 
 class RawImmutabilityRefused(IngestRefused):
-    """The raw copy already exists under this name with different bytes."""
+    """The raw copy already exists under this name with different bytes.
+    `source_id` is the Source concept id the refused file maps to, so a caller
+    that queues the refusal needs no second look at the workspace."""
+
+    def __init__(self, message: str, *, source_id: str | None = None) -> None:
+        super().__init__(message)
+        self.source_id = source_id
 
 
 class InconsistentWorkspace(IngestRefused):
@@ -663,7 +669,8 @@ def _prepare(
                     f"openkos ingest: refusing to ingest -- '{src}' differs from "
                     f"the existing 'raw/{name}' copy; raw sources are "
                     "immutable. Ingest under a different name, or inspect the "
-                    "existing copy."
+                    "existing copy.",
+                    source_id=f"sources/{slug}",
                 )
         elif concept_path.exists():
             # raw absent + concept present -> inconsistent workspace (D5)
