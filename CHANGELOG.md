@@ -27,6 +27,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   root). The defaults are provisional and absent means all of them; nothing
   reads the section yet.
 
+### Changed
+
+- A derived-store lock contention (`vectors.db`, `fts.db`, `graph.db` or
+  `findings.db` still busy after the busy timeout) now exits `3`, the
+  retry-safe refusal, instead of `1`, for `reindex` and every other locked
+  verb ([#1137](https://github.com/jasonssdev/openkos/issues/1137)). The
+  message no longer blames "a concurrent reindex" or "the workspace lock": it
+  names the verb you ran and says another OpenKOS process is using the
+  workspace's derived stores and that a re-run is safe.
+
 ### Fixed
 
 - `suggest-volatility` no longer tells an `openai-compatible` workspace to start
