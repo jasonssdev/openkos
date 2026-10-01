@@ -12109,18 +12109,26 @@ def _persist_edge_suggestions(
     *,
     include_confidential: bool,
     surface: str = "suggest-relations",
+    judged_digests: "Mapping[str, str | None] | None" = None,
 ) -> None:
     """Delegator to `relations_service.persist_edge_suggestions` (issue
     #1168), which owns the persist rule (#799). This wrapper only renders the
     service's advisory, to stderr; `surface` names the command the user
     actually ran (#867 review), since curate's Structure stage persists
-    through this helper too."""
+    through this helper too.
+
+    The persist is a commit phase (#1137): it enters the commit section the
+    running split verb published, and `judged_digests` pins each endpoint as it
+    stood before the typing call, so a suggestion about an endpoint edited or
+    forgotten meanwhile is dropped."""
     relations_service.persist_edge_suggestions(
         layout,
         results,
         include_confidential=include_confidential,
         on_warning=_echo_stderr,
         surface=surface,
+        judged_digests=judged_digests,
+        commit_section=_commit_section_for(layout.root),
     )
 
 
@@ -12147,18 +12155,16 @@ def _persist_adjudications(
     judging call (#1137): the judging call holds no workspace lock, so a
     member edited, raised or forgotten meanwhile has a different digest now,
     and its verdict is dropped rather than stored against content nobody
-    judged. Without it (curate, which holds the lock throughout) the digests
-    are read here, as before.
+    judged. Without it the digests are read here, at persist time.
 
     The persist is a commit phase: it takes the workspace lock, and a busy
     workspace costs the same advisory a failed persist does."""
     if not results:
         return
     try:
-        # A whole-lock caller (curate) publishes no section and already holds
-        # the lock, so only a split verb's published section is entered.
-        published = _COMMIT_SECTION.get()
-        with published() if published is not None else nullcontext():
+        # Both callers (`adjudicate`, `curate`) are split verbs, so the persist
+        # always enters the commit section the guard published.
+        with _commit_section_for(layout.root)():
             current_digest = application_pending.current_finding_digest(
                 layout.bundle_dir
             )
@@ -14358,7 +14364,7 @@ def repair() -> None:
     ),
     rich_help_panel="Curate",
 )
-@_guard_workspace_lock("curate")
+@_guard_workspace_lock("curate", commit_phase=True)
 def curate(
     auto: bool = typer.Option(
         False,
@@ -14454,6 +14460,12 @@ def curate(
     every stage's underlying call, fail-closed by default (spec:
     Sensitivity Threading Is Fail-Closed).
 
+    Locking (ADR-0036): `curate` is a SPLIT verb. It holds no workspace lock
+    while a stage plans, calls the model or asks; each accepted item's write
+    and each persist of paid-for results is its own commit phase, which takes
+    the lock under `--wait`, re-validates its inputs and drops an item whose
+    input vanished.
+
     All five stages run fully as of slice 2 (design D10): Preconditions and
     Identity shipped in slice 1; Structure, Metadata, and Contradictions
     went `live=True` in slice 2 with real `probe`/`run` implementations, so
@@ -14534,7 +14546,9 @@ def curate(
     # write -- an all-declined/empty session invalidated nothing. NOT per
     # stage and NOT inside `merge_service.commit_merge` (Identity commits per item).
     if any(outcome.applied for outcome in outcomes):
-        _refresh_derived_after_write(layout, cfg, verb="curate")
+        _refresh_derived_after_write(
+            layout, cfg, verb="curate", commit_section=_commit_section_for(root)
+        )
 
 
 @app.command(
