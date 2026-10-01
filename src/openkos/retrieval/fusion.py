@@ -104,3 +104,39 @@ def fuse(fts_hits: list[FtsHit], vec_hits: list[VecHit]) -> list[str]:
         if concept_id.startswith(INSIGHT_ID_PREFIX):
             scores[concept_id] *= INSIGHT_FUSION_PENALTY
     return sorted(scores, key=lambda concept_id: (-scores[concept_id], concept_id))
+
+
+SOURCE_ID_PREFIX = "sources/"
+"""The id prefix identifying a `type: Source` document (issue #1220). Like
+`INSIGHT_ID_PREFIX`, the folder IS the type's identity in an OKF bundle."""
+
+
+def select_top(ranked: list[str], limit: int) -> list[str]:
+    """Take the displayed top-`limit` of a fused ranking, capping Source share.
+
+    A `sources/` document embeds the whole raw text, so it matches lexically
+    AND densely almost every time and, as a corpus grows, fills every slot
+    while the compiled concepts that name the answer sit just below the cut
+    (issue #1220). At most `max(1, limit // 2)` Sources keep a slot in rank
+    order; later Sources are deferred behind the compiled concepts. It is a
+    re-rank, never an exclusion: deferred Sources backfill any slot the
+    concepts leave empty, in their original order, so the answer that exists
+    only in a Source stays reachable. A ranking with no Source (or one within
+    the cap) is returned as a plain `ranked[:limit]`. Pure and deterministic.
+    """
+    if limit <= 0:
+        return []
+    max_sources = max(1, limit // 2)
+    kept: list[str] = []
+    deferred: list[str] = []
+    sources = 0
+    for concept_id in ranked:
+        if len(kept) == limit:
+            break
+        if concept_id.startswith(SOURCE_ID_PREFIX):
+            if sources == max_sources:
+                deferred.append(concept_id)
+                continue
+            sources += 1
+        kept.append(concept_id)
+    return kept + deferred[: limit - len(kept)]

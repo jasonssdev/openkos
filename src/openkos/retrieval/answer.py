@@ -1419,7 +1419,7 @@ def answer(
     # #434). There used to be a second fuse here that topped this ranking up
     # with a seeded-PageRank concept in a reserved tail slot; measurement
     # showed the slot cost a real hit and bought centrality, not relevance.
-    fused_ids = fusion.fuse(hits, vec_hits)[: max(limit, 0)]
+    fused_ids = fusion.select_top(fusion.fuse(hits, vec_hits), limit)
     omitted_titles: list[str] = []
     omitted_ids: list[str] = []
     history_truncated_titles: list[str] = []

@@ -4865,3 +4865,47 @@ def test_id_lists_align_with_title_lists(tmp_path: Path) -> None:
     assert fitting_result.omitted_ids == []
     assert fitting_result.history_truncated_titles == []
     assert fitting_result.history_truncated_ids == []
+
+
+def test_sources_do_not_crowd_compiled_concepts_out_of_the_context(
+    tmp_path: Path,
+) -> None:
+    """#1220: four Sources outrank the compiled concepts that name the answer.
+    The cap keeps at most `limit // 2` of them, so the concepts reach the model
+    and the citations stay exactly the set placed in context."""
+    bundle_dir = tmp_path / "bundle"
+    for n in range(4):
+        _write_doc(
+            bundle_dir / "sources" / f"meeting{n}.md",
+            doc_type="Source",
+            title=f"Meeting {n}",
+            body="raw transcript " * 20,
+        )
+    _write_doc(bundle_dir / "people" / "gustavo.md", title="Gustavo", body="attended")
+    _write_doc(bundle_dir / "events" / "kickoff.md", title="Kickoff", body="held")
+    _write_doc(bundle_dir / "events" / "review.md", title="Review", body="held")
+    index = _RecordingIndex(
+        hits=[
+            *(
+                fts.FtsHit(concept_id=f"sources/meeting{n}", score=0.0)
+                for n in range(4)
+            ),
+            fts.FtsHit(concept_id="people/gustavo", score=0.0),
+            fts.FtsHit(concept_id="events/kickoff", score=0.0),
+            fts.FtsHit(concept_id="events/review", score=0.0),
+        ]
+    )
+    llm = _FakeLLM(reply="Gustavo attended.")
+
+    result = answer_mod.answer(
+        "who attended", bundle_dir=bundle_dir, llm=llm, fts_index=index
+    )
+
+    assert [c.concept_id for c in result.citations] == [
+        "sources/meeting0",
+        "sources/meeting1",
+        "people/gustavo",
+        "events/kickoff",
+        "events/review",
+    ]
+    assert result.fused_count == 5

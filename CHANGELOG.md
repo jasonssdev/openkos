@@ -42,6 +42,11 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   `bundle/log.md`, so reverting anything but the latest commit conflicts there; the
   line now says the revert applies only while that commit is the latest.
 
+- `query` no longer lets whole `type: Source` documents fill the retrieval
+  set: at most half of the `--limit` slots (minimum one) go to Sources, and the
+  compiled concepts that name the answer take the rest, so they reach the model
+  instead of a false sufficiency refusal (#1220).
+
 ## [0.3.1] - 2026-10-01
 
 MVP 4, the Unattended Engine, is complete. The headline is `openkos daemon`: a

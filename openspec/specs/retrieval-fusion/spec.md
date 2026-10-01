@@ -137,6 +137,31 @@ scaled score.
 - WHEN `fuse(...)` is called
 - THEN the insight (`0.5/61`) is ordered before the source (`1/123`)
 
+### Requirement: Source Documents Share The Displayed Top-N
+
+The displayed top-`limit` of a fused ranking MUST hold at most
+`max(1, limit // 2)` ids under `sources/` (whole raw-text documents, which
+match both retrievers and would otherwise crowd out the compiled concepts that
+name the answer). Sources beyond the cap MUST be deferred behind the remaining
+ids and MUST backfill any slot those leave empty, in their original rank
+order. It re-ranks and never excludes; a ranking with no `sources/` id MUST
+equal a plain `ranked[:limit]`. The cited set stays exactly the set placed in
+context.
+
+#### Scenario: Compiled concepts outrank surplus Sources
+
+- GIVEN a ranking of four `sources/` ids followed by three compiled concepts
+  and `limit` 5
+- WHEN the top-`limit` is selected
+- THEN it is the first two Sources followed by the three concepts
+
+#### Scenario: Deferred Sources backfill empty slots
+
+- GIVEN three `sources/` ids, one compiled concept and one more Source, and
+  `limit` 5
+- WHEN the top-`limit` is selected
+- THEN all five ids are returned, the concept ahead of the deferred Sources
+
 ### Requirement: Pure Function, Deterministic, Zero I/O
 
 `fuse` MUST perform no file, network, or database access, and MUST return
