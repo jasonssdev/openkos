@@ -177,6 +177,10 @@ What you get with nothing configured:
 
 **Edits there are ordinary edits.** Anything you change in the editor is a change to the file on disk; `openkos lint` and `openkos status` read the bundle fresh on every run, so they see it immediately. What the engine does and does not reconcile afterwards is [Editing by hand](#editing-by-hand), below.
 
+## Keeping it current without being there
+
+Maintenance does not have to be something you remember to run. `openkos daemon` runs in the foreground (under a terminal or any service manager you choose) and, on a schedule, refreshes the derived indexes and runs the advisors, recording what it finds as pending work. It never changes the bundle and never approves anything: `openkos pending` lists what is waiting, each with the command that resolves it, and the decision stays yours. Your own commands keep working while it runs; if one meets the daemon mid-write it can retry with `--wait`. Run `openkos daemon --once` for a single pass.
+
 ## Editing by hand
 
 The bundle is your files, so you can edit any concept document directly — in Obsidian, VS Code, or any editor — without asking the engine. This is not a workaround; it is the point. The canonical files are the source of truth, and the engine's indexes are derived from them.

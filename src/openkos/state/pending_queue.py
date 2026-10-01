@@ -684,6 +684,21 @@ def open_items(
     return _select_items(conn, where, params, alive)
 
 
+def item_input_digests(
+    conn: sqlite3.Connection, item_id: int
+) -> tuple[InputDigest, ...]:
+    """The `(input_ref, digest)` rows one row's proposal was computed from, in
+    the order they were enqueued. Read-only; an unknown id reads as empty."""
+    return tuple(
+        InputDigest(input_ref, digest)
+        for input_ref, digest in conn.execute(
+            "SELECT input_ref, digest FROM pending_item_input_digests"
+            " WHERE item_id = ? ORDER BY ordinal",
+            (item_id,),
+        )
+    )
+
+
 def all_items(
     conn: sqlite3.Connection,
     *,

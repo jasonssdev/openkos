@@ -26,7 +26,12 @@ from pathlib import Path
 from typing import Final, cast
 
 from openkos import read_outcome, sensitivity
-from openkos.application import concept_read, list_service, next_action
+from openkos.application import (
+    concept_read,
+    list_service,
+    next_action,
+    pending_queue_report,
+)
 from openkos.application import consistency as application_consistency
 from openkos.application import query as query_service
 from openkos.model import okf
@@ -402,6 +407,48 @@ def _subjects_disclosable(subjects: tuple[str, ...] | None, snapshot: Snapshot) 
     )
 
 
+@dataclass(frozen=True)
+class PendingRead:
+    """What `pending`'s `run` hands its gate: the ranked recommendation and
+    the pending-work queue snapshot read beside it."""
+
+    result: next_action.NextResult
+    queue: pending_queue_report.QueueSnapshot
+
+
+_SUBJECT_FREE_KINDS: Final = frozenset({"volatility"})
+"""Queue kinds whose row legitimately names no concept (a volatility row is
+about a concept TYPE). Any other row with no declared target is withheld: an
+empty list there is a producer defect, and the gate fails closed on it."""
+
+
+def _disclose_queue(
+    queue: pending_queue_report.QueueSnapshot, snapshot: Snapshot
+) -> dict[str, object]:
+    """The queue block of `pending`: open rows whose every target is
+    disclosable, as kind, targets and resolving command. A row with any
+    non-disclosable target -- or none declared -- is withheld whole and is
+    NOT counted: no `withheld` increment and no count field, since a
+    number of hidden rows is itself a disclosure. An absent queue is
+    `not_computed` and an unreadable one `unavailable`, never an empty
+    list."""
+    if queue.queue == "absent":
+        return {"state": "not_computed"}
+    if queue.queue == "unreadable":
+        return {"state": "unavailable"}
+    rows = [
+        {
+            "kind": row.kind,
+            "targets": list(row.targets),
+            "resolve": pending_queue_report.resolving_command(row.kind),
+        }
+        for row in queue.open_items
+        if _subjects_disclosable(row.targets, snapshot)
+        and (row.targets or row.kind in _SUBJECT_FREE_KINDS)
+    ]
+    return {"state": "present", "rows": rows}
+
+
 def disclose_pending(raw: object, snapshot: Snapshot) -> dict[str, object]:
     """Build `pending`'s disclosure-safe payload (design Decision 6).
 
@@ -432,6 +479,10 @@ def disclose_pending(raw: object, snapshot: Snapshot) -> dict[str, object]:
     `skip_notices` become `skipped_documents: len(...)`, a count separate
     from `withheld` -- a skipped document was never read at all, so it was
     never a disclosure decision (design Decision 3)."""
+    queue_block: dict[str, object] | None = None
+    if isinstance(raw, PendingRead):
+        queue_block = _disclose_queue(raw.queue, snapshot)
+        raw = raw.result
     raw = cast(next_action.NextResult, raw)
     withheld = 0
 
@@ -454,13 +505,16 @@ def disclose_pending(raw: object, snapshot: Snapshot) -> dict[str, object]:
             else:
                 withheld += 1
 
-    return {
+    payload: dict[str, object] = {
         "action": action,
         "declinations": declinations,
         "skipped_documents": len(raw.skip_notices),
         "withheld": withheld,
         "not_run": (),
     }
+    if queue_block is not None:
+        payload["queue"] = queue_block
+    return payload
 
 
 def _filtered_titles(

@@ -180,37 +180,48 @@ def contradiction_proposals(
     decline sidecar's own, so a typed-edge and a merged-body contradiction over
     one pair are two rows."""
     specs = {contradiction_spec_key(spec): spec for spec in outcome.plan.specs}
-    proposals: list[pq.Proposal] = []
-    for verdict in outcome.verdicts:
-        if verdict.verdict is not contradiction_engine.Verdict.CONTRADICTS:
-            continue
-        spec = specs.get((verdict.pair_ids, verdict.merged_absorbed_id))
-        digests = () if spec is None else _digest_rows(input_digests(bundle_dir, spec))
-        proposals.append(
-            pq.Proposal(
-                kind="contradiction",
-                key_body=pq.contradiction_key(
-                    verdict.pair_ids, verdict.merged_absorbed_id
-                ),
-                producer=PRODUCER_CONTRADICTIONS,
-                payload=_canonical(
-                    {
-                        "pair_ids": list(verdict.pair_ids),
-                        "merged_absorbed_id": verdict.merged_absorbed_id,
-                        "confidence": verdict.confidence,
-                        "rationale": verdict.rationale,
-                        "conflicting_claims": list(verdict.conflicting_claims),
-                    }
-                ),
-                # Sidecar owner first (`pair_ids[0]`), then the absorbed concept.
-                targets=_distinct(
-                    (*verdict.pair_ids, *(filter(None, [verdict.merged_absorbed_id])))
-                ),
-                input_digests=digests,
-                merged_absorbed_id=verdict.merged_absorbed_id,
-            )
+    return [
+        contradiction_proposal(
+            verdict,
+            specs.get((verdict.pair_ids, verdict.merged_absorbed_id)),
+            input_digests=input_digests,
+            bundle_dir=bundle_dir,
         )
-    return proposals
+        for verdict in outcome.verdicts
+        if verdict.verdict is contradiction_engine.Verdict.CONTRADICTS
+    ]
+
+
+def contradiction_proposal(
+    verdict: contradiction_engine.ContradictionVerdict,
+    spec: contradiction_engine._CandidateSpec | None,
+    *,
+    input_digests: InputDigestsFor,
+    bundle_dir: Path,
+) -> pq.Proposal:
+    """The proposal for one `CONTRADICTS` verdict, with the digests of the
+    candidate it was judged from (none when the spec is unknown)."""
+    digests = () if spec is None else _digest_rows(input_digests(bundle_dir, spec))
+    return pq.Proposal(
+        kind="contradiction",
+        key_body=pq.contradiction_key(verdict.pair_ids, verdict.merged_absorbed_id),
+        producer=PRODUCER_CONTRADICTIONS,
+        payload=_canonical(
+            {
+                "pair_ids": list(verdict.pair_ids),
+                "merged_absorbed_id": verdict.merged_absorbed_id,
+                "confidence": verdict.confidence,
+                "rationale": verdict.rationale,
+                "conflicting_claims": list(verdict.conflicting_claims),
+            }
+        ),
+        # Sidecar owner first (`pair_ids[0]`), then the absorbed concept.
+        targets=_distinct(
+            (*verdict.pair_ids, *(filter(None, [verdict.merged_absorbed_id])))
+        ),
+        input_digests=digests,
+        merged_absorbed_id=verdict.merged_absorbed_id,
+    )
 
 
 def enqueue_contradictions(
@@ -252,36 +263,50 @@ def identity_proposals(
     }
     proposals: list[pq.Proposal] = []
     for group in report.groups:
-        digests = _file_digests(current_digest, group.member_ids)
-        if digests is None:
-            continue
-        result = verdict_by_members.get(tuple(sorted(group.member_ids)))
-        proposals.append(
-            pq.Proposal(
-                kind="identity",
-                key_body=pq.identity_key(group.member_ids),
-                producer=PRODUCER_IDENTITY,
-                payload=_canonical(
-                    {
-                        "member_ids": list(group.member_ids),
-                        "member_types": list(group.member_types),
-                        "okf_type": group.okf_type,
-                        "tier": group.tier.value,
-                        "trigger": group.trigger,
-                        "adjudication": None
-                        if result is None
-                        else {
-                            "verdict": result.verdict.value,
-                            "confidence": result.confidence,
-                            "rationale": result.rationale,
-                        },
-                    }
-                ),
-                targets=tuple(group.member_ids),
-                input_digests=digests,
-            )
+        proposal = identity_group_proposal(
+            group,
+            current_digest=current_digest,
+            result=verdict_by_members.get(tuple(sorted(group.member_ids))),
         )
+        if proposal is not None:
+            proposals.append(proposal)
     return proposals
+
+
+def identity_group_proposal(
+    group: Any,
+    *,
+    current_digest: CurrentDigest,
+    result: adjudication.AdjudicatedCandidate | None = None,
+) -> pq.Proposal | None:
+    """The proposal for one candidate group, or `None` when a member cannot be
+    re-read (a row whose inputs cannot be digested could never be told stale)."""
+    digests = _file_digests(current_digest, group.member_ids)
+    if digests is None:
+        return None
+    return pq.Proposal(
+        kind="identity",
+        key_body=pq.identity_key(group.member_ids),
+        producer=PRODUCER_IDENTITY,
+        payload=_canonical(
+            {
+                "member_ids": list(group.member_ids),
+                "member_types": list(group.member_types),
+                "okf_type": group.okf_type,
+                "tier": group.tier.value,
+                "trigger": group.trigger,
+                "adjudication": None
+                if result is None
+                else {
+                    "verdict": result.verdict.value,
+                    "confidence": result.confidence,
+                    "rationale": result.rationale,
+                },
+            }
+        ),
+        targets=tuple(group.member_ids),
+        input_digests=digests,
+    )
 
 
 def enqueue_identity(
@@ -333,33 +358,43 @@ def relation_proposals(
     direction is carried in the payload."""
     proposals: list[pq.Proposal] = []
     for suggestion in outcome.results:
-        if suggestion.suggested_type is None:
-            continue
-        edge = suggestion.edge
-        digests = _file_digests(current_digest, (edge.source_id, edge.target_id))
-        if digests is None:
-            continue
-        effective = suggestion.corrected_edge or edge
-        proposals.append(
-            pq.Proposal(
-                kind="relation_type",
-                key_body=pq.relation_type_key(edge.source_id, edge.target_id),
-                producer=PRODUCER_RELATIONS,
-                payload=_canonical(
-                    {
-                        "source_id": edge.source_id,
-                        "target_id": edge.target_id,
-                        "effective_source_id": effective.source_id,
-                        "effective_target_id": effective.target_id,
-                        "suggested_type": suggestion.suggested_type,
-                        "rationale": suggestion.rationale,
-                    }
-                ),
-                targets=(edge.source_id, edge.target_id),
-                input_digests=digests,
-            )
+        proposal = relation_suggestion_proposal(
+            suggestion, current_digest=current_digest
         )
+        if proposal is not None:
+            proposals.append(proposal)
     return proposals
+
+
+def relation_suggestion_proposal(
+    suggestion: Any, *, current_digest: CurrentDigest
+) -> pq.Proposal | None:
+    """The proposal for one typed untyped-edge suggestion, or `None` for a
+    degraded one or an endpoint that cannot be re-read."""
+    if suggestion.suggested_type is None:
+        return None
+    edge = suggestion.edge
+    digests = _file_digests(current_digest, (edge.source_id, edge.target_id))
+    if digests is None:
+        return None
+    effective = suggestion.corrected_edge or edge
+    return pq.Proposal(
+        kind="relation_type",
+        key_body=pq.relation_type_key(edge.source_id, edge.target_id),
+        producer=PRODUCER_RELATIONS,
+        payload=_canonical(
+            {
+                "source_id": edge.source_id,
+                "target_id": edge.target_id,
+                "effective_source_id": effective.source_id,
+                "effective_target_id": effective.target_id,
+                "suggested_type": suggestion.suggested_type,
+                "rationale": suggestion.rationale,
+            }
+        ),
+        targets=(edge.source_id, edge.target_id),
+        input_digests=digests,
+    )
 
 
 def enqueue_relations(
@@ -395,28 +430,34 @@ def volatility_proposals(outcome: VolatilityOutcome) -> list[pq.Proposal]:
     digests: the default it was computed against is part of the payload."""
     proposals: list[pq.Proposal] = []
     for suggestion in outcome.results:
-        if (
-            suggestion.suggested_tier is None
-            or suggestion.suggested_tier == suggestion.current_default
-        ):
-            continue
-        proposals.append(
-            pq.Proposal(
-                kind="volatility",
-                key_body=pq.volatility_key(suggestion.type_name),
-                producer=PRODUCER_VOLATILITY,
-                payload=_canonical(
-                    {
-                        "type_name": suggestion.type_name,
-                        "current_default": suggestion.current_default,
-                        "suggested_tier": suggestion.suggested_tier,
-                        "rationale": suggestion.rationale,
-                    }
-                ),
-                targets=(),
-            )
-        )
+        proposal = volatility_suggestion_proposal(suggestion)
+        if proposal is not None:
+            proposals.append(proposal)
     return proposals
+
+
+def volatility_suggestion_proposal(suggestion: Any) -> pq.Proposal | None:
+    """The proposal for one type's suggested tier, or `None` for a degraded
+    suggestion or one equal to the type's current default."""
+    if (
+        suggestion.suggested_tier is None
+        or suggestion.suggested_tier == suggestion.current_default
+    ):
+        return None
+    return pq.Proposal(
+        kind="volatility",
+        key_body=pq.volatility_key(suggestion.type_name),
+        producer=PRODUCER_VOLATILITY,
+        payload=_canonical(
+            {
+                "type_name": suggestion.type_name,
+                "current_default": suggestion.current_default,
+                "suggested_tier": suggestion.suggested_tier,
+                "rationale": suggestion.rationale,
+            }
+        ),
+        targets=(),
+    )
 
 
 def enqueue_volatility(

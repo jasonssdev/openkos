@@ -61,6 +61,24 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- The MCP `pending` tool also lists the open pending-work queue rows (kind,
+  target ids and resolving command) beside its recommendation, through the same
+  disclosure gate: a row naming a concept that is not disclosable at the
+  server's launch setting is withheld whole, and no count of withheld rows is
+  returned. An absent queue is reported as not computed. The tool never changes
+  a row
+  ([#1141](https://github.com/jasonssdev/openkos/issues/1141)).
+- `openkos curate` reads and feeds the pending-work queue: once it exists, the
+  Identity, Structure and Metadata stages serve a fresh open row's verdict,
+  relation type or volatility tier instead of asking the model again, every
+  stage enqueues what it computed that holds no open row, and an accepted or
+  declined item resolves its row through the same write cores the other verbs
+  use. Contradictions stays report-only. Without a queue nothing changes. A
+  merge or relation write no longer refuses with exit `3` when another verb
+  appended to `index.md` or `log.md` while the prompt waited: its entry is
+  re-applied over the current catalog
+  ([#1137](https://github.com/jasonssdev/openkos/issues/1137),
+  [#1141](https://github.com/jasonssdev/openkos/issues/1141)).
 - `openkos next` reads the pending-work queue: once the queue exists, its
   duplicate-group and contradiction tiers take their findings from open queue
   rows instead of recomputing them, and a new last tier recommends
