@@ -77,3 +77,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0036](0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md) | The workspace lock covers a short commit phase, not the whole verb, and lives in a per-user state directory | Accepted | 2026-09-30 |
 | [0037](0037-unattended-work-computes-and-enqueues-only.md) | Unattended work computes and enqueues; only a human-facing path applies a proposal | Accepted | 2026-09-30 |
 | [0038](0038-a-watched-folder-is-an-external-inbox.md) | A watched folder is an external inbox; a source edited after import is refused into the queue, never re-imported | Accepted | 2026-09-30 |
+| [0039](0039-the-stable-python-api-ships-with-a-desktop-app-as-its-first-client.md) | The stable Python API ships with a desktop app as its first client, not with interoperability | Proposed | 2026-10-01 |

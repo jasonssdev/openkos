@@ -122,15 +122,16 @@ The wedge, in one line: **the local-first, personal producer-consumer-runtime fo
 
 ## Roadmap at a glance
 
-OpenKOS ships in five MVP arcs, each usable on its own. Full detail in [`docs/roadmap.md`](https://github.com/jasonssdev/openkos/blob/main/docs/roadmap.md).
+OpenKOS ships in six MVP arcs, each usable on its own. Full detail in [`docs/roadmap.md`](https://github.com/jasonssdev/openkos/blob/main/docs/roadmap.md).
 
 - **MVP 1 — The Compiler. (Complete.)** The Karpathy loop, locally, over text: ingest → OKF concepts with provenance → cited query → freshness lint. Useful in an afternoon.
 - **MVP 2 — The Graph and Memory. (Complete.)** Entity/relationship extraction and reversible merge, a typed knowledge graph (an OpenKOS layer over OKF's untyped links — other tools still read the bundle fine), hybrid retrieval (lexical and semantic, rank-fused), contradiction detection with durable verdicts (findings persist, so a repeat check costs no model calls, and `reconcile` records how you settled each one), a fail-closed sensitivity filter (confidential concepts never leave the machine — held back from any backend that is not verifiably local), a guided curation loop, reference-aware `forget` plus an irreversible `purge` (right-to-be-forgotten), and answers that file back into the base (the two-output rule).
 - **MVP 3 — The Ask Surface. (Complete.)** Reading the bundle already needs no terminal — it opens as an Obsidian vault as-is. This arc adds asking: application services for the read verbs and an MCP server (`query`, `get`, `navigate`, what is pending) gated on sensitivity, so a chat client you already have becomes the interface.
 - **MVP 4 — The Unattended Engine. (Complete.)** A foreground daemon runs scheduled maintenance and watches an inbox folder inside a call budget you set; it does the non-consequential work and queues the consequential decisions as pending work for you to review, instead of asking you to remember them. The workspace lock is held only for short commit phases, so a person and the daemon can share one workspace.
-- **MVP 5 — Interoperability.** Full OKF export, then import, so knowledge moves in and out of the wider ecosystem without losing its structure, plus a stable Python API for third-party producers and consumers.
+- **MVP 5 — Interoperability.** Full OKF export, then import, so knowledge moves in and out of the wider ecosystem without losing its structure.
+- **MVP 6 — The Desktop App.** One installer and an icon, so a non-technical user can drop files in, ask, and settle the pending queue without a terminal; it brings a local API and a stable Python API with the app as its first client.
 
-Beyond that: a local REST API, memory projections, a desktop app, graph visualization, and federation — explored only after the MVPs prove out with real users.
+Beyond that: extension points for third-party producers and consumers, memory projections, graph visualization, and federation — explored only after the MVPs prove out with real users.
 
 ## Documentation
 

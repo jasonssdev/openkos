@@ -80,7 +80,7 @@ As shipped, the whole derived layer is five SQLite files under `.openkos/`, all 
 | In-memory graph analysis | NetworkX (on subgraphs) | NetworkX | BSD |
 | Local LLM (extraction) | Ollama (Qwen3 / Mistral Small) | larger model | check the vendor's terms |
 
-The MCP server (`openkos mcp`, stdio) ships; it is hand-rolled rather than built on an SDK ([ADR-0027](adr/0027-hand-rolled-stdio-mcp-server.md)). A local REST API is a Horizon item and no web framework is a dependency; full OKF import/export is MVP 5.
+The MCP server (`openkos mcp`, stdio) ships; it is hand-rolled rather than built on an SDK ([ADR-0027](adr/0027-hand-rolled-stdio-mcp-server.md)). A local API is planned with the desktop app (MVP 6) and no web framework is a dependency yet; full OKF import/export is MVP 5.
 
 **What each runtime dependency is for.** `pyproject.toml` is the authority for the list itself; this table exists because a manifest says *what* is required and never *why*, and a dependency whose reason nobody records is one nobody can retire:
 

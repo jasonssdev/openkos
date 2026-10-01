@@ -875,7 +875,7 @@ knowing the tool, still had to stop and guess what to do next.
 
 ## Not available yet — do not test as missing features
 
-Local REST API, full OKF import/export, a
+Local API, full OKF import/export, a
 `--sensitivity` flag on ingest, a configurable extraction cap, and `--json` or
 structured output on any command other than `adjudicate` (which has `--json`).
 All deferred by design (see [`roadmap.md`](roadmap.md)).
