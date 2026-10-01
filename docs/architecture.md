@@ -43,6 +43,8 @@ openkos/
 │   │   ├── findings.py  adjudications.py       # same file, two tenants
 │   │   ├── revision_findings.py  # decision-revision verdicts, a further tenant of the same file
 │   │   ├── edge_suggestions.py  question_vectors.py
+│   │   ├── pending_queue.py      # the pending-work queue, a further tenant of findings.db
+│   │   └── jobs.py               # jobs.db: the unattended runner's outcome log
 │   ├── graph/                    # DERIVED layer
 │   │   ├── base.py  sqlite_graph.py  analysis.py
 │   │   └── proximity.py  summary.py
@@ -67,6 +69,9 @@ openkos/
 │   │   ├── pending.py  consistency.py   # pending-work predicates; MCP consistency warnings
 │   │   ├── next_action.py        # `next`'s ranked tier engine
 │   │   ├── repair.py             # OKF v0.2 migration plan/apply
+│   │   ├── runner.py  runtime.py  budget.py  watch.py   # the unattended runner: jobs, halt control, call budget, inbox watch
+│   │   ├── queue_producers.py    # advisor findings enqueued as pending work
+│   │   ├── lock_wait.py  commit_phase.py   # the workspace lock held for a commit phase only
 │   │   ├── revisions.py  revisions_report.py   # decision-revision plan and report
 │   │   ├── backends.py           # the one seam that resolves/constructs an LLM client
 │   │   └── consent.py            # confirmation gates staged as typed data
@@ -96,7 +101,7 @@ The principles that shape it:
 - **The Protocol seams that exist today** are `GraphStore` (`graph/base.py`), `VectorStore` (`state/vectorstore.py`), and `LLMBackend` and `Embedder` (`llm/base.py`). They define the shapes their implementations satisfy (`sqlite_graph.py`, the `sqlite-vec` store, `ollama.py`, `openai_compatible.py`). They are internal seams, not a published plugin API: OpenKOS ships no `Producer`/`Consumer` interface and no entry-point group. That extension surface is a roadmap item, not present code — see [`roadmap.md`](roadmap.md).
 - **One resolver seam constructs every LLM client.** `application/backends.py` resolves the configured `backend` (`ollama`, the default, or `openai-compatible`), the effective endpoint, and the environment-only API key, then constructs the matching concrete client — the CLI and MCP adapters call through it rather than importing `OllamaClient`/`OpenAICompatibleClient` directly. Adding a backend widens this one seam; it does not touch the pipeline packages that call `LLMBackend`/`Embedder`.
 - **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. The write use cases are `query.py`, `ingest.py`, and `lifecycle.py`; the read verbs (`status`, `list`, `lint`, `doctor`, `get`) have their own read cores, so an adapter is a thin layer over shared code rather than a second implementation; and `consent.py` holds the confirmation contracts as typed data so a non-TTY adapter can answer a gate without re-deriving its prompt. `cli/` keeps parsing, presentation, exit codes, and the shared write mechanics the services call through rather than own.
-- **The derived layer is reconstructible — but not uniformly, and not for free.** The five SQLite stores under `.openkos/` sit at three different points on that scale. See [State taxonomy](#state-taxonomy) below, which is the one place that distinction is written down.
+- **The derived layer is reconstructible — but not uniformly, and not for free.** The derived SQLite stores under `.openkos/` sit at several different points on that scale. See [State taxonomy](#state-taxonomy) below, which is the one place that distinction is written down.
 
 ## Repository conventions
 
@@ -139,14 +144,15 @@ To *read* the knowledge in an editor it is **`bundle/`** that opens, not the wor
     ├── graph.db          # node-edge projection
     ├── vectors.db        # dense index
     ├── findings.db       # contradiction + adjudication verdicts (NOT an index)
-    └── insight_questions.db   # cached question embeddings for `query --save`
+    ├── insight_questions.db   # cached question embeddings for `query --save`
+    └── jobs.db           # OPERATIONAL: the unattended runner's job outcomes
 ```
 
 *(A content-addressed `raw-store/` for binary originals is described under
 "Source material and versioning" below and is not yet built; today `raw/` holds
 text-shaped sources only.)*
 
-*(Those five stores do not share one lifecycle, and the differences are
+*(Those stores do not share one lifecycle, and the differences are
 load-bearing — which rebuild for free, which cost model calls, and which is a
 verdict rather than a projection. [State taxonomy](#state-taxonomy) is the one
 place that is written down; see also `design D1` in the `performance-caching`
@@ -236,9 +242,10 @@ services, and the consolidation of the five `.openkos/` SQLite files into one
 
 ## State taxonomy
 
-A workspace holds three kinds of state, and the difference matters the moment
-something is lost: one kind is canonical, one rebuilds for free, and one costs
-model calls to recreate. They previously sat side by side undifferentiated.
+A workspace holds four kinds of state, and the difference matters the moment
+something is lost: one kind is canonical, one rebuilds for free, one costs
+model calls to recreate, and one is operational bookkeeping that nothing else
+depends on.
 
 **Canonical, versioned, never reconstructible.** `bundle/` — `index.md`,
 `log.md`, and every concept document — plus the sidecars under `bundle/.state/`:
@@ -252,13 +259,13 @@ which keeps it outside every bundle `*.md` walk on either ground and therefore
 outside OKF §11 by construction rather than by convention.
 
 **Derived, under `.openkos/`, git-ignored, deleted wholesale by `purge`.** All
-five are SQLite, all are reconstructible in principle, and they differ in what
+of these are SQLite, all are reconstructible in principle, and they differ in what
 reconstruction costs:
 
 | Store | Written by | Rebuild cost | Posture |
 | --- | --- | --- | --- |
-| `fts.db` | `reindex`, and every bundle-writing verb | free, local | manifest-hash gated; `purge` rebuilds it in line |
-| `graph.db` | `reindex`, and every bundle-writing verb | free, local | manifest-hash gated; `purge` rebuilds it in line |
+| `fts.db` | `reindex`, and every bundle-writing verb | free, local | manifest-hash gated, refreshed per document with a whole rebuild as the fallback; `purge` rebuilds it in line |
+| `graph.db` | `reindex`, and every bundle-writing verb | free, local | manifest-hash gated, refreshed per document with a whole rebuild as the fallback; `purge` rebuilds it in line |
 | `vectors.db` | `reindex`, and every bundle-writing verb | embedding calls | `purge` deletes without rebuilding; re-derived lazily |
 | `findings.db` | `contradictions`, `curate`, `adjudicate` | **LLM calls** | per-row input digests, not manifest-gated; never rebuilt in line |
 | `insight_questions.db` | `query --save` | one embedding | pure cache; a miss is re-embedded, and the store is advisory |
@@ -271,9 +278,30 @@ file — contradiction verdicts and adjudication verdicts — deliberately, so a
 second tenant inherits `purge`'s erasure and `forget`'s sweep instead of opening
 a new privacy surface.
 
+**The pending-work queue is a tenant of `findings.db`.** It holds the proposals
+the unattended runner computed and a human has not yet decided (`openkos
+pending` lists them). Like a verdict it is not an index and cannot be
+re-derived for free, so it rides the same erasure and sweep paths; unlike a
+verdict it is only ever a proposal: applying one still goes through the verb
+and the confirm gate that would have made the change by hand.
+
+**Per-document refresh, whole-rebuild fallback.** `fts.db` and `graph.db` keep
+a per-document manifest next to the bundle-level hash, so a verb that changed a
+few documents refreshes only those rows. The whole rebuild stays the fallback
+for anything the incremental path cannot vouch for (a store without the
+manifest, a version mismatch, a manifest that does not reproduce the hash, a
+failure mid-refresh), and an incrementally refreshed store must equal a whole
+rebuild's rows. That is what makes the cache disposable in practice.
+
 `insight_questions.db` sits at the other end: losing it costs nothing but time,
 which is exactly why `query --save` degrades to "could not check for
 near-duplicates" and files the insight anyway rather than refusing.
+
+**Operational, under `.openkos/`, disposable and non-authoritative.** `jobs.db`
+is the first store of this kind: the unattended runner's log of what each job
+did and how it ended (completed, budget exhausted, timed out, failed). It is not
+an index of anything and no answer depends on it; deleting it loses only the
+history of unattended runs. `purge` deletes it with the rest of `.openkos/`.
 
 **Ephemeral, outside the workspace entirely.** The interprocess mutation lock
 ([#925](https://github.com/jasonssdev/openkos/issues/925)) lives in a `locks`
@@ -286,6 +314,39 @@ byte- and structure-identical, and a lock file created inside it would break
 that. A lock run also takes the earlier temp-directory lock for one transitional
 release, so an older `openkos` still excludes a newer one
 ([ADR-0036](adr/0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md)).
+The unattended runner's logs live in the sibling `logs` directory of the same
+per-user state directory, for the same reason: a log is written on every run and
+must never appear in the workspace's tree or its version history.
+
+### Locking a commit phase, not a verb
+
+A verb that writes the bundle does not hold the workspace lock for its whole
+run. It splits into a **compute phase**, which reads the bundle, calls the model
+and builds a plan with no lock held, and a **commit phase**, which takes the
+lock, re-validates every file the plan depends on against current disk state,
+writes, and releases. Contention is therefore bounded by the short write rather
+than by a model call, which is what lets a daemon and a person share a
+workspace: whichever arrives second refuses (exit 3) or retries within `--wait`,
+and a plan that went stale while it was being computed is a drift refusal, never
+a silent overwrite. `purge` is the exception and holds the lock for its whole
+run, because it rewrites history. Plain `query` takes no lock at all; only
+`--save`'s write is a commit phase
+([ADR-0036](adr/0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md)).
+
+### The unattended runner
+
+The runner is an ordinary synchronous use-case service in `application/`
+([ADR-0037](adr/0037-unattended-work-computes-and-enqueues-only.md)), not a
+second orchestrator and not a framework: the `daemon` verb owns the process
+concerns (signals, the poll loop, the log file, the exit code) and drives the
+runner one job at a time, with the effects the runner cannot own handed in as
+ports. A job ends with exactly one recorded outcome. The runner performs no
+consequential write: it refreshes the derived stores, counts lint findings and
+runs the advisors, and every proposal becomes pending work rather than a change
+to `bundle/`. Only the runner is budgeted (model calls per pass and per day,
+sources per pass, a job deadline); a command run from the CLI is never limited.
+A watched inbox folder is outside the workspace and read-only to OpenKOS
+([ADR-0038](adr/0038-a-watched-folder-is-an-external-inbox.md)).
 
 ## How the layers arrived
 
