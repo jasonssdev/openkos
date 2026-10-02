@@ -36,7 +36,13 @@ Each has its own `--self-test`; `evals/run_self_tests.py` sweeps them.
    at `num_ctx` 12288 and 32768 with `bge-m3` loaded against the 24 GB budget.
    Only the 12288 peak gates; 32768 is reported with a "fits beside the
    baseline" column. A model that is not pulled is **pending**: the driver
-   never downloads one.
+   never downloads one. The memory reading must show the candidate **and**
+   `bge-m3` resident in the same `ollama ps` snapshot (the budget holds them
+   together): a candidate that evicts `bge-m3` is **ineligible**. A reading
+   under 90% of the model's on-disk size is not its footprint, so the state is
+   **pending** with the reason, never eligible. Records carry an
+   `ELIGIBILITY_VERSION`; one written under older rules is re-measured on the
+   next `--run`, so nothing has to be deleted by hand.
 2. **Baseline** (`qwen3:8b`) on every harness at n=15, twice where the
    pre-registration says no 15-run baseline exists on the current fixture. The
    second repeat only ever runs in a **later invocation** (`--session`), so the

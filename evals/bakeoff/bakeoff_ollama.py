@@ -45,6 +45,18 @@ from bakeoff_spec import (
 GB = 1e9
 """Decimal gigabyte: the unit `ollama list` and `ollama ps` print."""
 
+ELIGIBILITY_VERSION = 2
+"""Bumped whenever a rule that reads a stored eligibility record changes, so a
+record written under older rules is re-measured on the next run instead of
+being trusted (v2: the memory reading must show the candidate AND `bge-m3`
+resident together, and the candidate no smaller than its weights)."""
+
+MIN_RESIDENT_FRACTION = 0.9
+"""A resident chat model holds at least its weights, so `ollama ps` reporting
+less than this fraction of the on-disk size (`/api/tags` `size`) is not the
+model's footprint. Correct readings sit at 1.0x-1.2x of disk; a gemma4 reading
+of 0.13x is the case this refuses."""
+
 LOAD_TIMEOUT_S = 900.0
 """A cold load of a 24 GB model from disk can take minutes."""
 _KEEP_ALIVE = "10m"
@@ -129,11 +141,15 @@ class OllamaLocal:
         )
         return self._clock() - started
 
-    def measure_memory(self, model: str, num_ctx: int) -> dict[str, Any]:
+    def measure_memory(
+        self, model: str, num_ctx: int, disk_bytes: int | None = None
+    ) -> dict[str, Any]:
         """Peak resident memory with `bge-m3` loaded and `model` loaded at
         `num_ctx`: every other model is unloaded first, so the sum is exactly
         the two. `total_bytes` sums `size` (all memory, GPU and CPU) across
-        what `ollama ps` lists."""
+        what `ollama ps` lists. `check` says whether that snapshot is a valid
+        reading of the budget (see `check_memory`); `disk_bytes` is the
+        model's `/api/tags` size, the floor its resident size is held to."""
         self.unload_all()
         self.load_embedder()
         load_s = self.load_chat(model, num_ctx)
@@ -150,6 +166,8 @@ class OllamaLocal:
             "load_s": round(load_s, 2),
             "total_bytes": sum(m["size"] for m in per_model.values()),
             "per_model": per_model,
+            "disk_bytes": disk_bytes,
+            "check": check_memory(per_model, model, disk_bytes),
         }
 
 
@@ -186,6 +204,66 @@ def native_context(show: Mapping[str, Any]) -> int | None:
     return max(values) if values else None
 
 
+def listed_size(tags: Sequence[Mapping[str, Any]], model: str) -> int | None:
+    """The model's on-disk size from `/api/tags`, or `None` when not listed."""
+    for entry in tags:
+        names = (str(entry.get("name", "")), str(entry.get("model", "")))
+        if model in names or f"{model}:latest" in names:
+            size = entry.get("size")
+            return int(size) if isinstance(size, int | float) and size > 0 else None
+    return None
+
+
+def _resident(per_model: Mapping[str, Any], model: str) -> Mapping[str, Any] | None:
+    for name, usage in per_model.items():
+        if name == model or name == f"{model}:latest" or name.startswith(f"{model}:"):
+            return dict(usage)
+    return None
+
+
+def check_memory(
+    per_model: Mapping[str, Any], model: str, disk_bytes: int | None
+) -> dict[str, str]:
+    """Is one `ollama ps` snapshot a valid reading of the 24 GB budget?
+
+    The pre-registered budget is the chat model, its KV cache AND `bge-m3`
+    held together (#1269 rule 6.1: "24 GB must hold the chat model(s), the KV
+    cache at production settings ... and `bge-m3`"). So the verdict is:
+
+    - `not_coresident`: the candidate is resident but `bge-m3` is not (the
+      server evicted it); the two do not fit together, which is the failure.
+    - `missing_candidate`: the candidate is not resident at all.
+    - `unvalidated`: no on-disk size to hold the reading to.
+    - `implausible`: the candidate's resident size is under
+      `MIN_RESIDENT_FRACTION` of its weights, so it is not its footprint.
+    - `ok`: everything above holds.
+
+    Only `not_coresident` is a verdict about the model; the others mean the
+    measurement is invalid and decide nothing."""
+    candidate = _resident(per_model, model)
+    if candidate is None:
+        return {"verdict": "missing_candidate", "reason": f"{model} is not resident"}
+    if _resident(per_model, EMBEDDING_MODEL) is None:
+        return {
+            "verdict": "not_coresident",
+            "reason": f"{EMBEDDING_MODEL} is not resident beside {model} "
+            "(evicted): the two do not fit together",
+        }
+    if disk_bytes is None or disk_bytes <= 0:
+        return {
+            "verdict": "unvalidated",
+            "reason": f"no on-disk size for {model} to validate the reading against",
+        }
+    size = int(candidate.get("size", 0))
+    if size < int(MIN_RESIDENT_FRACTION * disk_bytes):
+        return {
+            "verdict": "implausible",
+            "reason": f"{model} reads {size / GB:.2f} GB resident, under "
+            f"{MIN_RESIDENT_FRACTION:.0%} of its {disk_bytes / GB:.2f} GB weights",
+        }
+    return {"verdict": "ok", "reason": ""}
+
+
 def listed_digest(tags: Sequence[Mapping[str, Any]], model: str) -> str | None:
     for entry in tags:
         names = (str(entry.get("name", "")), str(entry.get("model", "")))
@@ -201,6 +279,7 @@ def decide_eligibility(
     license_id: str | None,
     native_ctx: int | None,
     memory_bytes_at_production: int | None,
+    memory_check: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """`{"state": eligible|ineligible|pending, "reasons": [...]}`.
 
@@ -211,8 +290,24 @@ def decide_eligibility(
     `ineligible` is final (a license, context or memory failure -- the pre-reg
     drops it for every family). `pending` means a fact is missing (not pulled,
     memory not measured yet) and nothing is decided. Every failed gate is
-    listed, not only the first: the report should say all of why."""
+    listed, not only the first: the report should say all of why.
+
+    A memory figure counts only with a `memory_check` verdict (`check_memory`):
+    `not_coresident` is ineligible, any other non-`ok` verdict (or none) leaves
+    the reading invalid and the state `pending`, never `eligible`."""
     reasons: list[str] = []
+    invalid: list[str] = []
+    check = memory_check or {}
+    if memory_bytes_at_production is not None:
+        if check.get("verdict") == "not_coresident":
+            reasons.append(
+                f"{check.get('reason', '')} within the {BUDGET_GB:.0f} GB budget"
+            )
+        elif check.get("verdict") != "ok":
+            invalid.append(
+                "memory reading is invalid: "
+                + (check.get("reason") or "no validity check ran")
+            )
     if license_id is not None and license_id not in LICENSE_ALLOWLIST:
         reasons.append(
             f"license {license_id!r} is not in the allowlist {list(LICENSE_ALLOWLIST)}"
@@ -239,6 +334,7 @@ def decide_eligibility(
         pending.append("native context not reported by /api/show")
     if memory_bytes_at_production is None:
         pending.append("memory at the production context not measured yet")
+    pending.extend(invalid)
     if pending:
         return {"state": "pending", "reasons": pending}
     return {"state": "eligible", "reasons": []}
@@ -261,6 +357,9 @@ class _FakeResponse:
 
     def __exit__(self, *_exc: object) -> None:
         return None
+
+
+_OK = {"verdict": "ok", "reason": ""}
 
 
 def _self_test() -> int:
@@ -330,6 +429,7 @@ def _self_test() -> int:
             license_id="mit",
             native_ctx=16384,
             memory_bytes_at_production=ok_bytes,
+            memory_check=_OK,
         ),
         {"state": "eligible", "reasons": []},
     )
@@ -340,6 +440,7 @@ def _self_test() -> int:
             license_id="mit",
             native_ctx=16384,
             memory_bytes_at_production=int(24 * GB),
+            memory_check=_OK,
         )["state"],
         "eligible",
     )
@@ -348,6 +449,7 @@ def _self_test() -> int:
         license_id="apache-2.0",
         native_ctx=40960,
         memory_bytes_at_production=over_bytes,
+        memory_check=_OK,
     )
     check("over budget is ineligible", over["state"], "ineligible")
     check(
@@ -358,6 +460,7 @@ def _self_test() -> int:
         license_id="apache-2.0",
         native_ctx=8192,
         memory_bytes_at_production=ok_bytes,
+        memory_check=_OK,
     )
     check(
         "native context below 12288 is ineligible (gemma2)",
@@ -369,6 +472,7 @@ def _self_test() -> int:
         license_id="mit",
         native_ctx=12288,
         memory_bytes_at_production=ok_bytes,
+        memory_check=_OK,
     )
     check("native context of exactly 12288 passes", exactly["state"], "eligible")
     gemma = decide_eligibility(
@@ -376,6 +480,7 @@ def _self_test() -> int:
         license_id="other",
         native_ctx=8192,
         memory_bytes_at_production=over_bytes,
+        memory_check=_OK,
     )
     check("every failed gate is listed", len(gemma["reasons"]), 3)
     check(
@@ -385,6 +490,7 @@ def _self_test() -> int:
             license_id="unknown",
             native_ctx=16384,
             memory_bytes_at_production=ok_bytes,
+            memory_check=_OK,
         )["state"],
         "ineligible",
     )
@@ -437,7 +543,9 @@ def _self_test() -> int:
         elif path == "/api/embed":
             resident[EMBEDDING_MODEL] = 1_200_000_000
         elif path == "/api/tags":
-            return _FakeResponse({"models": [{"name": "m:1b", "digest": "dd"}]})
+            return _FakeResponse(
+                {"models": [{"name": "m:1b", "digest": "dd", "size": 7_000_000_000}]}
+            )
         elif path == "/api/show":
             return _FakeResponse(
                 {"license": mit, "model_info": {"x.context_length": 32768}}
@@ -447,7 +555,11 @@ def _self_test() -> int:
     client = OllamaLocal(
         "127.0.0.1:11434", opener=fake_open, clock=iter([0.0, 7.5]).__next__
     )
-    check("tags are listed", client.tags(), [{"name": "m:1b", "digest": "dd"}])
+    check(
+        "tags are listed",
+        client.tags(),
+        [{"name": "m:1b", "digest": "dd", "size": 7_000_000_000}],
+    )
     show = client.show("m:1b")
     check(
         "show feeds the pure gates",
@@ -455,7 +567,7 @@ def _self_test() -> int:
         ("mit", 32768),
     )
     calls.clear()
-    measured = client.measure_memory("m:1b", 12288)
+    measured = client.measure_memory("m:1b", 12288, 7_000_000_000)
     check(
         "unloads the stranger first",
         calls[1],
@@ -478,6 +590,139 @@ def _self_test() -> int:
         1_200_000_000 + 8_000_000_000 + 12288 * 1000,
     )
     check("load seconds come from the injected clock", measured["load_s"], 7.5)
+    check("a good snapshot passes its check", measured["check"]["verdict"], "ok")
+    check("the on-disk size is recorded", measured["disk_bytes"], 7_000_000_000)
+
+    # --- the memory-validity guard (#1269): exact shapes from the live run ---
+    emb = {"size": 664_660_868, "size_vram": 664_660_868}
+
+    gemma_12b = {
+        "gemma4:12b": {"size": 1_030_488_062, "size_vram": 1_030_488_062},
+        EMBEDDING_MODEL + ":latest": emb,
+    }
+    gemma_26b = {
+        "gemma4:26b-a4b": {"size": 985_304_923, "size_vram": 985_304_923},
+        EMBEDDING_MODEL + ":latest": emb,
+    }
+    qwen35_alone = {
+        "qwen3.6:35b-a3b": {"size": 22_265_976_584, "size_vram": 22_265_976_584}
+    }
+    qwen35_at_32k = {
+        "qwen3.6:35b-a3b": {"size": 22_403_937_728, "size_vram": 22_403_937_728},
+        EMBEDDING_MODEL + ":latest": emb,
+    }
+    good = {
+        "mistral-small3.2:24b": {"size": 15_637_000_000, "size_vram": 15_637_000_000},
+        EMBEDDING_MODEL + ":latest": emb,
+    }
+    check(
+        "gemma4:12b reading of ~1 GB (8 GB weights) is implausible",
+        check_memory(gemma_12b, "gemma4:12b", 8_021_618_941)["verdict"],
+        "implausible",
+    )
+    check(
+        "gemma4:26b-a4b reading of ~1 GB (18.7 GB weights) is implausible",
+        check_memory(gemma_26b, "gemma4:26b-a4b", 18_731_025_629)["verdict"],
+        "implausible",
+    )
+    check(
+        "qwen3.6:35b with bge-m3 evicted does not co-reside",
+        check_memory(qwen35_alone, "qwen3.6:35b-a3b", 22_621_314_381)["verdict"],
+        "not_coresident",
+    )
+    check(
+        "qwen3.6:35b at 32768 with both resident reads ok",
+        check_memory(qwen35_at_32k, "qwen3.6:35b-a3b", 22_621_314_381)["verdict"],
+        "ok",
+    )
+    check(
+        "a correct reading (mistral-small3.2:24b) passes",
+        check_memory(good, "mistral-small3.2:24b", 15_177_384_862)["verdict"],
+        "ok",
+    )
+    check(
+        "a candidate that is not resident is invalid",
+        check_memory({EMBEDDING_MODEL + ":latest": emb}, "m:1b", 7_000_000_000)[
+            "verdict"
+        ],
+        "missing_candidate",
+    )
+    check(
+        "no on-disk size cannot validate a reading",
+        check_memory(good, "mistral-small3.2:24b", None)["verdict"],
+        "unvalidated",
+    )
+    floor = int(MIN_RESIDENT_FRACTION * 10_000_000_000)
+    at_floor = {
+        "m:1b": {"size": floor, "size_vram": floor},
+        EMBEDDING_MODEL + ":latest": emb,
+    }
+    below = {
+        "m:1b": {"size": floor - 1, "size_vram": floor - 1},
+        EMBEDDING_MODEL + ":latest": emb,
+    }
+    check(
+        "exactly the plausibility floor passes",
+        check_memory(at_floor, "m:1b", 10_000_000_000)["verdict"],
+        "ok",
+    )
+    check(
+        "one byte under the floor is implausible",
+        check_memory(below, "m:1b", 10_000_000_000)["verdict"],
+        "implausible",
+    )
+    gemma_decision = decide_eligibility(
+        pulled=True,
+        license_id="apache-2.0",
+        native_ctx=262144,
+        memory_bytes_at_production=1_695_148_930,
+        memory_check=check_memory(gemma_12b, "gemma4:12b", 8_021_618_941),
+    )
+    check(
+        "an implausible reading is pending, never eligible",
+        gemma_decision["state"],
+        "pending",
+    )
+    evicted = decide_eligibility(
+        pulled=True,
+        license_id="apache-2.0",
+        native_ctx=262144,
+        memory_bytes_at_production=22_265_976_584,
+        memory_check=check_memory(qwen35_alone, "qwen3.6:35b-a3b", 22_621_314_381),
+    )
+    check("an evicted embedder is ineligible", evicted["state"], "ineligible")
+    check(
+        "the reason names the eviction",
+        "not resident beside" in evicted["reasons"][0],
+        True,
+    )
+    check(
+        "a memory figure with no validity check is not eligible",
+        decide_eligibility(
+            pulled=True,
+            license_id="mit",
+            native_ctx=16384,
+            memory_bytes_at_production=ok_bytes,
+        )["state"],
+        "pending",
+    )
+    check(
+        "a correct reading still passes the whole decision",
+        decide_eligibility(
+            pulled=True,
+            license_id="apache-2.0",
+            native_ctx=32768,
+            memory_bytes_at_production=16_300_000_000,
+            memory_check=check_memory(good, "mistral-small3.2:24b", 15_177_384_862),
+        )["state"],
+        "eligible",
+    )
+    check(
+        "tags size is read for the plausibility floor",
+        listed_size([{"name": "m:1b", "size": 5}], "m:1b"),
+        5,
+    )
+    check("a missing tags size is None", listed_size([{"name": "m:1b"}], "m:1b"), None)
     check("the stranger really left", "old:1b" in measured["per_model"], False)
 
     try:

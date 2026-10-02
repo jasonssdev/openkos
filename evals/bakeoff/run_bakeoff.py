@@ -347,9 +347,12 @@ def _eligibility_state(results: pathlib.Path, tag: str) -> str | None:
     if not path.is_file():
         return None
     try:
-        return str(json.loads(path.read_text(encoding="utf-8")).get("state"))
+        stored = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    if stored.get("version") != ollama_mod.ELIGIBILITY_VERSION:
+        return None  # written under older rules: not a verdict, re-measure
+    return str(stored.get("state"))
 
 
 def ensure_eligibility(
@@ -361,19 +364,25 @@ def ensure_eligibility(
     baseline_record: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Measure (or reuse) one model's eligibility. `eligible` and `ineligible`
-    are final and reused; `pending` is recomputed."""
+    are final and reused when written under the current
+    `ELIGIBILITY_VERSION`; `pending` and any stale record is re-measured."""
     path = _eligibility_path(results, candidate.tag)
     if path.is_file():
         stored = json.loads(path.read_text(encoding="utf-8"))
-        if stored.get("state") in ("eligible", "ineligible"):
+        if stored.get("version") == ollama_mod.ELIGIBILITY_VERSION and stored.get(
+            "state"
+        ) in ("eligible", "ineligible"):
             return dict(stored)
 
     record: dict[str, Any] = {
+        "version": ollama_mod.ELIGIBILITY_VERSION,
         "model": candidate.tag,
         "measured_at": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
         "issue_stated_gb": candidate.approx_gb,
     }
-    digest = ollama_mod.listed_digest(client.tags(), candidate.tag)
+    tags = client.tags()
+    digest = ollama_mod.listed_digest(tags, candidate.tag)
+    disk_bytes = ollama_mod.listed_size(tags, candidate.tag)
     record["pulled"] = digest is not None
     record["digest"] = digest
     license_id: str | None = None
@@ -397,14 +406,18 @@ def ensure_eligibility(
         )
         if pre["state"] != "ineligible":
             for num_ctx in spec_mod.MEMORY_PROBE_CONTEXTS:
-                memory[str(num_ctx)] = client.measure_memory(candidate.tag, num_ctx)
+                memory[str(num_ctx)] = client.measure_memory(
+                    candidate.tag, num_ctx, disk_bytes
+                )
     record["memory"] = memory
-    at_production = memory.get(str(spec_mod.PRODUCTION_NUM_CTX), {}).get("total_bytes")
+    production = memory.get(str(spec_mod.PRODUCTION_NUM_CTX), {})
+    at_production = production.get("total_bytes")
     verdict = ollama_mod.decide_eligibility(
         pulled=digest is not None,
         license_id=license_id,
         native_ctx=ctx,
         memory_bytes_at_production=at_production,
+        memory_check=production.get("check"),
     )
     record.update(verdict)
     if baseline_record and memory:
@@ -419,6 +432,7 @@ def ensure_eligibility(
             )
             for num_ctx in memory
             if num_ctx in base_mem
+            and memory[num_ctx].get("check", {}).get("verdict") == "ok"
         }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2), encoding="utf-8")
@@ -1266,7 +1280,9 @@ def _self_test() -> int:
         # ---- the plan ----
         elig = _eligibility_path(results, "phi4:14b")
         elig.parent.mkdir(parents=True, exist_ok=True)
-        elig.write_text(json.dumps({"state": "eligible"}))
+        elig.write_text(
+            json.dumps({"state": "eligible", "version": ollama_mod.ELIGIBILITY_VERSION})
+        )
         plan = build_plan(results, runs=15, session="s1")
         baseline_edge = [
             i for i in plan if i.harness == "edge_typing" and i.model == "qwen3:8b"
@@ -1575,7 +1591,11 @@ def _self_test() -> int:
         "phi4:14b": ("MIT License", 16384),
         "big:35b": ("Apache License\nVersion 2.0", 40960),
         "gemma2:27b": ("Gemma Terms of Use", 8192),
+        "light:12b": ("MIT License", 16384),
+        "evict:35b": ("MIT License", 16384),
     }
+    resident_override: dict[str, int] = {}
+    evict_embedder: set[str] = set()
 
     def server(request: Any, timeout: float) -> _Resp:
         if isinstance(request, str):
@@ -1587,7 +1607,12 @@ def _self_test() -> int:
             )
         if path == "/api/tags":
             return _Resp(
-                {"models": [{"name": n, "digest": f"dig-{n}"} for n in pulled_models]}
+                {
+                    "models": [
+                        {"name": n, "digest": f"dig-{n}", "size": 9 * 10**9}
+                        for n in pulled_models
+                    ]
+                }
             )
         if path == "/api/show":
             lic, ctx = pulled_models[body["model"]]
@@ -1604,7 +1629,11 @@ def _self_test() -> int:
         if path == "/api/generate" and body.get("keep_alive") == 0:
             resident.pop(body["model"], None)
         elif path == "/api/generate":
-            resident[body["model"]] = (30 if body["model"] == "big:35b" else 10) * 10**9
+            resident[body["model"]] = resident_override.get(
+                body["model"], (30 if body["model"] == "big:35b" else 10) * 10**9
+            )
+            if body["model"] in evict_embedder:
+                resident.pop(spec_mod.EMBEDDING_MODEL, None)
         elif path == "/api/embed":
             resident[spec_mod.EMBEDDING_MODEL] = int(1.2e9)
         return _Resp({})
@@ -1668,6 +1697,52 @@ def _self_test() -> int:
             "a cached verdict is reused, not re-measured",
             again["measured_at"],
             fits["measured_at"],
+        )
+        resident_override["light:12b"] = 10**9  # a ~1 GB reading of a 9 GB model
+        light = ensure_eligibility(
+            client,
+            Candidate("light:12b", ("generate",), 9.0, 1.5, ""),
+            results,
+            accepted_licenses={},
+        )
+        check(
+            "a ~1 GB reading of a 9 GB model is never eligible",
+            (light["state"], "invalid" in light["reasons"][0]),
+            ("pending", True),
+        )
+        evict_embedder.add("evict:35b")
+        evicted = ensure_eligibility(
+            client,
+            Candidate("evict:35b", ("generate",), 23.5, 1.5, ""),
+            results,
+            accepted_licenses={},
+        )
+        check(
+            "a candidate that evicts bge-m3 is ineligible, though its sum fits",
+            (evicted["state"], evicted["memory"]["12288"]["total_bytes"] < 24 * 10**9),
+            ("ineligible", True),
+        )
+        # a record written before the version field is re-measured, not trusted
+        stale = _eligibility_path(results, "phi4:14b")
+        old = json.loads(stale.read_text(encoding="utf-8"))
+        old.pop("version")
+        old["measured_at"] = "stale"
+        stale.write_text(json.dumps(old))
+        check(
+            "an unversioned record is not a verdict",
+            _eligibility_state(results, "phi4:14b"),
+            None,
+        )
+        remeasured = ensure_eligibility(
+            client,
+            Candidate("phi4:14b", ("judge",), 9.0, 2.2, ""),
+            results,
+            accepted_licenses={},
+        )
+        check(
+            "a stale record is re-measured on the next run",
+            (remeasured["measured_at"] != "stale", remeasured["version"]),
+            (True, ollama_mod.ELIGIBILITY_VERSION),
         )
         attested = ensure_eligibility(
             client,
