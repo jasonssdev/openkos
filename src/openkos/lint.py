@@ -13,6 +13,7 @@ The clock and the freshness window are always injected by the caller
 function here is deterministic and testable with fixed inputs.
 """
 
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -150,7 +151,7 @@ class LintFinding:
     """`"stale"`, `"orphan"`, `"dangling"`, `"unextracted"`,
     `"unjudged"`, `"unevidenced"`, `"below-source-sensitivity"`,
     `"multi-source-uncovered"`, `"dangling-provenance"`,
-    `"unbacked-provenance"`, or `"non-nfc-name"`."""
+    `"unbacked-provenance"`, `"non-nfc-name"`, or `"unreferenced-raw"`."""
     path: str
     """The finding's bundle-relative `.md` path -- except for
     `"non-nfc-name"` (#474), where it may name a directory or a non-`.md`
@@ -297,6 +298,10 @@ class LintReport:
     directory under `bundle/`, which every bundle walk refuses to read
     through because the link can leave the workspace tree -- see
     `check_symlinked_markdown`."""
+    unreferenced_raw: list[LintFinding] = field(default_factory=list)
+    """`"unreferenced-raw"` findings (#1262): a file under `raw/` that no
+    Source's `resource` names -- typically the copy `forget` leaves behind
+    -- see `check_unreferenced_raw`."""
     status_export: list[LintFinding] = field(default_factory=list)
     """`"status-export-drift"` and `"status-export-blocked"` findings
     (deprecated-status-export, issue #1075): the computed supersession
@@ -1822,6 +1827,54 @@ def check_symlinked_markdown(bundle_dir: Path) -> list[LintFinding]:
         )
         for path in okf.scan_symlinked_bundle_entries(bundle_dir)
     ]
+
+
+def check_unreferenced_raw(raw_dir: Path, docs: list[LintDoc]) -> list[LintFinding]:
+    """Report every file under `raw/` that no collected document names as its
+    `resource` (#1262). Advisory like every other `lint` finding: it is a
+    knowledge-health observation, never an OKF conformance verdict.
+
+    `forget` never edits `raw/`, and `purge` finds a Source's raw file only
+    through that Source's `resource`, so a forgotten Source's raw copy is
+    left on disk and in git history with no command able to reach it. The
+    file would otherwise be invisible. The walk is names-only (nothing is
+    opened) and reads `docs` already collected, so it adds no bundle walk.
+    A missing `raw/` has no files to report."""
+    if not raw_dir.is_dir():
+        return []
+    referenced = {doc.resource for doc in docs if doc.resource}
+
+    def _unreadable(exc: OSError) -> None:
+        # `os.walk` swallows scan errors by default; an unreadable
+        # subdirectory must degrade this check to `not-run`, never to a
+        # quietly shorter list.
+        raise exc
+
+    names: list[str] = []
+    for current, _dirs, files in os.walk(raw_dir, onerror=_unreadable):
+        names.extend(
+            (Path(current) / name).relative_to(raw_dir).as_posix() for name in files
+        )
+    findings: list[LintFinding] = []
+    for name in sorted(names):
+        rel = f"{raw_dir.name}/{name}"
+        if rel in referenced:
+            continue
+        findings.append(
+            LintFinding(
+                kind="unreferenced-raw",
+                path=rel,
+                detail=(
+                    f"'{rel}' is not referenced by any Source. If it is the "
+                    "copy a `forget` left behind, `purge` cannot reach it "
+                    "while its concept is gone: restore the concept (undo "
+                    "the forget commit with `git revert`, while it is the "
+                    "latest) and run `openkos purge` on it to erase the raw "
+                    "bytes from history. Otherwise ingest it or delete it"
+                ),
+            )
+        )
+    return findings
 
 
 def check_non_nfc_names(bundle_dir: Path) -> list[LintFinding]:

@@ -1698,6 +1698,12 @@ class ForgetPlan:
     catalog_edit: catalog_delta.CatalogDelta | None = None
     """The purge set's `index.md`/`log.md` edit as a pure function of their
     current text, re-applied by the commit phase over a concurrent append."""
+    orphaned_raw: tuple[str, ...] = ()
+    """The `raw/<name>` copies the purge set's Sources name in `resource`
+    that are still on disk. `forget` never touches `raw/` (sources are
+    immutable), so after the forget they belong to no Source -- and `purge`
+    can no longer find them through a concept that is gone (#1262). Sorted;
+    drives the disclosure of what remains and how to erase it."""
 
 
 @dataclass(frozen=True)
@@ -2019,6 +2025,7 @@ def prepare_forget(
     )
 
     return ForgetPlan(
+        orphaned_raw=_orphaned_raw_copies(layout, purge_ids, member_metadata),
         purge_ids=purge_ids,
         total_removed=total_removed,
         new_index_text=new_index_text,
@@ -2037,6 +2044,34 @@ def prepare_forget(
         incomplete_walk_unreadable=incomplete_walk_unreadable,
         catalog_edit=forget_catalog,
     )
+
+
+def _orphaned_raw_copies(
+    layout: config.WorkspaceLayout,
+    purge_ids: Sequence[str],
+    member_metadata: Mapping[str, Mapping[str, object]],
+) -> tuple[str, ...]:
+    """Each purge-set member's `resource: raw/<name>` that is a real file
+    under `raw/` right now (#1262). Same shape rule `purge` applies to a
+    Source's `resource`; a malformed value or one that resolves outside
+    `raw/` names nothing."""
+    raw_dir_resolved = layout.raw_dir.resolve()
+    found: set[str] = set()
+    for member in purge_ids:
+        resource = member_metadata[member].get("resource")
+        if not (isinstance(resource, str) and resource.startswith("raw/")):
+            continue
+        if ".." in PurePosixPath(resource).parts:
+            continue
+        candidate = layout.root / resource
+        try:
+            candidate.resolve().relative_to(raw_dir_resolved)
+            is_file = candidate.is_file()
+        except (OSError, ValueError):
+            continue
+        if is_file:
+            found.add(resource)
+    return tuple(sorted(found))
 
 
 def recompose_forget_catalog(

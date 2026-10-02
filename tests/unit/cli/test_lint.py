@@ -1156,7 +1156,7 @@ def test_lint_reports_a_late_name_walk_failure_as_not_run_without_losing_finding
     assert not isinstance(result.exception, OSError)
     assert "simulated unreadable subdirectory" in result.stdout
     assert "Stale stamps:" in result.stdout
-    assert "14 check(s) completed, 1 did not run." in result.stdout
+    assert "15 check(s) completed, 1 did not run." in result.stdout
     assert "failed while reading the workspace" not in result.stderr
 
 
@@ -1184,7 +1184,7 @@ def test_lint_reports_a_state_dir_walk_failure_as_not_run_without_losing_finding
     assert not isinstance(result.exception, OSError)
     assert "simulated unreadable state dir" in result.stdout
     assert "Stale stamps:" in result.stdout
-    assert "14 check(s) completed, 1 did not run." in result.stdout
+    assert "15 check(s) completed, 1 did not run." in result.stdout
     assert "failed while reading the workspace" not in result.stderr
 
 
@@ -1208,7 +1208,7 @@ def test_lint_reports_a_dot_dir_walk_failure_as_not_run_without_losing_findings(
     assert not isinstance(result.exception, OSError)
     assert "simulated unreadable dot directory" in result.stdout
     assert "Stale stamps:" in result.stdout
-    assert "14 check(s) completed, 1 did not run." in result.stdout
+    assert "15 check(s) completed, 1 did not run." in result.stdout
     assert "failed while reading the workspace" not in result.stderr
 
 
@@ -1228,7 +1228,7 @@ def test_lint_reports_a_symlink_walk_failure_as_not_run(
 
     assert result.exit_code == 2
     assert "simulated unreadable symlink scan" in result.stdout
-    assert "14 check(s) completed, 1 did not run." in result.stdout
+    assert "15 check(s) completed, 1 did not run." in result.stdout
 
 
 def test_lint_renders_a_symlinked_markdown_finding(
@@ -1248,3 +1248,22 @@ def test_lint_renders_a_symlinked_markdown_finding(
     assert result.exit_code == 0, result.output
     assert "Symlinked markdown:" in result.stdout
     assert "leak.md: 'leak.md' is a symlink" in result.stdout
+
+
+def test_lint_reports_a_raw_walk_failure_as_not_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`check_unreferenced_raw` (#1262) is contained like its walk siblings:
+    an `OSError` becomes a `not-run` entry, not a traceback."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise(raw_dir: Path, docs: list[object]) -> list[object]:
+        raise OSError("simulated unreadable raw scan")
+
+    monkeypatch.setattr(lint_check, "check_unreferenced_raw", _raise)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 2
+    assert "simulated unreadable raw scan" in result.stdout
+    assert "15 check(s) completed, 1 did not run." in result.stdout

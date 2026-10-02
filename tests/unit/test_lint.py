@@ -1966,3 +1966,30 @@ def test_lint_identity_for_a_bare_dot_md_name_doubles_the_suffix(
 
     assert orphan.path == "concepts/.md.md"
     assert orphan.concept_id == "concepts/.md"
+
+
+# --- check_unreferenced_raw (#1262) -------------------------------------
+
+
+def test_check_unreferenced_raw_reports_only_files_no_source_names(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "raw"
+    (raw / "nested").mkdir(parents=True)
+    (raw / "kept.md").write_text("k", encoding="utf-8")
+    (raw / "orphan.md").write_text("o", encoding="utf-8")
+    (raw / "nested" / "deep.txt").write_text("d", encoding="utf-8")
+    docs = [_doc("sources/kept", "b", resource="raw/kept.md")]
+
+    findings = lint.check_unreferenced_raw(raw, docs)
+
+    assert [(f.kind, f.path) for f in findings] == [
+        ("unreferenced-raw", "raw/nested/deep.txt"),
+        ("unreferenced-raw", "raw/orphan.md"),
+    ]
+
+
+def test_check_unreferenced_raw_is_empty_without_a_raw_directory(
+    tmp_path: Path,
+) -> None:
+    assert lint.check_unreferenced_raw(tmp_path / "raw", []) == []

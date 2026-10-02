@@ -1400,6 +1400,11 @@ def _mask_commit_sha(output: str) -> str:
     #817, item 4). Anchoring on the surrounding wording keeps the
     tolerance to the one difference that is legitimate: two runs in two
     DIFFERENT repositories necessarily write two different shas."""
+    # #1262: the orphaned-raw disclosure names the same sha, anchored the
+    # same way on its own wording.
+    output = re.sub(
+        r"(to erase it, run `git revert )[0-9a-f]{7,40}`", r"\1<sha>`", output
+    )
     return _COMMIT_DISCLOSURE_RE.sub(
         "committed as <sha> -- `git revert <sha>` undoes it only while it is the latest commit.",
         output,
