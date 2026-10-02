@@ -24,6 +24,8 @@ from typing import Literal
 from openkos import config
 from openkos.application.budget import JOBS_DB_NAME
 from openkos.config import WorkspaceLayout
+from openkos.graph import sqlite_graph
+from openkos.resolution import candidates
 from openkos.state import jobs
 from openkos.state import pending_queue as pq
 from openkos.state.readonly import open_read_only
@@ -53,6 +55,16 @@ _RESOLVING_COMMAND = {
 }
 
 
+_CAPPED_KINDS = {
+    "identity": (candidates._MAX_CANDIDATE_GROUPS, "openkos duplicates"),
+    "relation_type": (sqlite_graph._MAX_CANDIDATE_EDGES, "openkos suggest-relations"),
+}
+"""Kind -> (the advisor's per-run candidate cap, the verb that reports the
+uncapped total). The advisors keep at most that many candidates per run and
+the queue records no truncation, so a kind listed at the cap is the only trace
+of one that bound."""
+
+
 def resolving_command(kind: str) -> str:
     """The command that resolves a row of `kind`, with no row-specific
     arguments: the form the MCP gate discloses."""
@@ -78,11 +90,26 @@ def row_subject(row: pq.PendingItem) -> str:
     return "(no subject)"
 
 
+def row_alternative_command(row: pq.PendingItem) -> str | None:
+    """A second way to close an identity row not yet judged the same: the
+    keep-distinct ruling over its members, for a group the operator already
+    knows is not one entity (a `adjudicate` judgment costs a model call). Other
+    rows, and a row judged the same, have one command."""
+    if row.kind != "identity" or not row.targets:
+        return None
+    adjudication = _payload(row).get("adjudication")
+    if isinstance(adjudication, dict) and adjudication.get("verdict") == "same":
+        return None
+    flags = " ".join(f"--keep-distinct {shlex.quote(t)}" for t in row.targets)
+    return f"openkos duplicates {flags}"
+
+
 def row_resolving_command(row: pq.PendingItem, inbox: Path | None = None) -> str:
     """The command that resolves THIS row. `openkos duplicates` only lists
     groups, so an identity row names the verb that can close it: the merge walk
-    for a group judged the same, a keep-distinct ruling over its members
-    otherwise. A watch refusal names the refused file: the watch records its
+    for a group judged the same, otherwise the judgment walk (`adjudicate
+    --apply`, whose prompt takes y / s / d), with the keep-distinct ruling as
+    `row_alternative_command`. A watch refusal names the refused file: the watch records its
     path relative to the inbox, so `inbox` (the configured folder, when known)
     is joined on."""
     payload = _payload(row)
@@ -90,8 +117,11 @@ def row_resolving_command(row: pq.PendingItem, inbox: Path | None = None) -> str
         adjudication = payload.get("adjudication")
         if isinstance(adjudication, dict) and adjudication.get("verdict") == "same":
             return "openkos adjudicate --apply"
-        flags = " ".join(f"--keep-distinct {shlex.quote(t)}" for t in row.targets)
-        return f"openkos duplicates {flags}"
+        if len(row.targets) == 2:
+            return "openkos adjudicate --apply (y merges, s skips, d records keep-distinct)"
+        return (
+            "openkos adjudicate --apply (prints the pairwise `openkos merge` commands)"
+        )
     if row.kind == "relation_type" and payload.get("suggested_type") == "supersedes":
         newer = payload.get("effective_source_id")
         older = payload.get("effective_target_id")
@@ -214,6 +244,13 @@ def _listing_lines(report: PendingReport, *, include_all: bool) -> list[str]:
             continue
         lines.append("")
         lines.append(f"{kind} ({len(rows)})")
+        capped = _CAPPED_KINDS.get(kind)
+        open_rows = sum(1 for r in rows if r.status in pq.OPEN_STATUSES)
+        if capped is not None and open_rows >= capped[0]:
+            lines.append(
+                f"  note: {capped[0]} is the per-run candidate cap, so more "
+                f"may exist; `{capped[1]}` reports the total."
+            )
         for row in rows:
             is_open = row.status in pq.OPEN_STATUSES
             lines.append(
@@ -221,6 +258,9 @@ def _listing_lines(report: PendingReport, *, include_all: bool) -> list[str]:
             )
             if is_open:
                 lines.append(f"    resolve: {row_resolving_command(row, report.inbox)}")
+                alternative = row_alternative_command(row)
+                if alternative is not None:
+                    lines.append(f"    or: {alternative}")
     return lines
 
 

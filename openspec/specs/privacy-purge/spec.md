@@ -546,9 +546,12 @@ reindex`" line misprices two of the three:
 - `vectors.db` — a full re-embed, under the Deferred-Reembed requirement
   above, which continues to govern its wording.
 - `findings.db` — persisted contradiction verdicts, identity adjudications
-  and edge-typing suggestions. Each is recomputable only by paying its model
-  call again on the next `contradictions`, `adjudicate` or
-  `suggest-relations` run. `openkos reindex` restores none of them.
+  and edge-typing suggestions, and the pending-work queue. Each verdict is
+  recomputable only by paying its model call again on the next
+  `contradictions`, `adjudicate` or `suggest-relations` run. The queue holds
+  every open review row for every concept, not only the purged ones, and
+  `openkos pending` reports it as not computed until `openkos daemon --once`
+  rebuilds it; the line MUST say so. `openkos reindex` restores none of them.
 - `insight_questions.db` — cached question embeddings for `query --save`'s
   near-duplicate scan. Free, and nothing needs to be run: a miss re-embeds
   on the next save.
@@ -684,6 +687,10 @@ files in the per-user log directory (the files named by the sha256 of the
 workspace's real path, including rotated ones). A log file it cannot delete
 MUST be named in the incomplete-erasure report with its path and the manual
 remedy, as for a store.
+
+The `jobs.db` line MUST state that it also holds the inbox watch's
+observation history, so the next watch pass re-checks every file in the
+inbox, and name `openkos daemon --once` as the way to restart it.
 
 #### Scenario: A purge leaves no daemon log naming the purged concept
 

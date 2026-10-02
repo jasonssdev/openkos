@@ -150,8 +150,10 @@ def resolve_merged(
 ) -> None:
     """`merge`: the identity row over exactly the merged pair. `proposed_survivor`
     is the member the engine would keep (`lifecycle.ordered_merge_pair`), read
-    BEFORE the absorbed file is removed. A larger group's row is left open: a
-    pairwise merge does not perform what a many-member proposal asks."""
+    BEFORE the absorbed file is removed. A larger group's row is not `applied`
+    (a pairwise merge does not perform what a many-member proposal asks), but
+    like every other open row naming the absorbed id it is retired `stale`: the
+    concept it offers a resolving command over no longer exists."""
     _resolve_by_key(
         root,
         "identity",
@@ -159,6 +161,18 @@ def resolve_merged(
         lambda _item: _as_proposed(proposed_survivor == survivor_id),
         "merge",
     )
+    _retire_naming(root, (absorbed_id,))
+
+
+def _retire_naming(root: Path, concept_ids: Sequence[str]) -> None:
+    """Retire every still-open row naming a concept a write removed (#1266):
+    the row cannot be acted on any more, and a producer's next pass recomputes
+    whatever is still true over the surviving concepts."""
+    with _queue(root) as conn:
+        if conn is None:
+            return
+        with contextlib.suppress(sqlite3.Error, OSError):
+            pq.retire_open_naming(conn, concept_ids, commit_section=_NO_SECTION)
 
 
 def resolve_related(

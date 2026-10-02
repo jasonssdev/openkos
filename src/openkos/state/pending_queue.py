@@ -546,6 +546,36 @@ def retire_open_by_input_ref(
     return len(ids)
 
 
+def retire_open_naming(
+    conn: sqlite3.Connection,
+    concept_ids: Iterable[str],
+    *,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] = _now,
+) -> int:
+    """Retire as `stale` every open row that names a concept in `concept_ids`
+    (as a target or an input ref), for a write that REMOVED those concepts: a
+    row over a concept that no longer exists can no longer be acted on, and its
+    resolving command would name a deleted id. Resolved rows keep their state.
+    Returns how many rows moved. An absent queue answers 0 and is never
+    created."""
+    if not queue_exists(conn):
+        return 0
+    now = clock().isoformat()
+    with _transaction(conn, commit_section):
+        ids = sorted(find_item_ids_referencing(conn, concept_ids))
+        if not ids:
+            return 0
+        marks = ",".join("?" for _ in ids)
+        cursor = conn.execute(
+            "UPDATE pending_items SET status='stale', resolution='stale',"  # noqa: S608
+            " claimed_by=NULL, resolved_at=?"
+            f" WHERE id IN ({marks}) AND status IN ('pending','claimed')",
+            (now, *ids),
+        )
+    return cursor.rowcount
+
+
 def _platform() -> str:
     """`sys.platform` read through a function so mypy does not narrow the
     per-OS branches below to the host it runs on (with `warn_unreachable`,

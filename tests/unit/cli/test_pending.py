@@ -18,6 +18,8 @@ from typer.testing import CliRunner
 
 from openkos.cli.main import _READ_ONLY_COMMANDS, app
 from openkos.config import WorkspaceLayout
+from openkos.graph import sqlite_graph
+from openkos.resolution import candidates
 from openkos.state import derived, jobs
 from openkos.state import pending_queue as pq
 
@@ -155,7 +157,9 @@ def test_open_rows_are_grouped_by_kind_with_their_resolving_command(
         "\n"
         "identity (1)\n"
         "  - concepts/a, concepts/b [pending]\n"
-        "    resolve: openkos duplicates --keep-distinct concepts/a"
+        "    resolve: openkos adjudicate --apply"
+        " (y merges, s skips, d records keep-distinct)\n"
+        "    or: openkos duplicates --keep-distinct concepts/a"
         " --keep-distinct concepts/b\n"
         "\n"
         "contradiction (1)\n"
@@ -185,7 +189,9 @@ def test_all_also_lists_resolved_declined_and_stale_rows(
         "\n"
         "identity (4)\n"
         "  - concepts/a, concepts/b [pending]\n"
-        "    resolve: openkos duplicates --keep-distinct concepts/a"
+        "    resolve: openkos adjudicate --apply"
+        " (y merges, s skips, d records keep-distinct)\n"
+        "    or: openkos duplicates --keep-distinct concepts/a"
         " --keep-distinct concepts/b\n"
         "  - concepts/c, concepts/d [applied]\n"
         "  - concepts/e, concepts/f [declined]\n"
@@ -293,7 +299,9 @@ def test_unattended_outcomes_needing_attention_follow_the_queue(
         "\n"
         "identity (1)\n"
         "  - concepts/a, concepts/b [pending]\n"
-        "    resolve: openkos duplicates --keep-distinct concepts/a"
+        "    resolve: openkos adjudicate --apply"
+        " (y merges, s skips, d records keep-distinct)\n"
+        "    or: openkos duplicates --keep-distinct concepts/a"
         " --keep-distinct concepts/b\n"
         "\n"
         "Needs attention (unattended jobs):\n"
@@ -491,3 +499,72 @@ def test_a_row_with_no_target_and_no_type_still_renders_a_subject(
 
     assert "  - (no subject) [pending]\n" in result.output
     assert "    resolve: openkos duplicates --keep-distinct\n" in result.output
+
+
+def test_a_larger_identity_group_points_at_the_merge_commands_not_a_prompt(
+    workspace: WorkspaceLayout,
+) -> None:
+    """`adjudicate --apply` merges only 2-member groups; for a larger one it
+    prints the exact pairwise `merge` lines, so the hint says that instead of
+    promising a y/s/d prompt (#1265)."""
+    conn = _queue(workspace)
+    _enqueue(conn, workspace, "identity", ("concepts/a", "concepts/b", "concepts/c"))
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert (
+        "    resolve: openkos adjudicate --apply"
+        " (prints the pairwise `openkos merge` commands)\n"
+        "    or: openkos duplicates --keep-distinct concepts/a"
+        " --keep-distinct concepts/b --keep-distinct concepts/c\n"
+    ) in result.output
+
+
+def test_an_identity_kind_at_the_candidate_cap_says_more_may_exist(
+    workspace: WorkspaceLayout,
+) -> None:
+    """The advisor keeps at most `_MAX_CANDIDATE_GROUPS` groups per run, so a
+    kind listed at exactly the cap may be hiding more; `pending` says so and
+    names the verb that reports the total (#1265)."""
+    cap = candidates._MAX_CANDIDATE_GROUPS
+    conn = _queue(workspace)
+    for n in range(cap):
+        _enqueue(conn, workspace, "identity", (f"concepts/a{n}", f"concepts/b{n}"))
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert f"identity ({cap})\n" in result.output
+    assert (
+        f"  note: {cap} is the per-run candidate cap, so more may exist;"
+        " `openkos duplicates` reports the total.\n"
+    ) in result.output
+
+
+def test_an_identity_kind_under_the_candidate_cap_carries_no_cap_note(
+    workspace: WorkspaceLayout,
+) -> None:
+    cap = candidates._MAX_CANDIDATE_GROUPS
+    conn = _queue(workspace)
+    for n in range(cap - 1):
+        _enqueue(conn, workspace, "identity", (f"concepts/a{n}", f"concepts/b{n}"))
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert "candidate cap" not in result.output
+
+
+def test_a_relation_type_kind_at_its_cap_names_the_verb_that_reports_the_total(
+    workspace: WorkspaceLayout,
+) -> None:
+    cap = sqlite_graph._MAX_CANDIDATE_EDGES
+    conn = _queue(workspace)
+    for n in range(cap):
+        _enqueue(conn, workspace, "relation_type", (f"concepts/a{n}", f"concepts/b{n}"))
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert "`openkos suggest-relations` reports the total." in result.output
