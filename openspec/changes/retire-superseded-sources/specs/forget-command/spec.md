@@ -14,7 +14,9 @@ HISTORICAL rather than blocking, in Phase A, for both scopes:
 2. in a concept outside the purge set, the references the engine itself
    generated for a purge-set Source: its entry in `provenance` and in the
    projected `sources`, and its `## Related` bullet in the generated shape
-   (`- [sources/<slug>](/sources/<slug>.md) — <phrase>`).
+   (`- [sources/<slug>](/sources/<slug>.md) — source this was extracted from`,
+   the one phrase the builder and an attach write for a Source; the same
+   bullet with any other phrase is hand-written and still blocks).
 
 Historical references MUST be previewed as edits (`~ bundle/<id>.md`, naming
 the removal), MUST be covered by the same count confirmation, and MUST be

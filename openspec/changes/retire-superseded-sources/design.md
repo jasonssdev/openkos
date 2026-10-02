@@ -108,7 +108,8 @@ relation from a Source to a purge-set Source whose referrer is outside the
 purge set; or, in a surviving concept, the entries the engine itself
 generated for the forgotten Source (the `provenance`/`sources` entry, and the
 `## Related` bullet in the builder's exact shape `- [sources/<slug>](/sources/
-<slug>.md) — <phrase>`). Everything else is a blocking reference exactly as
+<slug>.md) — source this was extracted from`; the shape is owned by
+`okf.related_bullet`, so the matcher cannot drift from the writer). Everything else is a blocking reference exactly as
 today: a hand-written link, another relation type, a body mention, an
 unverifiable referrer. This keeps `--force` meaningful and keeps the change
 from becoming a general reference-rewriting feature. The detached concept's

@@ -43,7 +43,7 @@ written against its shape.
 
 ## Phase 3: The retire path
 
-- [ ] 3.1 Pure helpers beside the provenance rewrite helpers in
+- [x] 3.1 Pure helpers beside the provenance rewrite helpers in
       `bundle/provenance.py`: remove one `provenance` entry (and the
       projected `sources` entry) and remove the generated `## Related`
       bullet for a given Source; match only the builder's exact bullet
