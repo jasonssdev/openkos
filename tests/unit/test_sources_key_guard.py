@@ -192,6 +192,9 @@ _ALLOWED_PROVENANCE_WRITERS = frozenset(
         "build_merged_document",
         "migrate_document",
         "apply_provenance_rewrites",
+        # retire-superseded-sources: the detach half of the retarget seam; its
+        # caller re-projects `sources` via `okf.refresh_sources`.
+        "_remove_provenance_entry",
     }
 )
 """Confirmed against `model/okf.py`'s actual code (task 3.20): the key name
