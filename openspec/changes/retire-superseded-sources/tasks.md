@@ -71,12 +71,12 @@ written against its shape.
 
 ## Phase 4: Proof and docs
 
-- [ ] 4.1 Mutation checks on the exact lines, restored by inverse edit and
+- [x] 4.1 Mutation checks on the exact lines, restored by inverse edit and
       `__pycache__` purged: the non-empty-provenance guard, the `sources/`
       root filter, the live-Source subset test, the generated-bullet
       matcher, the Source-authored requirement on the `supersedes` referrer,
       and the purge-unchanged guard. Each must turn a named test red.
-- [ ] 4.2 `docs/cli.md` (`forget` retire behavior, `relate` no longer warns,
+- [x] 4.2 `docs/cli.md` (`forget` retire behavior, `relate` no longer warns,
       `list` status); `docs/knowledge-object-model.md` only if the lifecycle
       paragraph's shape changes. ADR with status Proposed and its row in
       `docs/adr/README.md` (next free number at apply time; see design.md
