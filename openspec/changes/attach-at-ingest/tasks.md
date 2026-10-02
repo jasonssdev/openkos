@@ -77,7 +77,7 @@ is one work unit (one Conventional Commit, scope `ingest`, `okf`,
       (it should not). `docs/adr/NNNN-...md` with status Proposed and its
       row in `docs/adr/README.md` (next free number at apply time; see
       design.md "ADR gate"). (`docs`)
-- [ ] 4.3 Gates, run directly: `uv run ruff check .`, `uv run ruff format
+- [x] 4.3 Gates, run directly: `uv run ruff check .`, `uv run ruff format
       --check .`, `uv run mypy .`, `uv run pytest --cov`,
       `uv run python evals/run_self_tests.py`,
       `uv run pytest -q tests/unit/test_adr_index.py`. PR carries
