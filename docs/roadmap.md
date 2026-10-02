@@ -1,7 +1,7 @@
 ---
 type: Roadmap
 title: OpenKOS Roadmap
-description: A ship-first roadmap organized as five MVP arcs plus an explicit, non-committed horizon.
+description: A ship-first roadmap organized as MVP arcs plus an explicit, non-committed horizon.
 tags:
   - roadmap
   - mvp
@@ -158,6 +158,38 @@ Deliverables — **all shipped**, with the one measurement noted below:
 What a user can do after MVP 4: leave OpenKOS running, drop sources into a folder, and find the base current — with a short queue holding only the decisions that were genuinely theirs.
 
 Where the community can contribute: schedulers, watch backends, and reconciliation heuristics.
+
+---
+
+## The Quiet Engine — a named arc before MVP 5
+
+*Goal: cut the number of decisions OpenKOS asks of a person per ingested source, and make the remaining ones optional.*
+
+**Status: in progress.** The arc is a named arc between MVP 4 and MVP 5, not a numbered MVP: MVP 5 and MVP 6 keep their numbers and content ([ADR-0044](adr/0044-the-quiet-engine-arc-precedes-interoperability.md)).
+
+MVP 6's goal is a non-technical user without a terminal, but a desktop app built over today's engine would present the same review queue with buttons. The engine also creates much of that queue itself: a concept that already exists is forked into a `-N` copy rather than attached to, and unattended writes can leave derived indexes stale. This arc removes the load at its source, before a surface is built on top of it.
+
+Deliverables, in dependency order:
+
+- **Attach, don't fork, at ingest.** When an extracted candidate matches an existing concept on the same OKF type and the same normalized title key, the existing concept is revised (provenance appended, evidence merged, `version` bumped, canonical id kept) instead of a `-N` copy being written. Types where an identical title routinely names different things (Event, Person) keep today's behavior until measured
+- **Versions revise, deprecation propagates.** A new version of a watched source revises the concepts its previous version produced, and superseding a Source deprecates the concepts whose entire provenance is that Source, so retiring a Source needs no `--force`
+- **Fresh after every write, including unattended ones.** Daemon imports refresh the same derived indexes as CLI writes, the watch applies the same text-source allowlist as `ingest`, and a source is searchable as soon as it lands
+- **Post-hoc review for one structural class, under [ADR-0034](adr/0034-identity-auto-merge-only-for-a-measured-class.md).** Same-type, same-normalized-key `base`/`-N` families, and anything attach-at-ingest cannot attach, get their own pre-registered decision rule on a fixture with hard negatives. If the class passes it ships opt-in and off by default, with each automatic merge committed and its `unmerge` command disclosed; if it fails, nothing ships and the measurement is recorded
+- **Review becomes a digest, not a gate.** Every prompt offers skip and accept-recommended, "no" is distinguishable from "not now", unattended runs end with a "what changed" summary listing each automatic action and its undo, and `pending` never blocks querying or ingesting and states truncation
+- **Two product metrics, measured before and after:** human decisions per ingested source, and time from dropping a file to the first answer that can cite it, on a committed corpus shaped like the end-to-end corpus
+
+Exit criteria — the bars are to be fixed in a pre-registration written before the arc starts:
+
+- Decisions per source at or below a registered bar
+- No `-N` duplicate created for same-type, same-key concepts outside the excluded types
+- No false sufficiency refusal attributable to a stale index
+- Every automatic action listed with its undo
+
+Out of scope: any GUI (MVP 6); freezing the Python API ([ADR-0039](adr/0039-the-stable-python-api-ships-with-a-desktop-app-as-its-first-client.md) is unchanged); automatic merges based on judge confidence; automatic cross-type merges; anything irreversible, such as `purge`, without explicit consent.
+
+What a user can do after this arc: drop sources in and find a base that is current and mostly free of engine-made duplicates, with a short after-the-fact digest instead of a blocking queue.
+
+Where the community can contribute: fixtures with hard negatives for the structural class, and corpora for the product metrics.
 
 ---
 

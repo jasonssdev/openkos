@@ -82,4 +82,5 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0041](0041-a-changed-source-imports-as-a-new-version-and-its-supersession-is-proposed.md) | A source edited after import imports as a new version, and its supersession is proposed, not written | Accepted | 2026-10-01 |
 | [0042](0042-human-readable-cli-output-is-a-tty-gated-convention.md) | Human-readable CLI output follows one TTY-gated convention | Accepted | 2026-10-01 |
 | [0043](0043-llm-prompts-are-files-versioned-by-content-hash.md) | LLM prompts are files in one folder, versioned by content hash | Proposed | 2026-10-02 |
+| [0044](0044-the-quiet-engine-arc-precedes-interoperability.md) | The Quiet Engine arc, which cuts the decisions asked per source, precedes Interoperability; MVP numbers stay and the structural auto-merge class stays opt-in | Proposed | 2026-10-02 |
 | [0045](0045-ingest-attaches-to-an-existing-same-type-same-key-concept-instead-of-forking-it.md) | Ingest attaches to an existing same-type, same-key concept instead of forking it | Proposed | 2026-10-02 |
