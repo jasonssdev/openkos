@@ -79,3 +79,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0038](0038-a-watched-folder-is-an-external-inbox.md) | A watched folder is an external inbox; a source edited after import is refused into the queue, never re-imported | Accepted | 2026-09-30 |
 | [0039](0039-the-stable-python-api-ships-with-a-desktop-app-as-its-first-client.md) | The stable Python API ships with a desktop app as its first client, not with interoperability | Proposed | 2026-10-01 |
 | [0040](0040-an-optional-native-wake-up-for-the-inbox-watch.md) | The inbox watch may be woken by an optional OS file-notification backend; polling stays the default, the fallback and the safety net | Proposed | 2026-10-01 |
+| [0040](0040-human-readable-cli-output-is-a-tty-gated-convention.md) | Human-readable CLI output follows one TTY-gated convention | Proposed | 2026-10-01 |
