@@ -1567,7 +1567,9 @@ def test_adjudicate_apply_offers_a_same_two_member_group(
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
 
-    assert "Merge concepts/b into concepts/a? [y/N]" in result.stdout
+    assert (
+        "Merge concepts/b into concepts/a? [y]es / [s]kip / [d]istinct" in result.stdout
+    )
 
 
 def test_adjudicate_apply_never_prompts_different_or_uncertain_groups(
@@ -1892,7 +1894,7 @@ def test_adjudicate_apply_preview_precedes_the_exact_prompt_text(
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
 
-    prompt_line = "Merge concepts/b into concepts/a? [y/N]"
+    prompt_line = "Merge concepts/b into concepts/a? [y]es / [s]kip / [d]istinct"
     assert prompt_line in result.stdout
     lines = result.stdout.splitlines()
     prompt_idx = next(i for i, line in enumerate(lines) if prompt_line in line)
@@ -1932,7 +1934,7 @@ def test_adjudicate_apply_renders_the_shared_factorys_prompt_verbatim(
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
 
-    assert sentinel_prompt in result.stdout
+    assert sentinel_prompt.removesuffix(" [y/N]") in result.stdout
 
 
 def test_adjudicate_apply_accepts_merge_updates_filesystem_and_ledger(
@@ -2302,15 +2304,15 @@ def test_adjudicate_apply_declining_inputs_do_not_merge_and_continue(
     assert "declined" in result.stdout
 
 
-@pytest.mark.parametrize("unrecognized", ["t", "skip"])
+@pytest.mark.parametrize("unrecognized", ["t", "maybe"])
 def test_adjudicate_apply_unrecognized_answer_reprompts_then_applies(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
     unrecognized: str,
 ) -> None:
-    """An unrecognized answer (`t` -- #398's typo evidence -- or the
-    formerly advertised `skip`) is re-asked with a notice naming the
+    """An unrecognized answer (`t` -- #398's typo evidence -- or `maybe`)
+    is re-asked with a notice naming the
     accepted tokens, never silently counted as a decline; the subsequent
     `y` applies the merge (issue #483, the #398 contract)."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
@@ -2322,8 +2324,8 @@ def test_adjudicate_apply_unrecognized_answer_reprompts_then_applies(
 
     assert result.exit_code == 0
     assert (
-        f"Unrecognized answer '{unrecognized}' -- expected y or n "
-        "(Enter = N). Asking again." in result.stdout
+        f"Unrecognized answer '{unrecognized}' -- expected y, s or d "
+        "(Enter = s). Asking again." in result.stdout
     )
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
     assert "applied 1" in result.stdout
@@ -2387,11 +2389,11 @@ def test_adjudicate_apply_piped_reprompt_shifts_every_later_answer_by_one(
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
-    result = runner.invoke(app, ["adjudicate", "--apply"], input="t\nn\ny\n")
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="t\nd\ny\n")
 
     assert result.exit_code == 0
     assert (
-        "Unrecognized answer 't' -- expected y or n (Enter = N). Asking again."
+        "Unrecognized answer 't' -- expected y, s or d (Enter = s). Asking again."
         in result.stdout
     )
     # Line 2 (`n`) answered the FIRST group's re-prompt, not the second
@@ -2421,7 +2423,9 @@ def test_adjudicate_apply_prompt_advertises_y_n_without_skip(
     result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
 
     assert result.exit_code == 0
-    assert "Merge concepts/b into concepts/a? [y/N]" in result.stdout
+    assert (
+        "Merge concepts/b into concepts/a? [y]es / [s]kip / [d]istinct" in result.stdout
+    )
     assert "[y/N/skip]" not in result.stdout
     assert "/skip" not in result.stdout
 
@@ -2475,7 +2479,7 @@ def test_adjudicate_apply_names_declined_merges_in_the_summary(
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
-    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\nn\n")
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\nd\n")
 
     assert result.exit_code == 0
     lines = result.stdout.splitlines()
@@ -2849,7 +2853,7 @@ def test_adjudicate_apply_summary_reflects_applied_and_skipped_counts(
     )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
-    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\nn\n")
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\nd\n")
 
     assert result.exit_code == 0
     assert "applied 1, skipped 2" in result.stdout
@@ -5193,7 +5197,7 @@ def test_apply_interactive_warns_on_a_cross_source_pair(
     assert result.exit_code == 0
     assert "note: cross-source SAME" in result.stdout
     out = result.stdout
-    assert out.index("note: cross-source SAME") < out.index("[y/N]")
+    assert out.index("note: cross-source SAME") < out.index("[y]es")
 
 
 def test_n_gt2_skip_suggests_the_richest_member_as_survivor(
@@ -5540,7 +5544,7 @@ def test_apply_interactive_warns_on_a_cross_type_pair(
     assert result.exit_code == 0
     assert "note: cross-type SAME" in result.stdout
     out = result.stdout
-    assert out.index("note: cross-type SAME") < out.index("[y/N]")
+    assert out.index("note: cross-type SAME") < out.index("[y]es")
     # The note follows the survivor line printed directly above it, never
     # raw `member_ids` order -- here the Event carries the richer body, so
     # it survives and must be named first.
@@ -5681,8 +5685,8 @@ def test_apply_walk_renders_both_notes_for_a_both_classes_pair(
     out = result.stdout
     assert "note: cross-source SAME" in out
     assert "note: cross-type SAME" in out
-    assert out.index("note: cross-source SAME") < out.index("[y/N]")
-    assert out.index("note: cross-type SAME") < out.index("[y/N]")
+    assert out.index("note: cross-source SAME") < out.index("[y]es")
+    assert out.index("note: cross-type SAME") < out.index("[y]es")
 
 
 def test_apply_same_skips_a_member_whose_type_cannot_be_read(
@@ -6365,3 +6369,87 @@ def test_apply_include_cross_type_restores_the_walk(
     assert "note: cross-type SAME" in result.stdout
     assert not (tmp_path / "bundle" / "projects" / "evaluacion.md").exists()
     assert (tmp_path / "bundle" / "events" / "coordination.md").is_file()
+
+
+# --- #1264: skip answer; only `d` records a keep-distinct ruling -----------
+
+
+def _identity_rulings(tmp_path: Path) -> list[object]:
+    from openkos.bundle import decisions as bundle_decisions
+
+    return list(
+        bundle_decisions.read_identity_decisions("concepts/a", tmp_path / "bundle")
+    )
+
+
+def _apply_with_answer(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: str,
+) -> object:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+    return runner.invoke(app, ["adjudicate", "--apply"], input=answer)
+
+
+@pytest.mark.parametrize("answer", ["n\n", "no\n", "s\n", "skip\n", "\n", " S \n"])
+def test_apply_skip_answers_write_no_ruling_and_no_merge(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: str,
+) -> None:
+    """`n`, `s`, `skip` and Enter mean "not now": no merge, and crucially no
+    permanent keep-distinct ruling (#1264)."""
+    result = _apply_with_answer(tmp_path, tmp_path_factory, monkeypatch, answer)
+
+    assert result.exit_code == 0  # type: ignore[attr-defined]
+    assert (tmp_path / "bundle" / "concepts" / "b.md").is_file()
+    assert _identity_rulings(tmp_path) == []
+    assert "  declined:" not in result.stdout  # type: ignore[attr-defined]
+    assert "left pending: 1" in result.stdout  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("answer", ["d\n", "distinct\n", " D \n"])
+def test_apply_distinct_answer_records_the_keep_distinct_ruling(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: str,
+) -> None:
+    result = _apply_with_answer(tmp_path, tmp_path_factory, monkeypatch, answer)
+
+    assert result.exit_code == 0  # type: ignore[attr-defined]
+    assert (tmp_path / "bundle" / "concepts" / "b.md").is_file()
+    assert len(_identity_rulings(tmp_path)) == 1
+    assert "  declined: concepts/b -> concepts/a" in result.stdout  # type: ignore[attr-defined]
+
+
+def test_apply_prompt_offers_skip_and_distinct_and_states_what_d_records(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _apply_with_answer(tmp_path, tmp_path_factory, monkeypatch, "s\n")
+
+    assert (
+        "Merge concepts/b into concepts/a? [y]es / [s]kip / [d]istinct "
+        "(d records a permanent keep-distinct ruling)" in result.stdout  # type: ignore[attr-defined]
+    )
+    assert "[y/N]" not in result.stdout  # type: ignore[attr-defined]
+
+
+def test_apply_prompt_does_not_accept_a_as_accept_all(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identity has no accept-recommended path: `a` is re-asked."""
+    result = _apply_with_answer(tmp_path, tmp_path_factory, monkeypatch, "a\ns\n")
+
+    assert "Unrecognized answer 'a'" in result.stdout  # type: ignore[attr-defined]
+    assert "expected y, s or d" in result.stdout  # type: ignore[attr-defined]
+    assert (tmp_path / "bundle" / "concepts" / "b.md").is_file()

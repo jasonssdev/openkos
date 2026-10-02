@@ -82,10 +82,10 @@ Revert the commits; no data migration. Rulings already recorded stay valid.
 
 ## Success Criteria
 
-- [ ] `n`, `s` and Enter on the Identity prompt write nothing and record no
+- [x] `n`, `s` and Enter on the Identity prompt write nothing and record no
       ruling; `d` records it.
-- [ ] The prompt states what `d` records.
-- [ ] Structure/Metadata/`suggest-relations` accept `s`; Structure/Metadata
+- [x] The prompt states what `d` records.
+- [x] Structure/Metadata/`suggest-relations` accept `s`; Structure/Metadata
       accept `a`; Identity does not.
-- [ ] All gates green.
+- [x] All gates green.
 - [ ] Part 3 of #1264 stays open (PR uses `Refs #1264`).

@@ -13,7 +13,7 @@ import inspect
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -377,9 +377,11 @@ class _ApplyRecorder:
     ) -> None:
         self.events.append(f"preview:{suggested_type}")
 
-    def confirm_relate(self, edge: Edge, suggested_type: str, caveat: str) -> bool:
+    def confirm_relate(
+        self, edge: Edge, suggested_type: str, caveat: str
+    ) -> Literal["yes", "no", "skip"]:
         self.events.append("confirm")
-        return self.answers.pop(0)
+        return "yes" if self.answers.pop(0) else "no"
 
     def already_present(self) -> None:
         self.events.append("already_present")

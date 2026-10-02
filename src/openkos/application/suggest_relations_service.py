@@ -244,8 +244,12 @@ class ApplyObserver(Protocol):
     ) -> None:
         """One valid suggestion, before the consent question."""
 
-    def confirm_relate(self, edge: Edge, suggested_type: str, caveat: str) -> bool:
-        """Ask whether to write this relation."""
+    def confirm_relate(
+        self, edge: Edge, suggested_type: str, caveat: str
+    ) -> Literal["yes", "no", "skip"]:
+        """Ask whether to write this relation: `no` declines it (named in
+        the decline listing), `skip` leaves it for later (counted, not
+        named). Neither writes anything."""
 
     def already_present(self) -> None:
         """The relation already exists; nothing is written."""
@@ -819,11 +823,13 @@ def apply_relation_suggestions(
 
         caveat = suggestion_caveat(result.suggested_type)
         observer.preview(edge, result.suggested_type, caveat, result.rationale)
-        if not observer.confirm_relate(edge, result.suggested_type, caveat):
+        verdict = observer.confirm_relate(edge, result.suggested_type, caveat)
+        if verdict != "yes":
             skipped += 1
-            declined.append(
-                f"{edge.source_id} -> {edge.target_id} [{result.suggested_type}]"
-            )
+            if verdict == "no":
+                declined.append(
+                    f"{edge.source_id} -> {edge.target_id} [{result.suggested_type}]"
+                )
             continue
 
         # The commit phase (#1137): the model call and the prompt above held

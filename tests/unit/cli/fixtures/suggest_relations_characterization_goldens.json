@@ -38,7 +38,7 @@
       ]
     ],
     "stderr": "  [1/1] concepts/a -> concepts/b  [references]\n",
-    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N]: y\n  note: already present -- nothing to write\nopenkos suggest-relations --apply: applied 0, skipped 1 (declined: 0)\n"
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N/s]: y\n  note: already present -- nothing to write\nopenkos suggest-relations --apply: applied 0, skipped 1 (declined: 0)\n"
   },
   "apply_corrected": {
     "calls": [
@@ -80,7 +80,7 @@
       ]
     ],
     "stderr": "  [1/1] concepts/b -> concepts/a  [member_of]\n",
-    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[member_of] concepts/b -> concepts/a (direction model-suggested, unverified)\n  rationale: corrected\nRelate concepts/b -> concepts/a [member_of] (direction model-suggested, unverified)? [y/N]: y\nopenkos suggest-relations --apply: applied 1, skipped 0 (declined: 0)\n"
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[member_of] concepts/b -> concepts/a (direction model-suggested, unverified)\n  rationale: corrected\nRelate concepts/b -> concepts/a [member_of] (direction model-suggested, unverified)? [y/N/s]: y\nopenkos suggest-relations --apply: applied 1, skipped 0 (declined: 0)\n"
   },
   "apply_drift": {
     "calls": [],
@@ -105,7 +105,7 @@
       ]
     ],
     "stderr": "  [1/1] concepts/a -> concepts/b  [references]\nopenkos suggest-relations --apply: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/a.md. Nothing was written. Re-run to recompute over the current bundle.\n",
-    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N]: y\n"
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N/s]: y\n"
   },
   "apply_empty_results_with_failure": {
     "calls": [
@@ -195,7 +195,7 @@
       ]
     ],
     "stderr": "  [1/4] concepts/a -> concepts/b  [references]\n  [2/4] concepts/b -> projects/p  [produced_by]\n  [3/4] projects/p -> concepts/a  [?]\n  [4/4] concepts/a -> projects/p  [related_to]\n",
-    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: because\nRelate concepts/a -> concepts/b [references]? [y/N]: y\n[produced_by] concepts/b -> projects/p (direction model-suggested, unverified)\n  rationale: because\nRelate concepts/b -> projects/p [produced_by] (direction model-suggested, unverified)? [y/N]: n\n[?] projects/p -> concepts/a\n  note: no valid type suggested\n[related_to] concepts/a -> projects/p (connected; the documents do not say how)\n  rationale: because\nRelate concepts/a -> projects/p [related_to] (connected; the documents do not say how)? [y/N]: y\nopenkos suggest-relations --apply: applied 2, skipped 2 (declined: 1)\n  declined: concepts/b -> projects/p [produced_by]\n"
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: because\nRelate concepts/a -> concepts/b [references]? [y/N/s]: y\n[produced_by] concepts/b -> projects/p (direction model-suggested, unverified)\n  rationale: because\nRelate concepts/b -> projects/p [produced_by] (direction model-suggested, unverified)? [y/N/s]: n\n[?] projects/p -> concepts/a\n  note: no valid type suggested\n[related_to] concepts/a -> projects/p (connected; the documents do not say how)\n  rationale: because\nRelate concepts/a -> projects/p [related_to] (connected; the documents do not say how)? [y/N/s]: y\nopenkos suggest-relations --apply: applied 2, skipped 2 (declined: 1)\n  declined: concepts/b -> projects/p [produced_by]\n"
   },
   "apply_no_git_identity": {
     "calls": [
@@ -227,7 +227,7 @@
       ]
     ],
     "stderr": "  [1/1] concepts/a -> concepts/b  [references]\nopenkos: WARNING -- git identity unset; skipped auto-commit (writes are on disk).\n",
-    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N]: y\nopenkos suggest-relations --apply: applied 1, skipped 0 (declined: 0)\n"
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N/s]: y\nopenkos suggest-relations --apply: applied 1, skipped 0 (declined: 0)\n"
   },
   "apply_only_degrades": {
     "calls": [
@@ -263,7 +263,7 @@
       ]
     ],
     "stderr": "  [1/1] concepts/a -> concepts/b  [references]\nopenkos suggest-relations --apply: failed while relating concepts/a -> concepts/b -- prepare exploded.\n",
-    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N]: y\n"
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N/s]: y\n"
   },
   "apply_write_failure": {
     "calls": [],
@@ -277,7 +277,7 @@
       ]
     ],
     "stderr": "  [1/1] concepts/a -> concepts/b  [references]\nopenkos suggest-relations --apply: failed while relating concepts/a -> concepts/b -- write exploded.\n",
-    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N]: y\n"
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: concepts/a cites concepts/b\nRelate concepts/a -> concepts/b [references]? [y/N/s]: y\n"
   },
   "capped_run": {
     "calls": [

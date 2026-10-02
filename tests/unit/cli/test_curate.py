@@ -4468,7 +4468,7 @@ def test_identity_unrecognized_answer_reprompts_then_applies(
     assert result.exit_code == 0
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
     assert "Unrecognized answer 't'" in result.stdout
-    assert "y or n" in result.stdout
+    assert "y, s or d" in result.stdout
     assert "Identity: applied 1, skipped 0." in _lines(result.stdout)
 
 
@@ -4485,12 +4485,14 @@ def test_identity_declined_pair_identity_listed_in_summary(
     _seed_identity_pair(tmp_path, monkeypatch)
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["curate"], input="y\nn\n")
+    result = runner.invoke(app, ["curate"], input="y\nd\n")
 
     assert result.exit_code == 0
     assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
     # The advertised contract is [y/N] -- `skip` is gone from the prompt.
-    assert "Merge concepts/b into concepts/a? [y/N]" in result.stdout
+    assert (
+        "Merge concepts/b into concepts/a? [y]es / [s]kip / [d]istinct" in result.stdout
+    )
     assert "[y/N/skip]" not in result.stdout
     assert "Identity: applied 0, skipped 1." in _lines(result.stdout)
     assert "  declined: concepts/b -> concepts/a" in result.stdout
@@ -4530,7 +4532,7 @@ def test_identity_renders_the_shared_factorys_prompt_verbatim(
 
     result = runner.invoke(app, ["curate"], input="y\nn\n")
 
-    assert sentinel_prompt in result.stdout
+    assert sentinel_prompt.removesuffix(" [y/N]") in result.stdout
 
 
 def test_identity_applied_only_run_prints_no_declined_lines(
@@ -4617,7 +4619,7 @@ def test_structure_declined_edge_identity_listed_in_summary(
     result = runner.invoke(app, ["curate"], input="y\nn\n")
 
     assert result.exit_code == 0
-    assert "Relate concepts/a -> concepts/b [references]? [y/N]" in result.stdout
+    assert "Relate concepts/a -> concepts/b [references]? [y/N/s/a]" in result.stdout
     assert "[y/N/skip]" not in result.stdout
     assert "Structure: applied 0, skipped 1." in _lines(result.stdout)
     assert "  declined: concepts/a -> concepts/b [references]" in result.stdout
@@ -4667,7 +4669,7 @@ def test_metadata_declined_tier_identity_listed_in_summary(
     result = runner.invoke(app, ["curate"], input="y\nn\n")
 
     assert result.exit_code == 0
-    assert "Set Concept -> volatile? [y/N]" in result.stdout
+    assert "Set Concept -> volatile? [y/N/s/a]" in result.stdout
     assert "[y/N/skip]" not in result.stdout
     assert "Metadata: applied 0, skipped 1." in _lines(result.stdout)
     assert "  declined: Concept -> volatile" in result.stdout
@@ -4851,7 +4853,7 @@ def test_explicit_accept_narrows_review_false_rather_than_widening_it(
 
     assert result.exit_code == 0
     assert "Structure: applied 2, skipped 0." in _lines(result.stdout)
-    assert "Set Concept -> volatile? [y/N]" in result.stdout
+    assert "Set Concept -> volatile? [y/N/s/a]" in result.stdout
     assert "Metadata: applied 0, skipped 1." in _lines(result.stdout)
 
 
@@ -5071,7 +5073,7 @@ def test_accept_structure_still_prompts_for_an_asymmetric_suggestion(
     assert "Relate concepts/a -> concepts/b" not in result.stdout
     assert (
         "Relate concepts/a -> concepts/c [part_of] "
-        "(direction model-suggested, unverified)? [y/N/a/r]" in result.stdout
+        "(direction model-suggested, unverified)? [y/N/s/a/r]" in result.stdout
     )
     assert "Structure: applied 1, skipped 1." in _lines(result.stdout)
     assert "  declined: concepts/a -> concepts/c [part_of]" in result.stdout
@@ -5235,8 +5237,8 @@ def test_accept_the_rest_is_not_offered_without_accept_structure(
 
     result = runner.invoke(app, ["curate"], input="y\nn\n")
 
-    assert "[y/N/a/r]" not in result.stdout
-    assert "(direction model-suggested, unverified)? [y/N]" in result.stdout
+    assert "[y/N/s/a/r]" not in result.stdout
+    assert "(direction model-suggested, unverified)? [y/N/s]" in result.stdout
 
 
 def test_per_item_walk_marks_direction_unverified_only_on_asymmetric_types(
@@ -5260,10 +5262,10 @@ def test_per_item_walk_marks_direction_unverified_only_on_asymmetric_types(
     result = runner.invoke(app, ["curate"], input="y\nn\nn\n")
 
     assert result.exit_code == 0
-    assert "Relate concepts/a -> concepts/b [references]? [y/N]" in result.stdout
+    assert "Relate concepts/a -> concepts/b [references]? [y/N/s/a]" in result.stdout
     assert (
         "Relate concepts/a -> concepts/c [part_of] "
-        "(direction model-suggested, unverified)? [y/N]" in result.stdout
+        "(direction model-suggested, unverified)? [y/N/s]" in result.stdout
     )
 
 
@@ -5945,7 +5947,7 @@ def test_identity_walk_states_the_survivor_criterion_and_cross_source_note(
     # Compare against the per-item MERGE prompt -- curate's earlier stage
     # gate also prints a [y/N].
     assert out.index("note: cross-source SAME") < out.index(
-        "Merge events/m1 into events/m2? [y/N]"
+        "Merge events/m1 into events/m2? [y]es / [s]kip / [d]istinct"
     )
 
 
@@ -6013,7 +6015,10 @@ def test_identity_walk_skips_a_cross_type_pair(
     # #1258: the Project would have been the richer-body survivor and the
     # Event absorbed into it. The walk no longer offers the pair: no merge
     # prompt, both files untouched, the manual command carries the opt-in.
-    assert "Merge events/m1 into projects/evaluacion? [y/N]" not in out
+    assert (
+        "Merge events/m1 into projects/evaluacion? [y]es / [s]kip / [d]istinct"
+        not in out
+    )
     assert "skipped (cross-type SAME" in out
     assert "openkos merge --include-cross-type projects/evaluacion events/m1" in out
     assert (tmp_path / "bundle" / "events" / "m1.md").is_file()
@@ -6326,7 +6331,9 @@ def test_identity_serves_what_adjudicate_already_paid_for(
     # The served SAME verdict still reaches the walk: the merge is offered
     # for per-item consent exactly as a fresh one would be, and declining
     # it here is what makes "skipped 1" -- not an empty queue.
-    assert "Merge concepts/b into concepts/a? [y/N]" in result.stdout
+    assert (
+        "Merge concepts/b into concepts/a? [y]es / [s]kip / [d]istinct" in result.stdout
+    )
     assert "Identity: applied 0, skipped 1." in _lines(result.stdout)
 
 
@@ -6575,8 +6582,8 @@ def test_identity_mixed_run_serves_and_judges_in_candidate_order(
     # Both SAME verdicts reach the walk, in candidate order -- the served
     # one first because group1 comes first, not because it was served.
     out = result.stdout
-    assert "Merge concepts/b into concepts/a? [y/N]" in out
-    assert "Merge concepts/c into concepts/d? [y/N]" in out
+    assert "Merge concepts/b into concepts/a? [y]es / [s]kip / [d]istinct" in out
+    assert "Merge concepts/c into concepts/d? [y]es / [s]kip / [d]istinct" in out
     assert out.index("Merge concepts/b into concepts/a?") < out.index(
         "Merge concepts/c into concepts/d?"
     )
@@ -6828,3 +6835,190 @@ def test_structure_probe_joins_truncation_and_quarantine_notices(
     assert lines[0] == "50 of 60 candidate edge(s) shown (cap reached)"
     assert "1 candidate edge(s) withheld" in lines[1]
     assert "sources/s" in lines[1]
+
+
+# ---------------------------------------------------------------------------
+# issue #1264 -- skip answer, `d` as the only ruling, accept-remaining
+# ---------------------------------------------------------------------------
+
+
+def _identity_pair_workspace(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    seed_workspace_docs(tmp_path)
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _seed_identity_pair(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+
+
+@pytest.mark.parametrize("answer", ["n", "s", "skip", ""])
+def test_identity_skip_answers_record_no_ruling_and_name_no_decline(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: str,
+) -> None:
+    _identity_pair_workspace(tmp_path, tmp_path_factory, monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input=f"y\n{answer}\n")
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "b.md").is_file()
+    assert (
+        bundle_decisions.read_identity_decisions("concepts/a", tmp_path / "bundle")
+        == []
+    )
+    assert "Identity: applied 0, skipped 1." in _lines(result.stdout)
+    assert "  declined:" not in result.stdout
+
+
+@pytest.mark.parametrize("answer", ["d", "distinct"])
+def test_identity_distinct_answer_records_the_ruling(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: str,
+) -> None:
+    _identity_pair_workspace(tmp_path, tmp_path_factory, monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input=f"y\n{answer}\n")
+
+    assert result.exit_code == 0
+    assert (
+        len(bundle_decisions.read_identity_decisions("concepts/a", tmp_path / "bundle"))
+        == 1
+    )
+    assert "  declined: concepts/b -> concepts/a" in result.stdout
+
+
+def test_identity_prompt_states_what_d_records_and_rejects_a(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _identity_pair_workspace(tmp_path, tmp_path_factory, monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\na\ns\n")
+
+    assert (
+        "Merge concepts/b into concepts/a? [y]es / [s]kip / [d]istinct "
+        "(d records a permanent keep-distinct ruling)" in result.stdout
+    )
+    assert "Unrecognized answer 'a'" in result.stdout
+    assert "expected y, s or d" in result.stdout
+    assert (tmp_path / "bundle" / "concepts" / "b.md").is_file()
+
+
+def _one_tier_queue(monkeypatch: pytest.MonkeyPatch, names: Sequence[str]) -> None:
+    from openkos.resolution.volatility_typing import (
+        TierSuggestion,
+        TierSuggestionBatch,
+    )
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names", lambda *a, **k: list(names)
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_volatility",
+        lambda *a, **k: TierSuggestionBatch(
+            results=[
+                TierSuggestion(
+                    type_name=name,
+                    current_default="static",
+                    suggested_tier="volatile",
+                    rationale="stub",
+                )
+                for name in names
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+
+
+def test_metadata_skip_is_counted_but_not_named_as_declined(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _one_tier_queue(monkeypatch, ["Concept"])
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ns\n")
+
+    assert result.exit_code == 0
+    assert "Set Concept -> volatile? [y/N/s/a]" in result.stdout
+    assert "Metadata: applied 0, skipped 1." in _lines(result.stdout)
+    assert "  declined:" not in result.stdout
+
+
+def test_metadata_a_answer_accepts_the_rest_of_the_stage(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _one_tier_queue(monkeypatch, ["Concept", "Person", "Event"])
+    _simulate_tty(monkeypatch)
+
+    # Cost gate "y"; the FIRST prompt gets "a"; no further prompt is asked.
+    result = runner.invoke(app, ["curate"], input="y\na\n")
+
+    assert result.exit_code == 0
+    assert result.stdout.count("-> volatile? [y/N/s/a]") == 1
+    assert "Metadata: applied 3, skipped 0." in _lines(result.stdout)
+    assert "without asking" in result.output
+
+
+def test_structure_a_answer_accepts_the_rest_but_still_asks_asymmetric(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _abcd_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _typed_asymmetric_queue(monkeypatch, ["references", "related_to", "part_of"])
+
+    # Cost gate "y"; `a` on the first symmetric prompt; the second symmetric
+    # is NOT asked; the asymmetric part_of is asked and skipped.
+    result = runner.invoke(app, ["curate"], input="y\na\ns\n")
+
+    assert result.exit_code == 0
+    assert "Relate concepts/a -> concepts/b [references]? [y/N/s/a]" in result.stdout
+    assert "Relate concepts/a -> concepts/c [related_to]" not in result.stdout
+    assert (
+        "Relate concepts/a -> concepts/d [part_of] "
+        "(direction model-suggested, unverified)?" in result.stdout
+    )
+    assert "Structure: applied 2, skipped 1." in _lines(result.stdout)
+    assert "  declined:" not in result.stdout
+
+
+def test_structure_asymmetric_prompt_does_not_offer_the_stage_wide_a(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _abcd_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _typed_asymmetric_queue(monkeypatch, ["part_of"])
+
+    result = runner.invoke(app, ["curate"], input="y\ns\n")
+
+    assert "(direction model-suggested, unverified)? [y/N/s]" in result.stdout
+    assert "Structure: applied 0, skipped 1." in _lines(result.stdout)
