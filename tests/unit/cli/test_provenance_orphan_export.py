@@ -77,6 +77,7 @@ def test_export_input_repair_and_lint_ignore_a_provenance_orphan(
     assert superseded.ids == frozenset({"sources/v1"})
 
     plan = application_repair.plan_repair(bundle_dir)
+    assert isinstance(plan, application_repair.RepairPlan)
     assert all(
         rw.changes.export is okf.ExportOutcome.UNCHANGED
         for rw in plan.document_rewrites

@@ -50,7 +50,7 @@ written against its shape.
       shape; leave other text byte-identical; refuse to produce an empty
       `provenance`. Tests include a hand-edited bullet that must not match.
       (`bundle`)
-- [ ] 3.2 `prepare_forget` classification: build the historical set only when
+- [x] 3.2 `prepare_forget` classification: build the historical set only when
       the purge set holds a Source superseded by a Source outside it;
       historical rewrites planned like the resurrection withdrawals;
       blocking references computed as before from the remainder; `purge`'s
@@ -58,11 +58,11 @@ written against its shape.
       sole-source concept, shared concept), hand-written link blocks,
       non-Source `supersedes` blocks, sensitivity and `version` untouched,
       no-superseded-Source forget unchanged. (`lint`)
-- [ ] 3.3 `forget_core` Phase B writes the rewrites through the existing
+- [x] 3.3 `forget_core` Phase B writes the rewrites through the existing
       drift-guarded path before deletions; catalog and tombstones unchanged;
       removing the last relation omits `relations:`; a changed target
       refuses everything. (`lint`)
-- [ ] 3.4 CLI preview lines for the `~` edits (presentation only); end-to-end
+- [x] 3.4 CLI preview lines for the `~` edits (presentation only); end-to-end
       test: edit watched file, watch imports, `relate`, `forget` without
       `--force`, then `lint` is clean and `answer` cites only the live
       Source. (`cli`)
