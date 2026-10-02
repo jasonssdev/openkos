@@ -7,6 +7,7 @@ import glob
 import inspect
 import json
 import os
+import shlex
 import sqlite3
 import sys
 import unicodedata
@@ -1396,6 +1397,47 @@ def _echo_commit_disclosure(sha: str, *, prefix: str = "") -> None:
         f"{prefix}committed as {sha} -- `git revert {sha}` undoes it only "
         "while it is the latest commit."
     )
+
+
+def _echo_orphaned_raw_disclosure(
+    orphaned_raw: Sequence[str],
+    concept_id: str,
+    scope: str,
+    forget_sha: str | None,
+) -> None:
+    """Say, after a `forget`, that the raw copy of a forgotten Source is
+    still on disk and in git history, and how it is really erased (#1262).
+
+    `forget` never edits `raw/`, and `purge` finds a Source's raw file only
+    through the concept's `resource` field -- so once the concept is gone,
+    `purge <id>` refuses and nothing else can erase the bytes. The working
+    sequence is the one verified end to end: undo the forget commit (which
+    brings the concept back), then purge it. `git revert` is only safe while
+    that commit is the latest one (every commit appends to `log.md`), and the
+    wording says so; with no commit made there is nothing to revert, so only
+    the precondition is named. Silent when no raw copy remains."""
+    if not orphaned_raw:
+        return
+    paths = ", ".join(orphaned_raw)
+    purge = f"openkos purge {shlex.quote(concept_id)}" + (
+        " --scope source" if scope == "source" else ""
+    )
+    typer.echo(
+        f"openkos forget: {paths} remains on disk and in git history -- "
+        "forget never edits raw/, and purge cannot reach it once its "
+        "concept is gone."
+    )
+    if forget_sha is not None:
+        typer.echo(
+            f"openkos forget: to erase it, run `git revert {forget_sha}` "
+            "(it must still be the latest commit), then "
+            f"`{purge}`."
+        )
+    else:
+        typer.echo(
+            "openkos forget: to erase it, restore the concept from git "
+            f"first, then run `{purge}`."
+        )
 
 
 def _autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
@@ -5661,6 +5703,9 @@ def forget(
         # no git identity must not be sent after a commit that was never made.
         if forget_sha is not None:
             _echo_commit_disclosure(forget_sha, prefix="openkos forget: ")
+        _echo_orphaned_raw_disclosure(
+            plan.orphaned_raw, canonical_id, scope, forget_sha
+        )
 
         # #640: also prunes the forgotten concept(s) from `vectors.db` via the
         # vector stage's prune pass, not only the manifest-gated stores.
@@ -10907,6 +10952,13 @@ def lint() -> None:
         for finding in report.symlinked_markdown:
             _echo_report(f"  {finding.path}: {finding.detail}")
     typer.echo()
+    typer.echo("Unreferenced raw files:")
+    if not report.unreferenced_raw:
+        typer.echo("  No unreferenced raw files.")
+    else:
+        for finding in report.unreferenced_raw:
+            _echo_report(f"  {finding.path}: {finding.detail}")
+    typer.echo()
     typer.echo("Deprecated-status exports:")
     if not report.status_export:
         typer.echo("  No deprecated-status export findings.")
@@ -10915,7 +10967,7 @@ def lint() -> None:
             _echo_report(f"  {finding.concept_id}: {finding.detail}")
 
     # Completed/not-run counts (design.md Decision 5, ADR-0022): against
-    # `application_lint.TOTAL_CHECKS` (15 calls), NOT the 16 `LintReport`
+    # `application_lint.TOTAL_CHECKS` (16 calls), NOT the 17 `LintReport`
     # finding-list fields -- `check_below_source_sensitivity` is one call
     # feeding two fields, so counting fields would overstate how many
     # checks ran.

@@ -672,3 +672,33 @@ naming the residue and remedy.
 - GIVEN an open row naming only concepts outside the purge set
 - WHEN `openkos forget <id>` completes
 - THEN that row is unchanged
+
+### Requirement: Forget Discloses The Orphaned Raw Copy
+
+`forget` MUST NOT edit `raw/` (sources are immutable), so a forgotten
+Source's `raw/<name>` copy remains on disk and in git history. `purge`
+resolves a Source's raw path only through the concept's `resource`
+frontmatter, so once the concept is gone `purge <id>` refuses and nothing
+reaches the bytes. After a successful `forget`, when the purge set holds a
+Source whose validated `resource: raw/<name>` is still a file on disk,
+`forget` MUST say that each such raw path remains on disk and in git
+history, and MUST name the sequence that erases it: `git revert <commit>`
+of the forget commit (stating that it must still be the latest commit),
+then `openkos purge <id>` with the same `--scope` the forget used. When no
+forget commit was made, it MUST NOT name a `git revert` and instead say the
+concept must be restored from git first. It MUST say nothing about raw files
+when no purge-set member names an existing one. `purge`'s own contract is
+unchanged.
+
+#### Scenario: The disclosed sequence erases the raw copy
+
+- GIVEN an ingested Source and `openkos forget <id> --scope source`
+- WHEN the forget commit is reverted as named, and the named `purge` runs
+- THEN the `raw/<name>` file is gone from the working tree and from every
+  git object
+
+#### Scenario: A concept with no raw copy is not annotated
+
+- GIVEN a forgotten concept with no `resource`, or whose raw file is absent
+- WHEN `openkos forget` completes
+- THEN no raw-copy disclosure is printed

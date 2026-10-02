@@ -822,3 +822,27 @@ MUST degrade to `not-run` on an `OSError`.
 - GIVEN no `.md` file or directory under `bundle/` is a symlink
 - WHEN `openkos lint` runs
 - THEN no `symlinked-markdown` finding is reported
+
+### Requirement: Unreferenced Raw File Scan
+
+`openkos lint` MUST report an `unreferenced-raw` finding for each file under
+`raw/` that no Source's `resource` frontmatter names, with its
+workspace-relative path (`raw/<name>`). `forget` leaves a forgotten Source's
+raw copy behind and `purge` cannot reach it once the concept is gone, so
+without this scan the file is invisible. The finding is advisory knowledge
+health, never an OKF conformance verdict and never gating. The scan MUST
+reuse the already-collected documents (no second bundle walk), read names
+only, report nothing for a missing `raw/`, and degrade to `not-run` on an
+`OSError`.
+
+#### Scenario: A forgotten Source's raw copy is reported
+
+- GIVEN a Source was forgotten and `raw/<name>` remains
+- WHEN `openkos lint` runs
+- THEN it reports one `unreferenced-raw` finding for `raw/<name>`
+
+#### Scenario: A referenced raw file reports nothing
+
+- GIVEN every file under `raw/` is named by some Source's `resource`
+- WHEN `openkos lint` runs
+- THEN no `unreferenced-raw` finding is reported
