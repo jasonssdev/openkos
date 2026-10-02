@@ -320,6 +320,16 @@ resolving it.
 - WHEN the operator merges A into B through `openkos merge`
 - THEN the row is `applied`
 
+#### Scenario: A merge retires every open row naming the absorbed concept
+
+- GIVEN open rows over A, B and C (an identity row over all three, and
+  relation-type rows over A/B and B/C)
+- WHEN the operator merges B into A
+- THEN every open row that names B is `stale`, so none offers a resolving
+  command over a concept that no longer exists
+- AND an open row that does not name B is untouched
+- AND a row already `applied`, `declined` or `stale` keeps its state
+
 #### Scenario: A different verdict closes the identity row
 
 - GIVEN an open identity row for A and B

@@ -68,6 +68,31 @@ def test_purge_deletes_jobs_db_and_names_it_among_the_stores(
     assert "jobs.db" in result.output
 
 
+def test_purge_notice_names_the_queue_and_watch_history_and_how_to_recompute(
+    tmp_git_repo: TmpGitRepo, log_directory: Path
+) -> None:
+    """The queue lives in `findings.db` and the watch's observation history in
+    `jobs.db`; dropping either loses work the operator can see (#1266), so the
+    notice names both and says what restores them."""
+    _seed_derived_stores(tmp_git_repo.root)
+    jobs = tmp_git_repo.root / ".openkos" / "jobs.db"
+    jobs.write_bytes(b"SQLite format 3\x00")
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    lines = {
+        name: line
+        for line in result.output.splitlines()
+        for name in ("findings.db", "jobs.db")
+        if line.lstrip().startswith(f"- {name}:")
+    }
+    assert "pending-work queue" in lines["findings.db"]
+    assert "openkos daemon --once" in lines["findings.db"]
+    assert "inbox watch" in lines["jobs.db"]
+    assert "openkos daemon --once" in lines["jobs.db"]
+
+
 def test_purge_leaves_no_daemon_log_for_the_workspace(
     tmp_git_repo: TmpGitRepo, log_directory: Path
 ) -> None:

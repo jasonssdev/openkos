@@ -19,6 +19,7 @@ from openkos import config
 from openkos.application import (
     contradictions_service,
     duplicates_service,
+    queue_resolution,
     reconcile_service,
 )
 from openkos.application import lifecycle as application_lifecycle
@@ -146,9 +147,12 @@ def test_merge_against_the_proposed_direction_resolves_the_row_modified(
     assert (row.status, row.resolution) == ("applied", "modified")
 
 
-def test_merge_leaves_an_identity_row_over_a_different_member_set_open(
+def test_merge_retires_an_identity_row_over_a_larger_group_naming_the_absorbed_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A pairwise merge does not perform a three-member proposal, so the row is
+    not `applied`; but it names a concept that no longer exists, so it is
+    retired `stale` rather than left offering a hint over a deleted id (#1266)."""
     root = _init(tmp_path, monkeypatch)
     for name in ("a", "b", "c"):
         _concept(root, f"concepts/{name}")
@@ -156,7 +160,46 @@ def test_merge_leaves_an_identity_row_over_a_different_member_set_open(
 
     _merge(root, "concepts/a", "concepts/b")
 
-    assert _only(root).status == "pending"
+    row = _only(root)
+    assert (row.status, row.resolution) == ("stale", "stale")
+
+
+def test_merge_retires_every_open_row_naming_the_absorbed_id_and_only_those(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _init(tmp_path, monkeypatch)
+    for name in ("a", "b", "c", "d"):
+        _concept(root, f"concepts/{name}")
+    _seed(root, _relation_row("concepts/a", "concepts/b", "supports"))
+    _seed(root, _relation_row("concepts/b", "concepts/c", "supports"))
+    _seed(root, _relation_row("concepts/a", "concepts/c", "supports"))
+    _seed(root, _relation_row("concepts/c", "concepts/d", "supports"))
+
+    _merge(root, "concepts/a", "concepts/b")
+
+    by_targets = {item.targets: item.status for item in _items(root)}
+    assert by_targets == {
+        ("concepts/a", "concepts/b"): "stale",
+        ("concepts/b", "concepts/c"): "stale",
+        ("concepts/a", "concepts/c"): "pending",
+        ("concepts/c", "concepts/d"): "pending",
+    }
+
+
+def test_merge_keeps_an_already_resolved_row_that_names_the_absorbed_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _init(tmp_path, monkeypatch)
+    for name in ("a", "b", "c"):
+        _concept(root, f"concepts/{name}")
+    _seed(root, _identity_row(("concepts/b", "concepts/c")))
+    queue_resolution.resolve_declined_identity(
+        root, member_ids=("concepts/b", "concepts/c")
+    )
+
+    _merge(root, "concepts/a", "concepts/b")
+
+    assert _only(root).status == "declined"
 
 
 # -- relate (relation_type rows) --------------------------------------------

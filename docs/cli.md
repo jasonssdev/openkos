@@ -662,7 +662,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 ### `openkos pending [--all] [--stats]`
 
-**Read-only.** Lists the open rows of the pending-work queue (`.openkos/findings.db`) grouped by kind, each with its target ids and the command that resolves it, followed by the most recent unattended job outcomes that need attention (`budget_exhausted`, `timed_out`, `commit_failed`, `failed`). `--all` also lists applied, declined and stale rows; `--stats` prints per-kind counters and the fraction applied as proposed, which cover only the queue's current lifetime. An absent queue is reported as not computed, never as nothing pending. It takes no lock, makes no model call, writes nothing, and never prints a row's payload.
+**Read-only.** Lists the open rows of the pending-work queue (`.openkos/findings.db`) grouped by kind, each with its target ids and the command that resolves it, followed by the most recent unattended job outcomes that need attention (`budget_exhausted`, `timed_out`, `commit_failed`, `failed`). `--all` also lists applied, declined and stale rows; `--stats` prints per-kind counters and the fraction applied as proposed, which cover only the queue's current lifetime. An absent queue is reported as not computed, never as nothing pending. A `merge` retires (as stale) every open row naming the concept it absorbed, so no row offers a command over a concept that no longer exists. It takes no lock, makes no model call, writes nothing, and never prints a row's payload.
 
 ### `openkos daemon [--once]`
 
@@ -775,7 +775,7 @@ A failed **delete** is the opposite case and exits **1**. The delete *is* the er
 | Store | What was lost | What restores it |
 | --- | --- | --- |
 | `vectors.db` | dense retrieval, until re-embedded | `openkos reindex` (one embedding call per chunk of every surviving document). The next run reports `no embedding-model tag stored (fresh or dropped store)` rather than an embedding-model change — the tag lived in the dropped store. |
-| `findings.db` | every persisted contradiction verdict, edge suggestion and identity adjudication | **Nothing.** `reindex` restores none of them; each one costs the model call that produced it, paid again. |
+| `findings.db` | every persisted contradiction verdict, edge suggestion and identity adjudication, and the whole pending-work queue (`openkos pending` reports it as not computed) | `openkos daemon --once` rebuilds the queue. `reindex` restores none of the verdicts; each one costs the model call that produced it, paid again. |
 | `insight_questions.db` | the cached source-question embeddings behind `query --save`'s duplicate disclosure | Nothing to run: a miss re-embeds that question on the next save. Free to restore. |
 
 A store is reported only when this purge **actually destroyed it** — it existed before and is verifiably gone after. Absence alone is not loss: a workspace that never ran `curate` has no `findings.db` to lose, and a failed unlink must not be announced as a drop — a failed delete is warned about on its own terms (`openkos purge: warning -- failed to delete ...`), which is a different fact from a store having been dropped. The warning names every store the purge dropped, including `findings.db` and `insight_questions.db`, because dropping them in silence would cost the persisted findings (for example, minutes after `contradictions` had said `11 of 11 candidate(s) served from persisted findings`).

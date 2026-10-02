@@ -5873,6 +5873,10 @@ def _purge_dropped_stores(
             "but only by paying its model call again: the next "
             "`openkos contradictions`, `openkos adjudicate` and "
             "`openkos suggest-relations` run judges everything fresh. "
+            "The pending-work queue (every open review row, for every "
+            "concept, not only the purged ones) is gone too: "
+            "`openkos pending` reports it as not computed until "
+            "`openkos daemon --once` rebuilds it. "
             "`openkos reindex` restores none of them.",
         ),
         (
@@ -5883,9 +5887,11 @@ def _purge_dropped_stores(
         ),
         (
             layout.jobs_db_path,
-            "the unattended engine's job history and daily spend ledger. "
-            "Nothing to run: the next unattended run starts a fresh record, "
-            "and its budget counts spend from zero.",
+            "the unattended engine's job history, daily spend ledger and "
+            "inbox watch history. Nothing to run: the next unattended run "
+            "starts a fresh record, its budget counts spend from zero, and "
+            "its first watch pass re-checks every file in the inbox "
+            "(`openkos daemon --once`).",
         ),
     )
 
