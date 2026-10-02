@@ -348,3 +348,16 @@ def test_builder_never_offers_a_deprecated_concept(tmp_path: Path) -> None:
 
 def test_excluded_types_are_exactly_event_and_person() -> None:
     assert frozenset({"Event", "Person"}) == application_ingest.ATTACH_EXCLUDED_TYPES
+
+
+def test_builder_matches_only_the_same_type(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle, "concepts/atlas", "type: Concept\ntitle: Atlas")
+
+    lookup = application_ingest.build_attach_lookup(
+        bundle, read=lambda concept_id: AttachTarget(concept_id, "")
+    )
+
+    assert lookup.find("Concept", "Atlas") == ("concepts/atlas",)
+    assert lookup.find("Project", "Atlas") == ()
+    assert lookup.find("Place", "Atlas") == ()
