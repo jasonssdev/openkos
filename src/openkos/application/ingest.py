@@ -1801,7 +1801,9 @@ def compose_catalog_update(
     order, with one index bullet and one log entry per staged derived
     object, plus the durable disambiguation audit log entry (#131) when
     `plan.disambiguated_from is not None` -- no second read-modify-write
-    round trip, matching "one confirm gate, one preview".
+    round trip, matching "one confirm gate, one preview". An ATTACH plan
+    (#1268) revises an already-cataloged concept, so it adds only an
+    `**Attach**` log entry and no index bullet.
 
     `adopted` (#1136) are derived objects an interrupted run already wrote
     but never catalogued (`find_uncatalogued_objects`): each gets the index
@@ -1849,6 +1851,20 @@ def compose_catalog_update(
     new_log_text = bundle_log.insert_log_entry(log_text, entry_date, log_line)
 
     for plan in staged.plans:
+        if plan.attach_to is not None:
+            # An attach revises a concept that is already cataloged: its
+            # bullet (id, title, description) is unchanged, so no second one
+            # is inserted, and the write is logged as a revision, not as an
+            # extraction (#1268).
+            new_log_text = bundle_log.insert_log_entry(
+                new_log_text,
+                entry_date,
+                f"**Attach**: Revised [{plan.title}]"
+                f"(/{plan.link_dir}/{plan.slug}.md) ({plan.doc_type}) from "
+                f"[{source.title}](/sources/{slug}.md); now version "
+                f"{plan.attach_version}.",
+            )
+            continue
         new_index_text = bundle_index.insert_index_entry(
             new_index_text,
             section=plan.section,

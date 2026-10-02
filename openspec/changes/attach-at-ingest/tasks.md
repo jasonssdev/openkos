@@ -43,7 +43,7 @@ is one work unit (one Conventional Commit, scope `ingest`, `okf`,
       create-only no-op; `None` lookup reproduces today's plans exactly.
       `DerivedPlan` gains the attach fields; a new `StagingDrop` kind.
       (`ingest`)
-- [ ] 2.3 `compose_catalog_update`: no second `index.md` bullet for an attach
+- [x] 2.3 `compose_catalog_update`: no second `index.md` bullet for an attach
       plan; one `**Attach**` log entry; `**Disambiguation**` entry unchanged
       for the candidates attach does not take. (`ingest`)
 
