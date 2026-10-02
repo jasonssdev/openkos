@@ -12,11 +12,15 @@ appear as a `StagingDrop` of a distinct kind so the adapter renders its own
 wording; an attach MUST NOT increment `lost_in_staging`, because nothing
 extracted was lost.
 
-The lookup MUST arrive as a parameter (a mapping of `(type, normalized key)`
-to the existing concept's id and decoded text), built by the caller from the
-same snapshot reads that feed the drift guard; staging MUST NOT read the
-bundle to find a match. A `None` lookup MUST reproduce the pre-attach
-behavior exactly.
+The lookup MUST arrive as a parameter (a `find(type, title)` that returns the
+ids of existing, non-deprecated concepts of a non-excluded type whose title has
+the same normalized key, and a `read(id)` that returns one concept's decoded
+text), built by the caller; staging MUST NOT read the bundle itself. The
+caller's `read` MUST be memoised and MUST be invoked only after extraction
+returns, taking the target's baseline bytes from that same read, so the bytes a
+revision is composed from are the bytes the drift guard compares and a concept
+edited while the model was extracting is not overwritten. A `None` lookup MUST
+reproduce the pre-attach behavior exactly.
 
 `ingest_source` MUST register every attach target as a guarded target
 (re-validated by the drift guard after the confirm gate, baseline bytes taken
@@ -52,9 +56,8 @@ ones while remaining byte-identical when there are none.
 - WHEN the auto-commit runs
 - THEN the commit message equals the pre-attach message byte for byte
 
-#### Scenario: Staging reads no files to find a match
+#### Scenario: The baseline is read after extraction
 
-- GIVEN the staging function and an in-memory lookup
-- WHEN a match is staged
-- THEN no filesystem read other than the existing slug-existence check on
-  the unmatched path occurs
+- GIVEN an attach target edited while the extractor was running
+- WHEN the ingest completes
+- THEN the edit is preserved in the revised concept

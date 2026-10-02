@@ -44,7 +44,7 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from openkos import config, fsio
 from openkos.application import catalog_delta, lock_wait, queue_resolution
@@ -271,6 +271,15 @@ class Supersession:
 
 
 @dataclass(frozen=True)
+class AttachedConcept:
+    """One existing concept this run revised instead of forking (#1268)."""
+
+    concept_id: str
+    version: int
+    """The concept's `version` after the revision."""
+
+
+@dataclass(frozen=True)
 class IngestOutcome:
     """What one ingest did, for a caller's own reporting and for the batch
     tally (#267). A refusal never constructs one: it is raised instead."""
@@ -284,7 +293,12 @@ class IngestOutcome:
     documents)."""
 
     derived_count: int = 0
-    """How many derived objects this run staged (#566's denominator)."""
+    """How many NEW derived objects this run staged (#566's denominator);
+    concepts revised by an attach are counted in `attached`, not here."""
+
+    attached: tuple[AttachedConcept, ...] = ()
+    """The existing concepts this run revised through attach-at-ingest
+    (#1268), in staging order; empty when nothing attached."""
 
     extraction_skipped: bool = False
     """`True` exactly when #773's convergence short-circuit fired: nothing
@@ -309,6 +323,10 @@ class IngestOutcome:
     supersessions: tuple[Supersession, ...] = ()
     """The Sources this run proposes to supersede; empty on every run that
     neither imported a changed version nor replaced a dead Source."""
+
+    @property
+    def attached_count(self) -> int:
+        return len(self.attached)
 
 
 @dataclass(frozen=True)
@@ -493,6 +511,8 @@ def ingest_source(
         ]
         type_counts: dict[str, int] = {}
         for plan in prepared.derived_plans:
+            if plan.attach_to is not None:
+                continue
             type_counts[plan.doc_type] = type_counts.get(plan.doc_type, 0) + 1
         obs.imported(
             ImportedSummary(
@@ -507,7 +527,7 @@ def ingest_source(
         ports.autocommit(
             root,
             [*committed_paths, "bundle/index.md", "bundle/log.md"],
-            f"openkos: ingest {prepared.name} (+{len(prepared.derived_plans)} concepts)",
+            _commit_message(prepared),
         )
 
     for supersession in prepared.outcome.supersessions:
@@ -521,6 +541,21 @@ def ingest_source(
     ports.after_commit(prepared.layout, prepared.cfg)
 
     return prepared.outcome
+
+
+def _attached_concept(plan: application_ingest.DerivedPlan) -> AttachedConcept:
+    """The outcome record of one attach plan (`attach_to` and `attach_version`
+    are set together, by staging)."""
+    return AttachedConcept(cast(str, plan.attach_to), cast(int, plan.attach_version))
+
+
+def _commit_message(prepared: _Prepared) -> str:
+    """The auto-commit message; byte-identical to the pre-attach text when no
+    concept was revised, and naming the revisions separately when some were."""
+    created = sum(1 for plan in prepared.derived_plans if plan.attach_to is None)
+    revised = len(prepared.derived_plans) - created
+    suffix = f", ~{revised} revised" if revised else ""
+    return f"openkos: ingest {prepared.name} (+{created} concepts{suffix})"
 
 
 def supersede_command(supersession: Supersession) -> str:
@@ -918,6 +953,30 @@ def _prepare(
         # date-only-rewrite path: harmless, since `stage_derived_objects(
         # carried=...)` never calls `llm.chat` on it (design.md Decision 6).
         extraction_llm = ports.chat_client(cfg)
+        # Attach-at-ingest (#1268): the lookup is lazy and memoised, so every
+        # target is read once, AFTER extraction returns, and the bytes the
+        # revision is composed from are exactly the bytes the drift guard
+        # compares at the commit phase.
+        attach_baselines: dict[Path, bytes] = {}
+        attach_reads: dict[str, application_ingest.AttachTarget] = {}
+
+        def read_attach_target(concept_id: str) -> application_ingest.AttachTarget:
+            cached = attach_reads.get(concept_id)
+            if cached is None:
+                target_path = okf.concept_path_for(concept_id, layout.bundle_dir)
+                target_bytes, target_text = ports.snapshot_read(target_path)
+                attach_baselines[target_path] = target_bytes
+                cached = application_ingest.AttachTarget(concept_id, target_text)
+                attach_reads[concept_id] = cached
+            return cached
+
+        attach_lookup = (
+            application_ingest.build_attach_lookup(
+                layout.bundle_dir, read=read_attach_target
+            )
+            if cfg.attach_at_ingest and converged is None
+            else None
+        )
         try:
             with obs.extraction_progress() as on_progress:
                 staged = application_ingest.stage_derived_objects(
@@ -935,6 +994,7 @@ def _prepare(
                     union_judge=cfg.union_judge,
                     on_progress=on_progress,
                     carried=converged,
+                    attach=attach_lookup,
                 )
         except BackendError as exc:
             obs.notice(
@@ -1004,6 +1064,11 @@ def _prepare(
         guarded_targets: dict[Path, bytes] = {}
         if concept_snapshot is not None:
             guarded_targets[concept_path] = concept_snapshot
+        # An attach rewrites an existing concept in place: its baseline is the
+        # read the revision was composed from, so a change refuses the run.
+        for plan in derived_plans:
+            if plan.attach_to is not None:
+                guarded_targets[plan.path] = attach_baselines[plan.path]
         # `compose_catalog_update` owns the conditional Source re-render (never
         # patch the already-built bytes, never read either key off disk), the
         # dedup-before-insert Source bullet (D3), and the derived-plans
@@ -1122,16 +1187,21 @@ def _prepare(
         extraction_degraded=skip_reason is not None and converged is None,
         extraction_skipped=converged is not None,
         extraction_notice=extraction_notice,
-        derived_count=len(derived_plans),
+        derived_count=sum(1 for plan in derived_plans if plan.attach_to is None),
+        attached=tuple(
+            _attached_concept(plan)
+            for plan in derived_plans
+            if plan.attach_to is not None
+        ),
         alternative_pairs=tuple(
             (plan.doc_type, plan.type_alternative)
             for plan in derived_plans
-            if plan.type_alternative is not None
+            if plan.attach_to is None and plan.type_alternative is not None
         ),
         type_floor_pairs=tuple(
             (plan.doc_type, plan.sensitivity)
             for plan in derived_plans
-            if plan.type_floor_raised
+            if plan.attach_to is None and plan.type_floor_raised
         ),
     )
     return _Prepared(
@@ -1156,11 +1226,12 @@ def _prepare(
         read_dependencies={layout.config_path: config_snapshot},
         # Create-only writes have no snapshot to compare, so the commit phase
         # checks they are still absent: the raw copy on a fresh ingest, the
-        # Source when it did not exist, and every staged derived object.
+        # Source when it did not exist, and every staged NEW derived object
+        # (an attach target already exists and is a guarded target instead).
         created_targets=(
             *(() if regenerate else (raw_dest,)),
             *(() if had_prior_source else (concept_path,)),
-            *(plan.path for plan in derived_plans),
+            *(plan.path for plan in derived_plans if plan.attach_to is None),
         ),
         derived_plans=tuple(derived_plans),
         adopted=adopted,
@@ -1217,6 +1288,12 @@ def _write(prepared: _Prepared, new_index_text: str, new_log_text: str) -> None:
         # already-deduped write set computed in Phase A -- only `mkdir` +
         # create-only write, per plan, in staging order.
         for plan in prepared.derived_plans:
+            if plan.attach_to is not None:
+                # An attach revises a file that exists: create-only would
+                # always fail, so it is written atomically, behind the drift
+                # guard its baseline bytes sit in (#1268).
+                fsio.write_atomic(plan.path, plan.content)
+                continue
             plan.path.parent.mkdir(parents=True, exist_ok=True)
             fsio.write_exclusive(plan.path, plan.content)
         fsio.write_atomic(prepared.index_path, new_index_text)

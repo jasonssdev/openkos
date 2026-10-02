@@ -139,31 +139,45 @@ class AttachTarget:
 @dataclass(frozen=True)
 class AttachLookup:
     """The attach lookup `stage_derived_objects` consults (#1268), supplied by
-    the caller so staging reads no files itself. `matches` maps `(OKF type,
-    normalized title key)` to the ids of existing, non-deprecated concepts of
-    a non-excluded type; `read` returns one of them. A lookup of `None` means
-    attach is off for the run."""
+    the caller so staging reads no files itself. `find(type, title)` returns
+    the ids of existing, non-deprecated concepts of that non-excluded type
+    whose title has the same normalized key; `read` returns one of them. Both
+    are called only AFTER extraction returns, so the baseline bytes the drift
+    guard compares are read at the last moment before the commit phase, not
+    minutes earlier. A lookup of `None` means attach is off for the run."""
 
-    matches: Mapping[tuple[str, str], tuple[str, ...]]
+    find: Callable[[str, str], tuple[str, ...]]
     read: Callable[[str], AttachTarget]
 
 
 def build_attach_lookup(
     bundle_dir: Path, *, read: Callable[[str], AttachTarget]
 ) -> AttachLookup:
-    """Group `bundle_dir`'s eligible documents by `(type, normalized key)`,
-    through the one exact-title eligibility rule (`candidates.keyed_documents`:
-    readable, typed, titled, not a Source, not deprecated) and minus
-    `ATTACH_EXCLUDED_TYPES`, so a deprecated concept is never an attach
-    target and "same family" means what it means in `duplicates`."""
-    groups: dict[tuple[str, str], list[str]] = {}
-    for concept_id, okf_type, key in resolution_candidates.keyed_documents(bundle_dir):
-        if okf_type in ATTACH_EXCLUDED_TYPES or not key:
-            continue
-        groups.setdefault((okf_type, key), []).append(concept_id)
-    return AttachLookup(
-        matches={k: tuple(sorted(ids)) for k, ids in groups.items()}, read=read
-    )
+    """An `AttachLookup` over `bundle_dir`, built lazily on its first `find`.
+
+    Groups the eligible documents by `(type, normalized key)` through the one
+    exact-title eligibility rule (`candidates.keyed_documents`: readable,
+    typed, titled, not a Source, not deprecated) minus `ATTACH_EXCLUDED_TYPES`,
+    so a deprecated concept is never an attach target and "same family" means
+    what it means in `duplicates`."""
+    groups: dict[tuple[str, str], tuple[str, ...]] | None = None
+
+    def find(okf_type: str, title: str) -> tuple[str, ...]:
+        nonlocal groups
+        if okf_type in ATTACH_EXCLUDED_TYPES:
+            return ()
+        if groups is None:
+            built: dict[tuple[str, str], list[str]] = {}
+            for concept_id, doc_type, key in resolution_candidates.keyed_documents(
+                bundle_dir
+            ):
+                if doc_type in ATTACH_EXCLUDED_TYPES or not key:
+                    continue
+                built.setdefault((doc_type, key), []).append(concept_id)
+            groups = {k: tuple(sorted(ids)) for k, ids in built.items()}
+        return groups.get((okf_type, normalize_key(title)), ())
+
+    return AttachLookup(find=find, read=read)
 
 
 def _attach_candidates(
@@ -174,7 +188,7 @@ def _attach_candidates(
     it already excludes unparseable documents; a document damaged since is
     left to the slug path rather than rewritten)."""
     found: list[tuple[AttachTarget, dict[str, object], str]] = []
-    for concept_id in attach.matches.get((okf_type, normalize_key(title)), ()):
+    for concept_id in attach.find(okf_type, title):
         target = attach.read(concept_id)
         try:
             metadata, body = okf.load_frontmatter(target.text)

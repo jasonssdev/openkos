@@ -13,6 +13,7 @@ from openkos.application.ingest import AttachLookup, AttachTarget
 from openkos.extraction import concept as concept_mod
 from openkos.extraction.concept import ExtractionResult
 from openkos.model import okf
+from openkos.resolution.normalize import normalize_key
 
 
 class _NoLLM:
@@ -64,7 +65,7 @@ def _lookup(
         matches.setdefault((type_, key), []).append(concept_id)
         _write(bundle, concept_id, texts[concept_id])
     return AttachLookup(
-        matches={k: tuple(v) for k, v in matches.items()},
+        find=lambda type_, title: tuple(matches.get((type_, normalize_key(title)), ())),
         read=lambda concept_id: AttachTarget(concept_id, texts[concept_id]),
     )
 
@@ -327,9 +328,9 @@ def test_builder_groups_by_type_and_key_and_skips_excluded_types(
         bundle, read=lambda concept_id: AttachTarget(concept_id, "")
     )
 
-    assert lookup.matches == {
-        ("Concept", "skill"): ("concepts/skill", "concepts/skill-2")
-    }
+    assert lookup.find("Concept", "Skill") == ("concepts/skill", "concepts/skill-2")
+    assert lookup.find("Person", "Ana") == ()
+    assert lookup.find("Event", "Launch") == ()
 
 
 def test_builder_never_offers_a_deprecated_concept(tmp_path: Path) -> None:
@@ -342,7 +343,7 @@ def test_builder_never_offers_a_deprecated_concept(tmp_path: Path) -> None:
         bundle, read=lambda concept_id: AttachTarget(concept_id, "")
     )
 
-    assert lookup.matches == {}
+    assert lookup.find("Concept", "Skill") == ()
 
 
 def test_excluded_types_are_exactly_event_and_person() -> None:

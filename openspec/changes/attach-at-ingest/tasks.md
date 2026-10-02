@@ -49,7 +49,7 @@ is one work unit (one Conventional Commit, scope `ingest`, `okf`,
 
 ## Phase 3: Service, adapter, watch
 
-- [ ] 3.1 `ingest_service._prepare`/`_write`: build the lookup from the
+- [x] 3.1 `ingest_service._prepare`/`_write`: build the lookup from the
       drift-guard snapshot reads; attach targets in `guarded_targets` and not
       `created_targets`; Phase B writes them with `write_atomic`; commit
       paths and message (`+N concepts, ~M revised`, byte-identical when
