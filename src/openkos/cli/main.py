@@ -13151,13 +13151,15 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
         # user told to "try different wording" would rephrase a question the
         # bundle simply does not cover, which is the wrong instruction and
         # the reason #760 keeps this cause separate.
+        # ADR-0040: the outcome, then the next step, as two short lines. Why
+        # answering anyway would be the model's own knowledge under the
+        # bundle's citations is explained in the docs, not repeated here.
         return (
             f"Found {fts_hit_count} matching concept{_plural(fts_hit_count)}, "
-            "but none of them answers this question — the compiled bundle "
-            "does not cover it. Answering anyway would be the model's own "
-            "knowledge wearing the bundle's citations. Ingest a source that "
-            "covers it, or set `sufficiency_check: false` in openkos.yaml to "
-            "answer regardless."
+            "but none of them answers this question -- the compiled bundle "
+            "does not cover it.\n"
+            "Next: ingest a source that covers it, or set "
+            "`sufficiency_check: false` in openkos.yaml to answer regardless."
         )
     raise ValueError(f"unexpected no_match_cause: {cause!r}")
 
@@ -13597,7 +13599,10 @@ def query(
             typer.echo(f"  {notice}", err=True)
 
     if result.no_match_cause != "none":
-        typer.echo(_no_match_message(result.no_match_cause, result.fts_hit_count))
+        for line in _no_match_message(
+            result.no_match_cause, result.fts_hit_count
+        ).splitlines():
+            output.echo_wrapped(line, hanging="  ")
         return
 
     typer.echo(result.answer)

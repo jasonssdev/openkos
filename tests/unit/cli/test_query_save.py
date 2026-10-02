@@ -3264,3 +3264,52 @@ def test_save_plan_stays_silent_when_every_document_fitted_whole(
 
     assert result.exit_code == 0
     assert "partially read" not in result.output
+
+
+def _insufficient_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, tty: bool
+) -> str:
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=4,
+        llm_invoked=False,
+        no_match_cause="insufficient_context",
+        skip_notices=[],
+        fused_count=4,
+        context_block_count=4,
+    )
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
+    if tty:
+        monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+    monkeypatch.setenv("COLUMNS", "50")
+    result = runner.invoke(app, ["query", "what is quantisation?"])
+    assert result.exit_code == 0
+    return result.stdout
+
+
+def test_insufficient_refusal_is_an_outcome_line_then_a_next_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-0040: the refusal says what happened, then what to do, in two
+    short lines; the model-knowledge explanation lives in the docs."""
+    out = _insufficient_refusal(tmp_path, monkeypatch, tty=False)
+
+    assert out.splitlines() == [
+        "Found 4 matching concepts, but none of them answers this question "
+        "-- the compiled bundle does not cover it.",
+        "Next: ingest a source that covers it, or set `sufficiency_check: "
+        "false` in openkos.yaml to answer regardless.",
+    ]
+
+
+def test_insufficient_refusal_wraps_on_a_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _insufficient_refusal(tmp_path, monkeypatch, tty=True)
+
+    lines = out.splitlines()
+    assert len(lines) > 2
+    assert all(len(line) <= 50 for line in lines)
+    assert "".join(out.split()).endswith("answerregardless.")
