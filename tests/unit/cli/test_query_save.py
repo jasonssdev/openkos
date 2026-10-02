@@ -3292,7 +3292,7 @@ def _insufficient_refusal(
 def test_insufficient_refusal_is_an_outcome_line_then_a_next_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ADR-0040: the refusal says what happened, then what to do, in two
+    """ADR-0042: the refusal says what happened, then what to do, in two
     short lines; the model-knowledge explanation lives in the docs."""
     out = _insufficient_refusal(tmp_path, monkeypatch, tty=False)
 

@@ -24,7 +24,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 - **Human-readable output follows one terminal-gated convention**
   ([#1235](https://github.com/jasonssdev/openkos/issues/1235),
-  [ADR-0040](docs/adr/0040-human-readable-cli-output-is-a-tty-gated-convention.md)).
+  [ADR-0042](docs/adr/0042-human-readable-cli-output-is-a-tty-gated-convention.md)).
   On a terminal, `ingest` groups its stderr notices under a `note:` /
   `warning:` prefix, separates the proposal and the result with a blank line,
   and wraps long lines; `curate` and `adjudicate --apply` render each item of

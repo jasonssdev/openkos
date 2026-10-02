@@ -1,6 +1,6 @@
 ---
 type: Decision
-title: "ADR-0040: Human-readable CLI output follows one TTY-gated convention"
+title: "ADR-0042: Human-readable CLI output follows one TTY-gated convention"
 description: Verbs that talk to a human share one output shape — summary first, grouped text-prefixed notices, blank-line sections, wrapped prose — applied only on a terminal, through one helper module.
 status: Proposed
 date: 2026-10-01
@@ -13,7 +13,7 @@ timestamp: 2026-10-01T00:00:00Z
 sensitivity: public
 ---
 
-# ADR-0040: Human-readable CLI output follows one TTY-gated convention
+# ADR-0042: Human-readable CLI output follows one TTY-gated convention
 
 - **Status:** Proposed
 - **Date:** 2026-10-01

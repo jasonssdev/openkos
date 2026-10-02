@@ -45,7 +45,7 @@ Three style rules keep `docs/` low-churn:
 2. **No "since #NNN".** Describe behavior as it is; git history and the changelog carry the *when*. A link to a closed issue is fine as a historical footnote explaining why a design was *retired*; a ticket number woven into a feature's description is not.
 3. **Name the authority instead of copying the value.** Model tags, caps, and windows live in `openkos.yaml`, the specs, and the ADRs. Docs may show a current default where the user must literally type it (the README quickstart); everywhere else, point at the authority.
 
-**CLI output.** Human-readable output follows the TTY-gated convention in [ADR-0040](docs/adr/0040-human-readable-cli-output-is-a-tty-gated-convention.md): use the helpers in `openkos/cli/output.py` rather than formatting by hand, and never change stdout data, `--json` or exit codes for presentation.
+**CLI output.** Human-readable output follows the TTY-gated convention in [ADR-0042](docs/adr/0042-human-readable-cli-output-is-a-tty-gated-convention.md): use the helpers in `openkos/cli/output.py` rather than formatting by hand, and never change stdout data, `--json` or exit codes for presentation.
 
 ---
 

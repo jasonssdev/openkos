@@ -1673,7 +1673,7 @@ degrade) the line MUST read `openkos ingest: imported '{source}' -- Source
 only.` The line MUST NOT repeat the paths of the proposal the user just
 confirmed (they remain in the proposed-changes preview and in the commit),
 and MUST NOT change any exit code. On a terminal, one blank line precedes the
-proposal and this line (ADR-0040); on a non-terminal stream no blank line is
+proposal and this line (ADR-0042); on a non-terminal stream no blank line is
 added.
 
 #### Scenario: Zero derived objects -- Source only

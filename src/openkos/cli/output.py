@@ -1,4 +1,4 @@
-"""Shared helpers for human-readable CLI output (ADR-0040).
+"""Shared helpers for human-readable CLI output (ADR-0042).
 
 Every helper here changes presentation only, and only when the stream it
 writes to (or, for `wrapped`, the stream the text is destined for) is a

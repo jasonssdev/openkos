@@ -1,4 +1,4 @@
-"""The shared human-output helpers (ADR-0040): styling only on a TTY."""
+"""The shared human-output helpers (ADR-0042): styling only on a TTY."""
 
 import io
 import sys

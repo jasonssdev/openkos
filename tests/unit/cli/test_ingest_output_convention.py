@@ -1,4 +1,4 @@
-"""`ingest`'s human output follows the ADR-0040 convention.
+"""`ingest`'s human output follows the ADR-0042 convention.
 
 Piped, the proposal and the notices keep their text; the post-confirm line is
 a summary that no longer repeats the paths the user just approved. On a

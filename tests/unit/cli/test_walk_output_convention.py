@@ -1,4 +1,4 @@
-"""Interactive walks render one visually separated block per item (ADR-0040).
+"""Interactive walks render one visually separated block per item (ADR-0042).
 
 On a terminal each item is a block (header, rationale, prompt) set off by a
 blank line, and a long rationale is wrapped under a hanging indent. Piped, the

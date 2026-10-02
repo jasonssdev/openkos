@@ -666,7 +666,7 @@ def test_final_echo_lists_all_derived_paths(
 ) -> None:
     """The proposal lists the Source path plus every staged derived object's
     path (0..N); the post-confirm line is a summary that does not repeat them
-    (ADR-0040)."""
+    (ADR-0042)."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _multi_object_reply(_concept_reply(), _person_reply()))
     source = tmp_path / "notes.txt"

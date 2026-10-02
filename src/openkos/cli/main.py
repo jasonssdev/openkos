@@ -4891,7 +4891,7 @@ notice is informational and renders as a `note:` on a terminal."""
 
 def _format_import_summary(source: Path | str, type_counts: dict[str, int]) -> str:
     """The one-line post-confirm summary of an `ingest`: what was imported and
-    how many objects of each type, never the paths (ADR-0040 rule 1)."""
+    how many objects of each type, never the paths (ADR-0042 rule 1)."""
     if not any(type_counts.values()):
         return f"openkos ingest: imported '{source}' -- Source only."
     total = sum(type_counts.values())
@@ -13151,7 +13151,7 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
         # user told to "try different wording" would rephrase a question the
         # bundle simply does not cover, which is the wrong instruction and
         # the reason #760 keeps this cause separate.
-        # ADR-0040: the outcome, then the next step, as two short lines. Why
+        # ADR-0042: the outcome, then the next step, as two short lines. Why
         # answering anyway would be the model's own knowledge under the
         # bundle's citations is explained in the docs, not repeated here.
         return (
