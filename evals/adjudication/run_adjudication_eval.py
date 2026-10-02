@@ -11,7 +11,7 @@ paid for (see `evals/edge_typing/README.md`).
 
 The measurement runs BOTH directions of the change, because a rule that
 makes identical Event titles read as a recurring series buys its precision
-somewhere. `adjudication_fixtures.py` carries the nine probe classes; the
+somewhere. `adjudication_fixtures.py` carries the eleven probe classes; the
 same-expected control classes exist so a rubric that answered `different` to
 every Event pair -- or to everything -- cannot score well.
 
@@ -31,6 +31,12 @@ surrounding recall an Event-specific rule has no business disturbing;
 
 **part-whole** -- share judged `different`. The exclusion the shipped prompt
 already states, carried here so a rewrite cannot quietly drop it.
+
+**procedure-about / ui-component** (#1258, #1269) -- share judged
+`different`. A Concept against a Procedure that is only ABOUT it, and a
+framework against its own web UI: the shapes the 0.4.0 run judged `same`,
+which fed a merge that deleted the Concept. Hard negatives with no stored
+baseline yet -- no arm has been measured on them.
 
 **Per-probe verdict distribution** -- the full same/different/uncertain
 split per class, because the single headline rate per class cannot tell a
@@ -520,6 +526,8 @@ def main(argv: list[str] | None = None) -> int:
     part_whole_rate = _share("part-whole", "different")
     aspect_of_rate = _share("aspect-of", "different")
     transitivity_pair_rate = _share("transitivity", "different")
+    procedure_about_rate = _share("procedure-about", "different")
+    ui_component_rate = _share("ui-component", "different")
 
     # #910: the wild inconsistency is not a per-pair error but a verdict SET
     # that cannot all be true at once -- `same` twice and `different` once
@@ -633,6 +641,9 @@ def main(argv: list[str] | None = None) -> int:
         f"| alias-same retention (judged `same`) | {alias_same_retention:.2f} |",
         f"| part-whole (judged `different`) | {part_whole_rate:.2f} |",
         f"| **aspect-of (judged `different`)** | **{aspect_of_rate:.2f}** |",
+        f"| **procedure-about (judged `different`)** | "
+        f"**{procedure_about_rate:.2f}** |",
+        f"| **ui-component (judged `different`)** | **{ui_component_rate:.2f}** |",
         f"| **transitivity pairs (judged `different`)** | "
         f"**{transitivity_pair_rate:.2f}** |",
         f"| **transitivity violation rate (2-SAME-1-DIFFERENT triangles)** | "

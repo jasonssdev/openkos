@@ -1,6 +1,6 @@
 """Labelled candidate pairs for the entity-resolution adjudicator (#796).
 
-Nine probe classes, chosen so the harness can see BOTH directions of the
+Eleven probe classes, chosen so the harness can see BOTH directions of the
 change under test. A rule that makes identical Event titles read as a
 recurring series buys its precision somewhere, and `event-same` is where it
 would be paid for.
@@ -54,6 +54,20 @@ would be paid for.
   C(4,3) verdict triangle for the 2-SAME-1-DIFFERENT pattern, which is
   the wild inconsistency itself: `same` twice and `different` once over
   three members cannot all be true at once.
+
+- `procedure-about` (#1258, #1269) -- a `Concept` against a `Procedure`
+  that is merely ABOUT it (how to install it, configure it, use it). Same
+  subject, different kind of thing: the concept says what the tool is, the
+  procedure says how to do something with it. Expected `different`. This
+  is the shape that, once judged `same`, made a merge pick the procedure
+  as survivor by body length and delete the Concept. Cross-type, so each
+  procedure carries `type_alternative="Concept"` and the production
+  bridge nominates it the way the wild run did.
+- `ui-component` (#1258, #1269) -- a framework against its OWN web UI /
+  console, both `Concept`s. Expected `different`. The wild verdict was
+  `same` with the rationale "different aspects of the same concept, not
+  separate entities" -- which argues part-whole as identity. Two pairs, two
+  unrelated products, so the class measures the shape and not one name.
 
 Labels are CONSTRUCTED, not adjudicated: each pair is written to be
 unambiguous under the rubric the prompt states, so a wrong verdict is a
@@ -703,6 +717,157 @@ def _transitivity_pairs() -> tuple[LabelledPair, ...]:
 
 _TRANSITIVITY: Final[tuple[LabelledPair, ...]] = _transitivity_pairs()
 
+# --------------------------------------------------------------------------- #
+# procedure-about (#1258) -- a Concept against a Procedure about it
+# --------------------------------------------------------------------------- #
+
+_PROCEDURE_ABOUT: Final[tuple[LabelledPair, ...]] = (
+    LabelledPair(
+        left=FixtureDoc(
+            "concepts/lumen-toolkit",
+            "Concept",
+            "Lumen Toolkit",
+            "Lumen Toolkit is a command-line toolkit for building static "
+            "documentation sites. It bundles a markdown compiler, a theme "
+            "engine and a link checker behind one executable.",
+        ),
+        right=FixtureDoc(
+            "procedures/installing-lumen-toolkit",
+            "Procedure",
+            "Installing Lumen Toolkit",
+            "Steps to install Lumen Toolkit: download the release archive, "
+            "verify its checksum, unpack it into a directory on the PATH, "
+            "and run the version command to confirm the install worked.",
+            type_alternative="Concept",
+        ),
+        probe="procedure-about",
+        expected="different",
+        note=(
+            "The left says WHAT the toolkit is; the right is a numbered "
+            "procedure for one activity involving it. A thing and a how-to "
+            "about the thing are different objects: the right body "
+            "contains no definition of the toolkit and the left contains "
+            "no steps. The exact #1258 shape (a tool Concept against its "
+            "'Installing X' Procedure), de-identified."
+        ),
+    ),
+    LabelledPair(
+        left=FixtureDoc(
+            "concepts/harbor-queue",
+            "Concept",
+            "Harbor Queue",
+            "Harbor Queue is a durable message queue that guarantees "
+            "at-least-once delivery and keeps per-topic ordering. It is "
+            "the backbone the order services publish to.",
+        ),
+        right=FixtureDoc(
+            "procedures/building-your-first-harbor-queue-consumer",
+            "Procedure",
+            "Building Your First Harbor Queue Consumer",
+            "A tutorial: create a topic, write a small consumer that "
+            "acknowledges each message, and run it against a local broker "
+            "to watch messages arrive in order.",
+            type_alternative="Concept",
+        ),
+        probe="procedure-about",
+        expected="different",
+        note=(
+            "A tutorial that USES the queue, against the definition of the "
+            "queue. #1258's second wild shape ('Building your first agent "
+            "with X' against X): the tutorial has the longer body in the "
+            "wild, which is what made it the survivor."
+        ),
+    ),
+    LabelledPair(
+        left=FixtureDoc(
+            "concepts/cobalt-lint",
+            "Concept",
+            "Cobalt Lint",
+            "Cobalt Lint is a static analyzer for configuration files that "
+            "flags unsafe defaults and deprecated keys before they reach "
+            "production.",
+        ),
+        right=FixtureDoc(
+            "procedures/configuring-cobalt-lint",
+            "Procedure",
+            "Configuring Cobalt Lint",
+            "How to configure Cobalt Lint for a repository: add a rules "
+            "file at the root, choose which rule sets to enable, and set "
+            "the severity that fails the build.",
+            type_alternative="Concept",
+        ),
+        probe="procedure-about",
+        expected="different",
+        note=(
+            "A third activity noun (configuring), a third product, so a "
+            "verdict pattern separates the shape from 'installing' alone. "
+            "Same labelling logic: definition versus steps."
+        ),
+    ),
+)
+
+
+# --------------------------------------------------------------------------- #
+# ui-component (#1258) -- a framework against its own web UI
+# --------------------------------------------------------------------------- #
+
+_UI_COMPONENT: Final[tuple[LabelledPair, ...]] = (
+    LabelledPair(
+        left=FixtureDoc(
+            "concepts/tessera",
+            "Concept",
+            "Tessera",
+            "Tessera is a framework for building workflow automation "
+            "agents: it provides the planner, the tool registry and the "
+            "execution runtime that agents are assembled from.",
+        ),
+        right=FixtureDoc(
+            "concepts/tessera-web-ui",
+            "Concept",
+            "Tessera Web UI",
+            "The browser-based interface that ships with Tessera. It lets "
+            "a developer inspect a running agent's steps, replay a trace "
+            "and edit tool settings from a page instead of the command "
+            "line.",
+        ),
+        probe="ui-component",
+        expected="different",
+        note=(
+            "The right body describes an INTERFACE that ships with the "
+            "framework, not the framework: the framework is the planner, "
+            "registry and runtime; the UI is a client of them. Part and "
+            "whole, the exclusion the rubric already states, in the exact "
+            "'framework vs its web UI' shape #1258 reports as `same`."
+        ),
+    ),
+    LabelledPair(
+        left=FixtureDoc(
+            "concepts/ferrule",
+            "Concept",
+            "Ferrule",
+            "Ferrule is a data-validation framework: it defines schemas, "
+            "runs checks over datasets and reports which records violate "
+            "which rule.",
+        ),
+        right=FixtureDoc(
+            "concepts/ferrule-dashboard",
+            "Concept",
+            "Ferrule Dashboard",
+            "The web dashboard for Ferrule. It renders the latest "
+            "validation results as charts and tables and lets a reviewer "
+            "mark a failing record as acknowledged.",
+        ),
+        probe="ui-component",
+        expected="different",
+        note=(
+            "A second framework and a differently named UI component "
+            "('Dashboard' rather than 'Web UI'), so the class does not "
+            "hinge on one suffix. The dashboard displays the framework's "
+            "output; it is not the validator."
+        ),
+    ),
+)
+
 
 PAIRS: Final[tuple[LabelledPair, ...]] = (
     _RECURRENCE
@@ -712,6 +877,8 @@ PAIRS: Final[tuple[LabelledPair, ...]] = (
     + _CONTROLS
     + _ASPECT_OF
     + _TRANSITIVITY
+    + _PROCEDURE_ABOUT
+    + _UI_COMPONENT
 )
 
 PROBES: Final[tuple[str, ...]] = (
@@ -724,6 +891,8 @@ PROBES: Final[tuple[str, ...]] = (
     "part-whole",
     "aspect-of",
     "transitivity",
+    "procedure-about",
+    "ui-component",
 )
 
 
