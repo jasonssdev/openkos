@@ -129,8 +129,20 @@ class _DaemonContradictionsObserver:
         log.warning("contradiction findings not persisted (%s)", type(error).__name__)
 
 
+def _disclose(notify: Callable[[str], None], stage: str, notice: str | None) -> None:
+    """Say a stage's candidate cap bound (#1265). The attended verbs print this
+    notice; the daemon used to drop it, so `pending` showed a round 50 with no
+    hint that more existed. Logged always, announced where a person is
+    watching."""
+    if notice is None:
+        return
+    log.info("%s: %s", stage, notice)
+    notify(f"{stage}: {notice}")
+
+
 class _DaemonRelationsObserver:
-    def __init__(self) -> None:
+    def __init__(self, notify: Callable[[str], None] = lambda message: None) -> None:
+        self._notify = notify
         self._progress: Callable[[int, int, object], None] | None = None
         self._progress_resolved = False
 
@@ -146,7 +158,7 @@ class _DaemonRelationsObserver:
         return None
 
     def candidate_notices(self, truncation: str | None, quarantine: str | None) -> None:
-        return None
+        _disclose(self._notify, "suggest-relations", truncation)
 
     def no_candidates(self, message: str) -> None:
         return None
@@ -179,11 +191,14 @@ class _DaemonVolatilityObserver:
 
 
 class _DaemonRevisionsObserver:
+    def __init__(self, notify: Callable[[str], None] = lambda message: None) -> None:
+        self._notify = notify
+
     def started(self) -> None:
         return None
 
     def truncation_notice(self, notice: str) -> None:
-        return None
+        _disclose(self._notify, "revisions", notice)
 
     def cost_gate(self, plan: revisions.RevisionPlan) -> None:
         return None
@@ -253,6 +268,7 @@ def _identity_stage(ctx: StageContext) -> StageResult:
             if tuple(sorted(group.member_ids)) not in judged_different
         ),
     )
+    _disclose(ctx.notify, "identity", report.truncation_notice)
     producers.enqueue_identity(
         ctx.queue(),
         report,
@@ -289,7 +305,7 @@ def _relations_stage(ctx: StageContext) -> StageResult:
             suggest_edge_types=lambda *a, **k: edge_typing.suggest_edge_types(*a, **k),
             commit_section=ctx.commit_section,
         ),
-        _DaemonRelationsObserver(),
+        _DaemonRelationsObserver(ctx.notify),
     )
     producers.enqueue_relations(
         ctx.queue(),
@@ -361,6 +377,7 @@ def _contradictions_stage(ctx: StageContext) -> StageResult:
         ),
         observer=_DaemonContradictionsObserver(),
     )
+    _disclose(ctx.notify, "contradictions", outcome.truncation_notice)
     producers.enqueue_contradictions(
         ctx.queue(),
         outcome,
@@ -388,7 +405,7 @@ def _revisions_stage(ctx: StageContext) -> StageResult:
                 cli_main._resolve_local_exemption(client, cfg)
             ),
         ),
-        _DaemonRevisionsObserver(),
+        _DaemonRevisionsObserver(ctx.notify),
     )
     if run.status != "completed" or run.report is None:
         # Nothing was judged (no decisions, no usable vectors): an absent result

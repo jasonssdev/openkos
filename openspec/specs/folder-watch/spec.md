@@ -195,7 +195,8 @@ refreshed and leave the catch-up to the next maintenance job.
 ### Requirement: A Watch Job Honours The Budget, The Stop Flag, And The Deadline
 
 A watch job MUST import settled files in a deterministic order (by path),
-MUST stop admitting files when `max_sources_per_pass` or the call budget is
+MUST stop admitting files when `max_sources_per_pass` (counting only the files
+the ingest actually imports, never one it finds unchanged) or the call budget is
 reached (`unattended-budget`), and MUST check the stop flag and deadline
 between files (`job-runtime`). Every file not imported for any of those
 reasons MUST remain a candidate for the next job.
@@ -205,6 +206,16 @@ reasons MUST remain a candidate for the next job.
 - GIVEN `max_sources_per_pass: 1` and two settled new files
 - WHEN two watch jobs run
 - THEN each job imports one file, and the first records one deferred
+
+#### Scenario: Unchanged files do not spend the source budget
+
+- GIVEN settled inbox files whose bytes the ingest finds already imported and
+  extracted, and one new file, with `max_sources_per_pass` smaller than their
+  total
+- WHEN a watch job runs
+- THEN the unchanged files (no write, no model call) do not count against
+  `max_sources_per_pass`, the new file is imported in this job, and nothing is
+  deferred
 
 ### Requirement: A Native Notification Backend Only Wakes The Poll
 
