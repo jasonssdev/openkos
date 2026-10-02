@@ -62,6 +62,7 @@ import sys
 import tempfile
 import time
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -73,7 +74,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 # obvious candidate).
 sys.path.append(str(REPO_ROOT / "evals"))
 
-from fixtures import DOCS, EDGES  # noqa: E402
+from fixtures import DOCS, EDGES, LabelledEdge  # noqa: E402
 from harness_report import arm_identity_line  # noqa: E402
 
 from openkos.config import (  # noqa: E402
@@ -83,6 +84,7 @@ from openkos.config import (  # noqa: E402
 from openkos.graph.base import Edge  # noqa: E402
 from openkos.llm.ollama import OllamaClient  # noqa: E402
 from openkos.model import okf, types  # noqa: E402
+from openkos.model.relations import ASYMMETRIC_RELATION_TYPES  # noqa: E402
 from openkos.resolution.edge_typing import (  # noqa: E402
     _DIRECTION_TYPE_SIGNATURES,
     _contradicts_object_type_direction,
@@ -99,6 +101,68 @@ One map, built once: the payload, the regime split and the self-test all
 read it, and three hand-built copies of the same lookup would be three
 chances for the report to bucket an edge differently from the JSON beside
 it."""
+
+
+def direction_pairs(
+    edges: Sequence[LabelledEdge] = EDGES,
+) -> list[tuple[int, int]]:
+    """`(forward, reversed)` index pairs of `edges`: the two orientations of
+    ONE pair of documents where direction is decidable (issue #1269).
+
+    A pair qualifies only when ALL of these hold: the reversed edge runs
+    exactly target -> source of the forward one; the forward edge's label is
+    an ASYMMETRIC relation type (`relations.ASYMMETRIC_RELATION_TYPES`); and
+    the reversed edge's `trap_type` is that same type -- i.e. the fixture
+    itself says "this type is right forwards and wrong backwards". Every
+    other edge (symmetric labels, the honest-abstention edges, forward
+    edges with no reversed probe such as `depends_on`) has no defined
+    direction outcome and is EXCLUDED rather than counted as a pass, which
+    is why the report prints the defined count against the total."""
+    index = {(e.source_id, e.target_id): i for i, e in enumerate(edges)}
+    pairs: list[tuple[int, int]] = []
+    for fwd, edge in enumerate(edges):
+        if edge.expected_type not in ASYMMETRIC_RELATION_TYPES:
+            continue
+        rev = index.get((edge.target_id, edge.source_id))
+        if rev is not None and edges[rev].trap_type == edge.expected_type:
+            pairs.append((fwd, rev))
+    return pairs
+
+
+def score_direction(
+    answers: Sequence[Sequence[str | None]],
+    edges: Sequence[LabelledEdge] = EDGES,
+) -> dict[str, int]:
+    """Direction outcome per (pair, run). `answers[i][k]` is edge `i`'s type
+    in run `k` (`None` = degraded reply).
+
+    - `discriminated`: forward answered its label AND the reversed edge did
+      NOT assert the trap type -- the model got the orientation right on
+      both sides.
+    - `blind`: the SAME asymmetric type on both orientations. It asserts a
+      relation that cannot hold both ways, so it is a direction error that
+      type accuracy on the forward edge alone scores as a pass.
+    - `abstained`: no asymmetric claim made forward (wrong or degraded
+      forward answer), so direction cannot be credited; kept apart from
+      `blind` because a cheap honest `related_to` is not an inversion.
+
+    The three partition `total`. `direction_pairs` guarantees the reversed
+    edge's trap type IS the forward label, so "reversed asserts the trap"
+    and "reversed repeats the forward label" are one test."""
+    out = {"total": 0, "discriminated": 0, "blind": 0, "abstained": 0}
+    for fwd, rev in direction_pairs(edges):
+        label = edges[fwd].expected_type
+        for forward_answer, reversed_answer in zip(
+            answers[fwd], answers[rev], strict=True
+        ):
+            out["total"] += 1
+            if forward_answer != label:
+                out["abstained"] += 1
+            elif reversed_answer == label:
+                out["blind"] += 1
+            else:
+                out["discriminated"] += 1
+    return out
 
 
 def _unknown_endpoints() -> list[str]:
@@ -355,14 +419,61 @@ def _self_test() -> int:
             )
         )
 
+    # Issue #1269: the direction metric. Model-free like everything here: the
+    # scorer is a pure function of (labels, answers), so it is exercised on
+    # three synthetic models whose outcome is known by construction. Without
+    # these, a scorer that returned zeros (or `total` for every bucket) would
+    # print a plausible report from a real run.
+    pairs = direction_pairs()
+    if not pairs:
+        failures.append(
+            "no (forward, reversed) pair of labelled edges has a decidable "
+            "direction, so the direction metric is defined on 0 edges and "
+            "cannot be measured here"
+        )
+    runs = 2
+    n = len(EDGES)
+    paired = {i for pair in pairs for i in pair}
+    oracle = [[EDGES[i].expected_type] * runs for i in range(n)]
+    blind_model = [
+        [EDGES[min(pair)].expected_type if i in pair else "related_to"] * runs
+        for i in range(n)
+        for pair in [next((p for p in pairs if i in p), (i, i))]
+    ]
+    abstaining = [["related_to"] * runs for _ in range(n)]
+    want_total = len(pairs) * runs
+    for label, answers, want in (
+        ("oracle", oracle, {"discriminated": want_total}),
+        ("direction-blind", blind_model, {"blind": want_total}),
+        ("all-related_to", abstaining, {"abstained": want_total}),
+    ):
+        got = score_direction(answers)
+        expected_buckets = {
+            "total": want_total,
+            "discriminated": 0,
+            "blind": 0,
+            "abstained": 0,
+        } | want
+        if got != expected_buckets:
+            failures.append(
+                f"direction scorer on the {label} model: got {got}, "
+                f"want {expected_buckets}"
+            )
+    if len(paired) != 2 * len(pairs):
+        failures.append("a labelled edge belongs to more than one direction pair")
+
     for failure in failures:
         print(f"FAIL: {failure}")
-    total = 9
+    total = 11
     print(f"self-test: {total - len(failures)}/{total} passed")
     if not failures:
         print(
             f"corpus: {len(DOCS)} documents across {len(distinct_types)} types, "
             f"{len(EDGES)} labelled edges, {len(cross_type)} of them cross-type"
+        )
+        print(
+            f"direction metric (#1269): defined on {2 * len(pairs)} of "
+            f"{len(EDGES)} labelled edges ({len(pairs)} forward/reversed pairs)"
         )
         # Named explicitly, not folded into the pass count above: a green
         # self-test here means "0 of 0 harmed" is just as reachable as "0 of
@@ -541,6 +652,14 @@ def main() -> None:
                 trap_hits += 1
                 bucket["trap_hits"] += 1
 
+    # Issue #1269: direction, over the forward/reversed pairs only. The
+    # per-edge answers are re-indexed by edge position so the scorer is the
+    # same pure function the self-test exercises.
+    direction = score_direction(
+        [[a for a, _, _ in per_edge[i]] for i in range(len(EDGES))]
+    )
+    direction_pair_count = len(direction_pairs())
+
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     results_dir = pathlib.Path(__file__).resolve().parent / "results"
     results_dir.mkdir(exist_ok=True)
@@ -564,6 +683,7 @@ def main() -> None:
                 # arm measured before #812.
                 "rationale_language": args.rationale_language,
                 "regimes": regimes,
+                "direction": {"pairs": direction_pair_count, **direction},
                 "outcomes": rows,
             },
             indent=2,
@@ -658,6 +778,33 @@ def main() -> None:
             )
             + " |"
             for name, bucket in regimes.items()
+        ),
+        "",
+        "## Direction (#1269)",
+        "",
+        "Defined only where a forward edge carries an asymmetric label AND"
+        " its reversed twin is a probe for that same type, so the denominator"
+        " is the pairs, not the corpus. Everything else (symmetric labels,"
+        " abstentions, forward edges without a reversed probe) has no"
+        " direction outcome and is excluded, not counted as a pass.",
+        "",
+        f"Defined on **{2 * direction_pair_count} of {len(EDGES)} labelled"
+        f" edges** ({direction_pair_count} pairs x {args.runs} runs ="
+        f" {direction['total']} pair-runs).",
+        "",
+        "| outcome | pair-runs |",
+        "| --- | --- |",
+        *(
+            f"| {name} | {direction[key]} of {direction['total']} |"
+            for name, key in (
+                (
+                    "**direction-discriminated** (forward right, reversed not"
+                    " asserted)",
+                    "discriminated",
+                ),
+                ("direction-blind (same asymmetric type both ways)", "blind"),
+                ("abstained (no correct forward claim)", "abstained"),
+            )
         ),
         "",
         "## Type distribution",
