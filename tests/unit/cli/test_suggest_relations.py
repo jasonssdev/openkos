@@ -1962,7 +1962,7 @@ def test_apply_prompt_carries_the_direction_disclaimer(
     )
     assert (
         "Relate concepts/a -> projects/b [produced_by] "
-        "(direction model-suggested, unverified)? [y/N]" in result.stdout
+        "(direction model-suggested, unverified)? [y/N/s]" in result.stdout
     )
 
 
@@ -2043,7 +2043,7 @@ def test_apply_prompt_states_what_the_least_specific_type_does_not_say(
     )
     assert (
         "Relate concepts/a -> concepts/b [related_to] "
-        "(connected; the documents do not say how)? [y/N]" in result.stdout
+        "(connected; the documents do not say how)? [y/N/s]" in result.stdout
     )
 
 
@@ -2857,3 +2857,33 @@ def test_apply_writes_a_corrected_edge_in_the_corrected_direction(
     (entry,) = relations
     assert isinstance(entry, dict)
     assert set(entry) == {"target", "type"}
+
+
+def test_suggest_relations_apply_skip_answer_writes_nothing_and_is_not_declined(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1264: `s` skips a suggestion: counted as skipped, never named in the
+    `declined:` listing, and the prompt advertises it."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Beta")
+    before = _snapshot(tmp_path / "bundle")
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[_suggestion(suggested_type="references")]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--apply"], input="s\n")
+
+    assert result.exit_code == 0
+    assert _snapshot(tmp_path / "bundle") == before
+    assert "[references]? [y/N/s]" in result.stdout
+    assert "applied 0, skipped 1 (declined: 0)" in result.stdout
+    assert "  declined:" not in result.stdout

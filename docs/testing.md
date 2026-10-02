@@ -663,7 +663,7 @@ the two inputs carried.
 SAME pairs, test both modes:
 
 ```bash
-openkos adjudicate --apply                            # interactive [y/N] walk per SAME pair
+openkos adjudicate --apply                            # interactive y/s/d walk per SAME pair
 openkos adjudicate --apply-same --confirm-count <N>   # batch — <N> must equal the printed Total exactly
 ```
 

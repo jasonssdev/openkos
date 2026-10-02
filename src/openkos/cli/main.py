@@ -2386,6 +2386,7 @@ def _run_adjudicate_apply(
     skipped_n_gt2 = 0
     skipped_already_merged = 0
     skipped_cross_type = 0
+    skipped_by_operator = 0
     declined: list[str] = []
 
     for result in results:
@@ -2481,12 +2482,20 @@ def _run_adjudicate_apply(
             survivor_canonical=prepared.survivor_canonical,
             absorbed_canonical=prepared.absorbed_canonical,
         )
-        if not curate_module._confirm(confirmation.prompt):
+        answer = curate_module._confirm_identity(
+            _identity_walk_prompt(confirmation.prompt)
+        )
+        if answer == "skip":
+            # #1264: "not now" -- nothing is written or recorded, so the
+            # group stays pending and the next run offers it again.
+            skipped_by_operator += 1
+            continue
+        if answer == "distinct":
             declined.append(
                 f"{prepared.absorbed_canonical} -> {prepared.survivor_canonical}"
             )
-            # #797: recorded HERE too, not only in `curate`'s Identity
-            # walk. The two walks share a prompt and a write path by
+            # #797: recorded HERE too (on `d` only, #1264), not only in
+            # `curate`'s Identity walk. The two walks share a prompt and a write path by
             # design; a decline persisted in one and forgotten in the other
             # is exactly the drift the shared `_CROSS_SOURCE_WALK_NOTE`
             # constant above exists to prevent.
@@ -2553,17 +2562,24 @@ def _run_adjudicate_apply(
         applied += 1
 
     skipped_total = (
-        skipped_n_gt2 + skipped_already_merged + skipped_cross_type + len(declined)
+        skipped_n_gt2
+        + skipped_already_merged
+        + skipped_cross_type
+        + skipped_by_operator
+        + len(declined)
     )
     prefix = "nothing to apply -- " if applied == 0 and skipped_total == 0 else ""
     cross_type_clause = (
         f", cross-type: {skipped_cross_type}" if skipped_cross_type else ""
     )
+    pending_clause = (
+        f", left pending: {skipped_by_operator}" if skipped_by_operator else ""
+    )
     typer.echo(
         f"openkos adjudicate --apply: {prefix}applied {applied}, skipped "
         f"{skipped_total} (N>2: {skipped_n_gt2}, "
         f"already-merged: {skipped_already_merged}, declined: {len(declined)}"
-        f"{cross_type_clause})"
+        f"{cross_type_clause}{pending_clause})"
     )
     for item in declined:
         typer.echo(f"  declined: {item}")
@@ -11810,11 +11826,15 @@ class _ApplyObserver:
         typer.echo(f"[{suggested_type}] {edge.source_id} -> {edge.target_id}{caveat}")
         _echo_report(f"  rationale: {rationale}")
 
-    def confirm_relate(self, edge: Edge, suggested_type: str, caveat: str) -> bool:
-        return curate_module._confirm(
+    def confirm_relate(
+        self, edge: Edge, suggested_type: str, caveat: str
+    ) -> Literal["yes", "no", "skip"]:
+        answer = curate_module._confirm_choice(
             f"Relate {edge.source_id} -> {edge.target_id} "
-            f"[{suggested_type}]{caveat}? [y/N]"
+            f"[{suggested_type}]{caveat}? [y/N/s]"
         )
+        # `offer_all` is off, so `all` cannot come back; narrow for the type.
+        return "yes" if answer == "all" else answer
 
     def already_present(self) -> None:
         typer.echo("  note: already present -- nothing to write")
@@ -12191,6 +12211,20 @@ def suggest_volatility_cmd(
             err=True,
         )
         raise typer.Exit(code=1) from outcome.failure
+
+
+_IDENTITY_PROMPT_SUFFIX = (
+    "[y]es / [s]kip / [d]istinct (d records a permanent keep-distinct ruling)"
+)
+
+
+def _identity_walk_prompt(factory_prompt: str) -> str:
+    """The Identity merge prompt both interactive walks ask (#1264): the
+    shared factory's question (`application_lifecycle.merge_walk_confirmation`)
+    with its `[y/N]` suffix swapped for the three-answer one, so the prompt
+    states what `d` records. Rendered here, in the CLI layer, because the
+    factory only says WHAT is asked."""
+    return f"{factory_prompt.removesuffix(' [y/N]')} {_IDENTITY_PROMPT_SUFFIX}"
 
 
 def _record_identity_decline_from_walk(

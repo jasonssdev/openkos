@@ -375,12 +375,35 @@ def test_a_keep_distinct_answer_resolves_the_identity_row_declined_once(
         "openkos.cli.curate.adjudicate_candidates",
         lambda *a, **k: AdjudicationBatch(results=[]),
     )
-    monkeypatch.setattr("typer.prompt", lambda *a, **k: "n")
+    monkeypatch.setattr(
+        "typer.prompt",
+        lambda text, *a, **k: "d" if str(text).startswith("Merge") else "n",
+    )
 
     result = runner.invoke(app, ["curate", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     assert _rows(tmp_path, "identity") == [("declined", "declined")]
+
+
+def test_a_skipped_identity_group_leaves_its_row_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1264: `s` (and `n`, Enter) is "not now" -- no ruling, so the row the
+    stage presented returns to `pending` and the next run offers it again."""
+    _workspace(tmp_path, monkeypatch)
+    _identity_row(tmp_path, verdict="same")
+    _same_group(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(results=[]),
+    )
+    monkeypatch.setattr("typer.prompt", lambda *a, **k: "s")
+
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 0, result.stderr
+    assert [status for status, _ in _rows(tmp_path, "identity")] == ["pending"]
 
 
 def test_an_identity_group_judged_with_no_open_row_is_enqueued(
@@ -391,7 +414,10 @@ def test_an_identity_group_judged_with_no_open_row_is_enqueued(
     _same_group(monkeypatch)
     # Refusing the merge keeps the group in place; the keep-distinct ruling then
     # resolves the row the stage enqueued, so the row proves the enqueue ran.
-    monkeypatch.setattr("typer.prompt", lambda *a, **k: "n")
+    monkeypatch.setattr(
+        "typer.prompt",
+        lambda text, *a, **k: "d" if str(text).startswith("Merge") else "n",
+    )
 
     result = runner.invoke(app, ["curate", "--auto"])
 

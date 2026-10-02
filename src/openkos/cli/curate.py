@@ -605,9 +605,10 @@ def _confirm_item(
     prompt_text: str,
     *,
     acceptable_in_bulk: bool = True,
-) -> bool:
-    """`_confirm`, unless this stage was accepted in bulk for the run, in
-    which case the answer is yes and no prompt is printed (issue #385).
+) -> Literal["yes", "no", "skip"]:
+    """The per-item write-consent answer, unless this stage was accepted in
+    bulk for the run, in which case the answer is yes and no prompt is
+    printed (issue #385).
 
     `acceptable_in_bulk=False` exempts ONE item from that acceptance
     (issue #508): the stage is still accepted, but this particular
@@ -618,15 +619,33 @@ def _confirm_item(
     terminal would kill the walk mid-run, which is the same failure the
     Identity non-TTY guard exists to prevent.
 
-    Identity calls `_confirm` DIRECTLY rather than routing through here:
-    that keeps the merge walk structurally incapable of being skipped, so
-    a future edit to the acceptance rules cannot reach it by accident."""
+    A bulk-acceptable item's prompt also offers `a` (issue #1264): accept
+    this and the rest of the stage, i.e. exactly the set `--accept` applies.
+    It extends the run's accepted stages in place, after one stderr notice,
+    so every later item of the stage takes the bulk path above.
+
+    Identity never routes through here: it calls `_confirm_identity`
+    directly, which keeps the merge walk structurally incapable of being
+    accepted in bulk, so a future edit to the acceptance rules cannot reach
+    it by accident."""
     if _accepts(ctx, stage_name):
         if acceptable_in_bulk:
-            return True
+            return "yes"
         if not sys.stdin.isatty():
-            return False
-    return _confirm(prompt_text)
+            return "no"
+    answer = _confirm_choice(
+        f"{prompt_text} [y/N/s/a]" if acceptable_in_bulk else f"{prompt_text} [y/N/s]",
+        offer_all=acceptable_in_bulk,
+    )
+    if answer == "all":
+        ctx.accepted_stages = ctx.accepted_stages | {stage_name}
+        typer.echo(
+            f"openkos curate: {stage_name}: accepting the remaining items "
+            "without asking.",
+            err=True,
+        )
+        return "yes"
+    return answer
 
 
 def _partial_progress(
@@ -743,30 +762,110 @@ def _confirm(prompt_text: str) -> bool:
         )
 
 
-def _confirm_direction(prompt_text: str) -> Literal["yes", "no", "all", "reverse"]:
+def _ask[T](
+    prompt_text: str,
+    answers: dict[str, T],
+    *,
+    default: str,
+    expected: str,
+) -> T:
+    """The one validating answer loop behind every per-item prompt: asks
+    `prompt_text`, maps the answer (case/whitespace-insensitive) through
+    `answers`, treats empty input as `default`, and on anything else echoes
+    a one-line notice naming `expected` and asks again -- an unrecognized
+    answer never silently becomes a decision (#398)."""
+    while True:
+        answer = typer.prompt(prompt_text, default=default, show_default=False)
+        token = answer.strip().lower()
+        if token == "":
+            return answers[default]
+        if token in answers:
+            return answers[token]
+        typer.echo(
+            f"Unrecognized answer '{answer.strip()}' -- expected {expected}. "
+            "Asking again."
+        )
+
+
+def _confirm_identity(prompt_text: str) -> Literal["yes", "skip", "distinct"]:
+    """The Identity merge prompt (issue #1264), shared by `adjudicate
+    --apply` and `curate`'s Identity stage.
+
+    `y`/`yes` merges. `s`/`skip`, `n`/`no` and Enter skip: nothing is
+    written and nothing is recorded, so the pair is offered again next run.
+    `d`/`distinct` is the ONLY answer that persists anything -- the
+    permanent keep-distinct ruling (#797). Identity deliberately has no
+    accept-all answer: an accept-recommended path needs a measured signal
+    first (ADR-0034)."""
+    return _ask(
+        prompt_text,
+        {
+            "y": "yes",
+            "yes": "yes",
+            "s": "skip",
+            "skip": "skip",
+            "n": "skip",
+            "no": "skip",
+            "d": "distinct",
+            "distinct": "distinct",
+        },
+        default="s",
+        expected="y, s or d (Enter = s)",
+    )
+
+
+def _confirm_choice(
+    prompt_text: str, *, offer_all: bool = False
+) -> Literal["yes", "no", "skip", "all"]:
+    """The per-item prompt of the non-destructive walks -- Structure,
+    Metadata and `suggest-relations --apply` (issue #1264): `y` writes, `n`
+    (and Enter) declines, `s` skips. Neither of the last two writes anything;
+    they differ only in that a decline is named in the stage's `declined:`
+    listing. `a`/`all` -- accept this and the rest of the stage -- is
+    accepted only when `offer_all` (the prompt advertises it too)."""
+    answers: dict[str, Literal["yes", "no", "skip", "all"]] = {
+        "y": "yes",
+        "yes": "yes",
+        "n": "no",
+        "no": "no",
+        "s": "skip",
+        "skip": "skip",
+    }
+    expected = "y, n or s (Enter = N)"
+    if offer_all:
+        answers |= {"a": "all", "all": "all"}
+        expected = "y, n, s or a (Enter = N)"
+    return _ask(prompt_text, answers, default="n", expected=expected)
+
+
+def _confirm_direction(
+    prompt_text: str,
+) -> Literal["yes", "no", "skip", "all", "reverse"]:
     """The per-item prompt for an ASYMMETRIC suggestion in an accepted
-    Structure run (issue #1222): `_confirm`'s `y`/`n` plus two answers that
-    exist because direction is where the suggester errs.
+    Structure run (issue #1222): `_confirm_choice`'s `y`/`n`/`s` plus two
+    answers that exist because direction is where the suggester errs.
 
     `a`/`all` accepts this item and the remaining items of the same type;
     `r`/`reverse` applies it with source and target swapped. Anything else
     asks again, never counting as a decline, for the same reason `_confirm`
     does not."""
-    while True:
-        answer = typer.prompt(prompt_text, default="N", show_default=False)
-        token = answer.strip().lower()
-        if token in {"y", "yes"}:
-            return "yes"
-        if token in {"", "n", "no"}:
-            return "no"
-        if token in {"a", "all"}:
-            return "all"
-        if token in {"r", "reverse"}:
-            return "reverse"
-        typer.echo(
-            f"Unrecognized answer '{answer.strip()}' -- expected y, n, a or r "
-            "(Enter = N). Asking again."
-        )
+    return _ask(
+        prompt_text,
+        {
+            "y": "yes",
+            "yes": "yes",
+            "n": "no",
+            "no": "no",
+            "s": "skip",
+            "skip": "skip",
+            "a": "all",
+            "all": "all",
+            "r": "reverse",
+            "reverse": "reverse",
+        },
+        default="n",
+        expected="y, n, s, a or r (Enter = N)",
+    )
 
 
 def _preconditions_probe(ctx: CurateContext) -> StageProbe:
@@ -1119,12 +1218,19 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             survivor_canonical=prepared.survivor_canonical,
             absorbed_canonical=prepared.absorbed_canonical,
         )
-        if not _confirm(confirmation.prompt):
+        answer = _confirm_identity(cli_main._identity_walk_prompt(confirmation.prompt))
+        if answer == "skip":
+            # #1264: "not now" -- nothing is written and nothing is
+            # recorded, so the pair (and its pending row) stays open and the
+            # next run offers it again.
+            skipped += 1
+            continue
+        if answer == "distinct":
             skipped += 1
             declined.append(
                 f"{prepared.absorbed_canonical} -> {prepared.survivor_canonical}"
             )
-            # #797: the "no" is PERSISTED, not just tallied. Before this it
+            # #797: the explicit `d` is PERSISTED, not just tallied. Before this it
             # lived exactly as long as the session, so the next run
             # re-adjudicated the pair, re-offered the merge, and left the
             # workspace in the state that routes `next` straight back here
@@ -1534,8 +1640,9 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             f"[{suggestion.suggested_type}]{caveat}?"
         )
         reverse = False
+        verdict: Literal["yes", "no", "skip"]
         if asymmetric and suggestion.suggested_type in accepted_rest:
-            accepted = True
+            verdict = "yes"
         elif asymmetric and _accepts(ctx, "Structure") and sys.stdin.isatty():
             # #1222: the stage is accepted, so the flag already told us the
             # operator wants fewer prompts; the asymmetric ones still ask
@@ -1547,27 +1654,34 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 f"{edge.target_id} -> {edge.source_id} "
                 f"[{suggestion.suggested_type}] instead"
             )
-            answer = _confirm_direction(f"{question} [y/N/a/r]")
-            accepted = answer != "no"
+            answer = _confirm_direction(f"{question} [y/N/s/a/r]")
             reverse = answer == "reverse"
             if answer == "all":
                 accepted_rest.add(suggestion.suggested_type)
+            if answer == "no":
+                verdict = "no"
+            elif answer == "skip":
+                verdict = "skip"
+            else:
+                verdict = "yes"
         else:
-            accepted = _confirm_item(
+            verdict = _confirm_item(
                 ctx,
                 "Structure",
-                f"{question} [y/N]",
+                question,
                 # #624: every asymmetric type, whose direction is unverified,
                 # reaches a human even in a bulk-accepted run. `related_to`
                 # asserts nothing beyond the untyped link, so since #1222 it
                 # goes in with the rest. See `relations.ASYMMETRIC_RELATION_TYPES`.
                 acceptable_in_bulk=not asymmetric,
             )
-        if not accepted:
+        if verdict != "yes":
             skipped += 1
-            declined.append(
-                f"{edge.source_id} -> {edge.target_id} [{suggestion.suggested_type}]"
-            )
+            if verdict == "no":
+                declined.append(
+                    f"{edge.source_id} -> {edge.target_id} "
+                    f"[{suggestion.suggested_type}]"
+                )
             continue
         if reverse:
             edge = Edge(source_id=edge.target_id, target_id=edge.source_id)
@@ -1844,13 +1958,15 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
 
         typer.echo(f"[{result.suggested_tier}] {result.type_name}")
         output.echo_wrapped(f"  rationale: {result.rationale}", hanging="    ")
-        if not _confirm_item(
+        verdict = _confirm_item(
             ctx,
             "Metadata",
-            f"Set {result.type_name} -> {result.suggested_tier}? [y/N]",
-        ):
+            f"Set {result.type_name} -> {result.suggested_tier}?",
+        )
+        if verdict != "yes":
             skipped += 1
-            declined.append(f"{result.type_name} -> {result.suggested_tier}")
+            if verdict == "no":
+                declined.append(f"{result.type_name} -> {result.suggested_tier}")
             continue
 
         try:

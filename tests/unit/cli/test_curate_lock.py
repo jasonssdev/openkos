@@ -353,7 +353,10 @@ def test_a_keep_distinct_ruling_is_recorded_in_a_commit_phase(
     _workspace(tmp_path, monkeypatch)
     _same_group(monkeypatch)
     at_record: list[bool] = []
-    monkeypatch.setattr("typer.prompt", lambda *a, **k: "n")
+    monkeypatch.setattr(
+        "typer.prompt",
+        lambda text, *a, **k: "d" if str(text).startswith("Merge") else "n",
+    )
     wrap(
         monkeypatch,
         main_module,

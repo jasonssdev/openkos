@@ -833,9 +833,57 @@ def test_apply_walk_decline_persists_the_keep_distinct_ruling(
         ),
     )
 
-    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="d\n")
 
     assert result.exit_code == 0, result.stderr
     stored = bundle_decisions.read_identity_decisions("concepts/a", tmp_path / "bundle")
     assert [r.member_ids for r in stored] == [("concepts/a", "concepts/b")]
     assert (tmp_path / "bundle" / "concepts" / "b.md").is_file(), "merge withheld"
+
+
+def test_apply_walk_skip_answer_records_no_ruling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1264: `n` is a synonym of skip -- the pair is offered again, so no
+    keep-distinct ruling may be persisted (only `d` does)."""
+    from openkos.bundle import decisions as bundle_decisions
+    from openkos.resolution.adjudication import (
+        AdjudicatedCandidate,
+        AdjudicationBatch,
+        Verdict,
+    )
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert (
+        bundle_decisions.read_identity_decisions("concepts/a", tmp_path / "bundle")
+        == []
+    )
