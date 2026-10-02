@@ -219,3 +219,32 @@ def test_the_template_documents_the_section_as_provisional() -> None:
         "inbox",
     ):
         assert key in template
+
+
+def test_watch_backend_defaults_to_poll(tmp_path: Path) -> None:
+    _write(tmp_path, "")
+
+    assert config.read_config(tmp_path).unattended.watch_backend == "poll"
+
+
+def test_watch_backend_native_is_read(tmp_path: Path) -> None:
+    _write(tmp_path, "unattended:\n  watch_backend: native\n")
+
+    assert config.read_config(tmp_path).unattended.watch_backend == "native"
+
+
+@pytest.mark.parametrize("value", ["inotify", "", "Native", "true", "1"])
+def test_watch_backend_outside_poll_or_native_is_refused(
+    tmp_path: Path, value: str
+) -> None:
+    _write(tmp_path, f"unattended:\n  watch_backend: '{value}'\n")
+
+    with pytest.raises(ValueError, match="watch_backend"):
+        config.read_config(tmp_path)
+
+
+def test_watch_backend_must_be_a_string(tmp_path: Path) -> None:
+    _write(tmp_path, "unattended:\n  watch_backend: 5\n")
+
+    with pytest.raises(ValueError, match="watch_backend"):
+        config.read_config(tmp_path)

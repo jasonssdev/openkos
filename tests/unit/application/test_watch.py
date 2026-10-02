@@ -11,6 +11,7 @@ import os
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -92,7 +93,7 @@ class _Env:
             ),
         )
 
-    def cfg(self, **kw: int) -> config.UnattendedConfig:
+    def cfg(self, **kw: Any) -> config.UnattendedConfig:
         return config.UnattendedConfig(inbox=self.inbox, quiet_seconds=_QUIET, **kw)
 
     def job(self, **kw: int) -> runner.JobResult | None:

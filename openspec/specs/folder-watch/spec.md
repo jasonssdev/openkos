@@ -14,8 +14,7 @@ the pending-work queue once instead of producing an error on every save.
 This spec does not define: importing a changed source as a new version
 (deferred); moving, renaming, or deleting inbox files; watching more than
 one inbox per workspace; recursive watch semantics beyond the inbox's own
-subdirectories; an OS file-notification backend (the watch polls);
-spending rules (`unattended-budget`); job scheduling (`job-runtime`).
+subdirectories; spending rules (`unattended-budget`); job scheduling (`job-runtime`).
 
 ## Requirements
 
@@ -142,3 +141,40 @@ reasons MUST remain a candidate for the next job.
 - GIVEN `max_sources_per_pass: 1` and two settled new files
 - WHEN two watch jobs run
 - THEN each job imports one file, and the first records one deferred
+
+### Requirement: A Native Notification Backend Only Wakes The Poll
+
+`unattended.watch_backend` MUST be `poll` (the default) or `native`; any
+other value MUST refuse the config read naming the key. With `native` and the
+optional `openkos[watch]` extra installed, an OS file-notification event under
+the inbox MAY end the daemon's idle wait early, and the pass that follows MUST
+be the ordinary polling pass: every settle, re-hash and quiet-window rule of
+this spec applies unchanged, and an event MUST NOT import, skip or settle a
+file by itself. The periodic poll MUST keep running at its usual interval, so
+a missed or coalesced event delays a file and never loses it. A burst of
+events MUST be coalesced into one pass. If `native` is configured and the
+extra is not installed, or the backend cannot start, the daemon MUST warn on
+stderr and in its log and carry on polling; it MUST NOT refuse to run.
+`openkos doctor` MUST report the line only when `native` is configured, as an
+informational check that fails, with the install command, when the extra is
+absent. A `--once` run MUST NOT start a notifier.
+
+#### Scenario: An event ends the idle wait, not the quiet window
+
+- GIVEN `watch_backend: native` and a file written to the inbox
+- WHEN the backend signals a change
+- THEN the daemon runs a watch pass at once, and the file is imported only
+  after it has stayed unchanged for `quiet_seconds`, exactly as under polling
+
+#### Scenario: A missing extra falls back to polling
+
+- GIVEN `watch_backend: native` and `watchdog` not installed
+- WHEN `openkos daemon` starts
+- THEN it warns that it is polling instead, and the watch behaves exactly as
+  under `poll`
+
+#### Scenario: An unknown backend is refused
+
+- GIVEN `unattended: {watch_backend: inotify}`
+- WHEN the config is read
+- THEN the read fails naming `unattended.watch_backend`

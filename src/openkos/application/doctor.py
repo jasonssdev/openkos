@@ -144,6 +144,7 @@ from typing import Final, Literal
 
 from openkos import config, read_outcome
 from openkos.application import backends as application_backends
+from openkos.application import watch_notify
 from openkos.bundle import ledger as bundle_ledger
 from openkos.llm.base import (
     BackendDiagnostics,
@@ -235,6 +236,29 @@ def check_state_permissions(root: Path) -> CheckResult | None:
         critical=False,
         detail=", ".join(f"{name} (mode {mode:o})" for name, mode in exposed),
         remediation="chmod go-rwx " + " ".join(name for name, _ in exposed),
+    )
+
+
+def check_watch_backend(
+    unattended: config.UnattendedConfig, *, native_available: bool
+) -> CheckResult | None:
+    """The optional native watch backend (ADR-0040), reported only when the
+    config asks for it, so a polling workspace adds no line. Never critical:
+    the daemon falls back to polling, so a missing extra costs latency only."""
+    if unattended.watch_backend != "native":
+        return None
+    label = "Native watch backend"
+    if native_available:
+        return CheckResult(label, "pass", critical=False)
+    return CheckResult(
+        label,
+        "fail",
+        critical=False,
+        remediation="pip install 'openkos[watch]'",
+        detail=(
+            "unattended.watch_backend is 'native' but watchdog is not "
+            "installed; the daemon is polling instead"
+        ),
     )
 
 
@@ -1084,5 +1108,11 @@ def run_diagnostics(
         exposed_state = check_state_permissions(root)
         if exposed_state is not None:
             results.append(exposed_state)
+        if cfg is not None:
+            watch_check = check_watch_backend(
+                cfg.unattended, native_available=watch_notify.native_available()
+            )
+            if watch_check is not None:
+                results.append(watch_check)
 
     return tuple(results)

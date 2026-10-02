@@ -1002,3 +1002,136 @@ def test_daemon_retires_an_identity_row_once_the_group_is_judged_different(
     assert cli.invoke(app, ["daemon", "--once"]).exit_code == 0
 
     assert _identity_rows(root) == [("stale", "stale")]
+
+
+# --- the optional native wake (#1213) ----------------------------------------
+
+
+class _WakeNotifier:
+    def __init__(self) -> None:
+        self.started: Path | None = None
+        self.closed = False
+        self.consumed = 0
+        self.pending = True
+
+    def start(self, inbox: Path) -> None:
+        self.started = inbox
+
+    def consume(self) -> bool:
+        self.consumed += 1
+        pending, self.pending = self.pending, False
+        return pending
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _CountingStop(StopToken):
+    """Records each idle wait's kwargs, runs its `wake`, and stops the loop
+    after `limit` waits."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__()
+        self.limit = limit
+        self.waits: list[dict[str, object]] = []
+
+    def wait(self, timeout: float, **kwargs: object) -> bool:
+        self.waits.append({"timeout": timeout, **kwargs})
+        wake = kwargs.get("wake")
+        if callable(wake):
+            wake()
+        if len(self.waits) >= self.limit:
+            self.set()
+        return self.is_set()
+
+
+def _native_workspace(root: Path) -> Path:
+    inbox = _configure_inbox(root)
+    cfg_path = root / "openkos.yaml"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8") + "  watch_backend: native\n",
+        encoding="utf-8",
+    )
+    return inbox
+
+
+def _serve(root: Path, stop: StopToken | None, *, once: bool = False) -> int:
+    return daemon_module.serve(
+        root,
+        once=once,
+        ports=_fake_ports(_Git()),
+        stop=stop,
+        install_signals=False,
+    )
+
+
+def test_native_backend_wakes_the_idle_wait_and_is_closed(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inbox = _native_workspace(root)
+    notifier = _WakeNotifier()
+    monkeypatch.setattr(
+        "openkos.application.watch_notify._default_factory", lambda: notifier
+    )
+    stop = _CountingStop(limit=1)
+
+    assert _serve(root, stop) == 0
+
+    assert notifier.started == inbox.resolve()
+    assert callable(stop.waits[0]["wake"])
+    assert notifier.consumed >= 1
+    assert notifier.closed
+
+
+def test_native_without_the_extra_warns_and_polls(
+    root: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _native_workspace(root)
+
+    def missing() -> object:
+        raise ImportError("watchdog")
+
+    monkeypatch.setattr("openkos.application.watch_notify._default_factory", missing)
+    stop = _CountingStop(limit=1)
+
+    assert _serve(root, stop) == 0
+
+    assert "openkos[watch]" in capsys.readouterr().err
+    assert "wake" not in stop.waits[0]
+
+
+def test_poll_backend_never_passes_a_wake(root: Path) -> None:
+    _configure_inbox(root)
+    stop = _CountingStop(limit=1)
+
+    _serve(root, stop)
+
+    assert "wake" not in stop.waits[0]
+
+
+def test_once_never_starts_a_notifier(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _native_workspace(root)
+    monkeypatch.setattr(
+        "openkos.application.watch_notify._default_factory",
+        lambda: pytest.fail("a --once run built a notifier"),
+    )
+
+    assert _serve(root, None, once=True) == 0
+
+
+def test_a_native_wake_is_coalesced_before_the_next_pass(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _native_workspace(root)
+    notifier = _WakeNotifier()
+    monkeypatch.setattr(
+        "openkos.application.watch_notify._default_factory", lambda: notifier
+    )
+    stop = _CountingStop(limit=2)
+
+    assert _serve(root, stop) == 0
+
+    assert stop.waits[1]["timeout"] == daemon_module.WAKE_COALESCE_SECONDS
+    assert "wake" not in stop.waits[1]

@@ -263,3 +263,19 @@ def test_runtime_module_is_synchronous_and_cli_free() -> None:
     assert not roots & {"typer", "rich", "asyncio", "signal"}
     assert not any(name.startswith("openkos.cli") for name in imported)
     assert not any(isinstance(n, ast.AsyncFunctionDef) for n in ast.walk(tree))
+
+
+def test_stop_token_wait_returns_early_when_woken_without_a_stop() -> None:
+    clock = _Clock(0.0)
+
+    def sleep(seconds: float) -> None:
+        clock.now += seconds
+
+    token = runtime.StopToken()
+    woken = token.wait(
+        60.0, clock=clock, sleep=sleep, poll=0.25, wake=lambda: clock.now >= 0.5
+    )
+
+    assert woken is False
+    assert clock.now == pytest.approx(0.5)
+    assert not token.is_set()

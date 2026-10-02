@@ -92,6 +92,8 @@ The MCP server (`openkos mcp`, stdio) ships; it is hand-rolled rather than built
 | `sqlite-vec` | the on-disk dense index (`vectors.db`) |
 | `networkx` | the `GraphStore` → `DiGraph` conversion in `graph/analysis.py` |
 
+**Optional extras** are not runtime dependencies: the core installs and runs without them, and each is a convenience with a working fallback ([ADR-0040](adr/0040-an-optional-native-wake-up-for-the-inbox-watch.md)). `openkos[watch]` installs `watchdog` (Apache-2.0), which lets the daemon wake on an OS file-notification event instead of waiting out its poll interval; polling is the default and the fallback. A new extra needs the same justification as a runtime dependency, plus the fallback.
+
 SQLite, FTS5, and everything git-related add nothing: SQLite ships with Python, and git is driven through `subprocess` rather than a client library.
 
 `scipy` is not a dependency: it would have been required only by `networkx.pagerank`, and the PageRank retrieval channel is retired, so nothing imports it. The lesson generalises: a derived-layer dependency outlives the feature that justified it unless something checks, so declared dependencies are diffed against actual imports whenever a retrieval or graph channel is removed.

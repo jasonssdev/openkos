@@ -17,6 +17,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- An optional native file-notification backend for the inbox watch. Set `unattended.watch_backend: native` and install `openkos[watch]` (`watchdog`) and the daemon wakes on an OS event instead of waiting out its poll interval. The event only triggers a pass sooner: the ordinary polling pass still does every settle and re-hash check, and the periodic poll keeps running as a safety net, so a missed or coalesced event delays a file but never loses it. Polling stays the default; without the extra, or if the backend cannot start, the daemon warns and polls, and `doctor` reports it (#1213).
 - `openkos unrelate <source> <type> <target>` removes one typed relation, mirroring `relate`'s preview, confirm and commit flow. It writes a `log.md` line, refreshes the derived stores, withdraws a `supersedes` target's deprecated-status export when nothing else supersedes it, and refuses (writing nothing) when the relation does not exist. Before, a wrong relation could only be removed by hand-editing frontmatter or a revert that conflicts on `log.md` (#1232).
 
 ### Changed

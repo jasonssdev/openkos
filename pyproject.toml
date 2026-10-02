@@ -57,6 +57,12 @@ dependencies = [
     "typer>=0.27.0",
 ]
 
+[project.optional-dependencies]
+# Optional OS file-notification wake-up for the daemon's inbox watch
+# (`unattended.watch_backend: native`, ADR-0040). Polling is the default and the
+# fallback, so the core never needs it.
+watch = ["watchdog>=4.0.0"]
+
 [project.urls]
 Homepage = "https://github.com/jasonssdev/openkos"
 Repository = "https://github.com/jasonssdev/openkos"
@@ -74,6 +80,8 @@ build-backend = "uv_build"
 # `git-filter-repo` is a real test requirement, not just `purge`'s runtime
 # system tool: `test_filter_repo_available_true_when_installed` asserts the
 # PATH probe finds it, so it fails on a machine without the binary.
+# `watchdog` is the optional `watch` extra's dependency, installed here so CI
+# type-checks the native backend and runs its one real-event smoke test.
 dev = [
     "git-filter-repo>=2.47.0",
     "mypy>=2.3.0",
@@ -83,6 +91,7 @@ dev = [
     "ruff>=0.15.21",
     "types-networkx>=3.6.1.20260624",
     "types-pyyaml>=6.0.12.20260518",
+    "watchdog>=4.0.0",
 ]
 
 [tool.pytest.ini_options]

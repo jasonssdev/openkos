@@ -52,6 +52,7 @@ from openkos.application import (
     duplicates_service,
     reindex_service,
     revisions,
+    watch_notify,
 )
 from openkos.application import ingest_service as ingest_svc
 from openkos.application import pending as application_pending
@@ -86,6 +87,10 @@ COMMIT_RETRY_PAUSE_SECONDS = 300
 """After a commit-retry that did not complete, the loop idles at least this long
 before trying again, so a workspace that cannot commit (no identity, no
 repository) does not write a job record every poll."""
+
+WAKE_COALESCE_SECONDS = 1.0
+"""After a native change signal ends an idle wait early, the loop pauses this
+long before running jobs, so a burst of OS events costs one pass, not many."""
 
 _STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
@@ -491,6 +496,30 @@ def _idle_seconds(
     return max(poll, COMMIT_RETRY_PAUSE_SECONDS) if stuck else poll
 
 
+def _idle(
+    token: StopToken,
+    seconds: float,
+    notifier: watch_notify.ChangeNotifier | None,
+) -> None:
+    """The loop's idle wait. With a native notifier it ends early on a change
+    signal; the pass that follows is the ordinary polling one, and `seconds`
+    stays the safety-net interval, so a missed event delays, never loses."""
+    if notifier is None:
+        token.wait(seconds)
+        return
+    woke = False
+
+    def wake() -> bool:
+        nonlocal woke
+        woke = woke or notifier.consume()
+        return woke
+
+    token.wait(seconds, wake=wake)
+    if woke and not token.is_set():
+        token.wait(WAKE_COALESCE_SECONDS)
+        notifier.consume()
+
+
 class _Announcer:
     """The runner's `announce` port: one TTY-gated `openkos daemon: ...` line on
     stderr. A line identical to the one just printed is dropped, so an idling
@@ -508,6 +537,21 @@ class _Announcer:
 
     def reset(self) -> None:
         self._last = None
+
+
+def _open_notifier(
+    unattended: config.UnattendedConfig, *, once: bool
+) -> watch_notify.ChangeNotifier | None:
+    """The optional native wake-up, or `None` (polling alone). A `--once` run
+    never idles, so it never starts one. A requested backend that cannot start
+    is warned about on stderr and in the log, then polling carries on."""
+    if once:
+        return None
+    opened = watch_notify.open_notifier(unattended.watch_backend, unattended.inbox)
+    if opened.warning is not None:
+        log.warning("native watch backend unavailable; polling")
+        typer.echo(f"openkos daemon: {opened.warning}", err=True)
+    return opened.notifier
 
 
 def serve(
@@ -538,6 +582,7 @@ def serve(
         return 1
 
     token = stop if stop is not None else StopToken()
+    notifier: watch_notify.ChangeNotifier | None = None
     previous = _install_stop_handlers(token) if install_signals else {}
     logsetup.configure_logging("daemon", root=root)
     try:
@@ -545,6 +590,7 @@ def serve(
         announcer = _Announcer()
         wired = dataclasses.replace(wired, announce=announcer)
         log.info("daemon started (once=%s)", once)
+        notifier = _open_notifier(cfg.unattended, once=once)
         while True:
             due = maintenance_due(root, cfg.unattended, wired.now())
             results = run_due_jobs(
@@ -560,7 +606,7 @@ def serve(
                 announcer.reset()
             if once or token.is_set():
                 break
-            token.wait(_idle_seconds(cfg.unattended, results))
+            _idle(token, _idle_seconds(cfg.unattended, results), notifier)
             if token.is_set():
                 break
         if token.is_set():
@@ -574,5 +620,7 @@ def serve(
         typer.echo(f"openkos daemon: failed -- {type(exc).__name__}.", err=True)
         return 1
     finally:
+        if notifier is not None:
+            notifier.close()
         _restore_handlers(previous)
         logsetup.reset_logging()
