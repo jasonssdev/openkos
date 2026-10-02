@@ -4909,3 +4909,83 @@ def test_sources_do_not_crowd_compiled_concepts_out_of_the_context(
         "events/review",
     ]
     assert result.fused_count == 5
+
+
+def _superseded_source_bundle(tmp_path: Path) -> Path:
+    """`sources/v2` supersedes `sources/v1`; `concepts/v1-only` rests solely
+    on v1, `concepts/shared` on both, `concepts/live` on v2."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "sources" / "v1.md", doc_type="Source", title="V1")
+    _write_doc(
+        bundle_dir / "sources" / "v2.md",
+        doc_type="Source",
+        title="V2",
+        relations=[("sources/v1", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "v1-only.md",
+        title="V1 only",
+        provenance=["sources/v1"],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "shared.md",
+        title="Shared",
+        provenance=["sources/v1", "sources/v2"],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "live.md", title="Live", provenance=["sources/v2"]
+    )
+    return bundle_dir
+
+
+def test_provenance_orphan_of_superseded_source_absent_from_fts_and_vector(
+    tmp_path: Path,
+) -> None:
+    """retire-superseded-sources (#1259): a concept whose only Source was
+    superseded never reaches the fused/cited result via FTS or dense
+    retrieval; a concept that also cites a live Source still does."""
+    bundle_dir = _superseded_source_bundle(tmp_path)
+    recording_index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/v1-only", score=1.0),
+            fts.FtsHit(concept_id="concepts/shared", score=0.5),
+        ]
+    )
+    vector_store = _FakeVectorStore(
+        hits=[
+            VecHit(concept_id="concepts/v1-only", distance=0.0),
+            VecHit(concept_id="concepts/live", distance=0.1),
+        ]
+    )
+
+    result = answer_mod.answer(
+        "q",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="ok"),
+        embedder=_FakeEmbedder(),
+        vector_store=vector_store,
+        fts_index=recording_index,
+    )
+
+    cited_ids = {citation.concept_id for citation in result.citations}
+    assert "concepts/v1-only" not in cited_ids
+    assert {"concepts/shared", "concepts/live"} <= cited_ids
+    assert result.fts_hit_count == 1
+    assert result.dense_hit_count == 1
+
+
+def test_include_deprecated_restores_a_provenance_orphan(tmp_path: Path) -> None:
+    bundle_dir = _superseded_source_bundle(tmp_path)
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/v1-only", score=1.0)]
+    )
+
+    result = answer_mod.answer(
+        "q",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="ok"),
+        fts_index=recording_index,
+        include_deprecated=True,
+    )
+
+    assert {c.concept_id for c in result.citations} == {"concepts/v1-only"}

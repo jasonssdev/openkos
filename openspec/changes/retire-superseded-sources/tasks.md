@@ -24,7 +24,7 @@ written against its shape.
       data it already holds (still one walk); parity test asserting `list`
       `deprecated` rows equal `deprecated_concept_ids` on one shared
       fixture. (`cli`)
-- [ ] 1.4 Retrieval proof: a retrieval/`answer` test where a sole-source
+- [x] 1.4 Retrieval proof: a retrieval/`answer` test where a sole-source
       concept of a superseded Source is absent from FTS, vector and fused
       results and from adjudication/contradiction candidates, and present
       with `--include-deprecated`. (`retrieval`)
