@@ -18,6 +18,8 @@ from pathlib import Path
 from openkos import config
 from openkos.application import pending
 from openkos.bundle import decisions as bundle_decisions
+from openkos.resolution import adjudication
+from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
 
 
@@ -400,3 +402,116 @@ def test_current_finding_digest_unreadable_input_ref_answers_none(
     digest = pending.current_finding_digest(layout.bundle_dir)
 
     assert digest("concept-a") is None
+
+
+# --- judged_different_groups (#1226) ---
+
+
+def _concept(layout: config.WorkspaceLayout, name: str) -> str:
+    path = layout.bundle_dir / "events" / f"{name}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: Event\ntitle: {name}\n---\nBody of {name}.\n", encoding="utf-8"
+    )
+    return f"events/{name}"
+
+
+def _record_adjudication(
+    layout: config.WorkspaceLayout,
+    members: tuple[str, ...],
+    *,
+    verdict: str = "different",
+    rubric: str | None = None,
+    stale: bool = False,
+) -> None:
+    digest_of = pending.current_finding_digest(layout.bundle_dir)
+    digests = tuple(
+        adjudications_store.InputDigest(
+            member, "0" * 64 if stale else str(digest_of(member))
+        )
+        for member in members
+    )
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        adjudications_store.record_adjudications(
+            conn,
+            [
+                adjudications_store.Adjudication(
+                    member_ids=members,
+                    verdict=verdict,
+                    confidence=0.9,
+                    rationale="Distinct meetings.",
+                    include_confidential=False,
+                    input_digests=digests,
+                    rubric_digest=adjudication.rubric_digest()
+                    if rubric is None
+                    else rubric,
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+
+def test_judged_different_groups_is_empty_without_a_store(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+
+    assert pending.judged_different_groups(layout) == frozenset()
+    assert not layout.findings_db_path.exists()
+
+
+def test_a_fresh_different_verdict_is_reported(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    members = (_concept(layout, "a"), _concept(layout, "b"))
+    _record_adjudication(layout, members)
+
+    assert pending.judged_different_groups(layout) == frozenset({members})
+
+
+def test_a_same_verdict_is_not_reported(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    members = (_concept(layout, "a"), _concept(layout, "b"))
+    _record_adjudication(layout, members, verdict="same")
+
+    assert pending.judged_different_groups(layout) == frozenset()
+
+
+def test_a_verdict_over_edited_members_is_not_reported(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    members = (_concept(layout, "a"), _concept(layout, "b"))
+    _record_adjudication(layout, members, stale=True)
+
+    assert pending.judged_different_groups(layout) == frozenset()
+
+
+def test_a_verdict_from_another_rubric_is_not_reported(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    members = (_concept(layout, "a"), _concept(layout, "b"))
+    _record_adjudication(layout, members, rubric="0" * 64)
+
+    assert pending.judged_different_groups(layout) == frozenset()
+
+
+def test_a_verdict_over_a_different_member_set_is_not_reported(
+    tmp_path: Path,
+) -> None:
+    layout = _workspace(tmp_path)
+    members = (_concept(layout, "a"), _concept(layout, "b"))
+    _concept(layout, "c")
+    _record_adjudication(layout, members)
+    digest_of = pending.current_finding_digest(layout.bundle_dir)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        conn.execute(
+            "DELETE FROM adjudication_input_digests WHERE input_ref = ?", (members[1],)
+        )
+        conn.execute(
+            "INSERT INTO adjudication_input_digests "
+            "(adjudication_id, ordinal, input_ref, digest) VALUES (1, 1, ?, ?)",
+            ("events/c", str(digest_of("events/c"))),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert pending.judged_different_groups(layout) == frozenset()

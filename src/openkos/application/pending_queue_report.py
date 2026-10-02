@@ -8,14 +8,20 @@ nothing pending when nothing has looked would be a false all-clear.
 
 Only a row's kind, status, target ids and the resolving command are rendered.
 A row's payload is never put in the report, because proposal text can carry a
-person's words.
+person's words. Three payload fields are read for the listing only, because each
+is a name or a verdict rather than prose: a volatility row's concept type (its
+subject, as it has no target), a watch refusal's inbox path (the file to ingest)
+and an identity row's adjudication verdict (which verb can close it).
 """
 
+import json
+import shlex
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from openkos import config
 from openkos.application.budget import JOBS_DB_NAME
 from openkos.config import WorkspaceLayout
 from openkos.state import jobs
@@ -38,18 +44,59 @@ ABSENT_QUEUE_NOTICE = (
 )
 
 _RESOLVING_COMMAND = {
-    "identity": "openkos duplicates",
+    "identity": "openkos duplicates --keep-distinct",
     "relation_type": "openkos curate",
     "volatility": "openkos curate",
     "contradiction": "openkos contradictions",
     "revision": "openkos revisions",
-    "watch_refusal": "openkos ingest <the refused file under raw/>",
+    "watch_refusal": "openkos ingest <the refused file>",
 }
 
 
 def resolving_command(kind: str) -> str:
-    """The command that resolves a row of `kind`."""
+    """The command that resolves a row of `kind`, with no row-specific
+    arguments: the form the MCP gate discloses."""
     return _RESOLVING_COMMAND[kind]
+
+
+def _payload(row: pq.PendingItem) -> dict[str, object]:
+    try:
+        decoded = json.loads(row.payload)
+    except ValueError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def row_subject(row: pq.PendingItem) -> str:
+    """What a listed row is about: its targets, or for a volatility row (about a
+    concept type, so it has no target) that type."""
+    if row.targets:
+        return ", ".join(row.targets)
+    type_name = _payload(row).get("type_name")
+    if row.kind == "volatility" and isinstance(type_name, str):
+        return f"type {type_name}"
+    return "(no subject)"
+
+
+def row_resolving_command(row: pq.PendingItem, inbox: Path | None = None) -> str:
+    """The command that resolves THIS row. `openkos duplicates` only lists
+    groups, so an identity row names the verb that can close it: the merge walk
+    for a group judged the same, a keep-distinct ruling over its members
+    otherwise. A watch refusal names the refused file: the watch records its
+    path relative to the inbox, so `inbox` (the configured folder, when known)
+    is joined on."""
+    payload = _payload(row)
+    if row.kind == "identity" and row.targets:
+        adjudication = payload.get("adjudication")
+        if isinstance(adjudication, dict) and adjudication.get("verdict") == "same":
+            return "openkos adjudicate --apply"
+        flags = " ".join(f"--keep-distinct {shlex.quote(t)}" for t in row.targets)
+        return f"openkos duplicates {flags}"
+    inbox_path = payload.get("inbox_path")
+    if row.kind == "watch_refusal" and isinstance(inbox_path, str) and inbox_path:
+        refused = inbox / inbox_path if inbox is not None else inbox_path
+        return f"openkos ingest {shlex.quote(str(refused))}"
+    return _RESOLVING_COMMAND[row.kind]
 
 
 class QueueUnavailableError(Exception):
@@ -64,6 +111,16 @@ class PendingReport:
     stats: tuple[pq.KindStats, ...]
     attention: tuple[jobs.JobRecord, ...]
     jobs_unreadable: bool
+    inbox: Path | None = None
+    """The configured `unattended.inbox`, when it can be read: the base a watch
+    refusal's recorded path is relative to."""
+
+
+def _read_inbox(layout: WorkspaceLayout) -> Path | None:
+    try:
+        return config.read_config(layout.root).unattended.inbox
+    except (OSError, ValueError):
+        return None
 
 
 def _read_queue(
@@ -116,6 +173,7 @@ def read_report(layout: WorkspaceLayout) -> PendingReport:
         stats=stats,
         attention=attention,
         jobs_unreadable=jobs_unreadable,
+        inbox=_read_inbox(layout),
     )
 
 
@@ -152,10 +210,10 @@ def _listing_lines(report: PendingReport, *, include_all: bool) -> list[str]:
         for row in rows:
             is_open = row.status in pq.OPEN_STATUSES
             lines.append(
-                f"  - {', '.join(row.targets)} [{'pending' if is_open else row.status}]"
+                f"  - {row_subject(row)} [{'pending' if is_open else row.status}]"
             )
             if is_open:
-                lines.append(f"    resolve: {_RESOLVING_COMMAND[kind]}")
+                lines.append(f"    resolve: {row_resolving_command(row, report.inbox)}")
     return lines
 
 

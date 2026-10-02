@@ -43,6 +43,7 @@ from openkos.application import (
     ingest_service,
     lock_wait,
     merge_service,
+    queue_resolution,
     reconcile_service,
     reindex_service,
     unmerge_service,
@@ -12412,6 +12413,14 @@ def _persist_adjudications(
                     adjudications_store.record_adjudications(conn, batch)
                 finally:
                     conn.close()
+                # #1226: a persisted DIFFERENT verdict answers the pair's open
+                # identity row. Under the same lock as the persist, so no
+                # forget can interleave; best-effort, the queue is a cache.
+                for stored in batch:
+                    if stored.verdict == Verdict.DIFFERENT.value:
+                        queue_resolution.resolve_judged_different(
+                            layout.root, member_ids=stored.member_ids
+                        )
             except (OSError, sqlite3.Error) as exc:
                 # `surface` names the command the user actually ran (#867 review):
                 # curate's Identity stage persists through this helper too.

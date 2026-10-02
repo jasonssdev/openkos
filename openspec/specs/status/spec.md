@@ -188,6 +188,15 @@ a non-zero exit.
 - THEN no duplicate-groups entry appears under "needs attention" for that
   group, and the command still exits 0
 
+#### Scenario: A group the model judged different is not counted
+
+- GIVEN a bundle whose only exact-title-match duplicate group has a persisted
+  DIFFERENT adjudication that is still servable (members unedited, same
+  judgment rubric)
+- WHEN `openkos status` runs
+- THEN no duplicate-groups entry appears for that group, and it is counted
+  again as soon as a member is edited
+
 ### Requirement: Needs-Attention Surfaces Missing Vector Index
 
 `openkos status` MUST report, under "needs attention", whether the
@@ -428,6 +437,15 @@ and MUST remain informational — its presence MUST NOT cause a non-zero exit.
 - THEN the open finding is reported on its own line as open, and the stale
   finding is reported on a separate line labeled stale rather than folded
   into the open count or silently omitted
+
+#### Scenario: A pair judged on several runs is counted once
+
+- GIVEN a pair whose findings were persisted on two runs (for instance
+  `contradictions --fresh` over unchanged bytes), so the store holds two rows
+  for it
+- WHEN `openkos status` runs
+- THEN the pair is counted once, by its newest finding, and a later
+  `consistent` verdict retires an earlier `contradicts` one
 
 #### Scenario: Declined findings are absent from status
 

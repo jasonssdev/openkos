@@ -62,6 +62,7 @@ WRITE_CORE_RESOLUTIONS: Final = {
         "resolve_declined_contradiction"
     ),
     "openkos.application.ingest_service.ingest_source": "resolve_watch_refusals",
+    "openkos.cli.main._persist_adjudications": "resolve_judged_different",
 }
 """Fully qualified write core -> the `queue_resolution` function it must call."""
 
@@ -219,6 +220,21 @@ def resolve_declined_identity(root: Path, *, member_ids: Sequence[str]) -> None:
         pq.identity_key(member_ids),
         lambda _item: "declined",
         "keep-distinct",
+    )
+
+
+def resolve_judged_different(root: Path, *, member_ids: Sequence[str]) -> None:
+    """`adjudicate` / `curate`: the model judged exactly these members DIFFERENT
+    (#1226). The identity row over the same members is answered, so it closes as
+    `declined`, the same terminal state a human keep-distinct ruling reaches. It
+    is not a ruling: no sidecar is written, and the group is offered again if a
+    member changes."""
+    _resolve_by_key(
+        root,
+        "identity",
+        pq.identity_key(member_ids),
+        lambda _item: "declined",
+        "adjudicate",
     )
 
 

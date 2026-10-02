@@ -288,9 +288,9 @@ def test_pending_lists_the_row_with_its_resolving_command(env: _Env) -> None:
 
     assert "watch_refusal (1)" in lines
     assert "  - sources/a [pending]" in lines
-    assert any(line.startswith("    resolve: openkos ingest <") for line in lines), (
-        lines
-    )
+    # No `unattended.inbox` in this workspace's config, so the path stays as the
+    # watch recorded it (relative to the inbox) and is never a placeholder.
+    assert "    resolve: openkos ingest a.md" in lines
 
 
 def test_a_watch_with_no_refusal_creates_no_queue(env: _Env) -> None:

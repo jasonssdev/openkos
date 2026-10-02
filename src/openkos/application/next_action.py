@@ -364,10 +364,13 @@ class BundleSignals:
             # the workspace in the state that recommends `curate`, whose
             # Identity stage re-offers the same merge -- a loop whose only
             # exit was performing the merge the human had refused.
+            # #1226: a group judged DIFFERENT is settled for the same reason.
+            judged_different = pending.judged_different_groups(self._layout)
             self._exact_title_groups = [
                 group
                 for group in find_exact_title_groups(self._layout.bundle_dir)
-                if not pending.is_group_kept_distinct(
+                if tuple(sorted(group.member_ids)) not in judged_different
+                and not pending.is_group_kept_distinct(
                     self._layout, group.member_ids, on_warning=self._note_warning
                 )
             ]
@@ -395,12 +398,14 @@ class BundleSignals:
         ruled distinct (#797) -- tier 9's queue-backed finding. Callers
         branch on `queue_snapshot.queue` first, so an empty result here
         never stands in for an absent queue."""
+        judged_different = pending.judged_different_groups(self._layout)
         return tuple(
             row
             for row in self.queue_snapshot.open_items
             if row.kind == "identity"
             and _row_payload(row).get("tier") == "high"
             and not self._row_kept_distinct(row)
+            and tuple(sorted(row.targets)) not in judged_different
         )
 
     def _row_kept_distinct(self, row: pq.PendingItem) -> bool:

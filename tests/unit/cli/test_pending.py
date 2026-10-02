@@ -155,7 +155,8 @@ def test_open_rows_are_grouped_by_kind_with_their_resolving_command(
         "\n"
         "identity (1)\n"
         "  - concepts/a, concepts/b [pending]\n"
-        "    resolve: openkos duplicates\n"
+        "    resolve: openkos duplicates --keep-distinct concepts/a"
+        " --keep-distinct concepts/b\n"
         "\n"
         "contradiction (1)\n"
         "  - concepts/x, concepts/y [pending]\n"
@@ -184,7 +185,8 @@ def test_all_also_lists_resolved_declined_and_stale_rows(
         "\n"
         "identity (4)\n"
         "  - concepts/a, concepts/b [pending]\n"
-        "    resolve: openkos duplicates\n"
+        "    resolve: openkos duplicates --keep-distinct concepts/a"
+        " --keep-distinct concepts/b\n"
         "  - concepts/c, concepts/d [applied]\n"
         "  - concepts/e, concepts/f [declined]\n"
         "  - concepts/g, concepts/h [stale]\n"
@@ -291,7 +293,8 @@ def test_unattended_outcomes_needing_attention_follow_the_queue(
         "\n"
         "identity (1)\n"
         "  - concepts/a, concepts/b [pending]\n"
-        "    resolve: openkos duplicates\n"
+        "    resolve: openkos duplicates --keep-distinct concepts/a"
+        " --keep-distinct concepts/b\n"
         "\n"
         "Needs attention (unattended jobs):\n"
         "  maintenance job 2: budget_exhausted (max_sources_per_pass),"
@@ -388,3 +391,103 @@ def test_an_unreadable_queue_file_refuses_without_claiming_empty(
     assert result.exit_code == 1
     assert "not available" in result.output
     assert "nothing" not in result.output.lower()
+
+
+def test_a_volatility_row_names_its_concept_type_not_an_empty_subject(
+    workspace: WorkspaceLayout,
+) -> None:
+    conn = _queue(workspace)
+    pq.upsert_proposal(
+        conn,
+        pq.Proposal(
+            kind="volatility",
+            key_body=pq.volatility_key("Person"),
+            producer="test/1",
+            payload='{"type_name": "Person", "suggested_tier": "slow"}',
+            targets=(),
+        ),
+        commit_section=_section,
+        bundle_dir=workspace.bundle_dir,
+    )
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert result.output == (
+        "Pending work: 1 open row(s).\n"
+        "\n"
+        "volatility (1)\n"
+        "  - type Person [pending]\n"
+        "    resolve: openkos curate\n"
+    )
+
+
+def test_a_watch_refusal_row_names_the_refused_file_in_its_resolve_hint(
+    workspace: WorkspaceLayout,
+) -> None:
+    inbox = workspace.root.parent / "my inbox"
+    inbox.mkdir()
+    (workspace.root / "openkos.yaml").write_text(
+        (workspace.root / "openkos.yaml").read_text(encoding="utf-8")
+        + f"\nunattended:\n  inbox: '{inbox}'\n",
+        encoding="utf-8",
+    )
+    conn = _queue(workspace)
+    _enqueue(
+        conn,
+        workspace,
+        "watch_refusal",
+        ("sources/big",),
+        payload='{"inbox_path": "big.md", "reason": "x"}',
+    )
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert (
+        f"    resolve: openkos ingest '{inbox.resolve() / 'big.md'}'\n" in result.output
+    )
+    assert "<" not in result.output
+
+
+def test_a_row_with_an_unreadable_payload_keeps_a_generic_hint(
+    workspace: WorkspaceLayout,
+) -> None:
+    conn = _queue(workspace)
+    _enqueue(conn, workspace, "watch_refusal", ("sources/big",), payload="not json")
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert "    resolve: openkos ingest <the refused file>\n" in result.output
+
+
+def test_an_identity_row_judged_same_points_at_the_merge_walk(
+    workspace: WorkspaceLayout,
+) -> None:
+    conn = _queue(workspace)
+    _enqueue(
+        conn,
+        workspace,
+        "identity",
+        ("concepts/a", "concepts/b"),
+        payload='{"adjudication": {"verdict": "same"}}',
+    )
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert "    resolve: openkos adjudicate --apply\n" in result.output
+
+
+def test_a_row_with_no_target_and_no_type_still_renders_a_subject(
+    workspace: WorkspaceLayout,
+) -> None:
+    conn = _queue(workspace)
+    _enqueue(conn, workspace, "identity", ())
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert "  - (no subject) [pending]\n" in result.output
+    assert "    resolve: openkos duplicates --keep-distinct\n" in result.output

@@ -311,6 +311,22 @@ resolving it.
 - WHEN the operator merges A into B through `openkos merge`
 - THEN the row is `applied`
 
+#### Scenario: A different verdict closes the identity row
+
+- GIVEN an open identity row for A and B
+- WHEN `openkos adjudicate` (or `curate`) persists a DIFFERENT verdict for
+  exactly A and B
+- THEN the row is `declined`
+- AND no identity decision sidecar is written, so the group is offered again
+  if a member is edited or the judgment rubric changes
+
+#### Scenario: A servable different verdict keeps the group out of the queue
+
+- GIVEN a persisted DIFFERENT verdict for A and B that is still servable
+- WHEN the identity advisor runs, and when `status` counts identical-title
+  groups
+- THEN neither offers the group as identity work
+
 #### Scenario: The runner never resolves a row
 
 - GIVEN any open row
@@ -347,6 +363,14 @@ unattended job outcomes that need attention (`budget_exhausted`,
 `declined`, and `stale` rows. It MUST take no lock, make no model call, and
 write nothing. When the queue is absent it MUST say so and point at
 `openkos daemon --once`, never report the base as having nothing pending.
+Each row MUST name a subject and a resolving command that can actually
+resolve THAT row: a volatility row (about a concept type, so it has no
+target) names its type; a watch refusal's command names the refused file, not
+a placeholder; an identity row names the merge walk when its group was judged
+the same and a `duplicates --keep-distinct` ruling over its members otherwise,
+since `duplicates` alone only lists groups. The only payload fields read for
+this are a type name, an inbox path and an adjudication verdict -- names and
+a verdict, never proposal prose.
 
 #### Scenario: An absent queue is not an empty queue
 

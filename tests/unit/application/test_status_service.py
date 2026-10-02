@@ -18,7 +18,10 @@ from pathlib import Path
 import pytest
 
 from openkos import config
+from openkos.application import pending as application_pending
 from openkos.application import status as status_service
+from openkos.resolution import adjudication
+from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
 
 
@@ -395,3 +398,97 @@ def test_status_overview_recent_entries_is_a_tuple_not_a_list(tmp_path: Path) ->
 
     assert overview.recent_entries is not None
     assert isinstance(overview.recent_entries, tuple)
+
+
+# --- #1226: a settled DIFFERENT verdict is not pending identity work ---
+
+
+def _twin_events(layout: config.WorkspaceLayout) -> tuple[str, str]:
+    events = layout.bundle_dir / "events"
+    events.mkdir(parents=True, exist_ok=True)
+    for name in ("sync", "sync-2"):
+        (events / f"{name}.md").write_text(
+            "---\ntype: Event\ntitle: Weekly sync\n---\nBody.\n", encoding="utf-8"
+        )
+    return ("events/sync", "events/sync-2")
+
+
+def _judge(
+    layout: config.WorkspaceLayout, members: tuple[str, str], verdict: str
+) -> None:
+    digest_of = application_pending.current_finding_digest(layout.bundle_dir)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        adjudications_store.record_adjudications(
+            conn,
+            [
+                adjudications_store.Adjudication(
+                    member_ids=members,
+                    verdict=verdict,
+                    confidence=0.9,
+                    rationale="Judged.",
+                    include_confidential=False,
+                    input_digests=tuple(
+                        adjudications_store.InputDigest(m, str(digest_of(m)))
+                        for m in members
+                    ),
+                    rubric_digest=adjudication.rubric_digest(),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+
+def test_status_counts_an_unjudged_identical_title_group(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    _twin_events(layout)
+
+    assert status_service.build_status_report(layout).exact_title_group_count == 1
+
+
+def test_status_does_not_count_a_group_judged_different(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    _judge(layout, _twin_events(layout), "different")
+
+    assert status_service.build_status_report(layout).exact_title_group_count == 0
+
+
+def test_status_still_counts_a_group_judged_same(tmp_path: Path) -> None:
+    layout = _workspace(tmp_path)
+    _judge(layout, _twin_events(layout), "same")
+
+    assert status_service.build_status_report(layout).exact_title_group_count == 1
+
+
+# --- #1227: one finding per pair, however many runs judged it ---
+
+
+def test_a_pair_judged_on_two_runs_is_counted_once(tmp_path: Path) -> None:
+    """`record_findings` appends, so a pair judged twice (`--fresh`, or a rerun
+    over unchanged bytes) holds two fresh rows. `pending` and `reconcile
+    --from-findings` offer the pair once; `status` must not count it twice."""
+    layout = _workspace(tmp_path)
+    concepts_dir = layout.bundle_dir / "concepts"
+    concepts_dir.mkdir()
+    for name in ("alpha", "beta"):
+        (concepts_dir / f"{name}.md").write_text(
+            f"---\ntype: Concept\ntitle: {name.title()}\n---\nBody.\n",
+            encoding="utf-8",
+        )
+    pair = ("concepts/alpha", "concepts/beta")
+    _record_finding(layout, pair_ids=pair)
+    _record_finding(layout, pair_ids=pair)
+
+    assert status_service.contradiction_finding_counts(layout) == (1, 0)
+
+
+def test_a_later_consistent_verdict_supersedes_an_earlier_contradiction(
+    tmp_path: Path,
+) -> None:
+    layout = _workspace(tmp_path)
+    pair = ("concepts/alpha", "concepts/beta")
+    _record_finding(layout, pair_ids=pair)
+    _record_finding(layout, pair_ids=pair, verdict="consistent")
+
+    assert status_service.contradiction_finding_counts(layout) == (0, 0)
