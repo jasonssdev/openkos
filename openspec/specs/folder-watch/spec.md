@@ -47,6 +47,27 @@ file or directory inside the inbox.
 - THEN every inbox file and directory has the same name, bytes, and
   modification time as before the job
 
+### Requirement: The Watch Applies The Text-Source Allowlist
+
+The watch is a sweep of a folder, not an explicit single-file choice, so it
+MUST consider only files whose extension is on the same text-source allowlist
+that `ingest` applies to a directory, matched case-insensitively. Every other
+file, including an extensionless one, MUST be neither observed, counted as
+waiting, nor imported. Dot-entries and symlinks stay excluded as before. The
+count of files skipped for this reason MUST be recorded in the daemon log.
+
+#### Scenario: A binary in the inbox is not imported
+
+- GIVEN an inbox holding `note.md` and `report.docx`, both settled
+- WHEN a watch job runs
+- THEN only `note.md` is imported and `report.docx` is never observed
+
+#### Scenario: Skipped files are not counted as waiting
+
+- GIVEN an inbox holding one new `.md` file and one new `.docx` file
+- WHEN a watch job runs inside the quiet window
+- THEN the announcement says one file was seen
+
 ### Requirement: A File Is Imported Only After It Settles
 
 The watch MUST treat an inbox file as a candidate only when its size and

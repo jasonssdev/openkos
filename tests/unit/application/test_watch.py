@@ -198,9 +198,9 @@ def test_a_legacy_encoded_file_is_decoded_and_extracted(env: _Env) -> None:
 
 
 def test_a_binary_file_is_imported_with_a_visible_warning(env: _Env) -> None:
-    """A source that ends as no-extractable-text is never silent in the
-    unattended path (#1224): the warning names the file."""
-    (env.inbox / "pic.bin").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00")
+    """A text-extension source that ends as no-extractable-text is never
+    silent in the unattended path (#1224): the warning names the file."""
+    (env.inbox / "pic.txt").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00")
     env.job()
     env.settle()
 
@@ -209,7 +209,7 @@ def test_a_binary_file_is_imported_with_a_visible_warning(env: _Env) -> None:
     assert result is not None
     assert result.units_done == 1
     assert env.model.calls == 0
-    assert any("pic.bin" in n and "no extractable text" in n for n in env.notices)
+    assert any("pic.txt" in n and "no extractable text" in n for n in env.notices)
 
 
 def test_dot_entries_symlinks_and_subdirectories(env: _Env) -> None:
@@ -225,6 +225,41 @@ def test_dot_entries_symlinks_and_subdirectories(env: _Env) -> None:
     assert result is not None
     assert result.units_done == 1
     assert env.raw() == ["nested.md"]
+
+
+def test_non_text_files_are_not_candidates_for_import(env: _Env) -> None:
+    """The watch is a sweep of a folder, so it applies the allowlist that
+    `ingest <dir>` applies (#1261): a `.docx` or extensionless file is neither
+    observed, counted as waiting, nor imported."""
+    env.drop("note.md")
+    env.drop("UPPER.TXT")
+    (env.inbox / "report.docx").write_bytes(b"PK\x03\x04binary")
+    (env.inbox / "Makefile").write_text("all:\n", encoding="utf-8")
+    env.job()
+    env.settle()
+
+    result = env.job()
+
+    assert result is not None
+    assert result.units_done == 2
+    assert env.raw() == ["UPPER.TXT", "note.md"]
+    conn = jobs.open_jobs(config.WorkspaceLayout(env.root).jobs_db_path)
+    try:
+        observed = {o.path for o in jobs.observations(conn)}
+    finally:
+        conn.close()
+    assert observed == {"note.md", "UPPER.TXT"}
+
+
+def test_the_waiting_count_excludes_non_text_files(env: _Env) -> None:
+    env.drop("note.md")
+    (env.inbox / "report.docx").write_bytes(b"PK\x03\x04binary")
+    announced: list[str] = []
+    ports = dataclasses.replace(env.ports(), announce=announced.append)
+
+    watch.run_watch_job(env.root, unattended=env.cfg(), stop=env.stop, ports=ports)
+
+    assert announced == ["1 file seen in the inbox; will import after 5s quiet"]
 
 
 # --- a steady inbox costs nothing ---------------------------------------------

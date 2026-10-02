@@ -286,3 +286,27 @@ def test_decode_source_text_cp1252_undefined_byte_falls_to_mac_roman() -> None:
 )
 def test_decode_source_text_binary_is_not_text(data: bytes) -> None:
     assert fsio.decode_source_text(data) is None
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "a.md",
+        "A.MD",
+        "n.markdown",
+        "n.txt",
+        "n.text",
+        "n.rst",
+        "n.org",
+        "n.adoc",
+        "n.vtt",
+        "n.srt",
+    ],
+)
+def test_is_text_source_accepts_the_allowlisted_extensions(name: str) -> None:
+    assert fsio.is_text_source(Path(name)) is True
+
+
+@pytest.mark.parametrize("name", ["a.docx", "Makefile", "a.md.bak", "x.pdf", "a."])
+def test_is_text_source_rejects_everything_else(name: str) -> None:
+    assert fsio.is_text_source(Path(name)) is False
