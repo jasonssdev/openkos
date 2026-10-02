@@ -83,6 +83,12 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # history (default OFF). UNMEASURED --
                           # no harness has scored its citation quality or
                           # prompt-budget cost yet. Not recommended to enable.
+# attach_at_ingest: false  # turn OFF revising an existing concept at ingest
+                          # (default ON). When a newly extracted object has
+                          # the same type and normalized title as an existing
+                          # concept (Event and Person excepted), ingest adds
+                          # the source to that concept instead of writing a
+                          # `-2` copy. `false` restores the copies.
 # concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one
                           # by one (default OFF). Chunked sources only; below
                           # the chunk threshold there are no windows to

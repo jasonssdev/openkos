@@ -253,6 +253,8 @@ class ImportedSummary:
     index_name: str
     log_name: str
     type_counts: dict[str, int]
+    attached: tuple[AttachedConcept, ...] = ()
+    """Existing concepts this run revised instead of forking (#1268)."""
 
 
 @dataclass(frozen=True)
@@ -521,6 +523,7 @@ def ingest_source(
                 index_name=prepared.index_path.name,
                 log_name=prepared.log_path.name,
                 type_counts=type_counts,
+                attached=prepared.outcome.attached,
             )
         )
 

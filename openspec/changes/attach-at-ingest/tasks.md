@@ -56,7 +56,7 @@ is one work unit (one Conventional Commit, scope `ingest`, `okf`,
       M is 0); `IngestOutcome.attached_count`. Tests: drift refusal on a
       changed target writes nothing; interrupted-run adoption (#1136) stays
       idempotent; a hand-edited target is refused by the guard. (`ingest`)
-- [ ] 3.2 CLI presentation of attaches (stderr drop line; stdout summary
+- [x] 3.2 CLI presentation of attaches (stderr drop line; stdout summary
       names id and new `version`; batch summary counts). No logic in
       `cli/main.py`. (`cli`)
 - [ ] 3.3 Watch end-to-end under `tests/unit/e2e/`: import, edit, import;

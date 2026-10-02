@@ -4737,6 +4737,11 @@ def _ingest_batch(
         else:
             ingested_count += 1
             marker, label = "+", "ingested"
+        if outcome.attached:
+            label += (
+                f" (revised {outcome.attached_count} existing "
+                f"object{_plural(outcome.attached_count)})"
+            )
         suffix = ""
         if outcome.extraction_degraded:
             degraded_count += 1
@@ -5005,17 +5010,24 @@ _INGEST_WARNING_LEADS = (
 notice is informational and renders as a `note:` on a terminal."""
 
 
-def _format_import_summary(source: Path | str, type_counts: dict[str, int]) -> str:
+def _format_import_summary(
+    source: Path | str, type_counts: dict[str, int], revised: int = 0
+) -> str:
     """The one-line post-confirm summary of an `ingest`: what was imported and
-    how many objects of each type, never the paths (ADR-0042 rule 1)."""
+    how many objects of each type, never the paths (ADR-0042 rule 1).
+    `revised` counts existing concepts an attach revised (#1268)."""
+    revised_clause = f"{revised} existing object{_plural(revised)} revised"
     if not any(type_counts.values()):
+        if revised:
+            return f"openkos ingest: imported '{source}' -- {revised_clause}."
         return f"openkos ingest: imported '{source}' -- Source only."
     total = sum(type_counts.values())
     order = {t: i for i, t in enumerate(_TYPE_TO_SECTION)}
     parts = ", ".join(
         f"{type_counts[t]} {t}" for t in sorted(type_counts, key=lambda t: order[t])
     )
-    return f"openkos ingest: imported '{source}' -- {total} object{_plural(total)} ({parts})."
+    tail = f"; {revised_clause}" if revised else ""
+    return f"openkos ingest: imported '{source}' -- {total} object{_plural(total)} ({parts}){tail}."
 
 
 class _CliIngestObserver(ingest_service.IngestObserver):
@@ -5054,7 +5066,25 @@ class _CliIngestObserver(ingest_service.IngestObserver):
         # A summary, not the path list: the user approved those paths in the
         # proposal a moment ago, and the commit records them too.
         output.section_break()
-        typer.echo(_format_import_summary(summary.source, summary.type_counts))
+        typer.echo(
+            _format_import_summary(
+                summary.source, summary.type_counts, len(summary.attached)
+            )
+        )
+        for attached in summary.attached:
+            typer.echo(
+                f"  ~ revised {attached.concept_id} (now version {attached.version})"
+            )
+
+
+def _echo_derived_preview_line(plan: application_ingest.DerivedPlan) -> None:
+    """One proposed derived object: a new file, or an existing concept an
+    attach revises (#1268), which is a rewrite and never a creation."""
+    path = f"bundle/{plan.link_dir}/{plan.slug}.md"
+    if plan.attach_to is None:
+        typer.echo(f"  + {path}")
+    else:
+        typer.echo(f"  ~ {path} (revised -- version {plan.attach_version})")
 
 
 def _echo_ingest_preview(preview: ingest_service.IngestPreview) -> None:
@@ -5103,7 +5133,7 @@ def _echo_ingest_preview(preview: ingest_service.IngestPreview) -> None:
                 err=True,
             )
         for plan in preview.derived:
-            typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
+            _echo_derived_preview_line(plan)
         for obj in preview.adopted:
             typer.echo(
                 f"  ~ bundle/{obj.link_dir}/{obj.slug}.md "
@@ -5117,7 +5147,7 @@ def _echo_ingest_preview(preview: ingest_service.IngestPreview) -> None:
         typer.echo(f"  + bundle/sources/{slug}.md")
         _echo_event_date_preview_line(preview.event_date)
         for plan in preview.derived:
-            typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
+            _echo_derived_preview_line(plan)
         typer.echo(f"  ~ {preview.index_name} (new Source entry)")
         typer.echo(f"  ~ {preview.log_name} (new dated entry)")
 
