@@ -195,3 +195,29 @@ def test_doctor_reports_ollama_unreachable_without_crashing(
     assert "[FAIL] Ollama reachable" in result.output
     assert "[PASS] git available" in result.output
     assert "Traceback" not in result.output
+
+
+def test_every_prompt_file_ships_and_loads() -> None:
+    """The prompts are data files, not code (ADR-0043): `uv_build` has to
+    carry them into the wheel and `importlib.resources` has to find them in
+    the install under test. A wheel that dropped the folder would import
+    cleanly and fail on the first prompt load, so prove the load here, for
+    every file, and that the extraction system prompt (the largest) is
+    non-trivial."""
+    from importlib import resources
+
+    from openkos.llm import prompts
+
+    root = resources.files("openkos") / "prompts"
+    ids = sorted(
+        f"{task.name}/{entry.name.removesuffix(prompts.PROMPT_SUFFIX)}"
+        for task in root.iterdir()
+        if task.is_dir() and task.name != "__pycache__"
+        for entry in task.iterdir()
+        if entry.name.endswith(prompts.PROMPT_SUFFIX)
+    )
+
+    assert len(ids) >= 16
+    for prompt_id in ids:
+        assert prompts.raw_prompt_hash(prompt_id)
+    assert len(prompts.load_prompt("contradiction/system")) > 200

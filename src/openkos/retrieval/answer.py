@@ -86,6 +86,7 @@ from openkos.llm.base import (
     LLMBackend,
     Message,
 )
+from openkos.llm.prompts import load_prompt
 from openkos.model import okf
 from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
 from openkos.retrieval import fusion, history, pool
@@ -163,26 +164,10 @@ instead of becoming a permanent bundle concept with five invented
 provenance edges."""
 
 
-_SYSTEM_PROMPT = (
-    "You are OpenKOS, a local-first knowledge assistant. Answer the question "
-    "using ONLY the numbered CONTEXT concepts below -- do not use outside "
-    "knowledge. Write prose only: a concept id is an internal identifier, so "
-    "never quote one in your answer and never repeat the bracketed labels "
-    "that head the context blocks -- refer to a concept by its number if you "
-    "must refer to one at all. If the "
-    "context does not contain enough information to answer, say so plainly "
-    'rather than guessing; an honest "the compiled bundle does not cover '
-    'this" is the correct answer when the context is insufficient. '
-    "Finish with one final line of its own, exactly of the form "
-    f"'{_ATTRIBUTION_KEYWORD}: 1, 3' -- the numbers of the CONTEXT blocks "
-    "your answer actually draws on. List a block only if your answer genuinely "
-    "uses what it says, never merely because it was provided, and write "
-    f"'{_ATTRIBUTION_KEYWORD}: {_ATTRIBUTION_NONE}' if your answer draws on "
-    "none of them. The caller cites exactly the blocks this line names. "
-    "Close with that line every time, in exactly that form, however short "
-    "or long the answer and whatever language it is written in: the "
-    f"{_ATTRIBUTION_KEYWORD} line is machinery, not prose -- never "
-    "translate it, never omit it."
+_SYSTEM_PROMPT = load_prompt(
+    "answer/system",
+    attribution_keyword=_ATTRIBUTION_KEYWORD,
+    attribution_none=_ATTRIBUTION_NONE,
 )
 """Stable system half of the 2-message prompt (D5): local-first grounding
 rules (answer only from CONTEXT, keep internal ids out of the prose, admit
@@ -1078,14 +1063,8 @@ def _assemble_context(
 _SUFFICIENCY_NONE: Final = "NONE"
 """The reply meaning "no sentence here answers the question" (#760)."""
 
-_SUFFICIENCY_PROMPT = (
-    "You judge whether a body of CONTEXT can answer a QUESTION. Quote, "
-    "verbatim, the sentence or sentences from the CONTEXT that answer the "
-    "QUESTION. Quote only text that appears in the CONTEXT word for word. If "
-    f"no sentence in the CONTEXT answers the QUESTION, reply with exactly the "
-    f"single word {_SUFFICIENCY_NONE}. Sharing a topic with the question is "
-    "not enough -- a sentence must actually answer it. Do not answer from "
-    "your own knowledge."
+_SUFFICIENCY_PROMPT = load_prompt(
+    "answer/sufficiency", sufficiency_none=_SUFFICIENCY_NONE
 )
 """System half of the pre-synthesis sufficiency check (#760).
 

@@ -1,0 +1,2 @@
+When the source is a meeting, call, or interview transcript, BOTH halves of that instruction are required: the gathering itself AND each distinct subject the participants worked through -- every decision reached, every problem raised, every topic resolved, every procedure agreed. A working transcript normally develops SEVERAL such subjects, and a reply naming only the gathering has not read the transcript for its content.
+

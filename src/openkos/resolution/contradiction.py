@@ -89,6 +89,7 @@ from openkos.graph.base import GraphStore
 from openkos.graph.sqlite_graph import CandidateSource, build_graph
 from openkos.llm import parsing
 from openkos.llm.base import BackendError, LLMBackend, Message
+from openkos.llm.prompts import load_prompt
 from openkos.model import okf
 from openkos.model.relations import RESOLUTION_RELATION_TYPES
 
@@ -136,31 +137,7 @@ _MALFORMED_REPLY_RATIONALE = (
 """Stable rationale for a reply that fails fail-closed parsing (mirrors
 `adjudication.py`'s `_MALFORMED_REPLY_RATIONALE`)."""
 
-_SYSTEM_PROMPT = (
-    "You are a contradiction-detection adjudicator in a local-first "
-    "knowledge engine. Given two RELATED concepts and the relation linking "
-    "them, decide whether their content CONTRADICTS, is CONSISTENT, or the "
-    "answer is UNCERTAIN. A contradiction is two INCOMPATIBLE assertions "
-    "about the same subject and the same property (a date, a number, a "
-    "status, a cause). Two concepts defined in OPPOSITION to each other -- "
-    "complementary or opposite types in one taxonomy -- are NOT a "
-    "contradiction: their definitions differ by design and assert nothing "
-    "incompatible about any shared fact, so judge them consistent. "
-    "Likewise, one concept praising what a technique improves and another "
-    "describing a limitation it has make claims about DIFFERENT properties, "
-    "and two bodies that both acknowledge the same limitation AGREE about "
-    "it: judge contradicts only on incompatible values for one property, "
-    "never on opposite tone toward one subject. Assert "
-    "contradicts ONLY when you can cite specific conflicting claims from "
-    "both concepts; otherwise use consistent or uncertain. Set confidence "
-    "to how sure you are of the verdict, and reserve values above 0.9 for "
-    "conflicts you can quote directly from both bodies.\n\n"
-    "Return ONLY a JSON object, with NO prose, NO markdown, and NO code "
-    "fences around it, matching exactly this shape:\n"
-    '{"verdict": "contradicts"|"consistent"|"uncertain", '
-    '"confidence": <0.0-1.0>, "rationale": "...", '
-    '"conflicting_claims": ["...", ...]}'
-)
+_SYSTEM_PROMPT = load_prompt("contradiction/system")
 """Stable system half of the 2-message prompt (mirrors
 `adjudication._SYSTEM_PROMPT`/`edge_typing._SYSTEM_PROMPT`): the closed
 3-value verdict vocabulary, the citation requirement for `contradicts`, and

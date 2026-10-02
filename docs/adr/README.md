@@ -81,3 +81,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0040](0040-an-optional-native-wake-up-for-the-inbox-watch.md) | The inbox watch may be woken by an optional OS file-notification backend; polling stays the default, the fallback and the safety net | Accepted | 2026-10-01 |
 | [0041](0041-a-changed-source-imports-as-a-new-version-and-its-supersession-is-proposed.md) | A source edited after import imports as a new version, and its supersession is proposed, not written | Accepted | 2026-10-01 |
 | [0042](0042-human-readable-cli-output-is-a-tty-gated-convention.md) | Human-readable CLI output follows one TTY-gated convention | Accepted | 2026-10-01 |
+| [0043](0043-llm-prompts-are-files-versioned-by-content-hash.md) | LLM prompts are files in one folder, versioned by content hash | Proposed | 2026-10-02 |

@@ -36,6 +36,7 @@ from pathlib import Path
 from openkos import lint, sensitivity
 from openkos.llm import parsing, prompting
 from openkos.llm.base import BackendError, LLMBackend, Message
+from openkos.llm.prompts import load_prompt
 from openkos.model import okf, types
 
 N_SAMPLE_CONCEPTS = 5
@@ -61,16 +62,7 @@ as a JSON object at all -- this constant upholds `TierSuggestion.rationale`'s
 "never blank on the fail-closed degrade paths" invariant when the model DID
 reply with parseable JSON but left `rationale` blank."""
 
-_SYSTEM_PROMPT = (
-    "You are a knowledge-volatility tier suggester in a local-first "
-    "knowledge engine. Given a concept TYPE and a sample of that type's "
-    "concept bodies, suggest a single volatility `tier` string describing "
-    'how often concepts of this type tend to change -- one of "static", '
-    '"slow", or "volatile" -- plus a short rationale.\n\n'
-    "Return ONLY a JSON object, with NO prose, NO markdown, and NO code "
-    "fences around it, matching exactly this shape:\n"
-    '{"tier": "...", "rationale": "..."}'
-)
+_SYSTEM_PROMPT = load_prompt("volatility_typing/system")
 """Stable system half of the 2-message prompt (mirrors
 `edge_typing._SYSTEM_PROMPT`): the JSON-only instruction baked into system
 text; the `user` message carries the type name, current default tier, and

@@ -20,6 +20,7 @@ import re
 from typing import Final
 
 from openkos.llm.base import LLMBackend, Message
+from openkos.llm.prompts import load_prompt
 
 _MIN_LENGTH_RATIO: Final = 0.5
 """The reconciled body must be at least half as long as the LONGER input
@@ -32,15 +33,7 @@ _STACKED_HEADING_MARKER: Final = "## Merged content ("
 """A reply still carrying the stacked heading re-emitted the shape being
 fixed instead of reconciling it -- refused."""
 
-_SYSTEM_PROMPT: Final = (
-    "You are merging two overlapping notes about the same subject into ONE "
-    "coherent document. Both notes are correct; they overlap and phrase the "
-    "same content in two voices. Write a single markdown body that covers "
-    "every distinct claim from both notes exactly once, in one voice. Keep "
-    "concrete details; do not summarize away substance; do not add new "
-    "claims. Output ONLY the merged document body in markdown -- no YAML "
-    "frontmatter, no headings about merging, no commentary before or after."
-)
+_SYSTEM_PROMPT: Final = load_prompt("reconciliation/system")
 
 
 _HEADING_RE: Final = re.compile(r"^(?P<hashes>#{1,6})(?P<rest>\s.*)?$")
