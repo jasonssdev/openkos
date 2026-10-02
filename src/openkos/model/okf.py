@@ -2574,6 +2574,14 @@ def apply_deprecation_export(
     return decision, dump_frontmatter(decision.metadata, body)
 
 
+def is_marked_deprecated(metadata: Mapping[str, object]) -> bool:
+    """Whether the document's `status` reads `deprecated`, whoever wrote it:
+    a person, or the engine's export of a computed supersession. For a caller
+    that only needs to know a concept has already been retired
+    (`declares_deprecated` is the narrower, human-authored question)."""
+    return metadata.get("status") == "deprecated"
+
+
 def declares_deprecated(metadata: Mapping[str, object]) -> bool:
     """`True` only when `metadata`'s own `status` field is the exact literal
     `"deprecated"` AND it does not carry a valid deprecated-status export

@@ -275,10 +275,9 @@ def dead_sources_in_family(
             metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, okf.FrontmatterError):
             continue
-        if (
-            metadata.get(okf.EXTRACTION_STATUS_KEY) == "no-extractable-text"
-            and metadata.get("status") != "deprecated"
-        ):
+        if metadata.get(
+            okf.EXTRACTION_STATUS_KEY
+        ) == "no-extractable-text" and not okf.is_marked_deprecated(metadata):
             dead.append(f"sources/{slug}")
     return tuple(dead)
 
