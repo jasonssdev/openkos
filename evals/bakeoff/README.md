@@ -61,7 +61,7 @@ whose stamp could not pin its result.
 | `precondition` | blocks the candidate | "unjudged titles = 0 after adjudication" |
 | `gate` | **drops** the candidate for the family | rule 6.1 "no worse than baseline", and the vetoes |
 | `win` | the role is not won; no drop | rule 6.2 primary metrics |
-| `budget` | reported against adoption; no drop | rule 6.4 latency budget |
+| `budget` | **drops** the candidate for the family, at the first harness where it is known at n=15 | rule 6.4, owner clarification 3 |
 
 A bar the baseline already fails is **waived**, never a gate (owner decision 1).
 A win that would need more than the metric's ceiling is "no headroom": a scalar
@@ -75,13 +75,15 @@ human adopts.
 ## Interpretation choices
 
 The pre-registration states these rules without every number the code needs.
-Each choice is a constant or a data field, so it is one edit to overrule.
+Each choice is a constant or a data field. The ones below were accepted by the
+owner in the "Clarifications before the first run" comment on #1269 (see
+`CLARIFICATION` in `bakeoff_spec.py`).
 
 - **Stage order** is cheapest-first by the pre-registration's forecast minutes
   (sufficiency, adjudication, contradictions, auto_merge, decision_revisions),
   not the order the run plan lists them in.
-- **Only gates drop.** A missed win or a blown latency budget does not drop a
-  candidate (the pre-registration drops "at its first failed 6.1 bar").
+- **Gates and blown latency budgets drop** (owner clarification 3 on #1269). A
+  missed win does not: the same candidate may still win another role.
 - **"Persistently wrong" cases** (contradictions): wrong in more than half the
   runs (`PERSISTENT_WRONG_SHARE`); the three cases it means were 15, 15 and 14
   of 15.
@@ -103,10 +105,12 @@ Each choice is a constant or a data field, so it is one edit to overrule.
 
 ## What is not built (see the report on #1269)
 
-- The **same-family arm** for each judge harness: the harnesses score fixed
-  inputs, so a "same family as the generator" arm needs a stated generator
-  model; not guessed.
-- Running a Qwen3.6 candidate **with thinking on**: `OllamaClient` always sends
-  `think: false`, so the "both ways" probe (open question 5) is a client change.
+- The **same-family arm** for each judge harness (self-preference hypothesis):
+  **not measured this round** (owner clarification 1 on #1269). The harnesses
+  score fixed hand-written fixtures, so there is no generator model to match a
+  family against. The plan and the report both say so.
+- Running a Qwen3.6 candidate **with thinking on**: not done. Qwen3.6 runs with
+  thinking off only, as production does (`OllamaClient` sends `think: false`);
+  no client change (owner clarification 2).
 - **Pulling** models, and **adjudicating** the extraction queue: both are
   yours; the driver blocks on the second and reports the first.

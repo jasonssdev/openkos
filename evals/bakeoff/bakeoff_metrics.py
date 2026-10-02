@@ -70,7 +70,8 @@ PERSISTENT_WRONG_SHARE = 0.5
 """A merged field-shape case is "persistently wrong" when MORE than this share
 of its runs is wrong. The pre-registration says "the 3 persistently wrong
 cases" without defining it; the three it means were wrong in 15, 15 and 14 of
-15 baseline runs, so any share from 0.5 to 0.9 selects the same three."""
+15 baseline runs, so any share from 0.5 to 0.9 selects the same three. Accepted
+in the owner clarification on #1269 ("Clarifications before the first run")."""
 
 
 def load_json(path: pathlib.Path) -> Any:

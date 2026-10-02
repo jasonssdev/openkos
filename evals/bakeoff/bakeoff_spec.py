@@ -117,6 +117,23 @@ class HarnessSpec:
 
 
 _PRE = "pre-reg"
+CLARIFICATION = "#1269, comment 'Clarifications before the first run'"
+"""Owner decisions settled before the first run, encoded here and in
+`bakeoff_bars.py`: (1) the same-family arm is NOT MEASURED this round (see
+`NOT_MEASURED_THIS_ROUND`); (2) Qwen3.6 runs thinking OFF only, as production
+does, with no client change; (3) a blown latency budget DROPS a candidate for
+the family at the first harness where it is known at n=15. Also accepted there:
+cheapest-first stage order (`stage_order`), "top 2 Generate" ranked by mean
+per-fixture pre-cap recall gain, transitivity read `<= baseline + 0.03` (I6),
+and "persistently wrong" = wrong in more than half the runs
+(`bakeoff_metrics.PERSISTENT_WRONG_SHARE`)."""
+
+NOT_MEASURED_THIS_ROUND = (
+    "same-family arm per judge harness (self-preference hypothesis): the judge "
+    "harnesses score fixed hand-written fixtures, so there is no generator "
+    "model to match a family against; left for a dedicated experiment "
+    "(clarification 1)",
+)
 
 
 def _bar(
@@ -816,6 +833,16 @@ def _self_test() -> int:
     )
 
     # Pre-reg constants.
+    check(
+        "same-family arm is recorded as not measured",
+        any("same-family" in i for i in NOT_MEASURED_THIS_ROUND),
+        True,
+    )
+    check(
+        "clarification is cited",
+        "Clarifications before the first run" in CLARIFICATION,
+        True,
+    )
     check("n=15", RUNS, 15)
     check("budget", BUDGET_GB, 24.0)
     check("production context", PRODUCTION_NUM_CTX, 12288)

@@ -17,8 +17,10 @@ ROLES. A bar has exactly one role, and the role decides what a failure does:
 - `win` -- the rule 6.2 primary metric. Failing it means the role is not won;
   it does not drop the candidate (the same candidate may still win another
   role's harness, and its vetoes are what the knockout guards).
-- `budget` -- the rule 6.4 latency budget. Reported against adoption; the
-  pre-registration does not make it a drop condition, so it is not one here.
+- `budget` -- the rule 6.4 latency budget. A blown budget DROPS the candidate
+  for the family at the first harness where it is known at n=15, alongside a
+  failed gate (owner clarification on #1269, "Clarifications before the first
+  run", point 3). An unmeasured budget is not a drop.
 
 OWNER DECISION 1 ("no worse than baseline", and a bar the baseline already
 fails is an opportunity, not a gate) is `waive_if_baseline_fails`: an ABSOLUTE
@@ -237,7 +239,11 @@ def evaluate_harness(
 
     blocked = any(r.role == "precondition" and r.status != "PASS" for r in results)
     gate_failed = [r for r in results if r.role == "gate" and r.status == "FAIL"]
-    dropped = bool(gate_failed) and not blocked
+    budget_failed = [r for r in results if r.role == "budget" and r.status == "FAIL"]
+    # Clarification 3 on #1269: a blown latency budget drops like a failed gate.
+    # Results keep bar order, so `first_failed` is the first of either kind.
+    drop_causes = [r for r in results if r in gate_failed or r in budget_failed]
+    dropped = bool(drop_causes) and not blocked
 
     win_results = [r for r in results if r.role == "win"]
     if not win_results:
@@ -263,7 +269,7 @@ def evaluate_harness(
         results=results,
         blocked=blocked,
         dropped=dropped,
-        first_failed=gate_failed[0].bar_id if dropped else None,
+        first_failed=drop_causes[0].bar_id if dropped else None,
         wins=wins,
         budget_ok=budget_ok,
         unmeasured=tuple(r.bar_id for r in results if r.status == "NOT_MEASURED"),
@@ -451,8 +457,21 @@ def _self_test() -> int:
     check("a missed win does NOT drop", (lost.dropped, lost.wins), (False, "lost"))
     slow = evaluate_harness(bars, base, {"u": 0, "g": 0.9, "w": 0.7, "t": 31.0})
     check(
-        "a blown budget does NOT drop", (slow.dropped, slow.budget_ok), (False, False)
+        "a blown latency budget DROPS (#1269 clarification 3)",
+        (slow.dropped, slow.budget_ok, slow.first_failed),
+        (True, False, "bud"),
     )
+    check("the budget drop says why", slow.reason.startswith("dropped at bud"), True)
+    unmeasured_budget = evaluate_harness(
+        bars, base, {"u": 0, "g": 0.9, "w": 0.7, "t": None}
+    )
+    check(
+        "an unmeasured budget is not a drop",
+        (unmeasured_budget.dropped, unmeasured_budget.budget_ok),
+        (False, None),
+    )
+    both = evaluate_harness(bars, base, {"u": 0, "g": 0.84, "w": 0.7, "t": 31.0})
+    check("the first failed bar of either kind is named", both.first_failed, "gate")
     vetoed = evaluate_harness(bars, base, {"u": 0, "g": 0.84, "w": 0.9, "t": 5.0})
     check("a failed gate drops, whatever the win", vetoed.dropped, True)
     check("the drop names the first failed bar", vetoed.first_failed, "gate")

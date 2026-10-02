@@ -321,6 +321,11 @@ def render_plan(items: Sequence[PlanItem], *, runs: int, session: str) -> str:
         f"- already done and skipped: {done} item(s)",
         f"- upper bound with no knockout: **{(todo + conditional + deferred) / 60:.1f} h**",
         "",
+        "## Not measured this round",
+        "",
+        *(f"- {item}" for item in spec_mod.NOT_MEASURED_THIS_ROUND),
+        "- Qwen3.6 runs thinking OFF only, as production does (clarification 2).",
+        "",
         "The pre-registration forecasts about 65 h for the full serial battery and "
         "35-40 h for the staged plan; the upper bound above is the serial figure "
         "for THESE candidates, and the knockout is what brings it down.",
@@ -807,6 +812,10 @@ def render_report(
         )
 
     lines += [
+        "",
+        "## Not measured this round",
+        "",
+        *(f"- {item}" for item in spec_mod.NOT_MEASURED_THIS_ROUND),
         "",
         "## Role x model",
         "",
@@ -1309,6 +1318,16 @@ def _self_test() -> int:
             "## Time forecast" in text and "upper bound with no knockout" in text,
             True,
         )
+        check(
+            "the plan says the same-family arm is not measured",
+            "same-family arm" in text and "Not measured this round" in text,
+            True,
+        )
+        check(
+            "the plan says Qwen3.6 runs thinking off only",
+            "thinking OFF only" in text,
+            True,
+        )
         short = render_plan(plan, runs=5, session="s1")
         check(
             "a non-registered n is called out", "NOT the registered n=15" in short, True
@@ -1405,6 +1424,32 @@ def _self_test() -> int:
             "DROPPED",
         )
 
+        # Clarification 3: a blown latency budget drops, at the first harness.
+        mark(
+            "query_sufficiency",
+            "gemma4:12b",
+            {**suff_base, "latency_median_nonrefused_s": 2.5},
+        )
+        ev = evaluate_all(results, only_models=["gemma4:12b"], loader=fake_loader)
+        slow = ev.knockouts[("judge", "gemma4:12b")]
+        check(
+            "a candidate over 2x the baseline latency is dropped",
+            (slow.status, slow.stopped_at),
+            ("dropped", "query_sufficiency"),
+        )
+        check("the drop names the latency bar", "S4-latency" in slow.reason, True)
+        mark(
+            "query_sufficiency",
+            "gemma4:12b",
+            {**suff_base, "latency_median_nonrefused_s": 2.0},
+        )
+        ev = evaluate_all(results, only_models=["gemma4:12b"], loader=fake_loader)
+        check(
+            "exactly 2x the baseline latency is within budget",
+            ev.verdicts[("query_sufficiency", "gemma4:12b")].dropped,
+            False,
+        )
+
         # The baseline's own failure on an absolute veto is waived, not a drop.
         mark("query_sufficiency", "qwen3:8b", {**suff_base, "grounded_refused": 2.0})
         mark("query_sufficiency", "phi4:14b", {**suff_base, "grounded_refused": 2.0})
@@ -1497,6 +1542,11 @@ def _self_test() -> int:
 
         # The report renders from the evaluation with no model.
         rendered = render_report(results, ev, runs=15, session="s1")
+        check(
+            "the report says the same-family arm is not measured",
+            "same-family arm" in rendered,
+            True,
+        )
         check(
             "the report has a role x model table", "## Role x model" in rendered, True
         )
