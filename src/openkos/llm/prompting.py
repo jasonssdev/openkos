@@ -16,7 +16,9 @@ sentence, free to drift the day one of them is reworded.
 
 from typing import Final
 
-RATIONALE_LANGUAGE_TEMPLATE: Final = 'Write the "rationale" in {language}.'
+from openkos.llm.prompts import load_prompt
+
+RATIONALE_LANGUAGE_TEMPLATE: Final = load_prompt("rationale/language_template")
 """The clause appended to a rationale prompt's system turn when a workspace
 pins `rationale_language` (issue #812).
 

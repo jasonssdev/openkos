@@ -29,20 +29,14 @@ from openkos.extraction import evidence as evidence_mod
 from openkos.extraction import judge as judge_mod
 from openkos.llm import parsing
 from openkos.llm.base import BackendError, BackendUnavailable, LLMBackend, Message
+from openkos.llm.prompts import load_prompt
 from openkos.model.types import CLASSIFIABLE_TYPES as _VALID_TYPES
 
 # `_VALID_TYPES` is now derived from `openkos.model.types.REGISTRY` -- see
 # that module for the single source of truth. Closed classification
 # vocabulary; anything else fails validation.
 
-TRANSCRIPT_SUBJECTS_CLAUSE = (
-    "When the source is a meeting, call, or interview transcript, BOTH halves "
-    "of that instruction are required: the gathering itself AND each distinct "
-    "subject the participants worked through -- every decision reached, every "
-    "problem raised, every topic resolved, every procedure agreed. A working "
-    "transcript normally develops SEVERAL such subjects, and a reply naming "
-    "only the gathering has not read the transcript for its content.\n\n"
-)
+TRANSCRIPT_SUBJECTS_CLAUSE = load_prompt("extraction/transcript_subjects_clause")
 """The #715 clause, spliced into `_SYSTEM_PROMPT` below.
 
 #715: meeting-shaped sources retained people and NO subjects at all -- zero
@@ -81,177 +75,46 @@ one prompt twice while reporting it as clause-against-no-clause.
 Its placement is load-bearing and pinned by that test: immediately after the
 stated multiplicity test, which is where it was measured."""
 
-_SYSTEM_PROMPT = (
-    "You are a classification step in a local-first knowledge engine. Read "
-    "the SOURCE text below and decide which distinct derived knowledge "
-    "objects, if any, it is worth extracting. Apply the type rubric and "
-    "tie-breaks below to EACH object independently.\n\n"
-    'Vocabulary: the derived object\'s "type" MUST be one of exactly nine '
-    'values: "Person", "Organization", "Place", "Event", "Procedure", '
-    '"Decision", "Project", "Concept", or "Entity". First identify the '
-    "candidate distinct objects the source contains, then classify EACH "
-    "candidate independently against the type rubric below:\n"
-    '- "Person": the candidate is ONE specific, named individual human -- '
-    "their identity, role, work, or biography.\n"
-    '- "Organization": the candidate is ONE specific, named group, '
-    "company, institution, team, or agency.\n"
-    '- "Place": the candidate is ONE specific, named geographic location '
-    "or physical site -- a city, region, building, landmark, or venue -- "
-    "treated AS a location.\n"
-    '- "Event": the candidate is ONE bounded, dated happening -- an '
-    "occurrence tied to a specific time or span (a meeting, launch, "
-    "battle, incident, or conference).\n"
-    '- "Procedure": the candidate is ONE repeatable how-to -- a method, '
-    "protocol, recipe, or step-by-step process meant to be performed "
-    "again.\n"
-    '- "Decision": the candidate is ONE choice that was made -- carrying '
-    "its rationale, the alternatives considered, and its current status -- "
-    "a self-contained decision record, not a general idea or a dated "
-    "happening.\n"
-    '- "Project": the candidate is ONE ongoing effort defined by a goal '
-    "and a timespan -- a multi-step undertaking spanning time toward that "
-    "goal, not a single bounded happening or a repeatable how-to.\n"
-    '- "Concept": the source describes an idea, topic, theory, term, or '
-    "framework -- INCLUDING one named after a person, organization, or "
-    "place (a named method, system, principle, or law). A name borrowed "
-    "from a person, organization, or place is a label, not the subject: "
-    "classify by what the candidate is actually about, not by whose name "
-    "it carries.\n"
-    '- "Entity": a fallback for a concrete tool, product, or artifact that '
-    "is neither a who, a where, nor an idea -- Entity is never the first "
-    "choice, only what remains when nothing else fits.\n\n"
-    # The rubric above says "ONE specific, named X" for seven of the nine
-    # types, which leaves an instructional document -- a how-to, tutorial,
-    # reference page, or FAQ, about no NAMED subject -- with no branch to
-    # land on, and the model then declines instead of classifying. This
-    # clarifier gives such a source a home without restating the nine
-    # definitions above.
-    "Not every source is about a NAMED subject. An instructional document "
-    "-- a how-to, tutorial, guide, reference page, or FAQ -- still has a "
-    'primary subject: choose "Procedure" when it teaches a repeatable '
-    "how-to (an installation walkthrough, a setup or usage routine), or "
-    '"Concept" when it explains an idea, topic, tool, or framework. '
-    '"Concept" does NOT require a proper name. Example: a page explaining '
-    "what a tool is and how it works is a Concept; a page of steps for "
-    "installing that tool is a Procedure.\n\n"
-    "Tie-breaks, applied in this order:\n"
-    '(1) Name vs. denoted concept -- e.g. "Toyota" the company is '
-    'Organization, but "Toyota Production System" is Concept; a person is '
-    "Person, but a theory named after them is Concept; a landmark IS its "
-    'named place, but "Stockholm Syndrome" is Concept, not Place; a '
-    'general geographic idea (e.g. "urbanism") is Concept, not one '
-    "specific named site -- prefer Person, Organization, or Place ONLY "
-    "when the source centers on the individual, institution, or location "
-    "itself, otherwise choose Concept.\n"
-    "(2) Among specific named continuants, occurrents, and knowledge-work "
-    "objects (Person, Organization, Place, Event, Procedure, Decision, "
-    "Project) -- pick whichever the source centers on:\n"
-    "    - A landmark or site named after a person or organization (e.g. a "
-    'memorial) is "Place" ONLY if the source is about the physical site '
-    "itself; if the source is about the honoree, choose Person or "
-    "Organization instead.\n"
-    "    - An organization sited at one location (a headquarters or "
-    'campus) is "Organization" when the source centers on the group\'s '
-    'identity or activity; choose "Place" only when the source centers on '
-    "the site itself as a location.\n"
-    '    - A source about a bounded, dated happening is "Event", not '
-    '"Place" -- the place is merely where it occurred; choose "Place" '
-    "only when the source is genuinely about the location itself as a "
-    "site, not about what happened there.\n"
-    '    - Among occurrents, "Event" is a single time-bound happening '
-    'while "Procedure" is a repeatable how-to.\n'
-    "    - A choice made with rationale, alternatives considered, and a "
-    'current status is "Decision" -- distinct from "Concept" (a general '
-    "idea, topic, theory, or framework, with no decision-record shape) "
-    'and from "Event" (a dated happening with no rationale or '
-    "alternatives weighed).\n"
-    "    - An ongoing effort defined by a goal and a timespan is "
-    '"Project" -- distinct from "Event" (a single bounded happening) and '
-    'from "Procedure" (a repeatable how-to meant to be performed again, '
-    "not a one-time effort toward a goal).\n"
-    "    - When Person and Organization are truly balanced, prefer "
-    '"Organization" (the continuant that outlives individuals).\n'
-    '(3) Person, Organization, Place, and Concept all outrank "Entity" -- '
-    'so do "Event", "Procedure", "Decision", and "Project" -- Entity is '
-    "the last resort, used only when nothing else fits.\n\n"
-    "A source may be about more than one thing: extract each DISTINCT "
-    "object the source is genuinely about. Prefer FEWER, RICHER objects "
-    "over many shallow ones. Do NOT enumerate every named entity -- a "
-    "person, place, or organization merely mentioned or named in passing "
-    "is NOT a standalone object; extract it only when the source is "
-    "genuinely about it. Example: a meeting transcript is fundamentally "
-    "about the meeting itself (an Event) and any Decisions reached -- NOT "
-    "about each of the five participants named around the table; extract "
-    "the Event and the Decisions, not five Person stubs. The same restraint "
-    "applies to sub-topics: a section heading, a feature, a component, or a "
-    "term that exists only to EXPLAIN the source's main subject is part of "
-    "that object's body, not a separate object. A document explaining one "
-    "topic usually yields exactly ONE object.\n\n"
-    # Stated multiplicity test (design D3): decides single-topic vs
-    # multi-topic PER SUBJECT, additive next to (never inside) the
-    # verbatim-pinned anti-enumeration paragraph above.
-    "Multiplicity is decided per subject, not per source: a source "
-    "developing several distinct subjects -- e.g. a person discussed, an "
-    "idea corrected, a decision made -- yields one object per subject, "
-    "each classified independently. A source developing only one subject "
-    "still yields exactly ONE object.\n\n"
-    # #715, spliced HERE and nowhere else -- the position is measured, and a
-    # test pins the adjacency. Rationale, measurement and bounds live on
-    # `TRANSCRIPT_SUBJECTS_CLAUSE` itself, beside the bytes they describe.
-    + TRANSCRIPT_SUBJECTS_CLAUSE
-    # Anti-twin clause (design D4/5b, narrowed): prompt wording alone could
-    # not carry the unconditional rule at the 8B tier -- a narrower clause
-    # carrying a CONCRETE forbidden-title example made the defect WORSE
-    # (5.6 probe: twinned in 4 of 4, twice as the ONLY object -- priming).
-    # The rule is now enforced deterministically in
-    # `_drop_source_title_twins` (design D4/5b); this soft, example-free
-    # restatement only asks the model to prefer not emitting the twin
-    # ALONGSIDE genuine subjects, and explicitly preserves the floor: a
-    # source whose one genuine subject IS what its own title names still
-    # yields that subject.
-    + "A candidate whose title and scope merely restate the SOURCE's own "
-    'title and scope as a whole -- a "twin" that mirrors the source itself '
-    "rather than one specific subject within it -- MUST NOT be produced "
-    "ALONGSIDE another genuine candidate: when the source develops more "
-    "than one distinct subject, drop any candidate that only restates the "
-    "source as a whole and keep the specific ones. A source whose ONE "
-    "genuine subject is what its own title already names is not redundant "
-    "with anything and still yields that specific subject.\n\n"
-    # Positive default. This replaces a stack of three suppression levers
-    # ("When in doubt, leave it out", plus TWO separate invitations to
-    # return []) that together made the model answer a bare `[]` for any
-    # source without a named subject. Restraint is now expressed ONLY as
-    # "fewer, richer" (above) -- never as "extract nothing" -- and the
-    # empty array survives once, framed as a genuine last resort.
-    "Restraint means FEWER objects, never ZERO: a source with substantive "
-    "content normally yields AT LEAST ONE object -- the thing the source is "
-    "primarily about. Extract that primary subject rather than declining. "
-    "Return an empty array [] only as a last resort, for a source with no "
-    "substantive content at all (blank, boilerplate-only, or "
-    "unintelligible).\n\n"
-    # Near-boundary reporting (issue #401). Asked for as an OPTIONAL,
-    # omit-by-default field rather than a required one: the anti-twin
-    # experience (D4/5b) is that adding a rule the 8B tier must satisfy on
-    # every item can degrade the fields that already work. Framed as
-    # "only when genuinely torn" and "omit it otherwise" so the common,
-    # unambiguous case stays exactly the reply shape measured today, and
-    # `_validate` treats a missing, malformed, or self-equal value as
-    # simply no alternative.
-    "One further OPTIONAL field: if -- and ONLY if -- you were genuinely "
-    "torn between two types for a candidate, add "
-    '"type_alternative" naming the runner-up you weighed and rejected. '
-    "OMIT it entirely when the classification was clear, which is the "
-    'normal case. It must never equal that candidate\'s own "type". This '
-    "field records the closeness of the call; it does not change your "
-    "answer, so choose the better type exactly as you would have "
-    "otherwise.\n\n"
-    "Return ONLY a JSON array, with NO prose, NO markdown, and NO code "
-    "fences around it. Each element matches exactly this shape:\n"
-    '[{"type": "Person"|"Organization"|"Place"|"Event"|"Procedure"'
-    '|"Decision"|"Project"|"Concept"|"Entity", "title": "...", '
-    '"description": "...", "body": "...", "type_alternative": '
-    '"<optional, omit when the classification was clear>"}, ...]\n'
-    "Do NOT wrap the array in an outer object."
+# Design notes that sat inside the string, moved here with the text
+# (`prompts/extraction/system.md`):
+# The rubric above says "ONE specific, named X" for seven of the nine
+# types, which leaves an instructional document -- a how-to, tutorial,
+# reference page, or FAQ, about no NAMED subject -- with no branch to
+# land on, and the model then declines instead of classifying. This
+# clarifier gives such a source a home without restating the nine
+# definitions above.
+# Stated multiplicity test (design D3): decides single-topic vs
+# multi-topic PER SUBJECT, additive next to (never inside) the
+# verbatim-pinned anti-enumeration paragraph above.
+# #715, spliced HERE and nowhere else -- the position is measured, and a
+# test pins the adjacency. Rationale, measurement and bounds live on
+# `TRANSCRIPT_SUBJECTS_CLAUSE` itself, beside the bytes they describe.
+# Anti-twin clause (design D4/5b, narrowed): prompt wording alone could
+# not carry the unconditional rule at the 8B tier -- a narrower clause
+# carrying a CONCRETE forbidden-title example made the defect WORSE
+# (5.6 probe: twinned in 4 of 4, twice as the ONLY object -- priming).
+# The rule is now enforced deterministically in
+# `_drop_source_title_twins` (design D4/5b); this soft, example-free
+# restatement only asks the model to prefer not emitting the twin
+# ALONGSIDE genuine subjects, and explicitly preserves the floor: a
+# source whose one genuine subject IS what its own title names still
+# yields that subject.
+# Positive default. This replaces a stack of three suppression levers
+# ("When in doubt, leave it out", plus TWO separate invitations to
+# return []) that together made the model answer a bare `[]` for any
+# source without a named subject. Restraint is now expressed ONLY as
+# "fewer, richer" (above) -- never as "extract nothing" -- and the
+# empty array survives once, framed as a genuine last resort.
+# Near-boundary reporting (issue #401). Asked for as an OPTIONAL,
+# omit-by-default field rather than a required one: the anti-twin
+# experience (D4/5b) is that adding a rule the 8B tier must satisfy on
+# every item can degrade the fields that already work. Framed as
+# "only when genuinely torn" and "omit it otherwise" so the common,
+# unambiguous case stays exactly the reply shape measured today, and
+# `_validate` treats a missing, malformed, or self-equal value as
+# simply no alternative.
+_SYSTEM_PROMPT = load_prompt(
+    "extraction/system", transcript_subjects_clause=TRANSCRIPT_SUBJECTS_CLAUSE
 )
 """Stable system half of the 2-message prompt: the closed 9-value
 vocabulary, the per-candidate framing (design D2: identify the candidate
@@ -609,10 +472,7 @@ def _framing_shaped(source_title: str, source_text: str) -> bool:
     )
 
 
-_LANGUAGE_ANCHOR: Final = (
-    'Write every "title", "description" and "body" in the same language as '
-    "the SOURCE TEXT below."
-)
+_LANGUAGE_ANCHOR: Final = load_prompt("extraction/language_anchor")
 """Language anchor for the no-title path ONLY (#522).
 
 Omitting a meeting-shaped title also removes the only source-language text
@@ -766,37 +626,7 @@ def _normalize_title(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 
 
-_REASK_SYSTEM_PROMPT = (
-    "A first extraction pass over the SOURCE below returned exactly ONE "
-    "object, and that object only restates the source's own title. This is "
-    "a narrow follow-up question, NOT a request to extract the source "
-    "again: the object already kept is kept whatever you answer here.\n\n"
-    "Question: beyond the subject its title already names, does the BODY of "
-    "this source develop any FURTHER distinct subject in its own right -- a "
-    "specific idea, artifact, decision, procedure, person, organization, "
-    "place, event, or project that the text says something substantive "
-    "about?\n\n"
-    "Answer with ONLY those further subjects. Do NOT repeat the subject the "
-    "title already names, and do NOT restate it under another name or "
-    "another type: it is already kept, and returning it again adds "
-    "nothing.\n\n"
-    "An empty array [] is a CORRECT and EXPECTED answer here. Many sources "
-    "genuinely cover exactly one subject, and for those the first pass was "
-    "right: answer [] and nothing else. Do not invent a subject, and do not "
-    "promote a section heading, a passing mention, a supporting detail, or "
-    "a step of something already kept in order to fill this answer. If you "
-    "are unsure whether something is a separate subject or part of the one "
-    "already kept, it is part of the one already kept -- answer [].\n\n"
-    'Vocabulary: each object\'s "type" MUST be one of exactly nine values: '
-    '"Person", "Organization", "Place", "Event", "Procedure", "Decision", '
-    '"Project", "Concept", or "Entity".\n\n'
-    "Return ONLY a JSON array, with NO prose, NO markdown, and NO code "
-    "fences around it. Each element matches exactly this shape:\n"
-    '[{"type": "Person"|"Organization"|"Place"|"Event"|"Procedure"'
-    '|"Decision"|"Project"|"Concept"|"Entity", "title": "...", '
-    '"description": "...", "body": "..."}, ...]\n'
-    "Do NOT wrap the array in an outer object."
-)
+_REASK_SYSTEM_PROMPT = load_prompt("extraction/reask")
 """System half of the BOUNDED RE-ASK prompt (#584) -- a SEPARATE constant,
 never an edit to `_SYSTEM_PROMPT`.
 
@@ -2887,35 +2717,7 @@ def _add_reask_subjects(
     )
 
 
-_PARTICIPANT_CAPTURE_SYSTEM_PROMPT = (
-    "A first extraction pass over the meeting-shaped SOURCE below already "
-    "ran. This is a narrow follow-up question, NOT a request to extract "
-    "the source again: nothing the first pass already found is discarded "
-    "by your answer here.\n\n"
-    "Question: does the source name any MEETING PARTICIPANT -- a specific "
-    "person or organization who attended, spoke, chaired, facilitated, or "
-    "was otherwise present or represented in this meeting -- that the "
-    "first pass may have missed?\n\n"
-    "Only report a participant you can anchor with a role, affiliation, "
-    "or relation beyond their bare name -- for example their meeting role "
-    "(chair, facilitator, presenter, secretary, organizer), the "
-    "organization they represent or work for, or an explicit relation "
-    "such as spoke in this meeting, attended, or is a member of. State "
-    "that anchor explicitly in the description or body of your answer. A "
-    "name alone, with no such anchor, is NOT a valid answer -- omit it "
-    "rather than guess at a role the source does not state.\n\n"
-    "An empty array [] is a CORRECT and EXPECTED answer whenever no "
-    "further anchored participant is named. Do not invent a participant, "
-    "and do not promote a passing mention with no stated role or "
-    "affiliation into an answer.\n\n"
-    'Vocabulary: each object\'s "type" MUST be exactly "Person" or '
-    '"Organization" -- no other type is a valid answer to this question.\n\n'
-    "Return ONLY a JSON array, with NO prose, NO markdown, and NO code "
-    "fences around it. Each element matches exactly this shape:\n"
-    '[{"type": "Person"|"Organization", "title": "...", '
-    '"description": "...", "body": "..."}, ...]\n'
-    "Do NOT wrap the array in an outer object."
-)
+_PARTICIPANT_CAPTURE_SYSTEM_PROMPT = load_prompt("extraction/participant_capture")
 """System half of the SCOPED PARTICIPANT CAPTURE prompt (#668 design D6) --
 a SEPARATE constant, never an edit to `_SYSTEM_PROMPT`, for the same reason
 `_REASK_SYSTEM_PROMPT` (#584) is separate: `_SYSTEM_PROMPT` is the general

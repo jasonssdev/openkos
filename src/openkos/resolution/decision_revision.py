@@ -57,7 +57,6 @@ subject-pass diagnostic (how many labelled pairs' derived subjects clear a
 lexical bar), independent of candidate generation.
 """
 
-import hashlib
 import math
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
@@ -70,6 +69,7 @@ from typing import Final, Literal, cast
 from openkos import event_dates
 from openkos.llm import parsing
 from openkos.llm.base import BackendError, LLMBackend, Message
+from openkos.llm.prompts import load_prompt, prompt_hash
 from openkos.resolution import similarity
 from openkos.resolution.decision_subject import quoted_verbatim
 from openkos.resolution.normalize import normalize_key
@@ -535,22 +535,7 @@ def _format_resolved_date(decision_date: DecisionDate) -> str:
     return cast(date, decision_date.value).isoformat()
 
 
-_JUDGE_SYSTEM_PROMPT: Final = """You are comparing two Decisions recorded in a knowledge base, from different meetings.
-
-Decide how the second Decision relates to the first Decision's choice on the same subject:
-- reverses: the second overturns or replaces the first's choice, so the first's choice no longer applies.
-- refines: the second keeps the first's choice but narrows, extends, or conditions it -- including adding an exception, a limit, or an extra option to a choice that otherwise continues.
-- reaffirms: the second restates the same choice.
-- unrelated: the two concern a different subject, or one has no bearing on the other.
-
-When the order between the two Decisions is not established, apply these same four definitions symmetrically -- judge whether one overturns, refines, reaffirms, or has no bearing on the other, without assuming which one came first.
-
-Quote one sentence copied VERBATIM from each Decision's own body that supports your verdict.
-
-Reply with JSON only, no other text:
-{"verdict": "reverses"|"refines"|"reaffirms"|"unrelated", "confidence": 0.0-1.0, "rationale": "...", "quote_first": "...", "quote_second": "..."}
-
-Never add a field naming which Decision is earlier or later -- that is determined elsewhere, from recorded dates, never from this reply. Never paraphrase; each quote must be copied character-for-character from its own Decision's body."""
+_JUDGE_SYSTEM_PROMPT: Final = load_prompt("decision_revision/judge")
 """The judge's system prompt (design.md Decision 6). Measured by
 `evals/decision_revisions/`: the `reverses` and `refines` rules separate a
 choice that no longer applies from one kept in force but narrowed by an
@@ -561,9 +546,7 @@ field for direction or ordering -- `parse_judge_reply` reads only the five
 schema keys this prompt asks for, so no reply can ever set direction
 (ADR-0025)."""
 
-JUDGE_PROMPT_VERSION: Final[str] = hashlib.sha256(
-    _JUDGE_SYSTEM_PROMPT.encode()
-).hexdigest()[:16]
+JUDGE_PROMPT_VERSION: Final[str] = prompt_hash(_JUDGE_SYSTEM_PROMPT)
 """Derived, never hand-bumped, from `_JUDGE_SYSTEM_PROMPT` itself -- so a
 future prompt edit cannot forget to invalidate the revision-findings cache
 (Phase B, S5) that keys on this constant, mirroring

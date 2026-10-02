@@ -58,6 +58,7 @@ from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import CandidateReport, CandidateSource, build_graph
 from openkos.llm import parsing, prompting
 from openkos.llm.base import BackendError, LLMBackend, Message
+from openkos.llm.prompts import load_prompt
 from openkos.model import okf
 from openkos.model.relations import (
     ENGINE_OWNED_RELATION_TYPES,
@@ -188,38 +189,10 @@ than by iterating the rubric: a type added to `REGISTRY` without a definition
 raises `KeyError` at IMPORT, instead of silently reaching the model as a bare
 name and quietly reintroducing #388."""
 
-_SYSTEM_PROMPT = (
-    "You are a relation-type suggester in a local-first knowledge engine. "
-    "Given a SOURCE and a TARGET concept connected by an existing untyped "
-    "link, suggest a single relation `type` describing how SOURCE relates to "
-    "TARGET, plus a short rationale.\n\n"
-    "You MUST choose `type` from exactly this fixed vocabulary, and use the "
-    "string verbatim:\n"
-    f"{_SEEDED_VOCAB_LINE}.\n"
-    "Do NOT invent a type outside this list.\n\n"
-    "What each one means, read as SOURCE -> TARGET:\n"
-    f"{_RUBRIC_LINES}\n\n"
-    "Tie-breaks, applied in this order:\n"
-    "(1) Containment before connection: if SOURCE sits INSIDE TARGET, choose "
-    "part_of or member_of, not depends_on or references. Use member_of when "
-    "TARGET is a collection of like things and SOURCE is one of them; use "
-    "part_of when TARGET is a single whole and SOURCE is a component of it.\n"
-    "(2) Origin before mention: if TARGET brought SOURCE about, choose "
-    "caused_by (an outcome or event) or produced_by (an artifact and its "
-    "maker), not references -- naming something is weaker than owing your "
-    "existence to it.\n"
-    "(3) A specific type beats related_to whenever the two documents actually "
-    "state the relationship. Do not reach for related_to just because more "
-    "than one type is plausible; decide between them using (1) and (2).\n\n"
-    "Then the opposite guard, which matters just as much: if the documents do "
-    "NOT support a specific claim, related_to is the CORRECT answer. Do not "
-    "guess a stronger type to seem decisive. A wrong part_of or caused_by "
-    "asserts something false about how the knowledge fits together, and "
-    "anything reading this graph will believe it; an honest related_to only "
-    "declines to say more.\n\n"
-    "Return ONLY a JSON object, with NO prose, NO markdown, and NO code "
-    "fences around it, matching exactly this shape:\n"
-    '{"type": "...", "rationale": "..."}'
+_SYSTEM_PROMPT = load_prompt(
+    "edge_typing/system",
+    seeded_vocab_line=_SEEDED_VOCAB_LINE,
+    rubric_lines=_RUBRIC_LINES,
 )
 """Stable system half of the 2-message prompt (mirrors
 `adjudication._SYSTEM_PROMPT`): the closed suggestable vocabulary, a

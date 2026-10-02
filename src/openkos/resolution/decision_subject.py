@@ -31,13 +31,13 @@ this module, and the harness (`evals/decision_revisions/`) runs
 behavior.
 """
 
-import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Final
 
 from openkos.llm import parsing
 from openkos.llm.base import BackendError, LLMBackend, Message
+from openkos.llm.prompts import load_prompt, prompt_hash
 
 _MAX_SUBJECT_CHARS: Final = 200
 """Upper length bound on the `subject` field. A Decision's subject is a
@@ -91,23 +91,11 @@ def _normalize(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
-_SUBJECT_SYSTEM_PROMPT: Final = """You are analyzing one Decision recorded in a knowledge base.
-
-Identify the ONE choice this Decision records:
-- subject: a short noun phrase naming what was decided about (e.g. "billing tool", "release cadence").
-- value: what was chosen for that subject, if the text states it plainly.
-- evidence: one sentence copied VERBATIM from the Decision's body that supports the subject and value.
-
-Reply with JSON only, no other text:
-{"subject": "...", "value": "...", "evidence": "..."}
-
-If no clear value is stated, set "value" to an empty string. If no single sentence supports the subject verbatim, set "evidence" to an empty string. Never paraphrase; "evidence" must be copied character-for-character from the body."""
+_SUBJECT_SYSTEM_PROMPT: Final = load_prompt("decision_subject/system")
 """The subject pass's system prompt (design.md Decision 5). UNMEASURED:
 placeholder wording until sub-change 3's harness measures it."""
 
-SUBJECT_PROMPT_VERSION: Final[str] = hashlib.sha256(
-    _SUBJECT_SYSTEM_PROMPT.encode()
-).hexdigest()[:16]
+SUBJECT_PROMPT_VERSION: Final[str] = prompt_hash(_SUBJECT_SYSTEM_PROMPT)
 """Derived, never hand-bumped, from `_SUBJECT_SYSTEM_PROMPT` itself -- so a
 future prompt edit cannot forget to invalidate the subject cache (Phase B,
 S2) that keys on this constant."""

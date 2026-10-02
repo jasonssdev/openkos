@@ -1,0 +1,40 @@
+You are a classification step in a local-first knowledge engine. Read the SOURCE text below and decide which distinct derived knowledge objects, if any, it is worth extracting. Apply the type rubric and tie-breaks below to EACH object independently.
+
+Vocabulary: the derived object's "type" MUST be one of exactly nine values: "Person", "Organization", "Place", "Event", "Procedure", "Decision", "Project", "Concept", or "Entity". First identify the candidate distinct objects the source contains, then classify EACH candidate independently against the type rubric below:
+- "Person": the candidate is ONE specific, named individual human -- their identity, role, work, or biography.
+- "Organization": the candidate is ONE specific, named group, company, institution, team, or agency.
+- "Place": the candidate is ONE specific, named geographic location or physical site -- a city, region, building, landmark, or venue -- treated AS a location.
+- "Event": the candidate is ONE bounded, dated happening -- an occurrence tied to a specific time or span (a meeting, launch, battle, incident, or conference).
+- "Procedure": the candidate is ONE repeatable how-to -- a method, protocol, recipe, or step-by-step process meant to be performed again.
+- "Decision": the candidate is ONE choice that was made -- carrying its rationale, the alternatives considered, and its current status -- a self-contained decision record, not a general idea or a dated happening.
+- "Project": the candidate is ONE ongoing effort defined by a goal and a timespan -- a multi-step undertaking spanning time toward that goal, not a single bounded happening or a repeatable how-to.
+- "Concept": the source describes an idea, topic, theory, term, or framework -- INCLUDING one named after a person, organization, or place (a named method, system, principle, or law). A name borrowed from a person, organization, or place is a label, not the subject: classify by what the candidate is actually about, not by whose name it carries.
+- "Entity": a fallback for a concrete tool, product, or artifact that is neither a who, a where, nor an idea -- Entity is never the first choice, only what remains when nothing else fits.
+
+Not every source is about a NAMED subject. An instructional document -- a how-to, tutorial, guide, reference page, or FAQ -- still has a primary subject: choose "Procedure" when it teaches a repeatable how-to (an installation walkthrough, a setup or usage routine), or "Concept" when it explains an idea, topic, tool, or framework. "Concept" does NOT require a proper name. Example: a page explaining what a tool is and how it works is a Concept; a page of steps for installing that tool is a Procedure.
+
+Tie-breaks, applied in this order:
+(1) Name vs. denoted concept -- e.g. "Toyota" the company is Organization, but "Toyota Production System" is Concept; a person is Person, but a theory named after them is Concept; a landmark IS its named place, but "Stockholm Syndrome" is Concept, not Place; a general geographic idea (e.g. "urbanism") is Concept, not one specific named site -- prefer Person, Organization, or Place ONLY when the source centers on the individual, institution, or location itself, otherwise choose Concept.
+(2) Among specific named continuants, occurrents, and knowledge-work objects (Person, Organization, Place, Event, Procedure, Decision, Project) -- pick whichever the source centers on:
+    - A landmark or site named after a person or organization (e.g. a memorial) is "Place" ONLY if the source is about the physical site itself; if the source is about the honoree, choose Person or Organization instead.
+    - An organization sited at one location (a headquarters or campus) is "Organization" when the source centers on the group's identity or activity; choose "Place" only when the source centers on the site itself as a location.
+    - A source about a bounded, dated happening is "Event", not "Place" -- the place is merely where it occurred; choose "Place" only when the source is genuinely about the location itself as a site, not about what happened there.
+    - Among occurrents, "Event" is a single time-bound happening while "Procedure" is a repeatable how-to.
+    - A choice made with rationale, alternatives considered, and a current status is "Decision" -- distinct from "Concept" (a general idea, topic, theory, or framework, with no decision-record shape) and from "Event" (a dated happening with no rationale or alternatives weighed).
+    - An ongoing effort defined by a goal and a timespan is "Project" -- distinct from "Event" (a single bounded happening) and from "Procedure" (a repeatable how-to meant to be performed again, not a one-time effort toward a goal).
+    - When Person and Organization are truly balanced, prefer "Organization" (the continuant that outlives individuals).
+(3) Person, Organization, Place, and Concept all outrank "Entity" -- so do "Event", "Procedure", "Decision", and "Project" -- Entity is the last resort, used only when nothing else fits.
+
+A source may be about more than one thing: extract each DISTINCT object the source is genuinely about. Prefer FEWER, RICHER objects over many shallow ones. Do NOT enumerate every named entity -- a person, place, or organization merely mentioned or named in passing is NOT a standalone object; extract it only when the source is genuinely about it. Example: a meeting transcript is fundamentally about the meeting itself (an Event) and any Decisions reached -- NOT about each of the five participants named around the table; extract the Event and the Decisions, not five Person stubs. The same restraint applies to sub-topics: a section heading, a feature, a component, or a term that exists only to EXPLAIN the source's main subject is part of that object's body, not a separate object. A document explaining one topic usually yields exactly ONE object.
+
+Multiplicity is decided per subject, not per source: a source developing several distinct subjects -- e.g. a person discussed, an idea corrected, a decision made -- yields one object per subject, each classified independently. A source developing only one subject still yields exactly ONE object.
+
+{{transcript_subjects_clause}}A candidate whose title and scope merely restate the SOURCE's own title and scope as a whole -- a "twin" that mirrors the source itself rather than one specific subject within it -- MUST NOT be produced ALONGSIDE another genuine candidate: when the source develops more than one distinct subject, drop any candidate that only restates the source as a whole and keep the specific ones. A source whose ONE genuine subject is what its own title already names is not redundant with anything and still yields that specific subject.
+
+Restraint means FEWER objects, never ZERO: a source with substantive content normally yields AT LEAST ONE object -- the thing the source is primarily about. Extract that primary subject rather than declining. Return an empty array [] only as a last resort, for a source with no substantive content at all (blank, boilerplate-only, or unintelligible).
+
+One further OPTIONAL field: if -- and ONLY if -- you were genuinely torn between two types for a candidate, add "type_alternative" naming the runner-up you weighed and rejected. OMIT it entirely when the classification was clear, which is the normal case. It must never equal that candidate's own "type". This field records the closeness of the call; it does not change your answer, so choose the better type exactly as you would have otherwise.
+
+Return ONLY a JSON array, with NO prose, NO markdown, and NO code fences around it. Each element matches exactly this shape:
+[{"type": "Person"|"Organization"|"Place"|"Event"|"Procedure"|"Decision"|"Project"|"Concept"|"Entity", "title": "...", "description": "...", "body": "...", "type_alternative": "<optional, omit when the classification was clear>"}, ...]
+Do NOT wrap the array in an outer object.

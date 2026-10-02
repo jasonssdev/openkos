@@ -62,6 +62,7 @@ openkos/
 │   │   └── edge_typing.py  volatility_typing.py
 │   ├── llm/                      # model runtime abstraction
 │   │   ├── base.py  ollama.py  openai_compatible.py  prompting.py  parsing.py
+│   │   └── prompts.py            # the one loader for prompts/ (ADR-0043)
 │   ├── application/              # synchronous use-case services (ADR-0018)
 │   │   ├── query.py  ingest.py  lifecycle.py
 │   │   ├── status.py  list_service.py  lint.py  doctor.py   # read verbs' cores
@@ -79,6 +80,7 @@ openkos/
 │   │   ├── main.py  curate.py  observability.py
 │   ├── mcp/                      # stdio MCP adapter (read-only), async edge over the sync core
 │   │   ├── transport.py  server.py  tools.py  gate.py
+│   ├── prompts/                  # LLM system prompts: one file each, <task>/<name>.md (ADR-0043)
 │   ├── config.py                 # openkos.yaml + WorkspaceLayout
 │   ├── lint.py  lifecycle.py  sensitivity.py
 │   ├── event_dates.py  source_date.py  # bounded event-date resolver; a Source's event_date from evidence

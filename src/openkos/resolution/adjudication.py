@@ -41,6 +41,7 @@ from pathlib import Path
 from openkos import sensitivity
 from openkos.llm import parsing
 from openkos.llm.base import BackendError, LLMBackend, Message
+from openkos.llm.prompts import load_prompt
 from openkos.model import okf
 
 from .candidates import CandidateGroup, _type_label
@@ -56,36 +57,7 @@ _MALFORMED_REPLY_RATIONALE = (
 """Stable rationale for a reply that fails fail-closed parsing (mirrors
 `concept.py`'s parse/validate degrade -- see `_parse_reply`)."""
 
-_SYSTEM_PROMPT = (
-    "You are an entity-resolution adjudicator in a local-first knowledge "
-    "engine. Decide whether the listed CANDIDATE members below refer to the "
-    "SAME real-world entity, are DIFFERENT entities, or the answer is "
-    "UNCERTAIN. When unsure, use uncertain rather than guessing.\n\n"
-    "Use SAME only when the members are the SAME entity under different "
-    "names -- synonyms, aliases, spelling or casing variants. If one member "
-    "is a PART, COMPONENT, ASPECT, SUBTYPE, INSTANCE, or EXAMPLE of another, "
-    "or they merely belong to the same topic or family, they are DIFFERENT "
-    "entities, NOT duplicates: a component of X is not a duplicate of X. A "
-    "SAME verdict feeds a DESTRUCTIVE merge that collapses the members into "
-    "one, so whenever the relationship is part-whole, or you are unsure, "
-    "prefer different or uncertain over same.\n\n"
-    "Type changes what an identical title is evidence OF. For a Person or "
-    "an Organization, one name is strong evidence of one entity. For an "
-    "Event it is not: an identical title usually names a RECURRING SERIES, "
-    "and two records under it are usually two OCCURRENCES of it. Before "
-    "answering same for two Events, look for agreement on something only "
-    "one occurrence could carry -- a date, who was present, or a decision "
-    "one of them records. If the bodies DISAGREE on any of those, they are "
-    "different occurrences. If one carries such a signal and the other is "
-    "silent, their subject matter must substantively overlap before you "
-    "answer same. And if you find yourself writing that one is a "
-    "continuation, a follow-up, or a later session of the other, you have "
-    "already decided they are different.\n\n"
-    "Return ONLY a JSON object, with NO prose, NO markdown, and NO code "
-    "fences around it, matching exactly this shape:\n"
-    '{"verdict": "same"|"different"|"uncertain", "confidence": <0.0-1.0>, '
-    '"rationale": "..."}'
-)
+_SYSTEM_PROMPT = load_prompt("adjudication/system")
 """Stable system half of the 2-message prompt (mirrors
 `concept._build_messages`): the closed 3-value verdict vocabulary and the
 JSON-only instruction baked into system text; the `user` message carries the
