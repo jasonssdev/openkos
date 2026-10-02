@@ -165,6 +165,31 @@ The pairs stay as a regression guard. What ships for #1223 is deterministic:
 the merged-content `next:` hint asks the operator to read both bodies before
 offering `unmerge`.
 
+### Second attempt: the merged-content path itself (#1223) — still 0 false positives
+
+The first attempt judged its compatible pairs through the typed-edge prompt
+(`RELATION: a --related_to--> b`) and `_run_once` discarded every merged
+verdict, so the path the issue was filed on was never exercised. The merged
+path builds a different user turn (`MERGE: survivor absorbed absorbed`, no
+relation line) from a survivor's ledger sidecar, with earlier absorbed
+sections cut off by `_own_body_before_merge`. `MERGED_CASES` now materializes
+real survivors with ledger sidecars (through `ledger.write_entries`) and
+`--merged-only` runs just them. All text is synthetic.
+
+10 cases: 4 `merged-complementary` (two roles/facets of one person or
+service, Spanish and English), 2 `merged-identical` (one limitation in two
+wordings, Spanish), 2 `merged-long` (bodies of 17 KB and 34 KB, the larger
+near the 12288-token window, one with a stacked earlier merge), and 2
+`merged-contradiction` guards (a date conflict, an evaluative conflict).
+
+`baseline`, `qwen3:8b`, **15 runs**, 2026-10-02 (stamp `20261002T010540Z`):
+wrong verdicts on the compatible classes **0 of 120**
+(complementary 0 of 60, identical 0 of 30, long 0 of 30); contradiction
+guards missed **0 of 30**. With zero baseline failures a treatment has
+nothing to win, so **no prompt treatment was run and no prompt change
+ships**. The field failure remains unreproduced on synthetic merged
+content; reproducing it likely needs the original bundle.
+
 ## What a smaller model costs here (#700 lever 3) — REJECTED
 
 [#700](https://github.com/jasonssdev/openkos/issues/700) ranked "smaller models

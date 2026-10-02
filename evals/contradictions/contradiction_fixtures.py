@@ -555,3 +555,236 @@ PAIRS: tuple[LabelledPair, ...] = (
         "identical-statement",
     ),
 )
+
+
+# --------------------------------------------------------------------------- #
+# Merged-content cases (#1223, second attempt)
+# --------------------------------------------------------------------------- #
+#
+# The field failure (#1223) came from the MERGED-CONTENT path: a survivor
+# that absorbed a duplicate, whose own ledger pairs `survivor_before` against
+# `absorbed_snapshot`. That path builds its prompt with
+# `_build_merge_messages` ("MERGE: A absorbed B", no relation line), a
+# different user turn from the typed-edge `RELATION:` shape every pair above
+# is judged through -- and `run_contradictions_eval._run_once` used to drop
+# merged verdicts entirely. So the first #1223 attempt (the four
+# compatible-statement pairs above, 0.00 FP over 15 runs) never exercised the
+# path the issue was filed on.
+#
+# Every case is SYNTHETIC text written for this file. None of it comes from a
+# private corpus.
+
+MERGED_COMPLEMENTARY = "merged-complementary"
+MERGED_IDENTICAL = "merged-identical"
+MERGED_LONG = "merged-long"
+MERGED_CONTRADICTION = "merged-contradiction"
+MERGED_COMPATIBLE_PROBES = (MERGED_COMPLEMENTARY, MERGED_IDENTICAL, MERGED_LONG)
+"""Probe classes whose expected verdict is `consistent` (the FP classes)."""
+
+
+@dataclass(frozen=True)
+class MergedCase:
+    """One survivor that absorbed one duplicate, judged via its ledger."""
+
+    survivor_id: str
+    survivor_title: str
+    before_body: str
+    absorbed_id: str
+    absorbed_title: str
+    absorbed_body: str
+    expected: str
+    probe: str
+    prior_absorbed: tuple[tuple[str, str], ...] = ()
+    """`(absorbed_id, body)` for earlier merges already stacked into the
+    survivor's body as `## Merged content (<id>)` sections -- the "stacked
+    bodies after a merge" shape. `_own_body_before_merge` cuts them off, and
+    carrying them proves the cut holds on the judged prompt."""
+
+
+def _long_notes(prefix: str, topics: tuple[str, ...], per_topic: int) -> str:
+    """Deterministic long Spanish prose: many distinct, mutually compatible
+    statements, each about its OWN named module so two sides built from
+    disjoint `topics` never state different values for one property."""
+    paragraphs: list[str] = []
+    for index, topic in enumerate(topics):
+        sentences = [
+            f"El módulo {topic} de {prefix} registra sus eventos en un archivo "
+            f"propio y rota ese archivo cada {7 + index} días.",
+            f"El equipo que mantiene {topic} revisa sus alertas durante la "
+            f"reunión semanal y anota los pendientes en la lista compartida.",
+            f"La documentación de {topic} describe {per_topic} casos de uso "
+            f"habituales, cada uno con su ejemplo de configuración.",
+            f"Para trabajar con {topic} conviene tener instalada la versión "
+            f"{2 + index % 3} del cliente de línea de comandos.",
+            f"Los errores de {topic} se clasifican por gravedad y se "
+            f"atienden en orden, empezando por los que bloquean a otros "
+            f"equipos.",
+            f"Cuando {topic} cambia de comportamiento, se avisa en el canal "
+            f"del proyecto con un resumen de los cambios y su motivo.",
+        ]
+        paragraphs.append(" ".join(sentences))
+    return "\n\n".join(paragraphs)
+
+
+_TOPICS_BEFORE = (
+    "Ingesta",
+    "Catálogo",
+    "Búsqueda",
+    "Alertas",
+    "Reportes",
+    "Facturación",
+    "Permisos",
+    "Auditoría",
+    "Exportación",
+    "Notificaciones",
+    "Sincronización",
+    "Respaldo",
+)
+_TOPICS_ABSORBED = (
+    "Importación",
+    "Etiquetado",
+    "Resumen",
+    "Calendario",
+    "Traducción",
+    "Archivo",
+    "Métricas",
+    "Plantillas",
+    "Versionado",
+    "Mensajería",
+    "Colaboración",
+    "Recuperación",
+)
+
+MERGED_CASES: tuple[MergedCase, ...] = (
+    # -- merged-complementary: two roles of ONE person, Spanish --------------
+    MergedCase(
+        "people/lucia-paredes",
+        "Lucía Paredes",
+        "Lucía Paredes participó en la discusión sobre el diseño del módulo "
+        "de reportes y propuso guardar en memoria las consultas más "
+        "frecuentes.",
+        "people/lucia-paredes-2",
+        "Lucía Paredes",
+        "Lucía Paredes es la integrante del equipo que probará el módulo de "
+        "reportes antes del lanzamiento.",
+        "consistent",
+        MERGED_COMPLEMENTARY,
+    ),
+    MergedCase(
+        "people/tomas-herrera",
+        "Tomás Herrera",
+        "Tomás Herrera presentó en la reunión la propuesta para migrar la "
+        "base de datos de inventario.",
+        "people/tomas-herrera-2",
+        "Tomás Herrera",
+        "Tomás Herrera trabaja en el equipo de plataforma y atiende las "
+        "guardias de los fines de semana.",
+        "consistent",
+        MERGED_COMPLEMENTARY,
+    ),
+    MergedCase(
+        "concepts/servicio-notificaciones",
+        "Servicio de notificaciones",
+        "El servicio de notificaciones envía correos electrónicos y "
+        "mensajes push a las personas suscritas.",
+        "concepts/servicio-notificaciones-2",
+        "Servicio de notificaciones",
+        "El servicio de notificaciones se despliega en tres regiones y "
+        "toma los mensajes pendientes de una cola.",
+        "consistent",
+        MERGED_COMPLEMENTARY,
+    ),
+    MergedCase(
+        "people/priya-nair",
+        "Priya Nair",
+        "Priya Nair joined the review call and asked about the rollout "
+        "schedule for the billing changes.",
+        "people/priya-nair-2",
+        "Priya Nair",
+        "Priya Nair is the engineer who will run the load tests for the "
+        "billing changes next month.",
+        "consistent",
+        MERGED_COMPLEMENTARY,
+    ),
+    # -- merged-identical: the SAME limitation, in different words -----------
+    MergedCase(
+        "concepts/recuperacion-documentos",
+        "Recuperación de documentos",
+        "Los sistemas de recuperación de documentos tienen una limitación: "
+        "los resultados no siempre indican la fuente exacta de cada dato.",
+        "concepts/recuperacion-documentos-2",
+        "Recuperación de documentos",
+        "Una limitación conocida de estos sistemas es que no se puede saber "
+        "con certeza de qué fuente proviene cada dato del resultado.",
+        "consistent",
+        MERGED_IDENTICAL,
+    ),
+    MergedCase(
+        "concepts/trabajo-nocturno",
+        "Trabajo nocturno de exportación",
+        "El trabajo nocturno de exportación no es idempotente: ejecutarlo "
+        "dos veces para la misma fecha duplica las filas de salida.",
+        "concepts/trabajo-nocturno-2",
+        "Trabajo nocturno de exportación",
+        "Si el trabajo de exportación se vuelve a ejecutar para una fecha "
+        "que ya se procesó, las filas de salida quedan duplicadas.",
+        "consistent",
+        MERGED_IDENTICAL,
+    ),
+    # -- merged-long: bodies sized toward the 12288-token default window -----
+    MergedCase(
+        "concepts/plataforma-datos",
+        "Plataforma de datos",
+        "La plataforma de datos reúne varios módulos.\n\n"
+        + _long_notes("la plataforma", _TOPICS_BEFORE, 4),
+        "concepts/plataforma-datos-2",
+        "Plataforma de datos",
+        "La plataforma de datos también ofrece módulos de apoyo.\n\n"
+        + _long_notes("la plataforma", _TOPICS_ABSORBED, 5),
+        "consistent",
+        MERGED_LONG,
+        prior_absorbed=(
+            (
+                "concepts/plataforma-datos-0",
+                "La plataforma de datos se mantiene en un repositorio único "
+                "y se publica con una etiqueta de versión cada mes.",
+            ),
+        ),
+    ),
+    MergedCase(
+        "concepts/plataforma-analitica",
+        "Plataforma de analítica",
+        "La plataforma de analítica reúne varios módulos.\n\n"
+        + _long_notes("la analítica", _TOPICS_BEFORE * 2, 3),
+        "concepts/plataforma-analitica-2",
+        "Plataforma de analítica",
+        "La plataforma de analítica también ofrece módulos de apoyo.\n\n"
+        + _long_notes("la analítica", _TOPICS_ABSORBED * 2, 6),
+        "consistent",
+        MERGED_LONG,
+    ),
+    # -- merged-contradiction: real conflicts the merge path must keep -------
+    MergedCase(
+        "concepts/proyecto-aurora",
+        "Proyecto Aurora",
+        "El proyecto Aurora se lanzó en marzo de 2024 con tres módulos.",
+        "concepts/proyecto-aurora-2",
+        "Proyecto Aurora",
+        "El proyecto Aurora se lanzó en septiembre de 2025; antes de esa "
+        "fecha no existía ninguna versión pública.",
+        "contradicts",
+        MERGED_CONTRADICTION,
+    ),
+    MergedCase(
+        "concepts/compresion-lecturas",
+        "Compresión de lecturas",
+        "La compresión redujo la latencia de lectura de forma notable y se "
+        "considera un éxito del trimestre.",
+        "concepts/compresion-lecturas-2",
+        "Compresión de lecturas",
+        "La compresión aumentó la latencia de lectura de forma notable y se "
+        "considera un fracaso del trimestre.",
+        "contradicts",
+        MERGED_CONTRADICTION,
+    ),
+)

@@ -36,6 +36,7 @@ of a harness's own scoring code.
 - [`auto_merge`](auto_merge/README.md) — whether a confidence threshold makes auto-merge of one narrow class safe.
 - [`contradictions`](contradictions/README.md) — the contradiction judge's accuracy, stability and confidence.
 - [`decision_extraction`](decision_extraction/README.md) — extraction of the nine OpenKOS types over the AMI meeting corpus.
+- [`decision_granularity`](decision_granularity/README.md) — whether one-sentence prompt edits split multi-decision sources or keep a twice-named person.
 - [`decision_revisions`](decision_revisions/README.md) — the decision-revision detector's subject pass, direction rule and judge.
 - [`discarded_generation`](discarded_generation/README.md) — how much extraction generates and then throws away.
 - [`duplicate_function_words`](duplicate_function_words/README.md) — function words deciding a title-containment near-match.
