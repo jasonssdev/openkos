@@ -23,7 +23,13 @@ NoticeKind = Literal["note", "warning"]
 
 _FALLBACK_WIDTH = 80
 
-_SEVERITY_MARKERS = ("WARNING -- ", "warning -- ", "Warning: ", "note -- ", "notice -- ")
+_SEVERITY_MARKERS = (
+    "WARNING -- ",
+    "warning -- ",
+    "Warning: ",
+    "note -- ",
+    "notice -- ",
+)
 
 
 def is_tty(*, err: bool = False) -> bool:
