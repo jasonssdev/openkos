@@ -54,6 +54,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   `backfill-source-titles`, which no longer repeats the renamed pairs, raised
   paths or retitled Sources the proposal already listed.
 
+- **The report verbs follow the terminal convention too**
+  ([#1235](https://github.com/jasonssdev/openkos/issues/1235)). On a terminal,
+  `status`, `lint`, `duplicates`, `contradictions`, `revisions`,
+  `suggest-relations` and `suggest-volatility` wrap long finding and rationale
+  lines under a hanging indent, prefix their stderr advisories with `note:` /
+  `warning:`, and `suggest-relations --apply` sets each item off as a block.
+  Piped output is byte-identical to before; `next`, `pending` and `list` are
+  unchanged.
+
 - **The transitional temp-directory workspace lock is no longer taken.** 0.3.1
   moved the lock to the per-user state directory and, for that one release,
   also took the old lock under the OS temp directory so an older `openkos`

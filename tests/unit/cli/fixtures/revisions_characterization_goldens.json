@@ -245,13 +245,13 @@
         false
       ]
     ],
-    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n\ropenkos revisions: judging pair 1/1 - 0s...\n",
-    "stdout": "Proceed? [y/N]: y\ndecisions/a\n  [REFINES] with decisions/b (confidence 0.80) [direction unknown: decisions/b: no Source reached] [not actionable: unquoted]\n    decisions/a: (no verbatim quote from decisions/a)\n    decisions/b: (no verbatim quote from decisions/b)\n    rationale: stub\n    next: openkos reconcile --from-findings\n\n"
+    "stderr": "note: experimental -- detection quality is unmeasured on real bundles; review\n  every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n\ropenkos revisions: judging pair 1/1 - 0s...\n",
+    "stdout": "Proceed? [y/N]: y\ndecisions/a\n  [REFINES] with decisions/b (confidence 0.80) [direction unknown: decisions/b:\n    no Source reached] [not actionable: unquoted]\n    decisions/a: (no verbatim quote from decisions/a)\n    decisions/b: (no verbatim quote from decisions/b)\n    rationale: stub\n    next: openkos reconcile --from-findings\n\n"
   },
   "tty_decline": {
     "exit_code": 0,
     "rows": [],
-    "stderr": "openkos revisions: experimental -- detection quality is unmeasured on real bundles; review every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n",
+    "stderr": "note: experimental -- detection quality is unmeasured on real bundles; review\n  every finding before applying it with 'openkos reconcile --from-findings'.\n1 candidate pair(s), 0 served -> 1 LLM call(s) to judge (this can take a while). Pass --auto to skip this prompt.\n",
     "stdout": "Proceed? [y/N]: n\nAborted -- no revisions judged.\n"
   },
   "vector_store_absent": {
