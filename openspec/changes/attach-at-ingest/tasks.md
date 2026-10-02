@@ -67,12 +67,12 @@ is one work unit (one Conventional Commit, scope `ingest`, `okf`,
 
 ## Phase 4: Proof and docs
 
-- [ ] 4.1 Mutation checks on the exact lines, restored by inverse edit and
+- [x] 4.1 Mutation checks on the exact lines, restored by inverse edit and
       `__pycache__` purged: the `Event`/`Person` exclusion, the
       same-source guard, `version + 1`, the guarded-target registration,
       the deprecated filter, the type equality in the key. Each mutation
       must turn a named test red.
-- [ ] 4.2 `docs/cli.md` ingest section (what attach does, the key, the
+- [x] 4.2 `docs/cli.md` ingest section (what attach does, the key, the
       disclosure, the undo); `docs/architecture.md` only if a layer changes
       (it should not). `docs/adr/NNNN-...md` with status Proposed and its
       row in `docs/adr/README.md` (next free number at apply time; see
