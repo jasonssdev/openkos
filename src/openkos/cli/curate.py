@@ -1049,6 +1049,23 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 layout.bundle_dir, group.member_ids
             )
         )
+        # #1258: the same refusal `adjudicate --apply` makes, through the
+        # same predicate and skip line. `curate` has no opt-in of its own:
+        # the manual `merge --include-cross-type` command the line names is
+        # the deliberate route.
+        cross_type_reason = application_lifecycle.cross_type_concern(
+            layout.bundle_dir, (survivor_id, absorbed_id)
+        )
+        if cross_type_reason is not None:
+            typer.echo(
+                cli_main._cross_type_skip_line(
+                    group.member_ids,
+                    (survivor_id, absorbed_id),
+                    cross_type_reason,
+                )
+            )
+            skipped += 1
+            continue
         try:
             prepared = application_lifecycle.prepare_one_merge(
                 ctx.root,

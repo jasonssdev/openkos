@@ -5408,7 +5408,10 @@ def test_apply_same_skip_label_follows_the_command_it_recommends(
 
     assert result.exit_code == 0
     assert "(Project / Event)" in result.stdout
-    assert "openkos merge projects/evaluacion events/coordination" in result.stdout
+    assert (
+        "openkos merge --include-cross-type projects/evaluacion events/coordination"
+        in result.stdout
+    )
     assert "(Event / Project)" not in result.stdout
 
 
@@ -5469,7 +5472,7 @@ def test_apply_same_same_type_pair_is_not_flagged(
     assert "Total: 1" in result.stdout
 
 
-def test_include_cross_type_requires_apply_same(
+def test_include_cross_type_requires_an_apply_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`--include-cross-type` without `--apply-same` is refused up front
@@ -5483,7 +5486,7 @@ def test_include_cross_type_requires_apply_same(
     # The exact refusal, never Typer's unknown-option error: an assertion
     # on the flag name alone passes just as well before the flag exists.
     assert (
-        "openkos adjudicate: --include-cross-type requires --apply-same."
+        "openkos adjudicate: --include-cross-type requires --apply or --apply-same."
         in result.stderr
     )
 
@@ -5530,7 +5533,9 @@ def test_apply_interactive_warns_on_a_cross_type_pair(
     group = _cross_type_pair(tmp_path)
     _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
 
-    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+    result = runner.invoke(
+        app, ["adjudicate", "--apply", "--include-cross-type"], input="n\n"
+    )
 
     assert result.exit_code == 0
     assert "note: cross-type SAME" in result.stdout
@@ -5577,7 +5582,9 @@ def test_apply_walk_note_follows_the_survivor_it_just_printed(
     )
     _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
 
-    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+    result = runner.invoke(
+        app, ["adjudicate", "--apply", "--include-cross-type"], input="n\n"
+    )
 
     assert result.exit_code == 0
     out = result.stdout
@@ -5666,7 +5673,9 @@ def test_apply_walk_renders_both_notes_for_a_both_classes_pair(
     group = _both_classes_pair(tmp_path)
     _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
 
-    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+    result = runner.invoke(
+        app, ["adjudicate", "--apply", "--include-cross-type"], input="n\n"
+    )
 
     assert result.exit_code == 0
     out = result.stdout
@@ -6302,3 +6311,57 @@ def test_a_stored_self_refuting_same_is_corrected_on_serve(
     assert "verdict: DIFFERENT" in second.stdout
     assert "verdict: SAME" not in second.stdout
     assert "issue #796" in second.stdout
+
+
+# --- issue #1258: the interactive walk refuses cross-type SAME pairs --------
+
+
+def test_apply_skips_a_cross_type_same_pair_by_default(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1258: body length decided the survivor of a Procedure/Concept pair
+    and a Concept was absorbed into a tutorial about it. The per-item walk
+    no longer offers the pair at all: no prompt, nothing written, the
+    manual command (carrying the opt-in) is named, and the summary counts
+    it under `cross-type`."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    group = _cross_type_pair(tmp_path)
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code == 0
+    out = result.stdout
+    assert "[y/N]" not in out
+    assert "skipped (cross-type SAME" in out
+    assert (
+        "openkos merge --include-cross-type events/coordination "
+        "projects/evaluacion" in out
+    )
+    assert "cross-type: 1" in out
+    assert "applied 0" in out
+    assert (tmp_path / "bundle" / "events" / "coordination.md").is_file()
+    assert (tmp_path / "bundle" / "projects" / "evaluacion.md").is_file()
+
+
+def test_apply_include_cross_type_restores_the_walk(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--include-cross-type` is the explicit opt-in: the pair is previewed
+    with its note and still needs the per-item `y`."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    group = _cross_type_pair(tmp_path)
+    _stub_candidates_and_verdict(monkeypatch, group, verdict=Verdict.SAME)
+
+    result = runner.invoke(
+        app, ["adjudicate", "--apply", "--include-cross-type"], input="y\n"
+    )
+
+    assert result.exit_code == 0
+    assert "note: cross-type SAME" in result.stdout
+    assert not (tmp_path / "bundle" / "projects" / "evaluacion.md").exists()
+    assert (tmp_path / "bundle" / "events" / "coordination.md").is_file()

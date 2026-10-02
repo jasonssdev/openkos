@@ -2161,6 +2161,27 @@ def _cross_type_walk_note(reason: str) -> str:
     return f"  note: cross-type SAME -- {reason}; review this pair before consenting"
 
 
+def _cross_type_skip_line(
+    member_ids: Sequence[str],
+    ordered: Sequence[str],
+    reason: str,
+    *,
+    rerun_hint: str = "",
+) -> str:
+    """The one skip line every merge walk prints for a refused cross-type
+    SAME pair (#904, #1258): the batch, `adjudicate --apply`, and `curate`'s
+    Identity stage share it so the three doors cannot word the refusal
+    differently. The manual command carries `--include-cross-type` because
+    `merge` itself refuses the pair without it. `rerun_hint` names the
+    walk's own opt-in where it has one (`curate` has none)."""
+    return (
+        f"{member_ids[0]} / {member_ids[1]}: skipped "
+        f"(cross-type SAME -- {reason}; review and "
+        "merge manually with `openkos merge --include-cross-type "
+        f"{ordered[0]} {ordered[1]}`{rerun_hint})"
+    )
+
+
 # `_prepare_one_merge`/`_reconcile_planned` moved verbatim into
 # `application/lifecycle.py` (issue #918 Slice 5) and, like the four names
 # above, are reached through `application_lifecycle.<name>` rather than an
@@ -2322,6 +2343,7 @@ def _run_adjudicate_apply(
     *,
     no_reconcile: bool = False,
     reconcile: bool = False,
+    include_cross_type: bool = False,
 ) -> None:
     """The interactive `adjudicate --apply` merge walk (issue #137 Slice
     2b-ii, design D2-D9): per SAME 2-member group (D3), re-verify both
@@ -2363,6 +2385,7 @@ def _run_adjudicate_apply(
     applied = 0
     skipped_n_gt2 = 0
     skipped_already_merged = 0
+    skipped_cross_type = 0
     declined: list[str] = []
 
     for result in results:
@@ -2380,6 +2403,24 @@ def _run_adjudicate_apply(
                 layout.bundle_dir, group.member_ids
             )
         )
+        # #1258: a cross-type pair is never offered -- the survivor of a
+        # merge across OKF types is a human's call, and the richer body
+        # absorbed a Concept into a Procedure about it. The batch's own
+        # predicate and skip line; `--include-cross-type` is the opt-in.
+        cross_type_reason = application_lifecycle.cross_type_concern(
+            layout.bundle_dir, (survivor_id, absorbed_id)
+        )
+        if cross_type_reason is not None and not include_cross_type:
+            typer.echo(
+                _cross_type_skip_line(
+                    group.member_ids,
+                    (survivor_id, absorbed_id),
+                    cross_type_reason,
+                    rerun_hint=", or re-run with --include-cross-type",
+                )
+            )
+            skipped_cross_type += 1
+            continue
 
         try:
             prepared = application_lifecycle.prepare_one_merge(
@@ -2511,12 +2552,18 @@ def _run_adjudicate_apply(
                 raise typer.Exit(code=1) from exc
         applied += 1
 
-    skipped_total = skipped_n_gt2 + skipped_already_merged + len(declined)
+    skipped_total = (
+        skipped_n_gt2 + skipped_already_merged + skipped_cross_type + len(declined)
+    )
     prefix = "nothing to apply -- " if applied == 0 and skipped_total == 0 else ""
+    cross_type_clause = (
+        f", cross-type: {skipped_cross_type}" if skipped_cross_type else ""
+    )
     typer.echo(
         f"openkos adjudicate --apply: {prefix}applied {applied}, skipped "
         f"{skipped_total} (N>2: {skipped_n_gt2}, "
-        f"already-merged: {skipped_already_merged}, declined: {len(declined)})"
+        f"already-merged: {skipped_already_merged}, declined: {len(declined)}"
+        f"{cross_type_clause})"
     )
     for item in declined:
         typer.echo(f"  declined: {item}")
@@ -2572,10 +2619,12 @@ def _echo_batch_pass1_skips(
             # types is the second risky class the typed count must not
             # consent to, unless `--include-cross-type` opts in.
             typer.echo(
-                f"{skip.member_ids[0]} / {skip.member_ids[1]}: skipped "
-                f"(cross-type SAME -- {skip.reason}; review and "
-                f"merge manually with `openkos merge {skip.ordered[0]} "
-                f"{skip.ordered[1]}`, or re-run with --include-cross-type)"
+                _cross_type_skip_line(
+                    skip.member_ids,
+                    skip.ordered,
+                    skip.reason,
+                    rerun_hint=", or re-run with --include-cross-type",
+                )
             )
 
 
@@ -8734,6 +8783,15 @@ def merge(
             "Refused together with --no-reconcile."
         ),
     ),
+    include_cross_type: bool = typer.Option(
+        False,
+        "--include-cross-type",
+        help=(
+            "Merge two concepts that declare different OKF types (#1258) "
+            "-- refused by default because it absorbs one kind of thing "
+            "into another."
+        ),
+    ),
 ) -> None:
     """Fuse two distinct concept-ids into one: the first DESTRUCTIVE
     entity-resolution write (spec: Merge Fuses Two Distinct Concept-IDs).
@@ -8877,6 +8935,7 @@ def merge(
                 force=force,
                 no_reconcile=no_reconcile,
                 reconcile=reconcile,
+                include_cross_type=include_cross_type,
             ),
             ports=ports,
             observer=_CliMergeObserver(),
@@ -11145,9 +11204,10 @@ def adjudicate(
         False,
         "--include-cross-type",
         help=(
-            "Let --apply-same batch-merge SAME pairs whose members declare "
-            "different OKF types (#904) -- excluded by default because "
-            "that is the class that absorbs one kind of thing into another."
+            "Let --apply-same and --apply merge SAME pairs whose members "
+            "declare different OKF types (#904, #1258) -- excluded by "
+            "default because that is the class that absorbs one kind of "
+            "thing into another."
         ),
     ),
     fresh: bool = typer.Option(
@@ -11274,11 +11334,13 @@ def adjudicate(
             err=True,
         )
         raise typer.Exit(code=2)
-    if include_cross_type and not apply_same:
+    if include_cross_type and not (apply or apply_same):
         # #904: the same shape as its #776 sibling above -- a consent flag
-        # that consents to nothing is worse than a refusal.
+        # that consents to nothing is worse than a refusal. #1258 widened it
+        # to the interactive walk, which refuses cross-type pairs too.
         typer.echo(
-            "openkos adjudicate: --include-cross-type requires --apply-same.",
+            "openkos adjudicate: --include-cross-type requires --apply or "
+            "--apply-same.",
             err=True,
         )
         raise typer.Exit(code=2)
@@ -11493,6 +11555,7 @@ def adjudicate(
             results,
             no_reconcile=no_reconcile,
             reconcile=reconcile,
+            include_cross_type=include_cross_type,
         )
     elif apply_same:
         _run_adjudicate_apply_same(

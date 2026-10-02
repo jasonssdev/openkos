@@ -371,3 +371,54 @@ def test_commit_merge_is_the_shared_write_for_curate_and_adjudicate(
     [(_, paths, message)] = commits.calls
     assert message == f"openkos: merge {_ABSORBED} into {_SURVIVOR}"
     assert "bundle/index.md" in paths
+
+
+def _procedure_about_the_survivor(root: Path) -> str:
+    """A `Procedure` document about the Concept `_SURVIVOR` -- the #1258
+    shape: a tutorial about a thing next to the thing's own Concept."""
+    path = root / "bundle" / "procedures" / "installing-survivor.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\ntype: Procedure\ntitle: Installing Survivor\n---\n\n"
+        "# Installing Survivor\n\nStep one.\n",
+        encoding="utf-8",
+    )
+    return "procedures/installing-survivor"
+
+
+def test_a_cross_type_merge_is_refused_unless_opted_in(workspace: Path) -> None:
+    """#1258: the service refuses before preparing anything -- the Concept
+    is not absorbed into a Procedure about it -- and writes nothing."""
+    procedure_id = _procedure_about_the_survivor(workspace)
+    before = tree(workspace)
+
+    with pytest.raises(Refused) as caught:
+        _merge(
+            workspace,
+            events=[],
+            survivor_id=procedure_id,
+            absorbed_id=_SURVIVOR,
+        )
+
+    assert "cross-type" in caught.value.message
+    assert "--include-cross-type" in caught.value.message
+    assert tree(workspace) == before
+
+
+def test_a_cross_type_merge_proceeds_with_the_explicit_opt_in(
+    workspace: Path,
+) -> None:
+    procedure_id = _procedure_about_the_survivor(workspace)
+    events: list[str] = []
+
+    _merge(
+        workspace,
+        events=events,
+        policy=svc.MergePolicy(auto=True, include_cross_type=True),
+        survivor_id=procedure_id,
+        absorbed_id=_SURVIVOR,
+        observer=_Recorder(events),
+    )
+
+    assert not (workspace / "bundle" / f"{_SURVIVOR}.md").exists()
+    assert (workspace / "bundle" / f"{procedure_id}.md").is_file()
