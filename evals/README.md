@@ -35,6 +35,7 @@ of a harness's own scoring code.
 
 - [`adjudication`](adjudication/README.md) — scoring the identity adjudicator's SAME/DIFFERENT verdicts.
 - [`auto_merge`](auto_merge/README.md) — whether a confidence threshold makes auto-merge of one narrow class safe.
+- [`bakeoff`](bakeoff/README.md) — the shared driver for the #1269 model bake-off: eligibility gates and a staged knockout over the other harnesses.
 - [`contradictions`](contradictions/README.md) — the contradiction judge's accuracy, stability and confidence.
 - [`decision_extraction`](decision_extraction/README.md) — extraction of the nine OpenKOS types over the AMI meeting corpus.
 - [`decision_granularity`](decision_granularity/README.md) — whether one-sentence prompt edits split multi-decision sources or keep a twice-named person.
