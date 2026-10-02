@@ -4214,25 +4214,12 @@ _GLOB_MAGIC_CHARS = frozenset("*?[")
 these is treated as a quoted glob pattern, not a missing file (issue #267)."""
 
 
-_TEXT_SOURCE_EXTENSIONS = frozenset(
-    {".adoc", ".markdown", ".md", ".org", ".rst", ".srt", ".text", ".txt", ".vtt"}
-)
-"""Extensions directory/glob EXPANSION keeps (#568): prose documents and
-transcript formats. A user pointing `ingest` at a project folder must not
-sweep `.DS_Store`, lockfiles, code, or binaries into the bundle -- the
-degrade path handles them without crashing, but each one still becomes a
-permanent Source document. Matched case-insensitively on `Path.suffix`, so
-extensionless files (`LICENSE`, `Makefile`) are skipped too. An EXPLICIT
-single-file path bypasses this entirely: naming one exact file is a choice,
-expansion is a sweep."""
-
-
 def _expand_batch_sources(src: Path) -> tuple[list[Path], int] | None:
     """Route `ingest`'s `src` argument (issue #267): return `None` when it
     must take the existing single-file path unchanged, or a `(matches,
     skipped_non_text)` pair for the batch path -- the SORTED list of
     text-source files kept, plus how many expanded files the
-    `_TEXT_SOURCE_EXTENSIONS` allowlist dropped (#568), for the batch's
+    `fsio.TEXT_SOURCE_EXTENSIONS` allowlist dropped (#568), for the batch's
     pre-flight disclosure line.
 
     `None` covers two cases: an existing plain FILE (single-file behavior
@@ -4282,9 +4269,7 @@ def _expand_batch_sources(src: Path) -> tuple[list[Path], int] | None:
         )
     else:
         return None
-    matches = [
-        path for path in candidates if path.suffix.lower() in _TEXT_SOURCE_EXTENSIONS
-    ]
+    matches = [path for path in candidates if fsio.is_text_source(path)]
     return matches, len(candidates) - len(matches)
 
 
@@ -4796,7 +4781,7 @@ def ingest(
     (non-recursive; subdirectories are never walked into). A quoted GLOB
     (detected by its magic characters `*`, `?`, `[`; expanded relative to
     the cwd, recursion only via an explicit `**`) ingests every matched
-    text-source file. Both expansions apply the `_TEXT_SOURCE_EXTENSIONS`
+    text-source file. Both expansions apply the `fsio.TEXT_SOURCE_EXTENSIONS`
     allowlist (#568) and disclose any skips in one pre-flight line before
     the cost gate; an explicit single-file path bypasses the filter. Matched files are SORTED by path string -- never filesystem
     order -- so `log.md` and the per-file commits are reproducible across

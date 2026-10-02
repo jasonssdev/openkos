@@ -100,9 +100,12 @@ class FileStat:
 
 
 def _list_files(inbox: Path) -> Sequence[Path]:
-    """Regular files under `inbox`, recursively, skipping dot-entries,
-    symlinks and anything that is not a regular file; sorted by path."""
+    """Text-source files under `inbox`, recursively, skipping dot-entries,
+    symlinks, anything that is not a regular file, and (the sweep allowlist
+    `ingest <dir>` applies, `fsio.is_text_source`) every other extension;
+    sorted by path. The skipped count is logged, never silent."""
     found: list[Path] = []
+    skipped = 0
     for dirpath, dirnames, filenames in os.walk(inbox, followlinks=False):
         dirnames[:] = sorted(
             d
@@ -113,7 +116,12 @@ def _list_files(inbox: Path) -> Sequence[Path]:
             path = Path(dirpath) / name
             if name.startswith(".") or path.is_symlink() or not path.is_file():
                 continue
+            if not fsio.is_text_source(path):
+                skipped += 1
+                continue
             found.append(path)
+    if skipped:
+        log.info("watch: %d non-text file(s) in the inbox skipped", skipped)
     return sorted(found)
 
 

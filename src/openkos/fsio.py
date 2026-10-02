@@ -110,6 +110,23 @@ def decode_source_text(data: bytes) -> DecodedText | None:
     return DecodedText(text.replace("\r\n", "\n").replace("\r", "\n"), encoding)
 
 
+TEXT_SOURCE_EXTENSIONS = frozenset(
+    {".adoc", ".markdown", ".md", ".org", ".rst", ".srt", ".text", ".txt", ".vtt"}
+)
+"""Extensions a SWEEP of a folder keeps: prose documents and transcript
+formats. Both `ingest`'s directory/glob expansion and the inbox watch apply it,
+so a project folder or inbox never sweeps `.DS_Store`, lockfiles, code, or
+binaries into the bundle as permanent Sources. Matched case-insensitively on
+`Path.suffix`, so extensionless files (`LICENSE`, `Makefile`) are skipped too.
+An EXPLICIT single-file path bypasses it: naming one exact file is a choice,
+expansion is a sweep."""
+
+
+def is_text_source(path: Path) -> bool:
+    """Whether `path`'s extension is on the `TEXT_SOURCE_EXTENSIONS` allowlist."""
+    return path.suffix.lower() in TEXT_SOURCE_EXTENSIONS
+
+
 def read_source_text(path: Path) -> DecodedText | None:
     """`decode_source_text` over `path`'s bytes. Raises `OSError` as `read_bytes`
     does."""
