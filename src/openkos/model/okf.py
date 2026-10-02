@@ -2747,6 +2747,88 @@ def _demote_absorbed_headings(absorbed_body: str) -> str:
     return "\n".join(out)
 
 
+def _union_frontmatter(
+    survivor_metadata: dict[str, object],
+    absorbed_metadata: dict[str, object],
+) -> dict[str, object]:
+    """The field-union core `build_merged_document` and
+    `build_attached_document` share: scalar survivor-wins with gap fill,
+    order-preserving list union, newer-side `freshness`+`generated`,
+    `sources` re-projected over the unioned `provenance`, `status`
+    normalization, and a RECOMPUTED high-water `sensitivity`. It touches
+    neither `relations` (the merge recomputes it, an attach keeps the
+    existing document's) nor the body. One function so the two writers
+    cannot drift on any of these rules."""
+    merged: dict[str, object] = dict(survivor_metadata)
+    merged.pop(MERGED_FROM_KEY, None)
+    merged.pop("timestamp", None)
+    merged.pop("generated", None)
+
+    absorbed_wins = _absorbed_is_more_recent(survivor_metadata, absorbed_metadata)
+    winner_metadata = absorbed_metadata if absorbed_wins else survivor_metadata
+    merged["freshness"] = winner_metadata.get("freshness")
+
+    winner_generated = winner_metadata.get("generated")
+    if isinstance(winner_generated, Mapping):
+        merged["generated"] = dict(winner_generated)
+    else:
+        winner_timestamp = winner_metadata.get("timestamp")
+        if isinstance(winner_timestamp, str):
+            merged["generated"] = {"by": LEGACY_ACTOR, "at": winner_timestamp}
+        # else: the winner carries neither key -- no `generated` is written.
+
+    _SPECIAL_KEYS = (
+        "sensitivity",
+        "freshness",
+        "timestamp",
+        "generated",
+        MERGED_FROM_KEY,
+        RELATIONS_KEY,
+        TYPE_ALTERNATIVE_KEY,
+        EVENT_DATE_KEY,
+        SOURCE_FRONTMATTER_KEY,
+        STATUS_DERIVED_FROM_KEY,
+    )
+    for key, absorbed_value in absorbed_metadata.items():
+        if key in _SPECIAL_KEYS:
+            continue
+        if key == "status" and has_valid_export_marker(absorbed_metadata):
+            # deprecated-status-export (issue #1075, design Decision 6): an
+            # absorbed EXPORTED deprecation describes the ABSORBED
+            # concept's own supersession, which this merge's relation
+            # rewiring changes -- it must never fill a survivor gap
+            # either, unlike a human-authored `status` value (handled by
+            # the generic branch below on every OTHER iteration).
+            continue
+        survivor_value = merged.get(key)
+        if isinstance(absorbed_value, list) or isinstance(survivor_value, list):
+            survivor_list = survivor_value if isinstance(survivor_value, list) else []
+            absorbed_list = absorbed_value if isinstance(absorbed_value, list) else []
+            merged[key] = _union_dedup(survivor_list, absorbed_list)
+        elif key not in merged:
+            merged[key] = absorbed_value
+        # else: a scalar already present on the survivor wins -- no-op.
+
+    # `sources` is (re)introduced for the merged survivor over the
+    # ALREADY-UNIONED `provenance` above (design.md Decision 3/4) --  never
+    # copied from either side's own `sources`, which the `dict(survivor_
+    # metadata)` copy at the top of this function may still be carrying
+    # stale from before this merge.
+    merged_sources = project_sources(merged.get("provenance"))
+    if merged_sources is not None:
+        merged[SOURCES_KEY] = merged_sources
+    else:
+        merged.pop(SOURCES_KEY, None)
+
+    if merged.get("status") == "active":
+        merged["status"] = "stable"
+
+    merged["sensitivity"] = combine_sensitivity(
+        survivor_metadata.get("sensitivity"), absorbed_metadata.get("sensitivity")
+    )
+    return merged
+
+
 def build_merged_document(
     survivor_metadata: dict[str, object],
     survivor_body: str,
@@ -2828,73 +2910,7 @@ def build_merged_document(
     than competing with it; its prose, and the relative structure of its
     headings, are otherwise stacked verbatim.
     """
-    merged: dict[str, object] = dict(survivor_metadata)
-    merged.pop(MERGED_FROM_KEY, None)
-    merged.pop("timestamp", None)
-    merged.pop("generated", None)
-
-    absorbed_wins = _absorbed_is_more_recent(survivor_metadata, absorbed_metadata)
-    winner_metadata = absorbed_metadata if absorbed_wins else survivor_metadata
-    merged["freshness"] = winner_metadata.get("freshness")
-
-    winner_generated = winner_metadata.get("generated")
-    if isinstance(winner_generated, Mapping):
-        merged["generated"] = dict(winner_generated)
-    else:
-        winner_timestamp = winner_metadata.get("timestamp")
-        if isinstance(winner_timestamp, str):
-            merged["generated"] = {"by": LEGACY_ACTOR, "at": winner_timestamp}
-        # else: the winner carries neither key -- no `generated` is written.
-
-    _SPECIAL_KEYS = (
-        "sensitivity",
-        "freshness",
-        "timestamp",
-        "generated",
-        MERGED_FROM_KEY,
-        RELATIONS_KEY,
-        TYPE_ALTERNATIVE_KEY,
-        EVENT_DATE_KEY,
-        SOURCE_FRONTMATTER_KEY,
-        STATUS_DERIVED_FROM_KEY,
-    )
-    for key, absorbed_value in absorbed_metadata.items():
-        if key in _SPECIAL_KEYS:
-            continue
-        if key == "status" and has_valid_export_marker(absorbed_metadata):
-            # deprecated-status-export (issue #1075, design Decision 6): an
-            # absorbed EXPORTED deprecation describes the ABSORBED
-            # concept's own supersession, which this merge's relation
-            # rewiring changes -- it must never fill a survivor gap
-            # either, unlike a human-authored `status` value (handled by
-            # the generic branch below on every OTHER iteration).
-            continue
-        survivor_value = merged.get(key)
-        if isinstance(absorbed_value, list) or isinstance(survivor_value, list):
-            survivor_list = survivor_value if isinstance(survivor_value, list) else []
-            absorbed_list = absorbed_value if isinstance(absorbed_value, list) else []
-            merged[key] = _union_dedup(survivor_list, absorbed_list)
-        elif key not in merged:
-            merged[key] = absorbed_value
-        # else: a scalar already present on the survivor wins -- no-op.
-
-    # `sources` is (re)introduced for the merged survivor over the
-    # ALREADY-UNIONED `provenance` above (design.md Decision 3/4) --  never
-    # copied from either side's own `sources`, which the `dict(survivor_
-    # metadata)` copy at the top of this function may still be carrying
-    # stale from before this merge.
-    merged_sources = project_sources(merged.get("provenance"))
-    if merged_sources is not None:
-        merged[SOURCES_KEY] = merged_sources
-    else:
-        merged.pop(SOURCES_KEY, None)
-
-    if merged.get("status") == "active":
-        merged["status"] = "stable"
-
-    merged["sensitivity"] = combine_sensitivity(
-        survivor_metadata.get("sensitivity"), absorbed_metadata.get("sensitivity")
-    )
+    merged = _union_frontmatter(survivor_metadata, absorbed_metadata)
 
     merged_relations, _dropped_self_loops, _deduped_collisions = merge_relations(
         decode_relations(survivor_metadata),
@@ -2917,6 +2933,85 @@ def build_merged_document(
         merged_body += "\n"
 
     return merged, merged_body
+
+
+_RELATED_HEADING: Final = "## Related"
+"""The heading `build_concept` writes above a derived object's source
+backlinks; an attach inserts its section immediately above it."""
+
+ATTACH_RELATED_NOTE: Final = "source this was extracted from"
+"""The trailing phrase of a `## Related` bullet for a Source -- the one
+`build_concept` uses by default, so an attached Source reads like a born one."""
+
+
+def _squash_whitespace(text: str) -> str:
+    return " ".join(text.split())
+
+
+def build_attached_document(
+    existing_metadata: dict[str, object],
+    existing_body: str,
+    candidate_metadata: dict[str, object],
+    candidate_body: str,
+    *,
+    source_id: str,
+    source_title: str,
+) -> tuple[dict[str, object], str]:
+    """The revised `(metadata, body)` of an existing concept that a freshly
+    extracted candidate from `source_id` ATTACHES to (attach-at-ingest).
+
+    Frontmatter follows `_union_frontmatter` -- the same core merge uses --
+    so provenance union, the high-water `sensitivity`, newer-side
+    `freshness`/`generated` and the `sources` projection cannot drift from
+    merge. The existing concept keeps its `type`, `title`, `description` and
+    Concept ID (scalar existing-wins); `relations` is left as it was; no
+    `merged_from` ledger is written (there is no absorbed document to
+    restore); `type_alternative` is never imported. `version` is the existing
+    integer plus one, a missing or non-integer value counting as 1.
+
+    Body: nothing already written is rewritten or reordered. The candidate's
+    own body (NOT its lede or its Related list) becomes a
+    `## Update from <title> (<id>)` section with its headings demoted two
+    levels, inserted immediately above the existing `## Related` list (or
+    appended with a new one when the document has none), and one bullet for
+    the Source is added to that list. A candidate body already contained in
+    the existing body after whitespace normalization, or an empty one, adds
+    no section, while provenance, the Related bullet and `version` still
+    update because the Source did support the concept. No model is called."""
+    metadata = _union_frontmatter(existing_metadata, candidate_metadata)
+    prior = existing_metadata.get("version")
+    base = prior if isinstance(prior, int) and not isinstance(prior, bool) else 1
+    metadata["version"] = base + 1
+
+    body = existing_body.rstrip("\n")
+    lines = body.split("\n")
+    related_at = next(
+        (
+            i
+            for i in range(len(lines) - 1, -1, -1)
+            if lines[i].strip() == _RELATED_HEADING
+        ),
+        None,
+    )
+    head = (
+        "\n".join(lines[:related_at]).rstrip("\n") if related_at is not None else body
+    )
+    tail = "\n".join(lines[related_at:]).rstrip("\n") if related_at is not None else ""
+
+    evidence = candidate_body.strip()
+    if evidence and _squash_whitespace(evidence) not in _squash_whitespace(body):
+        title = " ".join(source_title.split())
+        head += (
+            f"\n\n## Update from {title} ({source_id})\n\n"
+            f"{_demote_absorbed_headings(evidence)}"
+        )
+
+    bullet = f"- [{source_id}](/{source_id}.md) — {ATTACH_RELATED_NOTE}"
+    if not tail:
+        tail = f"{_RELATED_HEADING}\n\n{bullet}"
+    elif f"(/{source_id}.md)" not in tail:
+        tail = f"{tail}\n{bullet}"
+    return metadata, f"{head}\n\n{tail}\n"
 
 
 _CITATIONS_HEADING: Final = "# Citations"

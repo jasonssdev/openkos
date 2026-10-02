@@ -33,11 +33,11 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Literal, cast
 
 from openkos import config, source_date, source_title
 from openkos.bundle import index as bundle_index
@@ -52,6 +52,8 @@ from openkos.extraction.concept import (
 from openkos.llm.base import LLMBackend
 from openkos.model import okf
 from openkos.model.types import TYPE_TO_LINK_DIR, TYPE_TO_SECTION
+from openkos.resolution import candidates as resolution_candidates
+from openkos.resolution.normalize import canonical_family_member, normalize_key
 from openkos.resolution.run_duplicates import collapse_run_duplicates
 from openkos.sensitivity import blocks_llm_send
 
@@ -97,6 +99,16 @@ class DerivedPlan:
     advisory's `(type, resolved_level)` pairs the same way it already
     builds `alternative_pairs`."""
 
+    attach_to: str | None = None
+    """The Concept ID of the EXISTING concept this plan revises (attach-at-
+    ingest, #1268), or `None` for an ordinary create plan. When set, `path`
+    is that concept's file, `slug`/`link_dir` are its own, `content` is the
+    full revised document, and Phase B rewrites it atomically behind the
+    drift guard instead of creating a file."""
+
+    attach_version: int | None = None
+    """The revised document's `version` -- set exactly when `attach_to` is."""
+
     type_floor_raised: bool = False
     """`True` when this object's resolved `sensitivity` is strictly above
     `stamp_sensitivity` because of the per-type offset mapping (issue #669,
@@ -104,6 +116,91 @@ class DerivedPlan:
     `plan.sensitivity != cfg.default_sensitivity`. `False` on the common
     path (no offset configured for this type, or `base` already at or
     above the floor-plus-offset)."""
+
+
+ATTACH_EXCLUDED_TYPES: frozenset[str] = frozenset({"Event", "Person"})
+"""OKF types whose identical title routinely names different things (recurring
+Events, Person homonyms; #776, #796), so a candidate of one of them is never
+attached and keeps the slug-collision path. A constant, not configuration:
+admitting a type is a measured change that ships with its own evidence (#1268
+decision 3)."""
+
+
+@dataclass(frozen=True)
+class AttachTarget:
+    """One existing concept as the attach lookup read it: the Concept ID and
+    its decoded text. The caller's read also feeds the drift guard's baseline,
+    so the bytes the revision was composed from are the bytes compared."""
+
+    concept_id: str
+    text: str
+
+
+@dataclass(frozen=True)
+class AttachLookup:
+    """The attach lookup `stage_derived_objects` consults (#1268), supplied by
+    the caller so staging reads no files itself. `find(type, title)` returns
+    the ids of existing, non-deprecated concepts of that non-excluded type
+    whose title has the same normalized key; `read` returns one of them. Both
+    are called only AFTER extraction returns, so the baseline bytes the drift
+    guard compares are read at the last moment before the commit phase, not
+    minutes earlier. A lookup of `None` means attach is off for the run."""
+
+    find: Callable[[str, str], tuple[str, ...]]
+    read: Callable[[str], AttachTarget]
+
+
+def build_attach_lookup(
+    bundle_dir: Path, *, read: Callable[[str], AttachTarget]
+) -> AttachLookup:
+    """An `AttachLookup` over `bundle_dir`, built lazily on its first `find`.
+
+    Groups the eligible documents by `(type, normalized key)` through the one
+    exact-title eligibility rule (`candidates.keyed_documents`: readable,
+    typed, titled, not a Source, not deprecated) minus `ATTACH_EXCLUDED_TYPES`,
+    so a deprecated concept is never an attach target and "same family" means
+    what it means in `duplicates`."""
+    groups: dict[tuple[str, str], tuple[str, ...]] | None = None
+
+    def find(okf_type: str, title: str) -> tuple[str, ...]:
+        nonlocal groups
+        if okf_type in ATTACH_EXCLUDED_TYPES:
+            return ()
+        if groups is None:
+            built: dict[tuple[str, str], list[str]] = {}
+            for concept_id, doc_type, key in resolution_candidates.keyed_documents(
+                bundle_dir
+            ):
+                if doc_type in ATTACH_EXCLUDED_TYPES or not key:
+                    continue
+                built.setdefault((doc_type, key), []).append(concept_id)
+            groups = {k: tuple(sorted(ids)) for k, ids in built.items()}
+        return groups.get((okf_type, normalize_key(title)), ())
+
+    return AttachLookup(find=find, read=read)
+
+
+def _attach_candidates(
+    attach: AttachLookup, okf_type: str, title: str
+) -> list[tuple[AttachTarget, dict[str, object], str]]:
+    """The readable matches for one candidate as `(target, metadata, body)`,
+    in id order. A match that fails to parse is ignored (the walk that found
+    it already excludes unparseable documents; a document damaged since is
+    left to the slug path rather than rewritten)."""
+    found: list[tuple[AttachTarget, dict[str, object], str]] = []
+    for concept_id in attach.find(okf_type, title):
+        target = attach.read(concept_id)
+        try:
+            metadata, body = okf.load_frontmatter(target.text)
+        except okf.FrontmatterError:
+            continue
+        found.append((target, metadata, body))
+    return found
+
+
+def _owns_source(metadata: Mapping[str, object], provenance_key: str) -> bool:
+    provenance = metadata.get("provenance")
+    return isinstance(provenance, list) and provenance_key in provenance
 
 
 def collision_family(link_dir: Path, base_slug: str) -> list[Path]:
@@ -193,6 +290,7 @@ DropKind = Literal[
     "run-duplicate",
     "already-exists",
     "disambiguated",
+    "attached",
     "build-failed",
 ]
 """The closed vocabulary for `StagingDrop.kind` (design: Interfaces/
@@ -459,6 +557,10 @@ class StagingDrop:
     for `"run-duplicate"` (#1230). `slug` is the collapsed candidate's own
     (never staged) slug."""
 
+    attached_to: str | None = None
+    """The Concept ID of the existing concept this candidate was attached to
+    -- set only for `"attached"` (#1268). `slug` is the candidate's own."""
+
 
 @dataclass(frozen=True)
 class StagedDerivedObjects:
@@ -515,6 +617,7 @@ def stage_derived_objects(
     on_progress: ProgressHook | None = None,
     carried: ConvergedReingest | None = None,
     source_tags: tuple[str, ...] = (),
+    attach: AttachLookup | None = None,
 ) -> StagedDerivedObjects:
     """Attempt LLM extraction of zero or more distinct derived objects from
     the source's decoded text, and stage each validated candidate for Phase
@@ -592,6 +695,14 @@ def stage_derived_objects(
     inheritance already uses. It is never consulted on the `carried` or
     pre-extraction-return paths above: a Source-only rewrite creates no
     derived object, so there is nothing to tag.
+
+    `attach` (attach-at-ingest, #1268) is the caller-built lookup of existing
+    concepts. A candidate of a non-excluded type whose `(type, normalized
+    title key)` matches one of them is staged as an ATTACH plan (see
+    `DerivedPlan.attach_to`) instead of reaching the slug-collision rules --
+    unless any match already lists this source in its `provenance`, which is
+    the unchanged same-source no-op. `None` (attach off) reproduces the
+    pre-attach behavior exactly.
     """
     if carried is not None:
         return StagedDerivedObjects(
@@ -670,6 +781,7 @@ def stage_derived_objects(
     plans: list[DerivedPlan] = []
     drops: list[StagingDrop] = []
     seen_slugs: set[str] = set()
+    attached_ids: set[str] = set()
     lost_in_staging = 0
     # #1230: collapse same-run near-duplicates the judge kept (same type,
     # near-match titles, same quoted source line) BEFORE staging, so only
@@ -709,6 +821,89 @@ def stage_derived_objects(
         link_dir_path = bundle_dir / link_dir
         derived_path = link_dir_path / f"{derived_slug}.md"
         original_slug: str | None = None
+        if attach is not None and extraction.type not in ATTACH_EXCLUDED_TYPES:
+            matches = _attach_candidates(attach, extraction.type, safe_title)
+            if matches:
+                provenance_key = f"sources/{source_slug}"
+                if any(_owns_source(meta, provenance_key) for _, meta, _ in matches):
+                    # The unchanged same-source no-op: this source already
+                    # supports a concept of this key, so a re-ingest neither
+                    # attaches twice nor bumps `version` twice.
+                    drops.append(StagingDrop(kind="already-exists", slug=derived_slug))
+                    continue
+                target_id = canonical_family_member(
+                    [target.concept_id for target, _, _ in matches]
+                )
+                if target_id in attached_ids:
+                    drops.append(
+                        StagingDrop(kind="in-batch-collision", slug=derived_slug)
+                    )
+                    continue
+                _, target_metadata, target_body = next(
+                    entry for entry in matches if entry[0].concept_id == target_id
+                )
+                attach_sensitivity = config.type_birth_sensitivity(
+                    cfg, extraction.type, stamp_sensitivity
+                )
+                try:
+                    candidate_text = okf.build_concept(
+                        type=extraction.type,
+                        title=safe_title,
+                        description=extraction.description,
+                        body=extraction.body,
+                        provenance=[provenance_key],
+                        sensitivity=attach_sensitivity,
+                        generated=okf.Generated(by=okf.engine_actor(), at=timestamp),
+                        type_alternative=extraction.type_alternative,
+                        tags=source_tags,
+                    )
+                except ValueError as exc:
+                    drops.append(
+                        StagingDrop(
+                            kind="build-failed", slug=derived_slug, error=str(exc)
+                        )
+                    )
+                    lost_in_staging += 1
+                    continue
+                candidate_metadata, _ = okf.load_frontmatter(candidate_text)
+                revised_metadata, revised_body = okf.build_attached_document(
+                    target_metadata,
+                    target_body,
+                    candidate_metadata,
+                    extraction.body,
+                    source_id=provenance_key,
+                    source_title=source_title,
+                )
+                version = cast(int, revised_metadata["version"])
+                existing_title = target_metadata.get("title")
+                attached_ids.add(target_id)
+                drops.append(
+                    StagingDrop(
+                        kind="attached", slug=derived_slug, attached_to=target_id
+                    )
+                )
+                plans.append(
+                    DerivedPlan(
+                        doc_type=extraction.type,
+                        section=section,
+                        link_dir=target_id.split("/", 1)[0],
+                        slug=target_id.split("/", 1)[1],
+                        title=(
+                            existing_title
+                            if isinstance(existing_title, str)
+                            else safe_title
+                        ),
+                        description=extraction.description,
+                        path=okf.concept_path_for(target_id, bundle_dir),
+                        content=okf.dump_frontmatter(revised_metadata, revised_body),
+                        type_alternative=extraction.type_alternative,
+                        sensitivity=attach_sensitivity,
+                        type_floor_raised=(attach_sensitivity != stamp_sensitivity),
+                        attach_to=target_id,
+                        attach_version=version,
+                    )
+                )
+                continue
         if derived_path.exists():
             # A slug already on disk. Distinguish WHO owns it (design:
             # Idempotency Predicate, #131): scan the whole `<slug>`/
@@ -1620,7 +1815,9 @@ def compose_catalog_update(
     order, with one index bullet and one log entry per staged derived
     object, plus the durable disambiguation audit log entry (#131) when
     `plan.disambiguated_from is not None` -- no second read-modify-write
-    round trip, matching "one confirm gate, one preview".
+    round trip, matching "one confirm gate, one preview". An ATTACH plan
+    (#1268) revises an already-cataloged concept, so it adds only an
+    `**Attach**` log entry and no index bullet.
 
     `adopted` (#1136) are derived objects an interrupted run already wrote
     but never catalogued (`find_uncatalogued_objects`): each gets the index
@@ -1668,6 +1865,20 @@ def compose_catalog_update(
     new_log_text = bundle_log.insert_log_entry(log_text, entry_date, log_line)
 
     for plan in staged.plans:
+        if plan.attach_to is not None:
+            # An attach revises a concept that is already cataloged: its
+            # bullet (id, title, description) is unchanged, so no second one
+            # is inserted, and the write is logged as a revision, not as an
+            # extraction (#1268).
+            new_log_text = bundle_log.insert_log_entry(
+                new_log_text,
+                entry_date,
+                f"**Attach**: Revised [{plan.title}]"
+                f"(/{plan.link_dir}/{plan.slug}.md) ({plan.doc_type}) from "
+                f"[{source.title}](/sources/{slug}.md); now version "
+                f"{plan.attach_version}.",
+            )
+            continue
         new_index_text = bundle_index.insert_index_entry(
             new_index_text,
             section=plan.section,

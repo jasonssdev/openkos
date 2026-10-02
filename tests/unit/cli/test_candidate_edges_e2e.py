@@ -99,7 +99,18 @@ class _FakeOllama:
             return json.dumps(
                 {"verdict": "no_contradiction", "rationale": "compatible claims"}
             )
-        title = self._titles[min(self._next_title, len(self._titles) - 1)]
+        # Keyed on the source text in the prompt, not on call order: one
+        # ingest makes several extraction calls, so a call counter handed the
+        # later sources the same clamped title, which only ever produced three
+        # concepts because ingest used to fork a same-title candidate as
+        # `<slug>-N`. It now attaches (#1268), and three sources must name
+        # three different subjects for the test to be about three concepts.
+        named = [t for t in self._titles if f"material about {t}" in text]
+        title = (
+            named[0]
+            if named
+            else self._titles[min(self._next_title, len(self._titles) - 1)]
+        )
         self._next_title += 1
         return json.dumps(
             {

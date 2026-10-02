@@ -331,6 +331,15 @@ given one; see `DEFAULT_TEMPERATURE` for why pinning it reduces variance
 without being a determinism guarantee."""
 
 
+DEFAULT_ATTACH_AT_INGEST = True
+"""Packaged default for `attach_at_ingest` (#1268): whether an extracted
+candidate that matches an existing concept on OKF type and normalized title
+key REVISES that concept (provenance appended, evidence merged, `version`
+bumped, Concept ID kept) instead of being written as a `<slug>-N` copy.
+`True` on every ingest path, the unattended watch included -- the owner's
+decision on #1268; `false` is the kill switch and restores the fork."""
+
+
 DEFAULT_CONCURRENT_EXTRACTION = False
 """Packaged default for `concurrent_extraction` (issue #744): whether the
 chunked extraction fan-out sends its windows concurrently.
@@ -1443,6 +1452,12 @@ class Config:
     unattended: UnattendedConfig = field(default_factory=UnattendedConfig)
     """The `unattended:` section (spend budget and folder watch); every
     default when the section is absent. See `UnattendedConfig`."""
+    attach_at_ingest: bool = DEFAULT_ATTACH_AT_INGEST
+    """Whether ingest attaches a same-type, same-key candidate to the existing
+    concept instead of writing `<slug>-N` (#1268), defaulting to
+    `DEFAULT_ATTACH_AT_INGEST` when the key is absent or explicitly null. Added
+    LAST and DEFAULTED, like `revision_history`, so a positional or partial
+    `Config(...)` construction elsewhere is unchanged."""
 
 
 def read_config(root: Path) -> Config:
@@ -1508,6 +1523,7 @@ def read_config(root: Path) -> Config:
     type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
     rationale_language = raw.get("rationale_language")
     revision_history = raw.get("revision_history")
+    attach_at_ingest = raw.get("attach_at_ingest")
     backend = raw.get("backend")
     base_url = raw.get("base_url")
     embedding_base_url = raw.get("embedding_base_url")
@@ -1775,6 +1791,14 @@ def read_config(root: Path) -> Config:
                     f"offset between 0 and {len(okf.SENSITIVITY_ORDER) - 1}, "
                     f"got {offset!r}"
                 )
+    if attach_at_ingest is not None and not isinstance(attach_at_ingest, bool):
+        # Same narrow `isinstance(x, bool)` guard as `union_judge`: YAML
+        # resolves `0`/`1` to `int`, and this key gates a write to an
+        # existing concept, so a truthy coercion is refused.
+        raise ValueError(
+            f"{layout.config_path.name}: 'attach_at_ingest' must be a "
+            f"boolean, got {type(attach_at_ingest).__name__}"
+        )
     if revision_history is not None and not isinstance(revision_history, bool):
         # Same narrow `isinstance(x, bool)` guard as `sufficiency_check`/
         # `union_judge` above: YAML resolves `1` to `int`, and this key gates
@@ -1962,6 +1986,11 @@ def read_config(root: Path) -> Config:
             rationale_language.strip()
             if rationale_language is not None
             else DEFAULT_RATIONALE_LANGUAGE
+        ),
+        attach_at_ingest=(
+            attach_at_ingest
+            if attach_at_ingest is not None
+            else DEFAULT_ATTACH_AT_INGEST
         ),
         revision_history=(
             revision_history

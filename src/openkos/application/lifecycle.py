@@ -81,6 +81,7 @@ from openkos.bundle import relations as bundle_relations
 from openkos.model import okf
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup
+from openkos.resolution.normalize import is_suffix_family
 
 STACKED_SHARE_GUARDRAIL = 0.8
 """Merged-body share at or above which a proposed merge is flagged as a
@@ -2760,14 +2761,6 @@ def member_body_length(bundle_dir: Path, member_id: str) -> int:
 _SUFFIX_FAMILY_CRITERION = "canonical id (base of a -N family)"
 
 
-def _is_suffix_family(base_id: str, other_id: str) -> bool:
-    """Whether `other_id` is `base_id` plus an ingest-time `-N` disambiguator
-    (digits only, same directory) -- the collision suffix `ingest` appends to
-    a slug that is already taken (#1228)."""
-    prefix = f"{base_id}-"
-    return other_id.startswith(prefix) and other_id[len(prefix) :].isdecimal()
-
-
 def ordered_merge_pair(
     bundle_dir: Path, member_ids: tuple[str, ...]
 ) -> tuple[str, str, str]:
@@ -2787,9 +2780,9 @@ def ordered_merge_pair(
     preview can state it. Moved verbatim from `cli/main.py`'s
     `_ordered_merge_pair`."""
     first, second = member_ids
-    if _is_suffix_family(first, second):
+    if is_suffix_family(first, second):
         return first, second, _SUFFIX_FAMILY_CRITERION
-    if _is_suffix_family(second, first):
+    if is_suffix_family(second, first):
         return second, first, _SUFFIX_FAMILY_CRITERION
     first_length = member_body_length(bundle_dir, first)
     second_length = member_body_length(bundle_dir, second)

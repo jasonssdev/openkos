@@ -449,6 +449,15 @@ def test_batch_auto_matches_pre_move_golden(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _init_workspace(tmp_path, monkeypatch)
+    # Both files yield the SAME concept title. This golden pins the batch
+    # stream of the pre-attach fork (`-2`), so the kill switch keeps that
+    # behavior; attach-at-ingest's own output is pinned in
+    # `test_ingest_attach_output.py` (#1268).
+    config_path = tmp_path / "openkos.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + "\nattach_at_ingest: false\n",
+        encoding="utf-8",
+    )
     _patch_llm(monkeypatch, _concept_reply())
     batch = tmp_path / "drop"
     batch.mkdir()

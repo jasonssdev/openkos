@@ -1806,3 +1806,66 @@ def test_stage_derived_objects_returns_carried_markers_without_llm_call(
     assert outcome.report is None
     assert outcome.drops == ()
     assert outcome.lost_in_staging == 0
+
+
+_ATTACH_INDEX = (
+    "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n"
+    "- [Skill](/concepts/skill.md) — A reusable capability.\n"
+)
+
+
+def _attach_update(*plans: ingest_service.DerivedPlan) -> ingest_service.CatalogUpdate:
+    return ingest_service.compose_catalog_update(
+        source=_source_plan(),
+        staged=_staged(plans=plans),
+        slug="notes",
+        resource="raw/notes.txt",
+        index_text=_ATTACH_INDEX,
+        log_text="---\nokf_version: '0.1'\n---\n",
+        regenerate=False,
+        timestamp="2026-07-14T18:30:00Z",
+        entry_date=date(2026, 7, 14),
+    )
+
+
+def test_compose_catalog_update_an_attach_adds_no_second_index_bullet() -> None:
+    plan = _plan(
+        slug="skill",
+        title="Skill",
+        link_dir="concepts",
+        section="Concepts",
+        attach_to="concepts/skill",
+        attach_version=3,
+    )
+
+    update = _attach_update(plan)
+
+    assert update.new_index_text.count("(/concepts/skill.md)") == 1
+
+
+def test_compose_catalog_update_an_attach_logs_an_attach_entry_not_an_extraction() -> (
+    None
+):
+    plan = _plan(
+        slug="skill",
+        title="Skill",
+        link_dir="concepts",
+        section="Concepts",
+        attach_to="concepts/skill",
+        attach_version=3,
+    )
+
+    update = _attach_update(plan)
+
+    assert "**Attach**" in update.new_log_text
+    assert "(/concepts/skill.md)" in update.new_log_text
+    assert "version 3" in update.new_log_text
+    assert "(/sources/notes.md)" in update.new_log_text
+    assert "Extracted [Skill]" not in update.new_log_text
+
+
+def test_compose_catalog_update_a_create_plan_still_logs_extraction() -> None:
+    update = _attach_update(_plan(slug="other", section="Concepts"))
+
+    assert "**Attach**" not in update.new_log_text
+    assert "Extracted [" in update.new_log_text

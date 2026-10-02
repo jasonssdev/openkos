@@ -44,7 +44,9 @@ def _accepted_keys() -> set[str]:
 # merged into `openspec/specs/`. Each entry MUST name the change; the archive
 # phase of that change merges the delta and REMOVES the entry (a stale entry
 # is caught by `test_the_pending_allowlist_holds_only_unspecified_keys`).
-_PENDING_ARCHIVE: dict[str, str] = {}
+_PENDING_ARCHIVE: dict[str, str] = {
+    "attach_at_ingest": "attach-at-ingest",
+}
 
 
 def _spec_text() -> str:

@@ -4418,18 +4418,18 @@ def test_family_scan_skips_malformed_frontmatter_member(tmp_path: Path) -> None:
 def test_foreign_collision_writes_slug_2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A second source whose extraction yields the SAME title as an
+    """(`Person` is an attach-excluded type, so it keeps the `-N` path, #1268.) A second source whose extraction yields the SAME title as an
     already-ingested, DIFFERENT source's derived object is written to
     `<slug>-2` with its own single-source `provenance`, leaving the first
     source's file untouched (spec: Second, different-source, same-title
     candidate writes to `<slug>-2`)."""
     _init_workspace(tmp_path, monkeypatch)
-    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    _patch_llm(monkeypatch, _person_reply(title="Stoic Practice"))
     source_a = tmp_path / "notes-a.txt"
     source_a.write_text("Notes from source A.", encoding="utf-8")
     first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
     assert first.exit_code == 0
-    base_path = tmp_path / "bundle" / "concepts" / "stoic-practice.md"
+    base_path = tmp_path / "bundle" / "people" / "stoic-practice.md"
     assert base_path.is_file()
 
     source_b = tmp_path / "notes-b.txt"
@@ -4437,7 +4437,7 @@ def test_foreign_collision_writes_slug_2(
     result = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
 
     assert result.exit_code == 0
-    disambiguated_path = tmp_path / "bundle" / "concepts" / "stoic-practice-2.md"
+    disambiguated_path = tmp_path / "bundle" / "people" / "stoic-practice-2.md"
     assert disambiguated_path.is_file()
     base_metadata, _ = okf.load_frontmatter(base_path.read_text(encoding="utf-8"))
     assert base_metadata["provenance"] == ["sources/notes-a"]
@@ -4451,12 +4451,12 @@ def test_foreign_collision_writes_slug_2(
 def test_third_foreign_source_writes_slug_3(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A THIRD different source with the same title, after `<slug>` and
+    """(`Person` is an attach-excluded type, so it keeps the `-N` path, #1268.) A THIRD different source with the same title, after `<slug>` and
     `<slug>-2` are already taken by different sources, is written to the
     first free numeric suffix `<slug>-3` (spec: Third, different-source,
     same-title candidate writes to `<slug>-3`)."""
     _init_workspace(tmp_path, monkeypatch)
-    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    _patch_llm(monkeypatch, _person_reply(title="Stoic Practice"))
     for name, text in (
         ("notes-a.txt", "Notes from source A."),
         ("notes-b.txt", "Notes from source B."),
@@ -4467,9 +4467,9 @@ def test_third_foreign_source_writes_slug_3(
         result = runner.invoke(app, ["ingest", name, "--auto"])
         assert result.exit_code == 0
 
-    assert (tmp_path / "bundle" / "concepts" / "stoic-practice.md").is_file()
-    assert (tmp_path / "bundle" / "concepts" / "stoic-practice-2.md").is_file()
-    third_path = tmp_path / "bundle" / "concepts" / "stoic-practice-3.md"
+    assert (tmp_path / "bundle" / "people" / "stoic-practice.md").is_file()
+    assert (tmp_path / "bundle" / "people" / "stoic-practice-2.md").is_file()
+    third_path = tmp_path / "bundle" / "people" / "stoic-practice-3.md"
     assert third_path.is_file()
     metadata, _ = okf.load_frontmatter(third_path.read_text(encoding="utf-8"))
     assert metadata["provenance"] == ["sources/notes-c"]
@@ -4479,12 +4479,12 @@ def test_third_foreign_source_writes_slug_3(
 def test_reingest_owner_of_base_slug_is_noop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Re-ingesting the source that owns the base `<slug>` recognizes it as
+    """(`Person` is an attach-excluded type, so it keeps the `-N` path, #1268.) Re-ingesting the source that owns the base `<slug>` recognizes it as
     this source's own object via the provenance family scan and writes no
     new file, even after a foreign source has since taken `<slug>-2` (spec:
     Re-ingesting the first source spawns no new file)."""
     _init_workspace(tmp_path, monkeypatch)
-    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    _patch_llm(monkeypatch, _person_reply(title="Stoic Practice"))
     source_a = tmp_path / "notes-a.txt"
     source_a.write_text("Notes from source A.", encoding="utf-8")
     first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
@@ -4497,8 +4497,8 @@ def test_reingest_owner_of_base_slug_is_noop(
     result = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert not (tmp_path / "bundle" / "concepts" / "stoic-practice-3.md").exists()
-    concept_dir = tmp_path / "bundle" / "concepts"
+    assert not (tmp_path / "bundle" / "people" / "stoic-practice-3.md").exists()
+    concept_dir = tmp_path / "bundle" / "people"
     assert sorted(p.name for p in concept_dir.glob("*.md")) == [
         "stoic-practice-2.md",
         "stoic-practice.md",
@@ -4508,13 +4508,13 @@ def test_reingest_owner_of_base_slug_is_noop(
 def test_reingest_owner_of_slug_2_does_not_spawn_slug_3(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CRITICAL: re-ingesting the source that owns the disambiguated
+    """(`Person` is an attach-excluded type, so it keeps the `-N` path, #1268.) CRITICAL: re-ingesting the source that owns the disambiguated
     `<slug>-2` scans the WHOLE collision family, recognizes `<slug>-2` as
     its own object, and writes no `<slug>-3` -- a prior `-N` winner must
     never spawn a further disambiguation on re-ingest (spec: Re-ingesting
     the source that owns `<slug>-2` does not spawn `-3`)."""
     _init_workspace(tmp_path, monkeypatch)
-    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    _patch_llm(monkeypatch, _person_reply(title="Stoic Practice"))
     source_a = tmp_path / "notes-a.txt"
     source_a.write_text("Notes from source A.", encoding="utf-8")
     first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
@@ -4523,13 +4523,13 @@ def test_reingest_owner_of_slug_2_does_not_spawn_slug_3(
     source_b.write_text("Notes from source B.", encoding="utf-8")
     second = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
     assert second.exit_code == 0
-    assert (tmp_path / "bundle" / "concepts" / "stoic-practice-2.md").is_file()
+    assert (tmp_path / "bundle" / "people" / "stoic-practice-2.md").is_file()
 
     result = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert not (tmp_path / "bundle" / "concepts" / "stoic-practice-3.md").exists()
-    concept_dir = tmp_path / "bundle" / "concepts"
+    assert not (tmp_path / "bundle" / "people" / "stoic-practice-3.md").exists()
+    concept_dir = tmp_path / "bundle" / "people"
     assert sorted(p.name for p in concept_dir.glob("*.md")) == [
         "stoic-practice-2.md",
         "stoic-practice.md",
@@ -4561,12 +4561,12 @@ def test_noncolliding_candidate_written_without_suffix(
 def test_disambiguation_writes_audit_log_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A foreign-source disambiguation appends one durable `log.md` bullet,
+    """(`Person` is an attach-excluded type, so it keeps the `-N` path, #1268.) A foreign-source disambiguation appends one durable `log.md` bullet,
     via `insert_log_entry`, naming the source slug, the extracted title,
     the original colliding slug, and the chosen disambiguated slug (spec:
     Durable Disambiguation Audit Log)."""
     _init_workspace(tmp_path, monkeypatch)
-    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    _patch_llm(monkeypatch, _person_reply(title="Stoic Practice"))
     source_a = tmp_path / "notes-a.txt"
     source_a.write_text("Notes from source A.", encoding="utf-8")
     first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
@@ -4588,12 +4588,12 @@ def test_disambiguation_writes_audit_log_entry(
 def test_status_surfaces_disambiguation_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The disambiguation audit entry, once written, is surfaced by
+    """(`Person` is an attach-excluded type, so it keeps the `-N` path, #1268.) The disambiguation audit entry, once written, is surfaced by
     `openkos status`'s recent-activity section alongside other log entries
     -- no new persisted ledger file is introduced (spec: Disambiguating
     ingest is recorded and surfaced)."""
     _init_workspace(tmp_path, monkeypatch)
-    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    _patch_llm(monkeypatch, _person_reply(title="Stoic Practice"))
     source_a = tmp_path / "notes-a.txt"
     source_a.write_text("Notes from source A.", encoding="utf-8")
     first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
