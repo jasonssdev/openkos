@@ -2935,6 +2935,85 @@ def build_merged_document(
     return merged, merged_body
 
 
+_RELATED_HEADING: Final = "## Related"
+"""The heading `build_concept` writes above a derived object's source
+backlinks; an attach inserts its section immediately above it."""
+
+ATTACH_RELATED_NOTE: Final = "source this was extracted from"
+"""The trailing phrase of a `## Related` bullet for a Source -- the one
+`build_concept` uses by default, so an attached Source reads like a born one."""
+
+
+def _squash_whitespace(text: str) -> str:
+    return " ".join(text.split())
+
+
+def build_attached_document(
+    existing_metadata: dict[str, object],
+    existing_body: str,
+    candidate_metadata: dict[str, object],
+    candidate_body: str,
+    *,
+    source_id: str,
+    source_title: str,
+) -> tuple[dict[str, object], str]:
+    """The revised `(metadata, body)` of an existing concept that a freshly
+    extracted candidate from `source_id` ATTACHES to (attach-at-ingest).
+
+    Frontmatter follows `_union_frontmatter` -- the same core merge uses --
+    so provenance union, the high-water `sensitivity`, newer-side
+    `freshness`/`generated` and the `sources` projection cannot drift from
+    merge. The existing concept keeps its `type`, `title`, `description` and
+    Concept ID (scalar existing-wins); `relations` is left as it was; no
+    `merged_from` ledger is written (there is no absorbed document to
+    restore); `type_alternative` is never imported. `version` is the existing
+    integer plus one, a missing or non-integer value counting as 1.
+
+    Body: nothing already written is rewritten or reordered. The candidate's
+    own body (NOT its lede or its Related list) becomes a
+    `## Update from <title> (<id>)` section with its headings demoted two
+    levels, inserted immediately above the existing `## Related` list (or
+    appended with a new one when the document has none), and one bullet for
+    the Source is added to that list. A candidate body already contained in
+    the existing body after whitespace normalization, or an empty one, adds
+    no section, while provenance, the Related bullet and `version` still
+    update because the Source did support the concept. No model is called."""
+    metadata = _union_frontmatter(existing_metadata, candidate_metadata)
+    prior = existing_metadata.get("version")
+    base = prior if isinstance(prior, int) and not isinstance(prior, bool) else 1
+    metadata["version"] = base + 1
+
+    body = existing_body.rstrip("\n")
+    lines = body.split("\n")
+    related_at = next(
+        (
+            i
+            for i in range(len(lines) - 1, -1, -1)
+            if lines[i].strip() == _RELATED_HEADING
+        ),
+        None,
+    )
+    head = (
+        "\n".join(lines[:related_at]).rstrip("\n") if related_at is not None else body
+    )
+    tail = "\n".join(lines[related_at:]).rstrip("\n") if related_at is not None else ""
+
+    evidence = candidate_body.strip()
+    if evidence and _squash_whitespace(evidence) not in _squash_whitespace(body):
+        title = " ".join(source_title.split())
+        head += (
+            f"\n\n## Update from {title} ({source_id})\n\n"
+            f"{_demote_absorbed_headings(evidence)}"
+        )
+
+    bullet = f"- [{source_id}](/{source_id}.md) — {ATTACH_RELATED_NOTE}"
+    if not tail:
+        tail = f"{_RELATED_HEADING}\n\n{bullet}"
+    elif f"(/{source_id}.md)" not in tail:
+        tail = f"{tail}\n{bullet}"
+    return metadata, f"{head}\n\n{tail}\n"
+
+
 _CITATIONS_HEADING: Final = "# Citations"
 """The exact, bare OKF v0.1 §8 reserved heading `build_source_concept` used to
 write at the end of every Source's body (before this change removed the

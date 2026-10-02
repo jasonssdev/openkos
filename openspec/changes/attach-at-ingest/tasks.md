@@ -6,13 +6,13 @@ is one work unit (one Conventional Commit, scope `ingest`, `okf`,
 
 ## Phase 1: Shared building blocks
 
-- [ ] 1.1 Pin merge output first. Add byte-exact golden tests over
+- [x] 1.1 Pin merge output first. Add byte-exact golden tests over
       `okf.build_merged_document` (list union order, high-water
       sensitivity, freshness winner, legacy `timestamp`, `sources`
       re-projection, `type_alternative`/`event_date` exclusion); then factor
       the field-union core into one private function both builders call.
       Goldens stay green unchanged. (`okf`)
-- [ ] 1.2 `okf.build_attached_document`: `version` read as int (absent or
+- [x] 1.2 `okf.build_attached_document`: `version` read as int (absent or
       non-int is 1) plus 1; `provenance` union and `sources`
       re-projection; `tags` union; `combine_sensitivity` never lowers;
       newer-side `freshness`/`generated`; identity fields untouched;
