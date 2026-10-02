@@ -57,16 +57,21 @@ def test_tty_notice_gets_a_text_prefix_and_loses_the_verb_prefix(
 ) -> None:
     _, err = streams(out_tty=False, err_tty=True)
     output.notice("openkos ingest: dropped 3 titles.", kind="warning", verb="ingest")
-    assert err.getvalue() == "\x1b[1mwarning:\x1b[0m dropped 3 titles.\n"
+    assert err.getvalue() == "warning: dropped 3 titles.\n"
 
 
-def test_no_color_keeps_the_prefix_but_drops_the_escape(
-    streams: Callable[..., tuple[_Stream, _Stream]], monkeypatch: pytest.MonkeyPatch
+def test_notice_never_emits_an_ansi_escape(
+    streams: Callable[..., tuple[_Stream, _Stream]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, err = streams(out_tty=False, err_tty=True)
-    monkeypatch.setenv("NO_COLOR", "1")
-    output.notice("openkos ingest: hello.", verb="ingest")
-    assert err.getvalue() == "note: hello.\n"
+    for no_color in (None, "1"):
+        _, err = streams(out_tty=False, err_tty=True)
+        if no_color is None:
+            monkeypatch.delenv("NO_COLOR", raising=False)
+        else:
+            monkeypatch.setenv("NO_COLOR", no_color)
+        output.notice("openkos ingest: hello.", verb="ingest")
+        assert err.getvalue() == "note: hello.\n"
 
 
 def test_tty_notice_wraps_with_a_hanging_indent(
@@ -76,9 +81,7 @@ def test_tty_notice_wraps_with_a_hanging_indent(
     output.notice("openkos q: " + "word " * 20, verb="q", kind="note")
     lines = err.getvalue().rstrip("\n").splitlines()
     assert len(lines) > 1
-    assert all(
-        len(line.replace("\x1b[1m", "").replace("\x1b[0m", "")) <= 40 for line in lines
-    )
+    assert all(len(line) <= 40 for line in lines)
     assert all(line.startswith("  ") for line in lines[1:])
 
 
@@ -87,7 +90,7 @@ def test_a_message_without_the_verb_prefix_is_kept_whole(
 ) -> None:
     _, err = streams(out_tty=False, err_tty=True)
     output.notice("something else", verb="ingest", kind="note")
-    assert err.getvalue() == "\x1b[1mnote:\x1b[0m something else\n"
+    assert err.getvalue() == "note: something else\n"
 
 
 def test_wrapped_is_unchanged_off_a_tty_and_wrapped_on_one(

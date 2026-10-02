@@ -34,7 +34,7 @@ We adopt one convention for human-readable output, implemented once in `openkos/
 2. **Notices are grouped.** A notice is one line with a text prefix by kind: `note:` or `warning:`. The long explanation stays in `lint`, `status` and the docs.
 3. **Sections are separated by one blank line** (notices, proposal, prompt, result), and each item of an interactive walk is a visually separated block with a stable layout: header, rationale, prompt.
 4. **Prose is wrapped** to the terminal width.
-5. **All of the above applies only when the stream is a terminal.** Rules 2 to 4 change the presentation of text, so a non-terminal stream gets the text it always got. Colour is never required to read the output, and `NO_COLOR` is honoured.
+5. **All of the above applies only when the stream is a terminal.** Rules 2 to 4 change the presentation of text, so a non-terminal stream gets the text it always got. No ANSI escape is ever emitted, so `NO_COLOR` has nothing to disable and meaning never depends on colour.
 6. **Prefixes are text only.** No symbols, boxes or tables by default; the goal is hierarchy and whitespace, not decoration.
 
 The convention does not touch streams (data stays on stdout, human messages on stderr), `--json`, exit codes, or row-oriented verbs, which stay one line per record.
@@ -54,6 +54,6 @@ Migration starts with the verbs where the human decides — `ingest`, `curate` a
 ## Alternatives considered
 
 - **A section in `CONTRIBUTING.md` only.** Cheap, but the choice is project-wide and hard to reverse once users script against the text, so it belongs in the decision log; `CONTRIBUTING.md` points here.
-- **Symbols and colour on a TTY (a tick, a warning sign).** Rejected for restraint and for terminals and fonts that render them badly; text prefixes read the same everywhere.
+- **Symbols and colour on a TTY (a tick, a warning sign, a coloured prefix).** Rejected for restraint and for terminals and fonts that render them badly; text prefixes read the same everywhere.
 - **Tables or boxes for proposals and walks.** Rejected: they wrap badly, cost width, and make the piped and terminal shapes diverge.
-- **Always-on styling with `NO_COLOR` as the only escape.** Rejected: redirected output would change, breaking the greppable contract.
+- **Always-on styling.** Rejected: redirected output would change, breaking the greppable contract.

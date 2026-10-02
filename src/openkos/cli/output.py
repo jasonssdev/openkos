@@ -7,11 +7,11 @@ passed, so greppable output stays byte-identical. Data, `--json` and exit
 codes are never routed through here.
 
 Gating mirrors `cli/observability.py`: `isatty()` on the stream, read at call
-time. Colour is limited to a bold prefix, and `NO_COLOR` (or `TERM=dumb`)
-removes even that; the prefix text stays, so nothing depends on colour.
+time. Nothing here emits an ANSI escape: hierarchy comes from text prefixes,
+blank lines and wrapping, so `NO_COLOR` has nothing to disable and meaning
+never depends on colour.
 """
 
-import os
 import shutil
 import sys
 import textwrap
@@ -32,14 +32,6 @@ def is_tty(*, err: bool = False) -> bool:
 
 def _terminal_width() -> int:
     return shutil.get_terminal_size((_FALLBACK_WIDTH, 24)).columns
-
-
-def _color_enabled(*, err: bool) -> bool:
-    if not is_tty(err=err):
-        return False
-    if os.environ.get("NO_COLOR"):
-        return False
-    return os.environ.get("TERM") != "dumb"
 
 
 def section_break(*, err: bool = False) -> None:
@@ -89,6 +81,4 @@ def notice(message: str, *, kind: NoticeKind = "note", verb: str | None = None) 
         break_long_words=False,
         break_on_hyphens=False,
     )
-    if _color_enabled(err=True):
-        lines = typer.style(prefix, bold=True) + lines[len(prefix) :]
     typer.echo(lines, err=True)
