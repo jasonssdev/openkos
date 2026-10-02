@@ -61,15 +61,25 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 # obvious candidate).
 sys.path.append(str(REPO_ROOT / "evals"))
 
-from contradiction_fixtures import DOCS, PAIRS, LabelledPair  # noqa: E402
+from contradiction_fixtures import (  # noqa: E402
+    DOCS,
+    MERGED_CASES,
+    MERGED_COMPATIBLE_PROBES,
+    MERGED_CONTRADICTION,
+    PAIRS,
+    LabelledPair,
+    MergedCase,
+)
 from contradiction_prompts import TREATMENT_SYSTEM_PROMPT  # noqa: E402
 from harness_report import arm_identity_line  # noqa: E402
 
+from openkos.bundle import ledger  # noqa: E402
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MAX_GENERATION_TOKENS,
 )
 from openkos.llm.ollama import OllamaClient  # noqa: E402
+from openkos.model import okf  # noqa: E402
 from openkos.resolution import contradiction as contradiction_mod  # noqa: E402
 
 DEFAULT_MODEL = "qwen3:8b"
@@ -100,6 +110,50 @@ def _materialize_bundle(bundle_dir: pathlib.Path) -> None:
                 lines.append(f"    type: {rel_type}")
         lines += ["---", f"# {doc.title}", "", doc.body]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _materialize_merged_case(bundle_dir: pathlib.Path, case: MergedCase) -> None:
+    """Write one survivor that absorbed one duplicate: the concept document
+    (current body = survivor body + the stacked `## Merged content` sections
+    exactly as `build_merged_document` appends them) and its ledger sidecar,
+    through the real `ledger.write_entries` primitive. The judged prompt is
+    rebuilt from the ledger alone, so the sidecar is what is measured."""
+    stacked_before = case.before_body
+    for prior_id, prior_body in case.prior_absorbed:
+        stacked_before += f"{okf.merged_content_heading(prior_id)}\n\n{prior_body}"
+    current = (
+        stacked_before
+        + f"{okf.merged_content_heading(case.absorbed_id)}\n\n{case.absorbed_body}"
+    )
+    path = okf.concept_path_for(case.survivor_id, bundle_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": case.survivor_title,
+        "sensitivity": "private",
+    }
+    path.write_text(okf.dump_frontmatter(metadata, current), encoding="utf-8")
+    entry = okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        merged_at="2026-01-01T00:00:00Z",
+        absorbed_id=case.absorbed_id,
+        absorbed_snapshot=okf.dump_frontmatter(
+            {"type": "Concept", "title": case.absorbed_title}, case.absorbed_body
+        ),
+        survivor_before=okf.dump_frontmatter(
+            {"type": "Concept", "title": case.survivor_title}, stacked_before
+        ),
+        index_before="",
+        log_before="",
+        link_rewrites=[],
+        sensitivity_before="private",
+        sensitivity_after="private",
+        relation_rewrites=[],
+        provenance_rewrites=[],
+    )
+    ledger.write_entries(
+        case.survivor_id, bundle_dir, survivor_id=case.survivor_id, entries=[entry]
+    )
 
 
 def _pair_key(a: str, b: str) -> tuple[str, str]:
@@ -205,6 +259,34 @@ def _self_test() -> int:
         3 / 6,
     )
 
+    # `score_merged`: wrong verdicts per probe, a missing cell counts WRONG.
+    cases = (
+        MergedCase("s1", "S", "a", "x1", "X", "b", "consistent", "merged-identical"),
+        MergedCase(
+            "s2", "S", "a", "x2", "X", "b", "contradicts", "merged-contradiction"
+        ),
+    )
+    runs = [
+        {("s1", "x1"): ("contradicts", 0.9), ("s2", "x2"): ("contradicts", 0.9)},
+        {("s1", "x1"): ("consistent", 0.9)},
+    ]
+    check(
+        "score_merged counts wrong and missing cells",
+        score_merged(cases, runs),
+        {"merged-identical": (1, 2), "merged-contradiction": (1, 2)},
+    )
+    check(
+        "every merged case has a declared probe class",
+        {c.probe for c in MERGED_CASES}
+        <= {*MERGED_COMPATIBLE_PROBES, MERGED_CONTRADICTION},
+        True,
+    )
+    check(
+        "merged compatible cases outnumber nothing less than 8",
+        sum(1 for c in MERGED_CASES if c.probe in MERGED_COMPATIBLE_PROBES) >= 8,
+        True,
+    )
+
     for line in failures:
         print(f"FAIL {line}")
     print(f"\nself-test: {'FAILED' if failures else 'passed'}")
@@ -213,17 +295,50 @@ def _self_test() -> int:
 
 def _run_once(
     bundle_dir: pathlib.Path, client: OllamaClient
-) -> dict[tuple[str, str], tuple[str, float]]:
-    """One full `find_contradictions` pass; returns `(verdict, confidence)`
-    keyed by sorted pair ids. Runs the REAL production path -- graph build,
-    candidate seeding, prompt assembly, fail-closed parse -- so what is
-    measured is what ships."""
+) -> tuple[
+    dict[tuple[str, str], tuple[str, float]],
+    dict[tuple[str, str], tuple[str, float]],
+]:
+    """One full `find_contradictions` pass; returns `(typed, merged)`, each
+    `(verdict, confidence)` keyed by sorted pair ids (typed-edge pairs) or by
+    `(survivor_id, absorbed_id)` (merged-content candidates). Runs the REAL
+    production path -- graph build, candidate seeding, prompt assembly,
+    fail-closed parse -- so what is measured is what ships. The merged half
+    was dropped here until #1223's second attempt, which is why the first
+    never exercised the path the issue was filed on."""
     batch, _total = contradiction_mod.find_contradictions(bundle_dir, llm=client)
-    return {
+    typed = {
         v.pair_ids: (v.verdict.value, v.confidence)
         for v in batch.results
         if v.merged_absorbed_id is None
     }
+    merged = {
+        (v.pair_ids[0], v.merged_absorbed_id): (v.verdict.value, v.confidence)
+        for v in batch.results
+        if v.merged_absorbed_id is not None
+    }
+    return typed, merged
+
+
+def score_merged(
+    cases: tuple[MergedCase, ...],
+    runs: list[dict[tuple[str, str], tuple[str, float]]],
+) -> dict[str, tuple[int, int]]:
+    """Per-probe `(wrong, n)` over every (case, run) cell. A cell the run did
+    not return is `<missing>` and counts WRONG for both directions, so a
+    candidate the judge never saw cannot read as a clean pass. Pure -- the
+    self-test drives it with no model."""
+    wrong: Counter[str] = Counter()
+    total: Counter[str] = Counter()
+    for case in cases:
+        for run in runs:
+            verdict, _conf = run.get(
+                (case.survivor_id, case.absorbed_id), ("<missing>", 0.0)
+            )
+            total[case.probe] += 1
+            if verdict != case.expected:
+                wrong[case.probe] += 1
+    return {probe: (wrong[probe], total[probe]) for probe in total}
 
 
 def main() -> int:
@@ -231,6 +346,11 @@ def main() -> int:
     parser.add_argument("--arm", choices=["baseline", "treatment"])
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--merged-only",
+        action="store_true",
+        help="Materialize and score only the merged-content cases (#1223).",
+    )
     parser.add_argument(
         "--self-test",
         action="store_true",
@@ -261,21 +381,28 @@ def main() -> int:
         context_window=DEFAULT_CONTEXT_WINDOW,
     )
     observed: list[dict[tuple[str, str], tuple[str, float]]] = []
+    merged_observed: list[dict[tuple[str, str], tuple[str, float]]] = []
     latencies: list[float] = []
 
     with tempfile.TemporaryDirectory() as tmp:
         bundle_dir = pathlib.Path(tmp) / "bundle"
         bundle_dir.mkdir(parents=True)
-        _materialize_bundle(bundle_dir)
+        if not args.merged_only:
+            _materialize_bundle(bundle_dir)
+        for case in MERGED_CASES:
+            _materialize_merged_case(bundle_dir, case)
         for index in range(args.runs):
             started = time.monotonic()
-            observed.append(_run_once(bundle_dir, client))
+            typed_run, merged_run = _run_once(bundle_dir, client)
+            observed.append(typed_run)
+            merged_observed.append(merged_run)
             latencies.append(time.monotonic() - started)
             print(f"  run {index + 1}/{args.runs} done ({latencies[-1]:.1f}s)")
 
+    active_pairs: tuple[LabelledPair, ...] = () if args.merged_only else PAIRS
     per_pair: dict[tuple[str, str], list[tuple[str, float]]] = defaultdict(list)
     for run in observed:
-        for labelled in PAIRS:
+        for labelled in active_pairs:
             key = _pair_key(labelled.source_id, labelled.target_id)
             per_pair[key].append(run.get(key, ("<missing>", 0.0)))
 
@@ -288,7 +415,7 @@ def main() -> int:
     correct = 0
     stabilities: list[float] = []
 
-    for labelled in PAIRS:
+    for labelled in active_pairs:
         key = _pair_key(labelled.source_id, labelled.target_id)
         outcomes = per_pair[key]
         for verdict, confidence in outcomes:
@@ -304,7 +431,7 @@ def main() -> int:
         stabilities.append(row["stability"])  # type: ignore[arg-type]
         rows.append(row)
 
-    total = len(PAIRS) * args.runs
+    total = len(active_pairs) * args.runs
     accuracy = correct / total if total else 0.0
     mean_stability = statistics.fmean(stabilities) if stabilities else 0.0
 
@@ -325,6 +452,12 @@ def main() -> int:
     cs_probes = ("complementary-description", "identical-statement")
     cs_fp_raw = _rate(class_raw_contradicts, cs_probes, class_totals)
     cs_fp_hc = _rate(class_hc_contradicts, cs_probes, class_totals)
+    merged_scores = score_merged(MERGED_CASES, merged_observed)
+    merged_fp_wrong = sum(
+        merged_scores.get(p, (0, 0))[0] for p in MERGED_COMPATIBLE_PROBES
+    )
+    merged_fp_n = sum(merged_scores.get(p, (0, 0))[1] for p in MERGED_COMPATIBLE_PROBES)
+    merged_tp_wrong, merged_tp_n = merged_scores.get(MERGED_CONTRADICTION, (0, 0))
     ec_raw = _rate(class_raw_contradicts, ("evaluative-contradiction",), class_totals)
     ec_hc = _rate(class_hc_contradicts, ("evaluative-contradiction",), class_totals)
 
@@ -347,6 +480,25 @@ def main() -> int:
                 "max_generation_tokens": DEFAULT_MAX_GENERATION_TOKENS,
                 "context_window": DEFAULT_CONTEXT_WINDOW,
                 "outcomes": rows,
+                "merged_only": args.merged_only,
+                "merged_outcomes": [
+                    {
+                        "survivor_id": case.survivor_id,
+                        "absorbed_id": case.absorbed_id,
+                        "probe": case.probe,
+                        "expected": case.expected,
+                        "outcomes": [
+                            list(
+                                run.get(
+                                    (case.survivor_id, case.absorbed_id),
+                                    ("<missing>", 0.0),
+                                )
+                            )
+                            for run in merged_observed
+                        ],
+                    }
+                    for case in MERGED_CASES
+                ],
             },
             indent=2,
         ),
@@ -357,7 +509,7 @@ def main() -> int:
         f"# contradiction-judge eval — arm `{args.arm}` (#558)",
         "",
         f"_Generated: {stamp}_ · model `{args.model}` · **{args.runs} runs**"
-        f" over {len(PAIRS)} labelled pairs.",
+        f" over {len(active_pairs)} labelled pairs.",
         "",
         # Part of the arm's identity, not trivia (#700/#740): the JSON beside
         # this file has recorded both since #738, but a reader who opens only
@@ -370,6 +522,16 @@ def main() -> int:
         "",
         "Labels are CONSTRUCTED, not adjudicated — see `contradiction_fixtures.py`.",
         "",
+        *(
+            [
+                "**`--merged-only` run: the typed-edge rows below measured "
+                "nothing (0 pairs) and read 0.00 by construction; only the "
+                "merged-content rows carry a result.**",
+                "",
+            ]
+            if args.merged_only
+            else []
+        ),
         "| metric | value |",
         "| --- | --- |",
         f"| verdict accuracy vs label | {accuracy:.2f} |",
@@ -382,6 +544,10 @@ def main() -> int:
         f"| **compatible-statement FP rate, raw contradicts** | **{cs_fp_raw:.2f}** |",
         f"| **compatible-statement FP rate, high-confidence** | **{cs_fp_hc:.2f}** |",
         f"| evaluative-contradiction retention, raw contradicts | {ec_raw:.2f} |",
+        f"| **merged-content compatible FP (wrong verdicts), n of TOTAL** | "
+        f"**{merged_fp_wrong} of {merged_fp_n}** |",
+        f"| merged-content contradiction missed, n of TOTAL | "
+        f"{merged_tp_wrong} of {merged_tp_n} |",
         f"| evaluative-contradiction retention, high-confidence | {ec_hc:.2f} |",
         f"| mean stability (modal share) | {mean_stability:.2f} |",
         f"| mean run latency | {statistics.fmean(latencies):.1f}s |",
@@ -389,6 +555,13 @@ def main() -> int:
         f"{statistics.fmean(right_confidences) if right_confidences else 0.0:.2f} |",
         f"| mean confidence, WRONG verdicts | "
         f"{statistics.fmean(wrong_confidences) if wrong_confidences else 0.0:.2f} |",
+        "",
+        "## Merged-content cases (wrong verdicts, n of TOTAL, per probe)",
+        "",
+        *[
+            f"- `{probe}`: {wrong} of {n}"
+            for probe, (wrong, n) in sorted(merged_scores.items())
+        ],
         "",
         "## Per pair",
         "",
