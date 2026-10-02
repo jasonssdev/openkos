@@ -3789,6 +3789,47 @@ def test_in_batch_slug_collision_keeps_first_drops_second(
     assert okf.check_conformance(tmp_path / "bundle") == []
 
 
+def test_run_duplicate_is_collapsed_and_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1230: two same-type objects with near-match titles that quote the
+    same source line collapse to the richer one, with a stderr note."""
+    quote = "We agreed to validate the pilot with real meeting minutes."
+
+    def _decision(title: str, body: str) -> str:
+        return json.dumps(
+            {
+                "extract": True,
+                "type": "Decision",
+                "title": title,
+                "description": "A decision about validation.",
+                "body": body,
+            }
+        )
+
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(
+            _decision("Use of real minutes for validation", quote),
+            _decision(
+                "Agreement on the use of real minutes for validation",
+                f"{quote} Confirmed with the team.",
+            ),
+        ),
+    )
+    (tmp_path / "notes.txt").write_text(f"Notes\n{quote}\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    decisions = tmp_path / "bundle" / "decisions"
+    assert [p.stem for p in decisions.glob("*.md")] == [
+        "agreement-on-the-use-of-real-minutes-for-validation"
+    ]
+    assert "keeping the richer one" in result.stderr
+
+
 def test_in_batch_collision_guard_does_not_reserve_slug_before_candidate_lands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

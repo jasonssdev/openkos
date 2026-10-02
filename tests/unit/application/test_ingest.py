@@ -495,6 +495,44 @@ def test_stage_derived_objects_drops_an_in_batch_collision(
     assert outcome.lost_in_staging == 0
 
 
+def test_stage_derived_objects_collapses_a_run_duplicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1230: two same-type objects with near-match titles that quote the
+    same source line are one subject; the richer survives and the other is
+    reported as a `run-duplicate` drop (not a staging loss)."""
+    quote = "We agreed to validate the pilot with real meeting minutes."
+    first = concept_mod.ExtractionResult(
+        type="Decision",
+        title="Use of real minutes for validation",
+        description="d1",
+        body=quote,
+    )
+    second = concept_mod.ExtractionResult(
+        type="Decision",
+        title="Agreement on the use of real minutes for validation",
+        description="d2",
+        body=f"{quote} Confirmed with the team.",
+    )
+    monkeypatch.setattr(
+        ingest_service, "extract_concept", _fake_extractor([first, second])
+    )
+    outcome = ingest_service.stage_derived_objects(
+        **_stage_kwargs(tmp_path, raw_content=f"Notes\n{quote}\n")  # type: ignore[arg-type]
+    )
+    assert [plan.slug for plan in outcome.plans] == [
+        "agreement-on-the-use-of-real-minutes-for-validation"
+    ]
+    assert outcome.drops == (
+        ingest_service.StagingDrop(
+            kind="run-duplicate",
+            slug="use-of-real-minutes-for-validation",
+            kept_slug="agreement-on-the-use-of-real-minutes-for-validation",
+        ),
+    )
+    assert outcome.lost_in_staging == 0
+
+
 def test_stage_derived_objects_create_only_skip_on_same_source_collision(
     tmp_path: Path,
 ) -> None:

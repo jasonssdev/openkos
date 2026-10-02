@@ -671,6 +671,31 @@ def _build_messages(source_text: str, source_title: str) -> list[Message]:
     ]
 
 
+_EXPORT_UI_CHROME_RE: Final = re.compile(
+    r"Actualizamos la secci[oó]n [^.\n]{1,80}? con tus comentarios\.?(?=[ \t]*$|\s+Danos)"
+    r"|Danos tu opini[oó]n:?\s*[ÚúUu]til o Poco [úu]til",
+    re.IGNORECASE | re.MULTILINE,
+)
+"""Feedback UI text a Gemini-notes export (Spanish locale) appends after the
+notes (#1231). It is application chrome, not something the source says, yet
+the model copies it into a body. Anchored on the full fixed phrases, never on
+a keyword, and the first sentence must END the line (or lead into the
+second), so ordinary prose that merely mentions a section or an opinion is
+untouched. Deterministic by design: preventing the model from reading it at
+all would be a prompt change, which needs a measured A/B."""
+
+
+def _strip_export_chrome(text: str) -> str:
+    """`text` without export UI chrome (`_EXPORT_UI_CHROME_RE`), trailing
+    whitespace trimmed; `text` itself when it carries none, so a clean body
+    is returned byte-identical."""
+    stripped, count = _EXPORT_UI_CHROME_RE.subn("", text)
+    if not count:
+        return text
+    lines = [line.rstrip() for line in stripped.splitlines()]
+    return "\n".join(lines).rstrip()
+
+
 def _validate(data: dict[str, Any]) -> ExtractionResult | None:
     """Fail-closed validation of one parsed candidate item: `type` in the
     closed vocabulary; `title`/`description` non-empty after strip; `body`
@@ -719,11 +744,14 @@ def _validate(data: dict[str, Any]) -> ExtractionResult | None:
     ):
         type_alternative = None
 
+    # #1231: scrub export UI chrome. A description that is ONLY chrome keeps
+    # its original text -- an empty one would invalidate the whole candidate.
+    description = _strip_export_chrome(description.strip()) or description.strip()
     return ExtractionResult(
         type=doc_type,
         title=title.strip(),
-        description=description.strip(),
-        body=body,
+        description=description,
+        body=_strip_export_chrome(body),
         type_alternative=type_alternative,
     )
 

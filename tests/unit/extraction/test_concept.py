@@ -7694,3 +7694,69 @@ def test_drop_framing_objects_removes_the_container_on_a_summarized_note() -> No
     )
 
     assert [r.title for r in kept] == ["Priorizar la ingesta"]
+
+
+_GEMINI_TRAILER = (
+    "Actualizamos la sección Decisiones con tus comentarios. "
+    "Danos tu opinión: Útil o Poco útil"
+)
+
+
+def test_validate_strips_a_gemini_notes_ui_trailer_from_the_body() -> None:
+    """#1231: a Gemini-notes export ends with feedback UI text; it is chrome,
+    not content, and must not be stored in a concept body."""
+    result = concept_mod._validate(
+        {
+            "type": "Decision",
+            "title": "Decisiones de la reunión",
+            "description": "Cinco decisiones.",
+            "body": f"- Usar minutas reales.\n- Revisar el piloto.\n\n{_GEMINI_TRAILER}",
+        }
+    )
+
+    assert result is not None
+    assert result.body == "- Usar minutas reales.\n- Revisar el piloto."
+
+
+def test_validate_strips_the_trailer_when_split_across_lines() -> None:
+    result = concept_mod._validate(
+        {
+            "type": "Decision",
+            "title": "Decisiones",
+            "description": "d",
+            "body": (
+                "- Usar minutas reales.\n"
+                "Actualizamos la sección Decisiones con tus comentarios.\n"
+                "Danos tu opinión: Útil o Poco útil\n"
+            ),
+        }
+    )
+
+    assert result is not None
+    assert result.body == "- Usar minutas reales."
+
+
+def test_validate_keeps_a_description_that_is_only_chrome() -> None:
+    """The description must stay non-empty: when stripping would empty it,
+    the original is kept rather than the candidate being invalidated."""
+    result = concept_mod._validate(
+        {
+            "type": "Decision",
+            "title": "Decisiones",
+            "description": _GEMINI_TRAILER,
+            "body": "",
+        }
+    )
+
+    assert result is not None
+    assert result.description == _GEMINI_TRAILER
+
+
+def test_validate_leaves_ordinary_prose_alone() -> None:
+    body = "Actualizamos la sección de precios con tus comentarios del cliente."
+    result = concept_mod._validate(
+        {"type": "Decision", "title": "Precios", "description": "d", "body": body}
+    )
+
+    assert result is not None
+    assert result.body == body
