@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0040: The inbox watch may be woken by an optional OS file-notification backend; polling stays the default, the fallback and the safety net"
 description: An optional openkos[watch] extra (watchdog) and an unattended.watch_backend key let the daemon end its idle wait on an OS event; the event only triggers the ordinary polling pass, which still does every settle and re-hash check, and the periodic poll keeps running, so the backend can lower latency but never lose a file or change a guarantee of ADR-0038.
-status: Proposed
+status: Accepted
 date: 2026-10-01
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0040: The inbox watch may be woken by an optional OS file-notification backend; polling stays the default, the fallback and the safety net
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-01
 
 ## Context

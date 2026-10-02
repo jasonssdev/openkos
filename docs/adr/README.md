@@ -77,7 +77,7 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0036](0036-lock-a-short-commit-phase-in-a-per-user-state-directory.md) | The workspace lock covers a short commit phase, not the whole verb, and lives in a per-user state directory | Accepted | 2026-09-30 |
 | [0037](0037-unattended-work-computes-and-enqueues-only.md) | Unattended work computes and enqueues; only a human-facing path applies a proposal | Accepted | 2026-09-30 |
 | [0038](0038-a-watched-folder-is-an-external-inbox.md) | A watched folder is an external inbox; a source edited after import is refused into the queue, never re-imported | Amended by ADR-0041 | 2026-09-30 |
-| [0039](0039-the-stable-python-api-ships-with-a-desktop-app-as-its-first-client.md) | The stable Python API ships with a desktop app as its first client, not with interoperability | Proposed | 2026-10-01 |
-| [0040](0040-an-optional-native-wake-up-for-the-inbox-watch.md) | The inbox watch may be woken by an optional OS file-notification backend; polling stays the default, the fallback and the safety net | Proposed | 2026-10-01 |
-| [0041](0041-a-changed-source-imports-as-a-new-version-and-its-supersession-is-proposed.md) | A source edited after import imports as a new version, and its supersession is proposed, not written | Proposed | 2026-10-01 |
-| [0042](0042-human-readable-cli-output-is-a-tty-gated-convention.md) | Human-readable CLI output follows one TTY-gated convention | Proposed | 2026-10-01 |
+| [0039](0039-the-stable-python-api-ships-with-a-desktop-app-as-its-first-client.md) | The stable Python API ships with a desktop app as its first client, not with interoperability | Accepted | 2026-10-01 |
+| [0040](0040-an-optional-native-wake-up-for-the-inbox-watch.md) | The inbox watch may be woken by an optional OS file-notification backend; polling stays the default, the fallback and the safety net | Accepted | 2026-10-01 |
+| [0041](0041-a-changed-source-imports-as-a-new-version-and-its-supersession-is-proposed.md) | A source edited after import imports as a new version, and its supersession is proposed, not written | Accepted | 2026-10-01 |
+| [0042](0042-human-readable-cli-output-is-a-tty-gated-convention.md) | Human-readable CLI output follows one TTY-gated convention | Accepted | 2026-10-01 |

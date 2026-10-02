@@ -598,7 +598,7 @@ The body **append is never compared against the survivor's existing body** — t
 
 `review: true` in config plus a non-TTY stdin (and no `--auto`) refuses to write rather than defaulting silently — re-run with `--auto` for unattended use. Declining, or refusing, leaves the bundle completely untouched.
 
-`merge` names the commit it wrote: after the success line, one more line gives the short sha and notes that `git revert <sha>` reverses it only while it is the latest commit (every commit appends to `log.md`, so an older one conflicts). `unmerge` reverses a merge through the ledger, but only in last-in-first-out order and only while the ledger entry survives; the commit is the unconditional way back. As with `forget`, the line appears only when the auto-commit succeeded.
+`merge` names the commit it wrote: after the success line, one more line gives the short sha and notes that `git revert <sha>` reverses it only while it is the latest commit (every commit appends to `log.md`, so an older one conflicts). `unmerge` reverses a merge through the ledger, but only in last-in-first-out order and only while the ledger entry survives; reverting the commit works only while it is the latest. As with `forget`, the line appears only when the auto-commit succeeded.
 
 Writes are, like `merge`'s Phase B siblings, **not transactional** as a whole: `index.md`/`log.md` are written first, then every rewritten inbound-link file, then the merged survivor (carrying the ledger) — and only then is the absorbed file removed, **last**. A failure at any point leaves a benign, git-recoverable partial result, never silent corruption; a failure while rewriting inbound links, in particular, leaves no trace at all, so simply re-running the same `merge` command completes it.
 
