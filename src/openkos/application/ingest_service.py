@@ -152,6 +152,12 @@ class IngestPolicy:
     skip_confirmation: bool = False
     """`--auto`: the confirmation question is not asked. The drift guard
     still runs -- skipping the prompt does not skip the window it stood in."""
+    version_changed: bool = False
+    """A file whose recorded origin matches but whose bytes changed is imported
+    as a NEW raw copy under the next free `<stem>-N<ext>` name, with a Source of
+    its own, instead of refusing (ADR-0041). The previous raw copy and Source are
+    never touched. Only the unattended watch sets it; a person's `ingest` keeps
+    the refusal."""
 
 
 def _refuse_symlinked_destinations(root: Path, destinations: Sequence[Path]) -> None:
@@ -250,6 +256,21 @@ class ImportedSummary:
 
 
 @dataclass(frozen=True)
+class Supersession:
+    """A Source this run proposes to supersede (ADR-0041). The run records
+    nothing: the relation is a consequential write the caller offers (a hint, or
+    a pending-work row) and a person confirms with `openkos relate`."""
+
+    source_id: str
+    """The Source concept id this run wrote."""
+    previous_id: str
+    """The Source it would supersede."""
+    reason: Literal["new_version", "dead_source"]
+    """`new_version`: the same file, imported again with changed bytes.
+    `dead_source`: a replacement for a Source that held no extractable text."""
+
+
+@dataclass(frozen=True)
 class IngestOutcome:
     """What one ingest did, for a caller's own reporting and for the batch
     tally (#267). A refusal never constructs one: it is raised instead."""
@@ -284,6 +305,10 @@ class IngestOutcome:
     finished (#805, item 1) -- what is on disk when the run ends, which on
     #773's short-circuit is read back from the untouched Source rather than
     stamped by this run."""
+
+    supersessions: tuple[Supersession, ...] = ()
+    """The Sources this run proposes to supersede; empty on every run that
+    neither imported a changed version nor replaced a dead Source."""
 
 
 @dataclass(frozen=True)
@@ -485,6 +510,9 @@ def ingest_source(
             f"openkos: ingest {prepared.name} (+{len(prepared.derived_plans)} concepts)",
         )
 
+    for supersession in prepared.outcome.supersessions:
+        obs.notice(_supersession_hint(supersession))
+
     # AFTER the commit, never before: the ingest is durable by this point,
     # so a failing embedder degrades to a notice instead of stranding
     # written-but-uncommitted files (#183). Outside the commit section too: the
@@ -493,6 +521,27 @@ def ingest_source(
     ports.after_commit(prepared.layout, prepared.cfg)
 
     return prepared.outcome
+
+
+def supersede_command(supersession: Supersession) -> str:
+    """The command that records `supersession` (a human-facing write)."""
+    return (
+        f"openkos relate {supersession.source_id} supersedes {supersession.previous_id}"
+    )
+
+
+def _supersession_hint(supersession: Supersession) -> str:
+    if supersession.reason == "new_version":
+        why = f"'{supersession.source_id}' is a new version of '{supersession.previous_id}'"
+    else:
+        why = (
+            f"'{supersession.previous_id}' has no extractable text and "
+            f"'{supersession.source_id}' replaces it"
+        )
+    return (
+        f"openkos ingest: {why}; to retire the earlier Source, run: "
+        f"{supersede_command(supersession)}"
+    )
 
 
 def _display(layout: config.WorkspaceLayout, path: Path) -> str:
@@ -636,6 +685,30 @@ def _prepare(
         destination = application_ingest.resolve_raw_destination(
             src, layout, origin_key
         )
+        previous_version_id: str | None = None
+        if (
+            policy.version_changed
+            and destination.regenerate
+            and src.read_bytes() != (layout.raw_dir / destination.name).read_bytes()
+        ):
+            # Same file, changed bytes, and the caller wants history kept: the
+            # new bytes become the next raw copy of the family and a Source of
+            # their own. The matched copy and its Source are never touched.
+            previous_version_id = (
+                f"sources/{source_titles.slugify(Path(destination.name).stem)}"
+            )
+            family = application_ingest.raw_collision_family(layout.raw_dir, src.name)
+            destination = application_ingest.RawDestination(
+                application_ingest.first_free_raw_name(family, src.name),
+                False,
+                None,
+                origin_key=origin_key,
+            )
+        dead_ids = (
+            application_ingest.dead_sources_in_family(layout, src.name)
+            if destination.disambiguated_from is not None
+            else ()
+        )
         name = destination.name
         slug = source_titles.slugify(Path(name).stem)
         if not slug:
@@ -655,6 +728,13 @@ def _prepare(
                 f"openkos ingest: 'raw/{destination.disambiguated_from}' is "
                 f"already held by a different source; copying this one to "
                 f"'raw/{name}' instead."
+            )
+
+        if previous_version_id is not None:
+            obs.notice(
+                f"openkos ingest: '{src.name}' changed since it was imported; "
+                f"importing it as 'raw/{name}', a new version. The earlier raw "
+                "copy is kept."
             )
 
         regenerate = destination.regenerate
@@ -1022,7 +1102,18 @@ def _prepare(
         index_name=index_path.name,
         log_name=log_path.name,
     )
+    new_source_id = f"sources/{slug}"
+    supersessions: tuple[Supersession, ...] = ()
+    if previous_version_id is not None:
+        supersessions = (
+            Supersession(new_source_id, previous_version_id, "new_version"),
+        )
+    elif skip_reason != "no-extractable-text":
+        supersessions = tuple(
+            Supersession(new_source_id, dead_id, "dead_source") for dead_id in dead_ids
+        )
     outcome = IngestWritten(
+        supersessions=supersessions,
         regenerated=regenerate,
         # design.md Decision 6: a date-only rewrite (`converged is not None`)
         # carries the PRIOR run's `skip_reason` forward unread by any fresh

@@ -405,3 +405,176 @@ def test_a_symlinked_destination_directory_is_refused_before_any_write(
     assert list(outside.iterdir()) == []
     assert not (workspace / "raw" / "notes.txt").exists()
     assert calls == []
+
+
+# -- source supersession (#1212, #1224) ---------------------------------------
+
+_VERSIONING = svc.IngestPolicy(skip_confirmation=True, version_changed=True)
+_PLAIN = svc.IngestPolicy(skip_confirmation=True)
+
+
+def _frontmatter(root: Path, concept: str) -> dict[str, object]:
+    from openkos.model import okf
+
+    text = (root / "bundle" / "sources" / f"{concept}.md").read_text(encoding="utf-8")
+    return okf.load_frontmatter(text)[0]
+
+
+def test_changed_bytes_import_as_a_new_version_when_asked(
+    workspace: Path, tmp_path: Path
+) -> None:
+    src = _source(tmp_path)
+    svc.ingest_source(workspace, src, _PLAIN, ports=_ports([]))
+    first_raw = (workspace / "raw" / "notes.txt").read_bytes()
+    src.write_text("Edited notes about self-control.\n", encoding="utf-8")
+
+    outcome = svc.ingest_source(workspace, src, _VERSIONING, ports=_ports([]))
+
+    assert (workspace / "raw" / "notes.txt").read_bytes() == first_raw
+    assert (workspace / "raw" / "notes-2.txt").read_text(encoding="utf-8") == (
+        "Edited notes about self-control.\n"
+    )
+    assert outcome.supersessions == (
+        svc.Supersession(
+            source_id="sources/notes-2",
+            previous_id="sources/notes",
+            reason="new_version",
+        ),
+    )
+    assert (
+        _frontmatter(workspace, "notes-2")["origin_key"]
+        == (_frontmatter(workspace, "notes")["origin_key"])
+    )
+
+
+def test_a_third_version_supersedes_the_second(workspace: Path, tmp_path: Path) -> None:
+    src = _source(tmp_path)
+    svc.ingest_source(workspace, src, _PLAIN, ports=_ports([]))
+    src.write_text("Second.\n", encoding="utf-8")
+    svc.ingest_source(workspace, src, _VERSIONING, ports=_ports([]))
+    src.write_text("Third.\n", encoding="utf-8")
+
+    outcome = svc.ingest_source(workspace, src, _VERSIONING, ports=_ports([]))
+
+    assert (workspace / "raw" / "notes-3.txt").read_text(encoding="utf-8") == (
+        "Third.\n"
+    )
+    assert [(s.source_id, s.previous_id) for s in outcome.supersessions] == [
+        ("sources/notes-3", "sources/notes-2")
+    ]
+
+
+def test_re_ingesting_an_already_imported_version_changes_nothing(
+    workspace: Path, tmp_path: Path
+) -> None:
+    src = _source(tmp_path)
+    svc.ingest_source(workspace, src, _PLAIN, ports=_ports([]))
+    src.write_text("Second.\n", encoding="utf-8")
+    svc.ingest_source(workspace, src, _VERSIONING, ports=_ports([]))
+    before = _snapshot(workspace)
+
+    outcome = svc.ingest_source(workspace, src, _VERSIONING, ports=_ports([]))
+
+    assert outcome.supersessions == ()
+    assert _snapshot(workspace) == before
+
+
+def test_restoring_an_earlier_version_imports_nothing_new(
+    workspace: Path, tmp_path: Path
+) -> None:
+    src = _source(tmp_path)
+    svc.ingest_source(workspace, src, _PLAIN, ports=_ports([]))
+    src.write_text("Second.\n", encoding="utf-8")
+    svc.ingest_source(workspace, src, _VERSIONING, ports=_ports([]))
+    src.write_text(_NOTES, encoding="utf-8")
+    before = _snapshot(workspace)
+
+    outcome = svc.ingest_source(workspace, src, _VERSIONING, ports=_ports([]))
+
+    assert outcome.supersessions == ()
+    assert _snapshot(workspace) == before
+
+
+def test_a_dead_source_is_offered_for_supersession_by_its_replacement(
+    workspace: Path, tmp_path: Path
+) -> None:
+    dead = tmp_path / "elsewhere" / "notes.txt"
+    dead.write_bytes(b"\xff\x00\x01\x02")
+    svc.ingest_source(workspace, dead, _PLAIN, ports=_ports([]))
+    other = tmp_path / "converted"
+    other.mkdir()
+    fixed = other / "notes.txt"
+    fixed.write_text(_NOTES, encoding="utf-8")
+    observer = _Recorder()
+
+    outcome = svc.ingest_source(
+        workspace, fixed, _PLAIN, ports=_ports([]), observer=observer
+    )
+
+    assert outcome.supersessions == (
+        svc.Supersession(
+            source_id="sources/notes-2",
+            previous_id="sources/notes",
+            reason="dead_source",
+        ),
+    )
+    assert any(
+        "openkos relate sources/notes-2 supersedes sources/notes" in n
+        for n in observer.notices
+    )
+
+
+def test_a_healthy_neighbour_is_never_offered_for_supersession(
+    workspace: Path, tmp_path: Path
+) -> None:
+    svc.ingest_source(workspace, _source(tmp_path), _PLAIN, ports=_ports([]))
+    other = tmp_path / "converted"
+    other.mkdir()
+    fixed = other / "notes.txt"
+    fixed.write_text("A different document.\n", encoding="utf-8")
+    observer = _Recorder()
+
+    outcome = svc.ingest_source(
+        workspace, fixed, _PLAIN, ports=_ports([]), observer=observer
+    )
+
+    assert outcome.supersessions == ()
+    assert not any("supersedes" in n for n in observer.notices)
+
+
+def test_a_replacement_that_is_itself_dead_supersedes_nothing(
+    workspace: Path, tmp_path: Path
+) -> None:
+    dead = tmp_path / "elsewhere" / "notes.txt"
+    dead.write_bytes(b"\xff\x00\x01\x02")
+    svc.ingest_source(workspace, dead, _PLAIN, ports=_ports([]))
+    other = tmp_path / "converted"
+    other.mkdir()
+    also_dead = other / "notes.txt"
+    also_dead.write_bytes(b"\xff\x00\x09\x08")
+
+    outcome = svc.ingest_source(workspace, also_dead, _PLAIN, ports=_ports([]))
+
+    assert outcome.supersessions == ()
+
+
+def test_an_already_superseded_dead_source_is_not_offered_again(
+    workspace: Path, tmp_path: Path
+) -> None:
+    dead = tmp_path / "elsewhere" / "notes.txt"
+    dead.write_bytes(b"\xff\x00\x01\x02")
+    svc.ingest_source(workspace, dead, _PLAIN, ports=_ports([]))
+    concept = workspace / "bundle" / "sources" / "notes.md"
+    text = concept.read_text(encoding="utf-8")
+    assert "\nstatus: " in text
+    concept.write_text(
+        text.replace("\nstatus: stable", "\nstatus: deprecated", 1), encoding="utf-8"
+    )
+    other = tmp_path / "converted"
+    other.mkdir()
+    fixed = other / "notes.txt"
+    fixed.write_text(_NOTES, encoding="utf-8")
+
+    outcome = svc.ingest_source(workspace, fixed, _PLAIN, ports=_ports([]))
+
+    assert outcome.supersessions == ()

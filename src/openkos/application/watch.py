@@ -19,7 +19,14 @@ refuses to proceed when the bytes differ from the digest that was admitted:
 nothing is written and the file is deferred, so a save that lands after the
 quiet window is never imported half-seen.
 
-Refusals (`RawImmutabilityRefused`, over-budget sources) are recorded as
+**Versions (ADR-0041).** The import policy sets `version_changed`, so a file whose
+bytes changed after import becomes a new raw copy and Source rather than a
+refusal; the supersession the ingest proposes is enqueued as a `relation_type`
+row (`queue_producers.enqueue_source_supersession`), never written, because
+writing it deprecates the earlier Source.
+
+Refusals (an over-budget source, or a `RawImmutabilityRefused` the service still
+raises, such as a row an older engine left open) are recorded as
 observation outcomes AND upserted as one `watch_refusal` queue row per source
 (`queue_producers`), so a person sees them in `openkos pending` once rather than
 as an error on every save. A row is retired as `stale` when the file's bytes
@@ -50,6 +57,7 @@ from openkos import config, fsio, lock
 from openkos.application import budget as budget_module
 from openkos.application import ingest as application_ingest
 from openkos.application import ingest_service as svc
+from openkos.application import pending as application_pending
 from openkos.application import queue_producers as producers
 from openkos.application import runner
 from openkos.application.lock_wait import CommitSection
@@ -414,6 +422,33 @@ def _retire_rows(
     return True
 
 
+def _queue_supersessions(
+    queue: _Queue, outcome: svc.IngestOutcome, section: CommitSection
+) -> None:
+    """Enqueue each supersession the import proposes as a pending-work row
+    (ADR-0041: unattended work never writes the relation, because writing it
+    deprecates the earlier Source). The import has already landed, so a failure
+    here is logged with the command that records it by hand, never raised."""
+    for supersession in outcome.supersessions:
+        try:
+            producers.enqueue_source_supersession(
+                queue.writer(),
+                source_id=supersession.source_id,
+                previous_id=supersession.previous_id,
+                reason=supersession.reason,
+                current_digest=application_pending.current_finding_digest(
+                    queue.bundle_dir
+                ),
+                bundle_dir=queue.bundle_dir,
+                commit_section=section,
+            )
+        except (runner._Halted, lock.WorkspaceBusyError, sqlite3.Error, OSError):
+            log.warning(
+                "supersession not queued; record it with: %s",
+                svc.supersede_command(supersession),
+            )
+
+
 def _import_one(
     root: Path,
     cand: _Candidate,
@@ -422,7 +457,7 @@ def _import_one(
     base_section: CommitSection,
     run_budget: budget_module.BudgetedRun,
     watch: WatchPorts,
-) -> None:
+) -> svc.IngestOutcome:
     @contextlib.contextmanager
     def guarded() -> Iterator[None]:
         with base_section():
@@ -431,10 +466,10 @@ def _import_one(
                 raise _NotSettled
             yield
 
-    svc.ingest_source(
+    return svc.ingest_source(
         root,
         cand.path,
-        svc.IngestPolicy(skip_confirmation=True),
+        svc.IngestPolicy(skip_confirmation=True, version_changed=True),
         ports=watch.ingest_ports(guarded, run_budget),
         observer=_WatchObserver(cand.path.name, watch.notify),
         confirm=None,
@@ -492,8 +527,9 @@ def _run_candidates(
             return
         admitted += 1
         refusal: svc.RawImmutabilityRefused | None = None
+        outcome: svc.IngestOutcome | None = None
         try:
-            _import_one(
+            outcome = _import_one(
                 root,
                 cand,
                 digest,
@@ -525,6 +561,7 @@ def _run_candidates(
             # The bytes import cleanly again: a row that refused this path is moot.
             if not _retire_rows(queue, [cand.obs.path], base_section):
                 log.warning("watch refusal row not retired; it stays open")
+            _queue_supersessions(queue, outcome, base_section)
             _record(conn, cand, digest=digest, outcome=IMPORTED)
             tally.done += 1
         if refusal is not None and not _file_refusal(

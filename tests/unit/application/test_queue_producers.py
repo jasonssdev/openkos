@@ -954,3 +954,101 @@ def test_a_declined_merged_body_contradiction_is_found_when_the_absorbed_id_sort
         commit_section=section,
     )
     assert (result.suppressed, result.inserted) == (1, 0)
+
+
+# -- source supersession (#1212, #1224, ADR-0041) -------------------------------
+
+
+def _enqueue_supersession(
+    conn: sqlite3.Connection,
+    section: _Section,
+    bundle_dir: Path,
+    *,
+    reason: str = "new_version",
+) -> qp.ProducerResult:
+    return qp.enqueue_source_supersession(
+        conn,
+        source_id="sources/a-2",
+        previous_id="sources/a",
+        reason=reason,
+        current_digest=_digest(1),
+        commit_section=section,
+        bundle_dir=bundle_dir,
+        clock=lambda: T0,
+    )
+
+
+def test_a_supersession_is_a_relation_row_that_relate_resolves(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    result = _enqueue_supersession(conn, section, bundle_dir)
+
+    assert result.inserted == 1
+    (item,) = pq.open_items(conn)
+    assert (item.kind, item.producer) == ("relation_type", qp.PRODUCER_VERSIONS)
+    assert item.targets == ("sources/a-2", "sources/a")
+    assert item.decision_key == pq.stored_decision_key(
+        "relation_type", pq.relation_type_key("sources/a-2", "sources/a")
+    )
+    payload = json.loads(item.payload)
+    assert payload["suggested_type"] == "supersedes"
+    assert (payload["effective_source_id"], payload["effective_target_id"]) == (
+        "sources/a-2",
+        "sources/a",
+    )
+    assert "new version" in payload["rationale"]
+
+
+def test_a_dead_source_supersession_says_why(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _enqueue_supersession(conn, section, bundle_dir, reason="dead_source")
+
+    (item,) = pq.open_items(conn)
+    assert "no extractable text" in json.loads(item.payload)["rationale"]
+
+
+def test_enqueueing_the_same_supersession_twice_keeps_one_row(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _enqueue_supersession(conn, section, bundle_dir)
+    again = _enqueue_supersession(conn, section, bundle_dir)
+
+    assert (again.inserted, again.unchanged) == (0, 1)
+    assert len(pq.open_items(conn)) == 1
+
+
+def test_a_complete_relation_pass_never_retires_a_supersession_row(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _enqueue_supersession(conn, section, bundle_dir)
+
+    result = qp.enqueue_relations(
+        conn,
+        SuggestRelationsOutcome(status="no_candidates"),
+        current_digest=_digest(1),
+        commit_section=section,
+        bundle_dir=bundle_dir,
+        clock=lambda: T0 + timedelta(minutes=1),
+    )
+
+    assert result.retired == 0
+    assert [i.status for i in pq.open_items(conn)] == ["pending"]
+
+
+def test_a_supersession_over_an_unreadable_source_is_not_queued(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    result = qp.enqueue_source_supersession(
+        conn,
+        source_id="sources/a-2",
+        previous_id="sources/a",
+        reason="new_version",
+        current_digest=lambda ref: None,
+        commit_section=section,
+        bundle_dir=bundle_dir,
+        clock=lambda: T0,
+    )
+
+    assert result.inserted == 0
+    assert pq.open_items(conn) == []

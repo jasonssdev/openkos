@@ -237,7 +237,16 @@ last-seen time, and a resolution time. The kinds MUST include `identity`
 `volatility`, `contradiction`, `revision`, and `watch_refusal`. The status
 MUST be one of `pending`, `claimed`, `applied`, `declined`, `stale`. The
 queue MUST be derived: deleting it MUST lose no human decision, and
-re-running the advisors MUST repopulate every open row.
+re-running the advisors MUST repopulate every open row, except rows an
+event-driven producer recorded (a source imported as a new version,
+ADR-0041), which the next watch pass over the inbox recomputes only for a
+change it sees.
+
+A `relation_type` row MAY be produced by an event rather than an advisor
+(`source-supersession/1`); a complete advisor pass over `relation_type`
+MUST NOT retire it as `stale` for being absent. Its resolving command is
+`openkos relate <new> supersedes <old>`, and `relate` of that pair MUST
+resolve it as `applied`.
 
 #### Scenario: The queue rebuilds from the advisors
 

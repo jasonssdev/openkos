@@ -6,13 +6,13 @@ A source dropped into a watched folder is ingested without an invocation.
 The watched folder is an external inbox the ingest service copies from,
 never `raw/` itself, so raw immutability and Source identity are exactly
 what a person's `ingest` already enforces (ADR-0038). A save is imported
-only once it has settled, and a file edited after import is refused into
-the pending-work queue once instead of producing an error on every save.
+only once it has settled, and a file edited after import is imported as a
+new version whose supersession of the earlier Source is proposed in the
+pending-work queue, never written unattended (ADR-0041).
 
 ## Non-Goals
 
-This spec does not define: importing a changed source as a new version
-(deferred); moving, renaming, or deleting inbox files; watching more than
+This spec does not define: moving, renaming, or deleting inbox files; watching more than
 one inbox per workspace; recursive watch semantics beyond the inbox's own
 subdirectories; spending rules (`unattended-budget`); job scheduling (`job-runtime`).
 
@@ -95,38 +95,53 @@ and modification time are unchanged. A file whose bytes match its existing
 - WHEN a watch job runs
 - THEN it makes no model call and imports nothing
 
-### Requirement: A Source Changed After Import Is Refused Into The Queue Once
+### Requirement: A Source Changed After Import Imports As A New Version
 
 When a settled inbox file's bytes differ from the `raw/` copy its path was
-imported to, the watch MUST NOT ingest it and MUST NOT retry it. It MUST
-upsert one pending-work row of kind `watch_refusal`, reason `source changed
-after import`, keyed by the Source concept id and digested over the file's
-current bytes, whose text names the inbox path and the remedy: rename the
-file in the inbox, or ingest it under a different name. The same bytes MUST
-NOT produce a second open row. The row MUST be retired as `stale` when the
-file is removed from the inbox or its bytes return to the imported bytes,
-and MUST move to `applied` when a raw copy with exactly the refused bytes
-lands.
+imported to, the watch MUST ingest the new bytes as a new raw copy under the
+next free name of the file's collision family (`note.md`, `note-2.md`,
+`note-3.md`) with a Source of its own that records the same `origin_key`. It
+MUST NOT overwrite or modify the earlier raw copy or Source, and it MUST NOT
+write the `supersedes` relation or any status. It MUST instead upsert one
+pending-work row of kind `relation_type`, produced by `source-supersession/1`,
+proposing that the new Source `supersedes` the newest earlier version, as
+`openkos relate <new> supersedes <old>` (ADR-0041). Bytes identical to any
+version already imported, including a restore of earlier bytes, MUST import
+nothing and make no model call. A changed file whose import does not fit the
+per-pass budget MUST still be refused into the queue as a `watch_refusal` row.
 
-#### Scenario: Repeated saves produce one row
+#### Scenario: An edit keeps both versions
 
 - GIVEN an imported inbox file that was edited and has settled
-- WHEN two watch jobs run with no further edit
-- THEN exactly one open `watch_refusal` row exists for its Source and no
-  ingest was attempted
+- WHEN a watch job runs
+- THEN `raw/` holds the original and the new bytes under distinct names, each
+  with its own Source, and the earlier Source is unchanged
 
-#### Scenario: A further edit replaces the row
+#### Scenario: The supersession is proposed, not written
 
-- GIVEN an open `watch_refusal` row for a Source
-- WHEN the inbox file is edited again and settles
-- THEN the old row is `stale` and one new open row carries the new digest
+- GIVEN the edit above was imported
+- WHEN the queue is read
+- THEN one open `relation_type` row proposes that the new Source supersedes
+  the earlier one, and neither Source carries `supersedes` or a deprecated
+  status
 
-#### Scenario: Renaming in the inbox re-imports deliberately
+#### Scenario: A second edit supersedes the first edit
 
-- GIVEN an open `watch_refusal` row for inbox file `note.md`
-- WHEN the user renames it to `note-v2.md` and it settles
-- THEN `note-v2.md` is imported as a new Source and the row moves to
-  `applied`
+- GIVEN an inbox file imported, edited and imported again, then edited again
+- WHEN the third version is imported
+- THEN its row proposes superseding the second version, not the original
+
+#### Scenario: Restoring earlier bytes imports nothing
+
+- GIVEN an inbox file imported as two versions
+- WHEN its bytes are restored to the first version and settle
+- THEN no raw copy is added and no model call is made
+
+#### Scenario: Confirming the supersession resolves the row
+
+- GIVEN an open supersession row
+- WHEN the operator runs `openkos relate <new> supersedes <old>`
+- THEN the earlier Source is exported as deprecated and the row is `applied`
 
 ### Requirement: A Watch Job Honours The Budget, The Stop Flag, And The Deadline
 

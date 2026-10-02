@@ -2691,3 +2691,24 @@ def test_batch_cost_gate_bills_zero_for_a_converged_date_only_rewrite(
     assert "~0 LLM call(s)" in result.stderr
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
     assert metadata["event_date"] == "2026-07-14"
+
+
+def test_a_replacement_for_a_dead_source_prints_the_supersede_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1224: a Source with no extractable text, then the same document
+    converted and ingested under the same basename: the hint names the exact
+    `relate` command, and nothing is written to retire the dead Source."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_bytes(b"\xff\x00garbage\x00")
+    assert runner.invoke(app, ["ingest", "notes.txt", "--auto"]).exit_code == 0
+    converted = tmp_path / "converted"
+    converted.mkdir()
+    (converted / "notes.txt").write_text("Alpha notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "converted/notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    assert "openkos relate sources/notes-2 supersedes sources/notes" in result.stderr
+    dead = (tmp_path / "bundle" / "sources" / "notes.md").read_text(encoding="utf-8")
+    assert "status: deprecated" not in dead

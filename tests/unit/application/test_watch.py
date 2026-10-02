@@ -433,14 +433,13 @@ def test_a_file_changed_between_settle_and_commit_is_deferred(env: _Env) -> None
 # --- changed after import ---------------------------------------------------------
 
 
-def test_a_source_changed_after_import_is_refused_once_without_a_model_call(
+def test_a_source_changed_after_import_is_imported_as_a_new_version(
     env: _Env,
 ) -> None:
     path = env.drop("a.md")
     env.job()
     env.settle()
     env.job()
-    calls = env.model.calls
     raw_before = (env.root / "raw" / "a.md").read_bytes()
     path.write_text("A different save.\n", encoding="utf-8")
     env.job()
@@ -450,9 +449,11 @@ def test_a_source_changed_after_import_is_refused_once_without_a_model_call(
 
     assert result is not None
     assert result.units_done == 1
-    assert env.model.calls == calls
     assert (env.root / "raw" / "a.md").read_bytes() == raw_before
-    assert env.observation("a.md").outcome == watch.REFUSED
+    assert (env.root / "raw" / "a-2.md").read_text(encoding="utf-8") == (
+        "A different save.\n"
+    )
+    assert env.observation("a.md").outcome == watch.IMPORTED
     env.settle()
     assert env.job() is None
 

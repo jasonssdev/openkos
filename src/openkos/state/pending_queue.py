@@ -66,6 +66,11 @@ KINDS: Final = (
 )
 OPEN_STATUSES: Final = ("pending", "claimed")
 
+EVENT_DRIVEN_PRODUCERS: Final = ("source-supersession/1",)
+"""Producers whose rows record an event (a source imported as a new version),
+not a computed advisor result. A complete advisor pass over the same kind cannot
+tell such a row is absent, so `retire_unseen` leaves them to the human."""
+
 _KEY_HEX_CHARS: Final = 32
 
 _CREATE_ITEMS_SQL = """
@@ -388,21 +393,27 @@ def retire_unseen(
     *,
     complete: bool,
     commit_section: CommitSection,
+    exclude_producers: Collection[str] = (),
     clock: Callable[[], datetime] = _now,
 ) -> int:
     """Retire as `stale` every open row of `kind` whose `decision_key` is not in
     `seen_keys` (the proposal no longer exists). A run that was not COMPLETE
-    retires nothing: a truncated run cannot tell absent from not-reached."""
+    retires nothing: a truncated run cannot tell absent from not-reached. Rows
+    of `exclude_producers` are never retired here."""
     if not complete:
         return 0
     now = clock().isoformat()
     with _transaction(conn, commit_section):
         rows = conn.execute(
-            "SELECT id, decision_key FROM pending_items"
+            "SELECT id, decision_key, producer FROM pending_items"
             " WHERE kind = ? AND status IN ('pending','claimed')",
             (kind,),
         ).fetchall()
-        doomed = [row[0] for row in rows if row[1] not in seen_keys]
+        doomed = [
+            row[0]
+            for row in rows
+            if row[1] not in seen_keys and row[2] not in exclude_producers
+        ]
         conn.executemany(
             "UPDATE pending_items SET status='stale', resolution='stale',"
             " claimed_by=NULL, resolved_at=? WHERE id = ?",

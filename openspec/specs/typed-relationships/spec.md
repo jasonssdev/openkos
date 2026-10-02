@@ -207,3 +207,19 @@ leave `target`'s bytes unchanged.
 - GIVEN `a` and `c` both supersede `b`
 - WHEN `openkos unrelate a supersedes b --auto` runs
 - THEN `b`'s bytes are unchanged
+
+### Requirement: A Supersession Proposed By Import Is Written Only By `relate`
+
+An import that proposes a Source supersedes an earlier Source (a changed
+watched file, or a replacement for a Source with no extractable text,
+ADR-0041) MUST NOT write the edge or the deprecated-status export itself. The
+edge and the export are written by `openkos relate <new> supersedes <old>` under
+the existing requirement above, and the proposal is an ordinary pending-work
+`relation_type` row that this `relate` resolves.
+
+#### Scenario: Nothing is deprecated until a person confirms
+
+- GIVEN a watched file imported as a second version
+- WHEN no `relate` has run
+- THEN the earlier Source carries no deprecated status and neither Source
+  carries a `supersedes` relation
