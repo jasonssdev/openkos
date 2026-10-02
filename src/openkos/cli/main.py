@@ -3737,6 +3737,13 @@ def _render_staging_drop(drop: application_ingest.StagingDrop) -> None:
             f"'{drop.disambiguated_to}'.",
             verb="ingest",
         )
+    elif drop.kind == "attached":
+        output.notice(
+            f"openkos ingest: '{drop.slug}' matches existing "
+            f"'{drop.attached_to}' (same type and title); revising it instead "
+            "of writing a copy.",
+            verb="ingest",
+        )
     else:  # "build-failed"
         output.notice(
             f"openkos ingest: extracted content failed validation -- "

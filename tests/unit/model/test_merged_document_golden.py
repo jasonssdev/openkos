@@ -8,7 +8,7 @@ import pytest
 
 from openkos.model import okf
 
-CASES = {
+CASES: dict[str, tuple[dict[str, object], str, dict[str, object], str]] = {
     "basic_union": (
         {
             "type": "Concept",

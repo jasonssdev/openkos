@@ -35,7 +35,7 @@ is one work unit (one Conventional Commit, scope `ingest`, `okf`,
       requirement in the ingestion spec delta so
       `tests/unit/test_config_keys_specified.py` passes; non-boolean refused
       like the other boolean keys. (`config`)
-- [ ] 2.2 `AttachIndex` and the attach decision in
+- [x] 2.2 `AttachIndex` and the attach decision in
       `stage_derived_objects`: exclusion constant `ATTACH_EXCLUDED_TYPES =
       {"Event", "Person"}`; different type does not match; deprecated is not
       a target and falls back to `-N`; family attaches to the canonical
