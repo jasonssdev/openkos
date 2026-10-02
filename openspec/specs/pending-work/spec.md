@@ -386,10 +386,20 @@ Each row MUST name a subject and a resolving command that can actually
 resolve THAT row: a volatility row (about a concept type, so it has no
 target) names its type; a watch refusal's command names the refused file, not
 a placeholder; an identity row names the merge walk when its group was judged
-the same and a `duplicates --keep-distinct` ruling over its members otherwise,
-since `duplicates` alone only lists groups. The only payload fields read for
+the same, and otherwise the judgment walk (`adjudicate --apply`, whose prompt
+answers are `y` merge, `s` skip and `d` keep-distinct; for a group of more than
+two members, which that walk does not merge, it says the walk prints the
+pairwise `merge` commands) with the `duplicates --keep-distinct` ruling over
+its members as an alternative on its own line, since `duplicates` alone only
+lists groups. The only payload fields read for
 this are a type name, an inbox path and an adjudication verdict -- names and
 a verdict, never proposal prose.
+
+The identity and relation-type advisors keep at most a fixed number of
+candidates per run, and the queue records no truncation. A kind whose open
+rows reach that cap MUST be listed with a note that the cap is the per-run
+candidate cap, so more may exist, naming the verb that reports the total
+(`duplicates`, `suggest-relations`); a kind under the cap carries no note.
 
 #### Scenario: An absent queue is not an empty queue
 
