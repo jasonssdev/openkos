@@ -15,6 +15,7 @@ index only points to them.
   logic with no model. `evals/run_self_tests.py` discovers every declared
   `--self-test` and runs them, and CI runs that sweep model-free.
 - Model-backed runs need a local Ollama unless a README says otherwise.
+- `evals/harness_stamp.py` is the shared identity stamp and timing helper: every stored `runs-*.json` of a bake-off harness carries a `stamp` (harness commit and dirty flag, model name and the local Ollama's digest, and `sha256(prompt)[:16]` per system prompt sent), plus per-run wall-clock (`run_latencies_s`, or per-row `elapsed_s` / `latency_s` where a harness already recorded it). Standard-library only; `--self-test` runs model-free.
 - `evals/harness_report.py` is the shared report helper: it renders the one line every report carries to name its arm (generation ceiling and context window, plus any harness-specific segments), so a stored run can be told apart from one measured under other settings. It is standard-library only; the rest of each report stays per-harness.
 - Timestamped reports and `runs-*.json` files under a harness's `results/`
   are historical records of what was measured; they are not edited after
@@ -34,6 +35,7 @@ of a harness's own scoring code.
 
 - [`adjudication`](adjudication/README.md) — scoring the identity adjudicator's SAME/DIFFERENT verdicts.
 - [`auto_merge`](auto_merge/README.md) — whether a confidence threshold makes auto-merge of one narrow class safe.
+- [`bakeoff`](bakeoff/README.md) — the shared driver for the #1269 model bake-off: eligibility gates and a staged knockout over the other harnesses.
 - [`contradictions`](contradictions/README.md) — the contradiction judge's accuracy, stability and confidence.
 - [`decision_extraction`](decision_extraction/README.md) — extraction of the nine OpenKOS types over the AMI meeting corpus.
 - [`decision_granularity`](decision_granularity/README.md) — whether one-sentence prompt edits split multi-decision sources or keep a twice-named person.

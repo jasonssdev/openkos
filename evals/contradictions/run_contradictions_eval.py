@@ -73,6 +73,7 @@ from contradiction_fixtures import (  # noqa: E402
 )
 from contradiction_prompts import TREATMENT_SYSTEM_PROMPT  # noqa: E402
 from harness_report import arm_identity_line  # noqa: E402
+from harness_stamp import build_stamp  # noqa: E402
 
 from openkos.bundle import ledger  # noqa: E402
 from openkos.config import (  # noqa: E402
@@ -548,6 +549,13 @@ def main() -> int:
                 "model": args.model,
                 "runs": args.runs,
                 "generated_at": stamp,
+                # #1269: per-run wall-clock and the identity stamp; the prompt
+                # is read AFTER the treatment swap, so it is what was sent.
+                "run_latencies_s": latencies,
+                "stamp": build_stamp(
+                    model=args.model,
+                    prompts={"contradiction/system": contradiction_mod._SYSTEM_PROMPT},
+                ),
                 # The client settings are part of the arm's identity, not
                 # trivia (#700): they were unpinned before that issue, so a
                 # stored run that does not name them cannot be told apart from

@@ -92,11 +92,13 @@ hung.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import pathlib
 import statistics
 import sys
 import tempfile
+import time
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -121,6 +123,7 @@ from attribution_corpus import (  # noqa: E402
 )
 from attribution_prompts import TREATMENT_SYSTEM_PROMPT  # noqa: E402
 from harness_report import arm_identity_line  # noqa: E402
+from harness_stamp import build_stamp, summarize_latencies  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
@@ -201,6 +204,29 @@ class Row:
     Counted per cell rather than dropped: a large cell that collapsed into
     no-matches is measuring groundedness under the name of attribution, and
     the report has to be able to say so."""
+    elapsed_s: float | None = None
+    """Wall-clock of this answer's whole `answer()` call (#1269), seconds.
+
+    `None` in every file written before #1269, which recorded no latency; a
+    default keeps those stored rows loadable."""
+
+
+def _run_latencies(rows: Sequence[Row]) -> list[float]:
+    """Per-run wall-clock (#1269): the sum of each run's answers, in run order."""
+    by_run: dict[int, float] = {}
+    for row in rows:
+        if row.elapsed_s is not None:
+            by_run[row.run] = by_run.get(row.run, 0.0) + row.elapsed_s
+    return [round(by_run[run], 3) for run in sorted(by_run)]
+
+
+@functools.cache
+def _stamp(model: str) -> dict[str, Any]:
+    """#1269 identity stamp, built once: `_write_runs` checkpoints per answer.
+    Read AFTER `--arm treatment` swaps the prompt, so it names what was sent."""
+    return build_stamp(
+        model=model, prompts={"answer/system": answer_mod._SYSTEM_PROMPT}
+    )
 
 
 def _unbounded_bodies(
@@ -378,6 +404,7 @@ def generate(
                             for regime in REGIMES:
                                 for question in QUESTIONS[(language, regime)]:
                                     recorder.reset()
+                                    started = time.monotonic()
                                     try:
                                         result = answer_mod.answer(
                                             question,
@@ -445,6 +472,9 @@ def generate(
                                             omitted=len(result.omitted_titles),
                                             no_match=result.answer
                                             == answer_mod.NO_MATCH,
+                                            elapsed_s=round(
+                                                time.monotonic() - started, 3
+                                            ),
                                         )
                                     )
                                     tokens = (
@@ -535,6 +565,10 @@ def _write_runs(
                 # defect, not the product.
                 "bound": pins.bound,
                 "rows": [row.__dict__ for row in rows],
+                # #1269: wall-clock per answer is on each row; per run is the
+                # sum of a run's answers. The stamp pins commit, digest, prompt.
+                "run_latencies_s": _run_latencies(rows),
+                "stamp": _stamp(model),
                 "failures": list(failures),
             },
             ensure_ascii=False,
@@ -630,6 +664,22 @@ def _chars_per_token(rows: Sequence[Row]) -> float:
     return statistics.median(chars / tokens for chars, tokens in pairs)
 
 
+def _latency_line(rows: Sequence[Row]) -> str:
+    """The report's wall-clock line (#1269): median per answer, per-run totals."""
+    per_answer = summarize_latencies(
+        r.elapsed_s for r in rows if r.elapsed_s is not None
+    )
+    if not per_answer["n"]:
+        return "Wall-clock: not recorded for these rows (#1269)."
+    per_run = _run_latencies(rows)
+    return (
+        f"Wall-clock per answer (#1269): median **{per_answer['median_s']}s**, "
+        f"mean {per_answer['mean_s']}s over {per_answer['n']} answers; "
+        f"median run total {summarize_latencies(per_run)['median_s']}s over "
+        f"{len(per_run)} runs."
+    )
+
+
 def render_report(
     rows: Sequence[Row],
     failures: Sequence[dict[str, Any]],
@@ -651,6 +701,7 @@ def render_report(
             max_generation_tokens=pins.max_generation_tokens,
             context_window=pins.context_window,
         ),
+        _latency_line(rows),
         ""
         if pins.bound
         else "\n> **`--unbounded`: this arm reproduces the PRE-#882 send.** Every "
@@ -1058,6 +1109,43 @@ def _self_test() -> int:
         "the treatment arm equals post-adoption production",
         TREATMENT_SYSTEM_PROMPT,
         answer_mod._SYSTEM_PROMPT,
+    )
+
+    # #1269: per-answer wall-clock and its per-run sums. Rows are two runs;
+    # run 0 holds two answers (1.0 + 2.5), run 1 one answer (4.0), and a row
+    # from before #1269 (no elapsed_s) must be skipped, not summed as zero.
+    def _timed(run: int, elapsed: float | None) -> Row:
+        return Row(
+            run=run,
+            context="small",
+            language="en",
+            regime="grounded",
+            question="q",
+            attribution="reported",
+            cited=1,
+            blocks=1,
+            answer_chars=1,
+            prompt_tokens=None,
+            sent_chars=1,
+            excerpted=0,
+            omitted=0,
+            no_match=False,
+            elapsed_s=elapsed,
+        )
+
+    timed_rows = [_timed(0, 1.0), _timed(0, 2.5), _timed(1, 4.0), _timed(1, None)]
+    check(
+        "per-run latency sums a run's answers", _run_latencies(timed_rows), [3.5, 4.0]
+    )
+    check(
+        "report line carries the median per answer",
+        "median **2.5s**" in _latency_line(timed_rows),
+        True,
+    )
+    check(
+        "pre-#1269 rows say latency was not recorded",
+        _latency_line([_timed(0, None)]),
+        "Wall-clock: not recorded for these rows (#1269).",
     )
 
     if failures:

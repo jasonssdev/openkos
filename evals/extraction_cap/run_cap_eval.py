@@ -100,6 +100,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from openkos.extraction import concept as concept_mod
+from openkos.extraction import judge as judge_mod
 from openkos.extraction.concept import (
     _TWIN_EXEMPT_TYPE,
     ExtractionOutcome,
@@ -112,6 +113,10 @@ from openkos.llm.ollama import OllamaClient, OllamaError
 from openkos.source_title import derive_source_title
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+# #1269: `harness_stamp` lives beside `harness_report` at the evals root.
+sys.path.append(str(_REPO_ROOT / "evals"))
+from harness_stamp import build_stamp  # noqa: E402
+
 _CORPUS = _REPO_ROOT / "examples" / "extraction-corpus"
 _SOURCES = _CORPUS / "sources"
 _GROUND_TRUTH = _CORPUS / "ground-truth"
@@ -1048,7 +1053,14 @@ def temperature_urlopen(
     return _open
 
 
-def runs_to_json(cells: Sequence[Cell], *, model: str, runs: int, stamp: str) -> str:
+def runs_to_json(
+    cells: Sequence[Cell],
+    *,
+    model: str,
+    runs: int,
+    stamp: str,
+    identity: dict[str, Any] | None = None,
+) -> str:
     """Serialize the RAW observations of a sweep -- never the verdicts.
 
     Verdicts are deliberately excluded. They are a FUNCTION of the ground truth
@@ -1060,6 +1072,9 @@ def runs_to_json(cells: Sequence[Cell], *, model: str, runs: int, stamp: str) ->
         "model": model,
         "runs": runs,
         "generated_at": stamp,
+        # #1269: commit, model digest, prompt identity. Per-run wall-clock is
+        # on every outcome as `latency_s`. Absent when not supplied.
+        **({"stamp": identity} if identity is not None else {}),
         "outcomes": [
             {
                 "fixture": o.fixture,
@@ -2883,7 +2898,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     # replayed against; a flag is something to forget exactly once.
     runs_path = results_dir / f"runs-{stamp}-{slug}.json"
     runs_path.write_text(
-        runs_to_json(cells, model=args.model, runs=args.runs, stamp=stamp),
+        runs_to_json(
+            cells,
+            model=args.model,
+            runs=args.runs,
+            stamp=stamp,
+            identity=build_stamp(
+                model=args.model,
+                prompts={
+                    "extraction/system": concept_mod._SYSTEM_PROMPT,
+                    "extraction/reask": concept_mod._REASK_SYSTEM_PROMPT,
+                    "extraction/participant_capture": (
+                        concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT
+                    ),
+                    "extraction/judge": judge_mod._JUDGE_SYSTEM_PROMPT,
+                },
+            ),
+        ),
         encoding="utf-8",
     )
     print(f"\nWrote report: {args.output}")

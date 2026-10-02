@@ -64,6 +64,7 @@ import pathlib
 import statistics
 import sys
 import tempfile
+import time
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -79,6 +80,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.append(str(REPO_ROOT / "evals"))
 
 from harness_report import arm_identity_line  # noqa: E402
+from harness_stamp import (  # noqa: E402
+    TimedBackend,
+    build_stamp,
+    prompt_hash,
+    summarize_latencies,
+)
 from revision_fixture_library import load_library_fixture  # noqa: E402
 from revision_fixtures import (  # noqa: E402
     DecisionDoc,
@@ -98,6 +105,8 @@ from openkos.config import (  # noqa: E402
 from openkos.llm.base import EMBED_DIM, Embedder, LLMBackend, Message  # noqa: E402
 from openkos.llm.ollama import OllamaError  # noqa: E402
 from openkos.model import okf  # noqa: E402
+from openkos.resolution import decision_revision as decision_revision_mod  # noqa: E402
+from openkos.resolution import decision_subject as decision_subject_mod  # noqa: E402
 from openkos.resolution.decision_revision import (  # noqa: E402
     EMBEDDING_SIMILARITY_THRESHOLD,
     JUDGE_PROMPT_VERSION,
@@ -433,6 +442,8 @@ class PipelineResult:
     """Judge outcomes over (b) every labelled pair directly, whether or
     not the candidate stage ever proposed it."""
     dates_by_id: dict[str, DecisionDate]
+    run_latencies_s: list[float] = field(default_factory=list)
+    """Wall-clock of each judge iteration (both stages), seconds (#1269)."""
 
 
 def embed_text(title: str, body: str) -> str:
@@ -542,9 +553,12 @@ def run_pipeline(
 
     runs_a: list[list[RevisionVerdict]] = []
     runs_b: list[list[RevisionVerdict]] = []
+    run_latencies_s: list[float] = []
     for _ in range(runs):
+        started = time.monotonic()
         runs_a.append(judge_pairs(candidate_pairs, llm=llm).results)
         runs_b.append(judge_pairs(labelled_judge_pairs, llm=llm).results)
+        run_latencies_s.append(time.monotonic() - started)
 
     return PipelineResult(
         subject_results=subject_batch.results,
@@ -554,6 +568,7 @@ def run_pipeline(
         rows_a=judge_rows(fixture.pairs, runs_a),
         rows_b=judge_rows(fixture.pairs, runs_b),
         dates_by_id=dates_by_id,
+        run_latencies_s=run_latencies_s,
     )
 
 
@@ -1356,7 +1371,32 @@ def _self_test() -> int:
     )
     embedder = _FakeEmbedder(vectors=[vector_by_id[cid] for cid in ordered_ids])
 
-    result = run_pipeline(fixture, backend, embedder, runs=self_test_runs)
+    timed_backend = TimedBackend(backend)
+    result = run_pipeline(fixture, timed_backend, embedder, runs=self_test_runs)
+
+    # --- #1269 stamp: the shared prompt hash IS production's version ------
+    check(
+        "stamp prompt hash equals SUBJECT_PROMPT_VERSION",
+        prompt_hash(decision_subject_mod._SUBJECT_SYSTEM_PROMPT),
+        SUBJECT_PROMPT_VERSION,
+    )
+    check(
+        "stamp prompt hash equals JUDGE_PROMPT_VERSION",
+        prompt_hash(decision_revision_mod._JUDGE_SYSTEM_PROMPT),
+        JUDGE_PROMPT_VERSION,
+    )
+
+    # --- #1269 latency: one wall-clock per judge run, one per chat call ----
+    check(
+        "one wall-clock per judge run",
+        len(result.run_latencies_s),
+        self_test_runs,
+    )
+    check(
+        "every chat call (subject pass + judge) is timed",
+        len(timed_backend.call_latencies_s),
+        backend.calls,
+    )
 
     # --- wiring: candidate generation over the SCRIPTED embeddings --------
     check(
@@ -2338,8 +2378,10 @@ def main(argv: list[str] | None = None) -> int:
         f"model {args.model}, embedding {DEFAULT_EMBEDDING_MODEL}, {args.runs} run(s), "
         f"{len(fixture.decisions)} decisions, {len(fixture.pairs)} labelled pairs\n"
     )
+    # #1269: every chat call (subject pass and judge) is timed.
+    timed = TimedBackend(client)
     result = run_pipeline(
-        fixture, client, embedder, runs=args.runs, vector_source=args.vector_source
+        fixture, timed, embedder, runs=args.runs, vector_source=args.vector_source
     )
 
     subject_stats = subject_pass_stats(result.subject_results)
@@ -2385,6 +2427,21 @@ def main(argv: list[str] | None = None) -> int:
                 "vector_source": args.vector_source,
                 "embedding_model": DEFAULT_EMBEDDING_MODEL,
                 "embedding_similarity_threshold": EMBEDDING_SIMILARITY_THRESHOLD,
+                # #1269: wall-clock per chat call and per judge run, and the
+                # identity stamp (commit, model digest, both prompts).
+                "call_latencies_s": timed.call_latencies_s,
+                "run_latencies_s": result.run_latencies_s,
+                "stamp": build_stamp(
+                    model=args.model,
+                    prompts={
+                        "decision_subject/system": (
+                            decision_subject_mod._SUBJECT_SYSTEM_PROMPT
+                        ),
+                        "decision_revision/judge": (
+                            decision_revision_mod._JUDGE_SYSTEM_PROMPT
+                        ),
+                    },
+                ),
                 "without_vector": result.plan.without_vector,
                 "candidate_total": result.plan.total,
                 "candidates": [[*c.pair_ids, c.score] for c in result.plan.candidates],
@@ -2412,6 +2469,11 @@ def main(argv: list[str] | None = None) -> int:
             context_window=DEFAULT_CONTEXT_WINDOW,
             extra=extra,
         ),
+        "",
+        f"Wall-clock (#1269): median **{summarize_latencies(timed.call_latencies_s)['median_s']}s** "
+        f"per chat call over {len(timed.call_latencies_s)} calls; median judge run "
+        f"{summarize_latencies(result.run_latencies_s)['median_s']}s over "
+        f"{len(result.run_latencies_s)} runs.",
         "",
         "Fixture: `evals/decision_revisions/revision_fixture_library.py` -- NOT AMI. "
         "Labels are owner-adjudicated (T3), never scored before settlement. "

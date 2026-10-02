@@ -91,6 +91,7 @@ from auto_merge_fixtures import (  # noqa: E402
     documents,
 )
 from harness_report import arm_identity_line  # noqa: E402
+from harness_stamp import build_stamp  # noqa: E402
 
 from openkos import config as config_mod  # noqa: E402
 from openkos.application import lifecycle as lifecycle_mod  # noqa: E402
@@ -1086,6 +1087,12 @@ def _run_arm(arm: str, runs_requested: int, model: str) -> int:
             "max_generation_tokens": DEFAULT_MAX_GENERATION_TOKENS,
         },
         "started_at": stamp,
+        # #1269: commit, model digest and prompt identity. Per-run wall-clock
+        # is already on every trial as `latency_s`.
+        "stamp": build_stamp(
+            model=model,
+            prompts={"adjudication/system": adjudication_mod._SYSTEM_PROMPT},
+        ),
         "runs": rows,
     }
     (results_dir / f"runs-{slug}.json").write_text(
