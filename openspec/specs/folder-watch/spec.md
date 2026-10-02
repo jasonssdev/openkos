@@ -164,6 +164,34 @@ per-pass budget MUST still be refused into the queue as a `watch_refusal` row.
 - WHEN the operator runs `openkos relate <new> supersedes <old>`
 - THEN the earlier Source is exported as deprecated and the row is `applied`
 
+### Requirement: An Import Leaves The Derived Indexes Fresh
+
+After a watch job has imported at least one file, it MUST run the incremental
+derived-index refresh (`derived-index-cache`) once, after its last import,
+so the imported material is searchable without waiting for a maintenance
+job. A job that imports nothing MUST NOT refresh. A refresh that cannot run
+(store contention, a refusal) MUST NOT change the outcome of the imports,
+which are already committed; the watch MUST advise that the indexes were not
+refreshed and leave the catch-up to the next maintenance job.
+
+#### Scenario: Two imports cost one refresh
+
+- GIVEN two settled inbox files
+- WHEN a watch job imports both
+- THEN the derived indexes are refreshed once, after the second import
+
+#### Scenario: A job that imports nothing refreshes nothing
+
+- GIVEN an inbox whose only file is still inside its quiet window
+- WHEN a watch job runs
+- THEN no refresh runs
+
+#### Scenario: A refresh that cannot run does not fail the import
+
+- GIVEN a settled inbox file and a derived store held by another process
+- WHEN a watch job imports the file
+- THEN the Source is imported, the job's outcome is unchanged, and the daemon advises that the indexes were not refreshed
+
 ### Requirement: A Watch Job Honours The Budget, The Stop Flag, And The Deadline
 
 A watch job MUST import settled files in a deterministic order (by path),

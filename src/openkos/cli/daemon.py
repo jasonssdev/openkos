@@ -16,8 +16,9 @@ This module is the CLI-layer composition root for the runner
 - **Git.** The four `vcs.git` functions the runner's commit-retry job uses.
 - **The watch job.** `watch_ports()` builds each inbox file's `IngestPorts` around
   the commit section the watch hands it, with the budgeted run's counted chat
-  client. Its post-commit step is a no-op: the maintenance job's incremental
-  refresh embeds what an import added, so the watch never takes a second lock.
+  client. Its post-commit step is a no-op: the watch job runs the incremental
+  refresh once, after its last import, so a batch pays for one refresh and the
+  imports are searchable without waiting for the maintenance job.
 - **The advisor stages.** Contradictions, duplicates (identity), relation typing,
   volatility and revisions, each computed through its application service with
   `max_calls=ctx.budget.remaining` and a chat client counted by the pass's
@@ -423,7 +424,7 @@ def _ingest_ports(
 ) -> ingest_svc.IngestPorts:
     """One inbox file's ingest effects: the extraction client counted into the
     budgeted run, the engine's auto-commit, and no post-commit embedding (the
-    maintenance job's incremental refresh owns that)."""
+    watch job refreshes the derived indexes once per job, after its imports)."""
     from openkos.cli import main as cli_main
 
     return ingest_svc.IngestPorts(
