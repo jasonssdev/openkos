@@ -59,7 +59,7 @@ is one work unit (one Conventional Commit, scope `ingest`, `okf`,
 - [x] 3.2 CLI presentation of attaches (stderr drop line; stdout summary
       names id and new `version`; batch summary counts). No logic in
       `cli/main.py`. (`cli`)
-- [ ] 3.3 Watch end-to-end under `tests/unit/e2e/`: import, edit, import;
+- [x] 3.3 Watch end-to-end under `tests/unit/e2e/`: import, edit, import;
       assert no `-N` copy, `version: 2`, both Sources in provenance, the
       supersession row still proposed and nothing deprecated, and a
       re-saved version converges with no model call. A second case: the
