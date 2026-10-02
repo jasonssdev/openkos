@@ -9,21 +9,51 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 > OpenKOS is **alpha** — it runs, and the API may still change. The package is
 > published on [PyPI](https://pypi.org/project/openkos/); the MVP 1 (Compiler),
 > MVP 2 (Graph and Memory), MVP 3 (Ask Surface), and MVP 4 (Unattended Engine) arcs
-> are complete; MVP 5 (Interoperability) is next. The project's vision,
+> are complete; MVP 5 (Interoperability) is next, then MVP 6 (the desktop app and
+> the stable Python API). The project's vision,
 > architecture, and design live in the documents under
 > [`docs/`](https://github.com/jasonssdev/openkos/tree/main/docs).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-02
+
+The Unattended Engine, hardened. The daemon can now wake on an OS file event (optional `openkos[watch]`), a watched file edited after import lands as a new version with its supersession queued for you to confirm, `openkos unrelate` removes a typed relation, and every verb's human-readable output follows one terminal-gated convention. A repeated key in `openkos.yaml` is now refused, and the transitional temp-directory workspace lock is gone.
+
+### Upgrading from 0.3.1
+
+Most of this release needs nothing from you. These are the points that do, or that you will notice:
+
+- **A duplicate key in `openkos.yaml` is now an error.** Before, the last duplicate silently won; now the file is refused and `openkos doctor` prints `[FAIL] Config valid` naming the key. Remove the repeated key.
+- **Do not run 0.3.0 or older at the same time as 0.4.0 on one workspace.** 0.3.1 took the old temp-directory lock as well as the new per-user one; 0.4.0 no longer does, so an older `openkos` (which locks only the old path) does not exclude a current run. 0.3.1 and 0.4.0 still exclude each other through the per-user lock.
+- **Human-readable stderr text changed, and it is not a parsing interface.** On a terminal, notices carry a `note:` / `warning:` prefix, long lines wrap and results are separated from proposals by a blank line; a pipe or redirect sees plain text with no colour or escape sequences. Read `--json` or stdout for anything a script needs.
+- **A few piped result lines changed.** The line after you confirm now names concept ids instead of repeating the `bundle/...md` paths already shown in the preview, for `relate`, `unrelate`, `merge`, `unmerge` and `forget` (`forget --scope source` reports `removed N concept(s)` without the path list). `normalize-names`, `backfill-sensitivity` and `backfill-source-titles` no longer repeat the renamed pairs, raised paths or retitled Sources. `ingest` now prints one summary line (`imported 'notes.txt' -- 8 objects (...)`, or `-- Source only.`) in place of the path list and the separate `extracted N objects` line, and the `query` refusal for an unanswerable question is two short lines. Stdout data, `--json` and exit codes are unchanged.
+- **Editing a watched file after import no longer refuses it.** The inbox watcher imports it as a new version (`raw/<stem>-N<ext>`) and queues a proposal that the new Source supersedes the old one; resolve it with `openkos relate <new> supersedes <old>`. Nothing is deprecated until you do.
+- **New optional `unattended.watch_backend` key and `openkos[watch]` extra.** `native` wakes the daemon on an OS file event; `poll` (the default) is unchanged. Without the extra, the daemon warns and polls.
+- **`openkos curate` takes new answers.** `--accept structure` applies `related_to` suggestions without asking, and the per-item prompt for asymmetric types now also accepts `a` (accept this and the rest of that type) and `r` (apply the reversed direction).
+
 ### Added
 
 - An optional native file-notification backend for the inbox watch. Set `unattended.watch_backend: native` and install `openkos[watch]` (`watchdog`) and the daemon wakes on an OS event instead of waiting out its poll interval. The event only triggers a pass sooner: the ordinary polling pass still does every settle and re-hash check, and the periodic poll keeps running as a safety net, so a missed or coalesced event delays a file but never loses it. Polling stays the default; without the extra, or if the backend cannot start, the daemon warns and polls, and `doctor` reports it (#1213).
+
 - `openkos unrelate <source> <type> <target>` removes one typed relation, mirroring `relate`'s preview, confirm and commit flow. It writes a `log.md` line, refreshes the derived stores, withdraws a `supersedes` target's deprecated-status export when nothing else supersedes it, and refuses (writing nothing) when the relation does not exist. Before, a wrong relation could only be removed by hand-editing frontmatter or a revert that conflicts on `log.md` (#1232).
 
 - The inbox watcher now imports a file whose bytes changed after import as a new version instead of refusing it into the queue: a new `raw/<stem>-N<ext>` copy and Source (the earlier ones are never touched), plus a pending-work row proposing that the new Source supersedes the earlier one, resolved by `openkos relate <new> supersedes <old>`. The relation is queued rather than written because it deprecates a Source and unattended runs never apply consequential changes ([ADR-0041](docs/adr/0041-a-changed-source-imports-as-a-new-version-and-its-supersession-is-proposed.md), amends ADR-0038; #1212).
+
 - `openkos ingest` prints the exact `openkos relate <new> supersedes <dead>` command when a file is copied to a disambiguated name and the name was held by a Source with no extractable text, and the daemon queues the same proposal, so a dead Source can be retired once its replacement is imported (#1224).
 
+- `openkos curate --accept structure` applies `related_to` suggestions without
+  asking, since they add no claim beyond the untyped link; asymmetric types
+  still ask per item, and that prompt now also takes `a` (accept this and the
+  remaining items of the same type) and `r` (apply the reversed direction).
+
 ### Changed
+
+- `openkos.yaml` with a repeated key (top-level or nested) is now refused, and
+  `openkos doctor` prints `[FAIL] Config valid` naming the key, instead of
+  `[PASS]` over a file whose last duplicate silently won
+  ([#1233](https://github.com/jasonssdev/openkos/issues/1233)). Bundle
+  frontmatter parsing is unchanged.
 
 - **Human-readable output follows one terminal-gated convention**
   ([#1235](https://github.com/jasonssdev/openkos/issues/1235),
@@ -76,6 +106,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   already listed, and `forget --scope source` reports `removed N concept(s)`
   without the path list. Stdout data, `--json` and exit codes are unchanged.
 
+- **The roadmap is re-cut.** MVP 5 is interoperability only (OKF import/export); the stable Python API moves to a new MVP 6 that ships with a desktop app as its first client ([ADR-0039](docs/adr/0039-the-stable-python-api-ships-with-a-desktop-app-as-its-first-client.md)). No code changed; the README, roadmap and architecture documents now say so.
+
+### Removed
+
 - **The transitional temp-directory workspace lock is no longer taken.** 0.3.1
   moved the lock to the per-user state directory and, for that one release,
   also took the old lock under the OS temp directory so an older `openkos`
@@ -84,18 +118,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   older no longer exclude a current run: do not run them concurrently against
   the same workspace.
 
-- `openkos curate --accept structure` applies `related_to` suggestions without
-  asking, since they add no claim beyond the untyped link; asymmetric types
-  still ask per item, and that prompt now also takes `a` (accept this and the
-  remaining items of the same type) and `r` (apply the reversed direction).
-
 ### Fixed
-
-- `openkos.yaml` with a repeated key (top-level or nested) is now refused, and
-  `openkos doctor` prints `[FAIL] Config valid` naming the key, instead of
-  `[PASS]` over a file whose last duplicate silently won
-  ([#1233](https://github.com/jasonssdev/openkos/issues/1233)). Bundle
-  frontmatter parsing is unchanged.
 
 - The per-commit disclosure printed by `forget`, `merge` and `curate` no longer
   advertises `git revert <sha>` as an unconditional undo. Every commit appends to
@@ -111,6 +134,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   ingest-time `-N` suffix become the permanent Concept ID: when the two members
   are a base/`-N` family the un-suffixed id survives, whichever body is richer
   (#1228).
+
 - The merge reconciliation pass no longer drops the `## Related` section: the
   links of both members are put back deterministically, without a second
   `## Related` (#1229).
@@ -133,6 +157,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   auto-commit dropped its `raw/` copy from the commit pathspec and left it
   staged, with nothing recorded for the daemon's commit retry. Names are now
   compared in NFC. (#1219)
+
 - **Non-UTF-8 text is no longer treated as binary.** `ingest` and the daemon's
   inbox watch now read legacy-encoded text through a deterministic fallback
   (Mac Roman for CR-terminated files, otherwise cp1252, only when the result is
@@ -156,6 +181,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   same source line are collapsed to the one with the longer body before
   staging, and `ingest` says so on stderr. A pair that quotes different lines,
   or quotes nothing, is never touched.
+
 - The feedback text a Gemini-notes export (Spanish locale) appends ("Actualizamos
   la sección Decisiones con tus comentarios. Danos tu opinión: Útil o Poco
   útil") is no longer copied into an object body
@@ -172,10 +198,12 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   names a verb that can close it (`openkos adjudicate --apply` for a group
   judged the same, `openkos duplicates --keep-distinct <ids>` otherwise)
   instead of the read-only `openkos duplicates`.
+
 - **`openkos pending` no longer prints empty or placeholder text.** A
   `volatility` row names its concept type (`type Person`) instead of rendering
   as `-`, and a `watch_refusal` row's `resolve:` hint names the refused file
   instead of `<the refused file under raw/>`.
+
 - **`openkos status` no longer over-counts open contradictions.** A pair judged
   on more than one run (for instance `contradictions --fresh`) holds one row
   per run, and each fresh row was counted; only the newest finding for a pair
@@ -3497,7 +3525,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jasonssdev/openkos/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jasonssdev/openkos/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jasonssdev/openkos/compare/v0.2.14...v0.3.0
 [0.2.14]: https://github.com/jasonssdev/openkos/compare/v0.2.13...v0.2.14

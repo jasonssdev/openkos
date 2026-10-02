@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0041: A source edited after import imports as a new version, and its supersession is proposed, not written"
 description: The inbox watcher imports a watched file whose bytes changed as a new raw copy under the next free versioned name with a Source of its own, instead of refusing it into the queue; the supersedes relation that retires the earlier Source is enqueued as a relation_type row a person confirms with `openkos relate`, because writing it deprecates a Source; the same proposal is offered when a replacement is ingested for a Source with no extractable text. Amends ADR-0038 Decisions Three and Four.
-status: Proposed
+status: Accepted
 date: 2026-10-01
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0041: A source edited after import imports as a new version, and its supersession is proposed, not written
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-01
 - **Amends:** [ADR-0038](0038-a-watched-folder-is-an-external-inbox.md) (Decisions Three and Four only)
 - **Issues:** [#1212](https://github.com/jasonssdev/openkos/issues/1212), [#1224](https://github.com/jasonssdev/openkos/issues/1224)

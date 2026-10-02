@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0039: The stable Python API ships with a desktop app as its first client, not with interoperability"
 description: MVP 5 is narrowed to OKF export, OKF import and sensitivity enforcement at the export boundary; the stable Python API and the third-party extension points leave it. A new MVP 6, the desktop app, builds a local API and the stable Python API together with a real first client; extension points move to the Horizon, built on that API. The shell technology is deferred to its own ADR.
-status: Proposed
+status: Accepted
 date: 2026-10-01
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0039: The stable Python API ships with a desktop app as its first client, not with interoperability
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-01
 
 ## Context
