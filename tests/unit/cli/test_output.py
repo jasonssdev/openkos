@@ -93,6 +93,23 @@ def test_a_message_without_the_verb_prefix_is_kept_whole(
     assert err.getvalue() == "note: something else\n"
 
 
+def test_tty_notice_replaces_a_legacy_severity_marker_with_its_prefix(
+    streams: Callable[..., tuple[_Stream, _Stream]],
+) -> None:
+    _, err = streams(out_tty=False, err_tty=True)
+    output.notice("openkos purge: WARNING -- it broke.", kind="warning", verb="purge")
+    output.notice("openkos: note -- 'x' is unseeded.", kind="note", verb="relate")
+    assert err.getvalue() == "warning: it broke.\nnote: 'x' is unseeded.\n"
+
+
+def test_piped_notice_keeps_a_legacy_severity_marker(
+    streams: Callable[..., tuple[_Stream, _Stream]],
+) -> None:
+    _, err = streams(out_tty=False, err_tty=False)
+    output.notice("openkos purge: WARNING -- it broke.", kind="warning", verb="purge")
+    assert err.getvalue() == "openkos purge: WARNING -- it broke.\n"
+
+
 def test_wrapped_is_unchanged_off_a_tty_and_wrapped_on_one(
     streams: Callable[..., tuple[_Stream, _Stream]],
 ) -> None:
