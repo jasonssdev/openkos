@@ -158,6 +158,10 @@ class StageContext:
     policy: UnattendedPolicy
     commit_section: CommitSection
     queue: Callable[[], sqlite3.Connection]
+    notify: Callable[[str], None] = lambda message: None
+    """Where a stage says what its run did NOT cover (a candidate cap that bound,
+    #1265): the runner's `announce` port, so an unattended pass never swallows a
+    notice an attended verb would print."""
 
 
 @dataclass(frozen=True)
@@ -380,6 +384,7 @@ def _run_maintenance_units(
         policy=UnattendedPolicy(calls_remaining=lambda: run_budget.remaining),
         commit_section=section,
         queue=queue,
+        notify=ports.announce,
     )
 
     def gate() -> None:

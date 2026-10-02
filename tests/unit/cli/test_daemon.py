@@ -17,6 +17,7 @@ import threading
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
@@ -1135,3 +1136,154 @@ def test_a_native_wake_is_coalesced_before_the_next_pass(
 
     assert stop.waits[1]["timeout"] == daemon_module.WAKE_COALESCE_SECONDS
     assert "wake" not in stop.waits[1]
+
+
+# --- the candidate cap is disclosed, not swallowed (#1265) -------------------
+
+_CAP_NOTICE = "note: 50 of 110 candidate group(s) shown (cap reached)"
+
+
+def _stage_ctx(root: Path, notify: list[str]) -> runner.StageContext:
+    from openkos.application import budget as budget_module
+    from openkos.application.lock_wait import locked_commit_section
+    from openkos.application.runtime import UnattendedPolicy
+
+    layout = config.WorkspaceLayout(root)
+    return runner.StageContext(
+        root=root,
+        layout=layout,
+        budget=budget_module.start_budgeted_run(
+            layout, config.read_config(root).unattended, _NOW
+        ),
+        policy=UnattendedPolicy(),
+        commit_section=locked_commit_section(root, wait_seconds=0),
+        queue=lambda: None,  # type: ignore[arg-type, return-value]
+        notify=notify.append,
+    )
+
+
+def test_the_identity_stage_discloses_a_capped_candidate_list(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.application import duplicates_service, queue_producers
+
+    monkeypatch.setattr(
+        duplicates_service,
+        "report_duplicates",
+        lambda *a, **k: duplicates_service.DuplicatesReport((), 0, _CAP_NOTICE),
+    )
+    monkeypatch.setattr(queue_producers, "enqueue_identity", lambda *a, **k: None)
+    seen: list[str] = []
+
+    daemon_module._identity_stage(_stage_ctx(root, seen))
+
+    assert seen == [f"identity: {_CAP_NOTICE}"]
+
+
+def test_the_identity_stage_is_silent_when_the_cap_did_not_bind(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.application import duplicates_service, queue_producers
+
+    monkeypatch.setattr(
+        duplicates_service,
+        "report_duplicates",
+        lambda *a, **k: duplicates_service.DuplicatesReport((), 0, None),
+    )
+    monkeypatch.setattr(queue_producers, "enqueue_identity", lambda *a, **k: None)
+    seen: list[str] = []
+
+    daemon_module._identity_stage(_stage_ctx(root, seen))
+
+    assert seen == []
+
+
+def test_the_relations_and_revisions_observers_disclose_their_caps() -> None:
+    seen: list[str] = []
+    relations = daemon_module._DaemonRelationsObserver(seen.append)
+    revisions_observer = daemon_module._DaemonRevisionsObserver(seen.append)
+
+    relations.candidate_notices("note: 50 of 80 candidate edge(s) shown", None)
+    relations.candidate_notices(None, None)
+    revisions_observer.truncation_notice("note: 50 of 70 pair(s) shown")
+
+    assert seen == [
+        "suggest-relations: note: 50 of 80 candidate edge(s) shown",
+        "revisions: note: 50 of 70 pair(s) shown",
+    ]
+
+
+def test_the_contradictions_stage_discloses_a_capped_pair_list(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    from openkos.application import contradictions_service, queue_producers
+
+    outcome = types.SimpleNamespace(
+        truncation_notice="note: 50 of 90 pair(s) shown",
+        batch=types.SimpleNamespace(failure=None),
+        deferred_by_bound=0,
+    )
+    monkeypatch.setattr(
+        contradictions_service, "run_contradictions", lambda *a, **k: outcome
+    )
+    monkeypatch.setattr(queue_producers, "enqueue_contradictions", lambda *a, **k: None)
+    seen: list[str] = []
+
+    daemon_module._contradictions_stage(_stage_ctx(root, seen))
+
+    assert seen == ["contradictions: note: 50 of 90 pair(s) shown"]
+
+
+def test_the_runner_hands_a_stage_the_announce_port(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lines: list[str] = []
+
+    def stage(ctx: runner.StageContext) -> runner.StageResult:
+        ctx.notify("a cap bound")
+        return runner.StageResult()
+
+    ports = dataclasses.replace(
+        _fake_ports(_Git(), [runner.AdvisorStage("x", stage, uses_model=False)]),
+        announce=lines.append,
+    )
+    runner.run_due_jobs(
+        root,
+        unattended=config.read_config(root).unattended,
+        stop=StopToken(),
+        ports=ports,
+        maintenance_due=True,
+    )
+
+    assert "a cap bound" in lines
+
+
+def test_the_relations_and_revisions_stages_wire_their_observers_to_notify(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.application import revisions
+    from openkos.application import suggest_relations_service as relations_service
+
+    def fake_relations(
+        root_arg: Path, request: object, ports: object, observer: Any
+    ) -> None:
+        observer.candidate_notices("relations cap", None)
+        raise RuntimeError("stop here")
+
+    def fake_revisions(
+        root_arg: Path, request: object, ports: object, observer: Any
+    ) -> None:
+        observer.truncation_notice("revisions cap")
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(relations_service, "suggest_relations", fake_relations)
+    monkeypatch.setattr(revisions, "run_revisions", fake_revisions)
+    seen: list[str] = []
+
+    for stage in (daemon_module._relations_stage, daemon_module._revisions_stage):
+        with pytest.raises(RuntimeError, match="stop here"):
+            stage(_stage_ctx(root, seen))
+
+    assert seen == ["suggest-relations: relations cap", "revisions: revisions cap"]

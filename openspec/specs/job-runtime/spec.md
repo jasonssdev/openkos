@@ -149,6 +149,28 @@ start never looks like a crash.
 - WHEN the process has exited
 - THEN the daemon log holds an end line after its start line
 
+### Requirement: A Maintenance Stage Discloses A Candidate Cap That Bound
+
+When an advisor stage's candidate list was truncated by its per-run cap
+(duplicate groups, candidate edges, decision-revision pairs, contradiction
+pairs), the maintenance pass MUST NOT swallow the notice the same verb prints
+when a person runs it: the stage MUST log the notice and pass it to the
+runner's `announce` port, prefixed with the stage name. A stage whose cap did
+not bind MUST say nothing. The notice is advisory; it never changes a job's
+outcome.
+
+#### Scenario: A capped identity list is named
+
+- GIVEN more duplicate candidate groups than the per-run cap
+- WHEN the identity stage of a maintenance pass runs
+- THEN the log and the announce port carry `identity: note: 50 of N candidate group(s) shown (cap reached)`
+
+#### Scenario: An uncapped stage is silent
+
+- GIVEN a duplicate scan whose cap did not bind
+- WHEN the identity stage runs
+- THEN nothing is announced about a cap
+
 ### Requirement: SIGTERM And SIGINT Stop The Daemon Cooperatively
 
 On SIGTERM or SIGINT the daemon MUST set a stop flag and MUST NOT start a

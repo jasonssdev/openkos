@@ -579,3 +579,64 @@ def test_a_refused_refresh_never_fails_the_import(env: _Env) -> None:
     assert result is not None
     assert result.outcome == "completed"
     assert any("derived" in n for n in env.notices)
+
+
+def _forget_observations(env: _Env) -> None:
+    """Simulate files ingested before the watch ever observed them (a manual
+    `ingest`, or a lost `jobs.db`): every settled file is a candidate again."""
+    conn = jobs.open_jobs(config.WorkspaceLayout(env.root).jobs_db_path)
+    try:
+        jobs.forget_observations(conn, [o.path for o in jobs.observations(conn)])
+    finally:
+        conn.close()
+
+
+def test_unchanged_files_do_not_spend_the_source_budget(env: _Env) -> None:
+    _settled_drop(env, "a.md", "b.md", "c.md")
+    assert env.job() is not None
+    _forget_observations(env)
+    env.drop("z.md", "A brand new note.\n")
+    env.job(max_sources_per_pass=2)  # starts the clocks
+    env.settle()
+    calls = env.model.calls
+
+    result = env.job(max_sources_per_pass=2)
+
+    assert result is not None
+    assert (result.outcome, result.units_deferred) == ("completed", 0)
+    assert "z.md" in env.raw()
+    assert env.model.calls > calls  # only the new file reached the model
+    assert env.observation("z.md").outcome == watch.IMPORTED
+
+
+def test_the_source_budget_still_bounds_real_imports(env: _Env) -> None:
+    _settled_drop(env, "a.md")
+    env.job()
+    _forget_observations(env)
+    env.drop("y.md", "First new note.\n")
+    env.drop("z.md", "Second new note.\n")
+    env.job(max_sources_per_pass=1)
+    env.settle()
+
+    result = env.job(max_sources_per_pass=1)
+
+    assert result is not None
+    assert (result.outcome, result.detail_code) == (
+        "budget_exhausted",
+        "max_sources_per_pass",
+    )
+    assert result.units_deferred == 1
+
+
+def test_a_job_of_only_unchanged_files_refreshes_nothing(env: _Env) -> None:
+    _settled_drop(env, "a.md")
+    assert env.job() is not None  # imports it
+    _forget_observations(env)
+    env.job()  # observes it again
+    env.settle()
+    refreshes = len(env.refreshes)
+
+    result = env.job()
+
+    assert result is not None
+    assert len(env.refreshes) == refreshes

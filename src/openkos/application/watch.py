@@ -14,7 +14,9 @@ whose stat is unchanged since it was handled is neither re-read nor re-hashed.
 
 **Import.** A candidate is admitted under `max_sources_per_pass` and the call
 budget (by estimate, whole), then goes through `ingest_source` with the
-runner's policy. Its commit section re-hashes the file under the lock and
+runner's policy. A file the ingest finds unchanged (nothing written, no model
+call) gives its source slot back, so a backlog of already-imported files never
+starves a new one (#1265). Its commit section re-hashes the file under the lock and
 refuses to proceed when the bytes differ from the digest that was admitted:
 nothing is written and the file is deferred, so a save that lands after the
 quiet window is never imported half-seen.
@@ -580,6 +582,12 @@ def _run_candidates(
             _record(conn, cand, digest=digest, outcome=IMPORTED)
             tally.done += 1
             tally.imported += 1
+            if isinstance(outcome, svc.IngestUnchanged):
+                # Nothing was written and no model was contacted (#773's
+                # convergence short-circuit): it is not an import, so it must
+                # not use up the pass's source budget (#1265).
+                admitted -= 1
+                tally.imported -= 1
         if refusal is not None and not _file_refusal(
             conn,
             queue,
