@@ -463,3 +463,37 @@ def test_rows_are_returned_in_alphabetical_id_order(tmp_path: Path) -> None:
         "concepts/zebra",
         "people/jane",
     ]
+
+
+def test_status_marks_provenance_orphans_and_matches_the_shared_predicate(
+    tmp_path: Path,
+) -> None:
+    """`list` replicates the predicate for one-walk; parity with
+    `lifecycle.deprecated_concept_ids` on one shared fixture."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "sources" / "v1.md", type_="Source")
+    _write_doc(
+        bundle_dir / "sources" / "v2.md",
+        type_="Source",
+        relations=[("sources/v1", "supersedes")],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "sole.md",
+        extra_lines=["provenance:", "  - sources/v1"],
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "shared.md",
+        extra_lines=["provenance:", "  - sources/v1", "  - sources/v2"],
+    )
+    _write_doc(bundle_dir / "concepts" / "hand.md")
+    _write_doc(
+        bundle_dir / "insights" / "i.md",
+        type_="Insight",
+        extra_lines=["provenance:", "  - concepts/sole"],
+    )
+
+    rows = listing.list_objects(bundle_dir)
+
+    listed = {r.concept_id for r in rows if r.status == "deprecated"}
+    assert listed == {"sources/v1", "concepts/sole", "insights/i"}
+    assert listed == set(lifecycle.deprecated_concept_ids(bundle_dir))

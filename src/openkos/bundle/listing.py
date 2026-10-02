@@ -12,7 +12,8 @@ for every row in a single pass -- no second walk, and no call to
 `Source` -- reusing it would make `list sources` work while `list Source`
 failed).
 
-Canonical layer: imports only `model.okf` + `model.types` + stdlib, the same
+Canonical layer: imports only `model.okf` + `model.types` + the pure
+`lifecycle.provenance_orphans` predicate + stdlib, the same
 import shape `bundle/index.py`, `bundle/merge.py`, and `bundle/relations.py`
 already use (AGENTS.md layering -- the canonical layer never depends on the
 derived layer: `retrieval`, `graph`, `memory`, `resolution`).
@@ -21,6 +22,7 @@ derived layer: `retrieval`, `graph`, `memory`, `resolution`).
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from openkos import lifecycle
 from openkos.model import okf
 from openkos.model.types import REGISTRY
 
@@ -96,6 +98,7 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
     own_status: dict[str, str] = {}
     rows_without_status: dict[str, BundleObject] = {}
     supersedes: set[tuple[str, str]] = set()
+    provenance_by_id: dict[str, frozenset[str]] = {}
 
     for scan in okf._iter_docs(bundle_dir):
         # This comment used to defer extracting a shared `okf.concept_id_for`
@@ -137,6 +140,10 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
             readable=True,
         )
 
+        provenance = lifecycle.provenance_ids(meta)
+        if provenance is not None:
+            provenance_by_id[concept_id] = provenance
+
         try:
             relations = okf.decode_relations(meta)
         except ValueError:
@@ -146,6 +153,10 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
                 supersedes.add((concept_id, relation.target))
 
     superseded = {target for _source, target in supersedes}
+    # Provenance orphans of a superseded Source: the SAME pure function
+    # `lifecycle.deprecated_concept_ids` calls, over data this walk already
+    # holds, so the two cannot drift and `list` stays one walk.
+    orphans = lifecycle.provenance_orphans(provenance_by_id, superseded)
 
     # Sorted by CONCEPT ID, not by the walk's insertion order (#389).
     # `okf._iter_docs` walks `sorted(rglob(...))`, which is alphabetical
@@ -162,6 +173,7 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
                     "deprecated"
                     if own_status.get(concept_id) == "deprecated"
                     or concept_id in superseded
+                    or concept_id in orphans
                     else "stable"
                 ),
             )

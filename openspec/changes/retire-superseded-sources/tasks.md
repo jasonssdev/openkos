@@ -20,7 +20,7 @@ written against its shape.
       existing walk and folds the orphans in; tests over a real bundle
       including `unrelate` restoring liveness with no file written, and an
       unreadable document failing safe (no hide, no crash). (`lint`)
-- [ ] 1.3 `bundle/listing.list_objects` calls the same pure function over the
+- [x] 1.3 `bundle/listing.list_objects` calls the same pure function over the
       data it already holds (still one walk); parity test asserting `list`
       `deprecated` rows equal `deprecated_concept_ids` on one shared
       fixture. (`cli`)
