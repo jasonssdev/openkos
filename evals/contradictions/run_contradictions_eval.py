@@ -66,6 +66,7 @@ from contradiction_fixtures import (  # noqa: E402
     MERGED_CASES,
     MERGED_COMPATIBLE_PROBES,
     MERGED_CONTRADICTION,
+    MERGED_FIELD_SHAPE_PROBES,
     PAIRS,
     LabelledPair,
     MergedCase,
@@ -281,6 +282,57 @@ def _self_test() -> int:
         <= {*MERGED_COMPATIBLE_PROBES, MERGED_CONTRADICTION},
         True,
     )
+    # #1223 field shapes: pooled over exactly the two field-shape probes,
+    # ignoring the other classes; absent classes read (0, 0).
+    check(
+        "field_shape_wrong pools only the field-shape probes",
+        field_shape_wrong(
+            {
+                "merged-scope-guidance": (3, 10),
+                "merged-narrower-use": (1, 5),
+                "merged-identical": (9, 9),
+            }
+        ),
+        (4, 15),
+    )
+    check("field_shape_wrong on no data", field_shape_wrong({}), (0, 0))
+    # Two cases of ONE probe class: the per-case count must not pool them.
+    same_class = (
+        MergedCase("s1", "S", "a", "x1", "X", "b", "consistent", "merged-identical"),
+        MergedCase("s3", "S", "a", "x3", "X", "b", "consistent", "merged-identical"),
+    )
+    check(
+        "per_case_wrong isolates one case across runs",
+        [
+            (c.survivor_id, w)
+            for c, w in per_case_wrong(
+                same_class,
+                [
+                    {("s1", "x1"): ("contradicts", 0.9), ("s3", "x3"): ("x", 0.0)},
+                    {("s1", "x1"): ("consistent", 0.9), ("s3", "x3"): ("x", 0.0)},
+                ],
+            )
+        ],
+        [("s1", 1), ("s3", 2)],
+    )
+    check(
+        "fixture exposes both #1223 field shapes with >= 5 cases each",
+        all(
+            sum(1 for c in MERGED_CASES if c.probe == probe) >= 5
+            for probe in MERGED_FIELD_SHAPE_PROBES
+        ),
+        True,
+    )
+    check(
+        "every field-shape case expects consistent",
+        {c.expected for c in MERGED_CASES if c.probe in MERGED_FIELD_SHAPE_PROBES},
+        {"consistent"},
+    )
+    check(
+        "at least 4 merged-contradiction guards survive in the fixture",
+        sum(1 for c in MERGED_CASES if c.probe == MERGED_CONTRADICTION) >= 4,
+        True,
+    )
     check(
         "merged compatible cases outnumber nothing less than 8",
         sum(1 for c in MERGED_CASES if c.probe in MERGED_COMPATIBLE_PROBES) >= 8,
@@ -339,6 +391,28 @@ def score_merged(
             if verdict != case.expected:
                 wrong[case.probe] += 1
     return {probe: (wrong[probe], total[probe]) for probe in total}
+
+
+def field_shape_wrong(scores: dict[str, tuple[int, int]]) -> tuple[int, int]:
+    """`(wrong, n)` pooled over the #1223 field-shape probes
+    (`MERGED_FIELD_SHAPE_PROBES`) -- the pre-registered primary metric. A
+    class absent from `scores` contributes `(0, 0)`, so a partial run reads as
+    "no data" and the caller prints `n of TOTAL` rather than a bare rate."""
+    return (
+        sum(scores.get(p, (0, 0))[0] for p in MERGED_FIELD_SHAPE_PROBES),
+        sum(scores.get(p, (0, 0))[1] for p in MERGED_FIELD_SHAPE_PROBES),
+    )
+
+
+def per_case_wrong(
+    cases: tuple[MergedCase, ...],
+    runs: list[dict[tuple[str, str], tuple[str, float]]],
+) -> list[tuple[MergedCase, int]]:
+    """`(case, wrong cells over runs)` for every case, so one persistently
+    failing case is visible instead of averaged into its class."""
+    return [
+        (case, score_merged((case,), runs).get(case.probe, (0, 0))[0]) for case in cases
+    ]
 
 
 def main() -> int:
@@ -458,6 +532,7 @@ def main() -> int:
     )
     merged_fp_n = sum(merged_scores.get(p, (0, 0))[1] for p in MERGED_COMPATIBLE_PROBES)
     merged_tp_wrong, merged_tp_n = merged_scores.get(MERGED_CONTRADICTION, (0, 0))
+    fs_wrong, fs_n = field_shape_wrong(merged_scores)
     ec_raw = _rate(class_raw_contradicts, ("evaluative-contradiction",), class_totals)
     ec_hc = _rate(class_hc_contradicts, ("evaluative-contradiction",), class_totals)
 
@@ -546,6 +621,8 @@ def main() -> int:
         f"| evaluative-contradiction retention, raw contradicts | {ec_raw:.2f} |",
         f"| **merged-content compatible FP (wrong verdicts), n of TOTAL** | "
         f"**{merged_fp_wrong} of {merged_fp_n}** |",
+        f"| **#1223 field shapes (scope-guidance + narrower-use), wrong, n of "
+        f"TOTAL** | **{fs_wrong} of {fs_n}** |",
         f"| merged-content contradiction missed, n of TOTAL | "
         f"{merged_tp_wrong} of {merged_tp_n} |",
         f"| evaluative-contradiction retention, high-confidence | {ec_hc:.2f} |",
@@ -561,6 +638,14 @@ def main() -> int:
         *[
             f"- `{probe}`: {wrong} of {n}"
             for probe, (wrong, n) in sorted(merged_scores.items())
+        ],
+        "",
+        f"## Merged-content cases, wrong verdicts per case (of {args.runs} runs)",
+        "",
+        *[
+            f"- `{case.survivor_id}` ({case.probe}, expected "
+            f"`{case.expected}`): {wrong} of {args.runs}"
+            for case, wrong in per_case_wrong(MERGED_CASES, merged_observed)
         ],
         "",
         "## Per pair",

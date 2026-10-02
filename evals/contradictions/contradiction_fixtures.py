@@ -578,8 +578,25 @@ MERGED_COMPLEMENTARY = "merged-complementary"
 MERGED_IDENTICAL = "merged-identical"
 MERGED_LONG = "merged-long"
 MERGED_CONTRADICTION = "merged-contradiction"
-MERGED_COMPATIBLE_PROBES = (MERGED_COMPLEMENTARY, MERGED_IDENTICAL, MERGED_LONG)
+MERGED_SCOPE_GUIDANCE = "merged-scope-guidance"
+MERGED_NARROWER_USE = "merged-narrower-use"
+MERGED_COMPATIBLE_PROBES = (
+    MERGED_COMPLEMENTARY,
+    MERGED_IDENTICAL,
+    MERGED_LONG,
+    MERGED_SCOPE_GUIDANCE,
+    MERGED_NARROWER_USE,
+)
 """Probe classes whose expected verdict is `consistent` (the FP classes)."""
+
+MERGED_FIELD_SHAPE_PROBES = (MERGED_SCOPE_GUIDANCE, MERGED_NARROWER_USE)
+"""The two classes added after the third #1223 occurrence (0.4.0 E2E): a
+definitional sentence paired with (a) a sentence saying where task-specific
+guidance BELONGS instead of in the defined thing (`merged-scope-guidance`), or
+(b) a sentence naming a narrower use of the same thing
+(`merged-narrower-use`). The first two #1223 attempts had no case of either
+shape, so a 0-of-120 baseline there said nothing about them. Reported apart as
+the pre-registered primary metric."""
 
 
 @dataclass(frozen=True)
@@ -784,6 +801,154 @@ MERGED_CASES: tuple[MergedCase, ...] = (
         "Compresión de lecturas",
         "La compresión aumentó la latencia de lectura de forma notable y se "
         "considera un fracaso del trimestre.",
+        "contradicts",
+        MERGED_CONTRADICTION,
+    ),
+    # -- merged-scope-guidance: a definition vs "this belongs elsewhere" ------
+    MergedCase(
+        "concepts/claude-md",
+        "CLAUDE.md",
+        "CLAUDE.md is a Markdown file used in Claude Code to provide "
+        "persistent memory and context for a project.",
+        "concepts/claude-md-3",
+        "CLAUDE.md",
+        "A skill is loaded only when relevant, so long or task-specific "
+        "guidance belongs in a skill rather than in CLAUDE.md.",
+        "consistent",
+        MERGED_SCOPE_GUIDANCE,
+    ),
+    MergedCase(
+        "concepts/makefile",
+        "Makefile",
+        "A Makefile is a file that lists build targets and the commands "
+        "that produce them.",
+        "concepts/makefile-2",
+        "Makefile",
+        "Long shell logic belongs in a separate script that the Makefile "
+        "calls, rather than inside the Makefile itself.",
+        "consistent",
+        MERGED_SCOPE_GUIDANCE,
+    ),
+    MergedCase(
+        "concepts/archivo-env",
+        "Archivo .env",
+        "El archivo .env guarda las variables de entorno de un proyecto "
+        "para el entorno local de desarrollo.",
+        "concepts/archivo-env-2",
+        "Archivo .env",
+        "Los secretos de producción se guardan en un gestor de secretos, "
+        "no en el archivo .env.",
+        "consistent",
+        MERGED_SCOPE_GUIDANCE,
+    ),
+    MergedCase(
+        "concepts/readme",
+        "README",
+        "The README is the first file a visitor reads; it explains what the "
+        "project does and how to install it.",
+        "concepts/readme-2",
+        "README",
+        "Detailed API reference belongs on the documentation site, so the "
+        "README only links to it.",
+        "consistent",
+        MERGED_SCOPE_GUIDANCE,
+    ),
+    MergedCase(
+        "concepts/changelog",
+        "Changelog",
+        "Un changelog registra los cambios visibles de cada versión de un producto.",
+        "concepts/changelog-3",
+        "Changelog",
+        "Las decisiones de diseño extensas se documentan en un registro de "
+        "decisiones y no en el changelog.",
+        "consistent",
+        MERGED_SCOPE_GUIDANCE,
+        prior_absorbed=(
+            (
+                "concepts/changelog-2",
+                "El changelog se organiza por versión, con la más reciente "
+                "al principio.",
+            ),
+        ),
+    ),
+    # -- merged-narrower-use: a definition vs a narrower use of the same thing
+    MergedCase(
+        "entities/claude-md",
+        "CLAUDE.md",
+        "A Markdown file used in Claude Code to provide persistent memory "
+        "and context for a project.",
+        "entities/claude-md-2",
+        "CLAUDE.md",
+        "A file where Claude saves solutions to problems.",
+        "consistent",
+        MERGED_NARROWER_USE,
+    ),
+    MergedCase(
+        "concepts/cache",
+        "Cache",
+        "A cache stores recently computed results so that later requests "
+        "are answered faster.",
+        "concepts/cache-2",
+        "Cache",
+        "The cache is where the thumbnail service keeps its resized images.",
+        "consistent",
+        MERGED_NARROWER_USE,
+    ),
+    MergedCase(
+        "concepts/bitacora",
+        "Bitácora del sistema",
+        "La bitácora del sistema registra eventos para facilitar el "
+        "diagnóstico de fallos.",
+        "concepts/bitacora-2",
+        "Bitácora del sistema",
+        "La bitácora es el lugar donde el servicio de pagos anota los "
+        "reintentos fallidos.",
+        "consistent",
+        MERGED_NARROWER_USE,
+    ),
+    MergedCase(
+        "concepts/cola-trabajo",
+        "Cola de trabajo",
+        "A work queue holds items until a worker is free to take them.",
+        "concepts/cola-trabajo-2",
+        "Cola de trabajo",
+        "The queue is where the email service parks messages that are "
+        "waiting to be sent.",
+        "consistent",
+        MERGED_NARROWER_USE,
+    ),
+    MergedCase(
+        "concepts/tablero-kanban",
+        "Tablero kanban",
+        "Un tablero kanban muestra el estado de las tareas de un equipo en columnas.",
+        "concepts/tablero-kanban-2",
+        "Tablero kanban",
+        "El tablero es donde el equipo de soporte coloca las solicitudes "
+        "que están por atender.",
+        "consistent",
+        MERGED_NARROWER_USE,
+    ),
+    # -- merged-contradiction guards in the SAME two shapes ------------------
+    MergedCase(
+        "concepts/makefile-logic",
+        "Makefile logic",
+        "Long shell logic belongs in a separate script that the Makefile "
+        "calls, never inside the Makefile itself.",
+        "concepts/makefile-logic-2",
+        "Makefile logic",
+        "Long shell logic belongs inside the Makefile recipes; separate "
+        "scripts are not used for it.",
+        "contradicts",
+        MERGED_CONTRADICTION,
+    ),
+    MergedCase(
+        "concepts/cache-lectura",
+        "Caché de lectura",
+        "La caché es de solo lectura: el servicio de miniaturas nunca escribe en ella.",
+        "concepts/cache-lectura-2",
+        "Caché de lectura",
+        "El servicio de miniaturas escribe en la caché las imágenes "
+        "redimensionadas cada vez que procesa una.",
         "contradicts",
         MERGED_CONTRADICTION,
     ),

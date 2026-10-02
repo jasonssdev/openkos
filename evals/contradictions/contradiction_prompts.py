@@ -45,9 +45,29 @@ if _BENEFIT_LIMITATION_SENTENCE not in _SHIPPED:  # pragma: no cover - drift gua
         "arm was measured with production carrying exactly this text."
     )
 
-TREATMENT_SYSTEM_PROMPT = _SHIPPED
-"""Equal to production since #870's adoption -- the convention this module
-states above: the stored `--arm treatment` runs were measured on
-pre-adoption production plus the sentence, which is byte-for-byte today's
-production, so the stored arm stays reproducible. The next candidate
-edits this file again."""
+_NARROWER_STATEMENT_SENTENCE = (
+    "A narrower statement -- one particular use of the subject, or where "
+    "related guidance belongs -- is consistent with a broader definition "
+    "unless it would make that definition false. "
+)
+"""#1223's candidate: the third field occurrence paired a definition with
+(a) "task-specific guidance belongs in a skill rather than in <the thing>"
+and (b) "a file where <the tool> saves solutions" -- a scope remark and a
+narrower use, neither of which makes the definition false. The baseline
+judged both `contradicts` at 0.95 on 15 of 15 runs.
+
+REFUTED (README, "Third attempt"): with this sentence the pooled field-shape
+wrong count went 44 of 150 -> 43 of 150, and both verbatim field pairs stayed
+15 of 15 wrong. It is NOT in production and is kept here only so
+`--arm treatment` reproduces the stored arm."""
+
+_ANCHOR = "never on opposite tone toward one subject. "
+if _ANCHOR not in _SHIPPED:  # pragma: no cover - drift guard
+    raise RuntimeError("the #1223 candidate's insertion anchor drifted")
+
+TREATMENT_SYSTEM_PROMPT = _SHIPPED.replace(
+    _ANCHOR, _ANCHOR + _NARROWER_STATEMENT_SENTENCE, 1
+)
+"""The REFUTED #1223 candidate: production plus ONE sentence after the tone
+sentence, nothing else moved. It differs from production on purpose -- the
+stored `--arm treatment` run of 2026-10-02 measured exactly this text."""
