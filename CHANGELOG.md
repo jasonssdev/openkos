@@ -63,6 +63,19 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   Piped output is byte-identical to before; `next`, `pending` and `list` are
   unchanged.
 
+- **The lifecycle verbs follow the terminal-gated output convention**
+  ([#1235](https://github.com/jasonssdev/openkos/issues/1235),
+  [ADR-0042](docs/adr/0042-human-readable-cli-output-is-a-tty-gated-convention.md)).
+  `relate`, `unrelate`, `set-sensitivity`, `set-volatility`, `merge`,
+  `unmerge`, `reconcile`, `forget` and `purge` now separate the preview from
+  the result with a blank line on a terminal, prefix their advisory notices
+  with `note:` / `warning:`, and wrap long warnings and rationales; a pipe
+  sees the same text as before. The result line changed everywhere: after
+  you confirm a `relate`, `unrelate`, `merge`, `unmerge` or `forget`, it names the
+  concept ids instead of repeating the `bundle/...md` paths the preview
+  already listed, and `forget --scope source` reports `removed N concept(s)`
+  without the path list. Stdout data, `--json` and exit codes are unchanged.
+
 - **The transitional temp-directory workspace lock is no longer taken.** 0.3.1
   moved the lock to the per-user state directory and, for that one release,
   also took the old lock under the OS temp directory so an older `openkos`

@@ -23,6 +23,14 @@ NoticeKind = Literal["note", "warning"]
 
 _FALLBACK_WIDTH = 80
 
+_SEVERITY_MARKERS = (
+    "WARNING -- ",
+    "warning -- ",
+    "Warning: ",
+    "note -- ",
+    "notice -- ",
+)
+
 
 def is_tty(*, err: bool = False) -> bool:
     """True when the chosen stream (stderr if `err`, else stdout) is a terminal."""
@@ -63,16 +71,24 @@ def notice(message: str, *, kind: NoticeKind = "note", verb: str | None = None) 
 
     Not a terminal: `message` verbatim (it keeps the `openkos <verb>:` lead
     callers have always written, so a pipe sees the same text). A terminal:
-    that lead is replaced by a `note:` / `warning:` prefix and the line is
-    wrapped under a hanging indent."""
+    that lead (and a legacy `WARNING -- ` / `note -- ` marker after it) is
+    replaced by a `note:` / `warning:` prefix and the line is wrapped under
+    a hanging indent."""
     if not is_tty(err=True):
         typer.echo(message, err=True)
         return
     body = message
-    if verb is not None:
-        lead = f"openkos {verb}: "
+    leads = ("openkos: ",) if verb is None else (f"openkos {verb}: ", "openkos: ")
+    for lead in leads:
         if body.startswith(lead):
             body = body[len(lead) :]
+            break
+    # The legacy text carries its own severity word after the lead; the
+    # `note:` / `warning:` prefix replaces it rather than doubling it.
+    for marker in _SEVERITY_MARKERS:
+        if body.startswith(marker):
+            body = body[len(marker) :]
+            break
     prefix = f"{kind}:"
     lines = textwrap.fill(
         f"{prefix} {body}",

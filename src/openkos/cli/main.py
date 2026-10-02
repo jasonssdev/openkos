@@ -1785,19 +1785,14 @@ def _advisory(verb: str, message: str) -> None:
     """One advisory line on stderr under the ADR-0042 convention.
 
     `message` is the piped text, `openkos <verb>: [WARNING -- |warning -- |note -- ]body`.
-    Piped it is written verbatim. On a terminal the lead and the inline
-    marker give way to a `warning:` / `note:` prefix, wrapped by
-    `output.notice`."""
-    lead = f"openkos {verb}: "
-    body = message[len(lead) :] if message.startswith(lead) else message
-    kind: output.NoticeKind = "note"
-    if body.startswith(("WARNING -- ", "warning -- ")):
-        body, kind = body[len("WARNING -- ") :], "warning"
-    elif body.startswith("note -- "):
-        body = body[len("note -- ") :]
-    output.notice(
-        f"{lead}{body}" if output.is_tty(err=True) else message, kind=kind, verb=verb
+    The severity comes from the inline marker; `output.notice` writes the
+    message verbatim when piped and, on a terminal, swaps the lead and the
+    marker for a `warning:` / `note:` prefix."""
+    body = message.removeprefix(f"openkos {verb}: ")
+    kind: output.NoticeKind = (
+        "warning" if body.startswith(("WARNING -- ", "warning -- ")) else "note"
     )
+    output.notice(message, kind=kind, verb=verb)
 
 
 def _plural(n: int) -> str:
@@ -2218,17 +2213,18 @@ def _apply_reconciliation(
         return prepared
     prepared, failure = _reconcile_merged_survivor(root, prepared)
     if isinstance(failure, _SensitivitySkip):
-        typer.echo(
+        output.notice(
             f"openkos {verb}: skipped body reconciliation -- "
             f"{failure.concept_id} is confidential and the backend is not "
             "local; the stacked body was kept.",
-            err=True,
+            verb=verb,
         )
     elif failure is not None:
-        typer.echo(
+        output.notice(
             f"openkos {verb}: notice -- reconciliation failed ({failure}); "
             "kept the stacked body.",
-            err=True,
+            kind="warning",
+            verb=verb,
         )
     return prepared
 
@@ -5323,6 +5319,7 @@ def forget(
         )
         raise typer.Exit(code=1) from exc
 
+    output.section_break()
     typer.echo("openkos forget: proposed changes:")
     if plan.total_removed >= 1:
         typer.echo(f"  ~ {index_path.name} (remove entry)")
@@ -5579,17 +5576,16 @@ def forget(
             typer.echo(message, err=True)
             raise typer.Exit(code=1) from exc
 
+        output.section_break()
         if scope == "source":
-            deleted_paths = ", ".join(
-                f"bundle/{member}.md" for member in plan.purge_ids
-            )
+            # The preview listed every path; the result is the summary.
             typer.echo(
                 f"openkos forget: removed {len(plan.purge_ids)} concept(s) "
-                f"({deleted_paths}) ({index_path.name}, {log_path.name} updated)."
+                f"({index_path.name}, {log_path.name} updated)."
             )
         else:
             typer.echo(
-                f"openkos forget: removed 'bundle/{canonical_id}.md' "
+                f"openkos forget: removed '{canonical_id}' "
                 f"({index_path.name}, {log_path.name} updated)."
             )
 
@@ -6125,6 +6121,7 @@ def purge(
     # Slice 2 removes the (now-obsolete) mandatory residual-leak warning:
     # the history content-scrub below means no residual is left to warn
     # about.
+    output.section_break()
     typer.echo("openkos purge: proposed IRREVERSIBLE history rewrite:")
     for target in plan.disclosure.expunge_targets:
         typer.echo(f"  - {target}")
@@ -6318,10 +6315,11 @@ def purge(
     # a large history -- print an explicit "do not interrupt" line FIRST,
     # so an operator who sees no output does not mistake it for a hang and
     # Ctrl-C into the catastrophic mid-rewrite state.
-    typer.echo(
+    output.notice(
         "openkos purge: beginning the irreversible history rewrite now -- "
         "do not interrupt.",
-        err=True,
+        kind="warning",
+        verb="purge",
     )
     try:
         vcs_git.expunge_paths(
@@ -6388,11 +6386,12 @@ def purge(
         try:
             fsio.write_atomic(target_path, withdrawal.new_text)
         except OSError:
-            typer.echo(
+            output.notice(
                 f"openkos purge: WARNING -- failed to withdraw the "
                 f"deprecated-status export of '{withdrawal.target}'; run "
                 "`openkos repair` to fix it.",
-                err=True,
+                kind="warning",
+                verb="purge",
             )
             continue
         status_touched.append(target_path)
@@ -6439,6 +6438,8 @@ def purge(
                 commit_message += f" (+{len(plan.purge_ids) - 1})"
             _autocommit(root, commit_paths_rel, commit_message)
 
+        # No section_break here: the preview already ends with a blank line
+        # on every stream, which is the section separator.
         if scope == "source":
             typer.echo(
                 f"openkos purge: permanently expunged {len(plan.purge_ids)} "
@@ -6613,7 +6614,7 @@ def relate(
         raise typer.Exit(code=1) from exc
     rel_note = relation_type_note(rel_type)
     if rel_note is not None:
-        typer.echo(rel_note, err=True)
+        output.notice(rel_note, verb="relate")
 
     now = datetime.now(UTC)
 
@@ -6634,6 +6635,7 @@ def relate(
         )
         raise typer.Exit(code=1) from exc
 
+    output.section_break()
     typer.echo("openkos relate: proposed changes:")
     if prepared.already_present:
         preview_line = (
@@ -6697,10 +6699,11 @@ def relate(
             )
             raise typer.Exit(code=1) from exc
 
+        output.section_break()
         typer.echo(
             f"openkos relate: added a {prepared.rel_type!r} relation from "
-            f"'bundle/{prepared.source_canonical}.md' to "
-            f"'bundle/{prepared.target_canonical}.md' ({log_path.name} updated)."
+            f"'{prepared.source_canonical}' to "
+            f"'{prepared.target_canonical}' ({log_path.name} updated)."
         )
 
         commit_paths = [f"bundle/{prepared.source_canonical}.md", "bundle/log.md"]
@@ -6795,6 +6798,7 @@ def unrelate(
         typer.echo(f"openkos unrelate: refusing to unrelate -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    output.section_break()
     typer.echo("openkos unrelate: proposed changes:")
     typer.echo(
         f"  ~ bundle/{prepared.source_canonical}.md (relations: "
@@ -6837,10 +6841,11 @@ def unrelate(
             )
             raise typer.Exit(code=1) from exc
 
+        output.section_break()
         typer.echo(
             f"openkos unrelate: removed the {prepared.rel_type!r} relation from "
-            f"'bundle/{prepared.source_canonical}.md' to "
-            f"'bundle/{prepared.target_canonical}.md' ({log_path.name} updated)."
+            f"'{prepared.source_canonical}' to "
+            f"'{prepared.target_canonical}' ({log_path.name} updated)."
         )
 
         commit_paths = [f"bundle/{prepared.source_canonical}.md", "bundle/log.md"]
@@ -7094,11 +7099,12 @@ def set_sensitivity_cmd(
                 known_extra_ids={canonical_id},
                 root_ids={canonical_id},
             ):
-                typer.echo(
+                output.notice(
                     "openkos set-sensitivity: WARNING -- "
                     f"{member_id!r} cites unresolvable provenance "
                     f"{entry_id!r}; excluded from propagation.",
-                    err=True,
+                    kind="warning",
+                    verb="set-sensitivity",
                 )
 
             descendant_raises = bundle_provenance.resolve_source_raises(
@@ -7142,6 +7148,7 @@ def set_sensitivity_cmd(
         "lower": "lowering",
         "same": "normalizing",
     }[direction]
+    output.section_break()
     typer.echo("openkos set-sensitivity: proposed changes:")
     typer.echo(
         f"  ~ bundle/{canonical_id}.md (sensitivity: {direction_word} "
@@ -7262,6 +7269,7 @@ def set_sensitivity_cmd(
             )
             raise typer.Exit(code=1) from exc
 
+        output.section_break()
         if descendant_raises:
             propagated = ", ".join(
                 f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
@@ -7306,13 +7314,14 @@ def set_sensitivity_cmd(
                     )
                 else:
                     lever = f"raise each Source: {named}"
-                typer.echo(
+                output.echo_wrapped(
                     f"openkos set-sensitivity: note -- '{canonical_id}' was "
                     f"derived from {named}; raising it does not contain content "
                     "its source(s) replicated into sibling objects. To contain "
                     f"everything derived from them, {lever}. For every Source "
                     "that reaches this object, including through intermediate "
-                    f"objects: openkos list --sources {canonical_id}."
+                    f"objects: openkos list --sources {canonical_id}.",
+                    hanging="  ",
                 )
 
         _autocommit(
@@ -8481,6 +8490,7 @@ def set_volatility_cmd(
         typer.echo(f"openkos set-volatility: refusing to set -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    output.section_break()
     typer.echo("openkos set-volatility: proposed changes:")
     typer.echo(f"  {concept_type}: {old_tier} -> {tier}")
 
@@ -8512,6 +8522,7 @@ def set_volatility_cmd(
             )
             raise typer.Exit(code=1) from exc
 
+        output.section_break()
         typer.echo(
             f"openkos set-volatility: set {concept_type} -> {tier} in "
             f"{layout.config_path.name}."
@@ -8628,6 +8639,7 @@ class _CliMergeObserver(merge_service.MergeObserver):
         prepared = preview.prepared
         survivor_canonical = prepared.survivor_canonical
         absorbed_canonical = prepared.absorbed_canonical
+        output.section_break()
         typer.echo("openkos merge: proposed changes:")
         typer.echo(
             f"  ~ sensitivity: {prepared.sensitivity_before} -> "
@@ -8677,9 +8689,10 @@ class _CliMergeObserver(merge_service.MergeObserver):
             typer.echo(_cross_type_walk_note(preview.cross_type_concern))
 
     def merged(self, summary: merge_service.MergeSummary) -> None:
+        output.section_break()
         typer.echo(
-            f"openkos merge: merged 'bundle/{summary.absorbed_canonical}.md' into "
-            f"'bundle/{summary.survivor_canonical}.md' "
+            f"openkos merge: merged '{summary.absorbed_canonical}' into "
+            f"'{summary.survivor_canonical}' "
             f"({summary.index_name}, {summary.log_name} updated)."
         )
 
@@ -8899,6 +8912,7 @@ class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
         plan = prepared.plan
         survivor_canonical = preview.survivor_canonical
         absorbed_canonical = preview.absorbed_canonical
+        output.section_break()
         typer.echo("openkos unmerge: proposed changes:")
         for rel in prepared.rewritten_files:
             typer.echo(f"  ~ bundle/{rel} (reverse inbound link rewrite)")
@@ -8935,33 +8949,38 @@ class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
             f"  + bundle/{absorbed_canonical}.md (restore{absorbed_status_suffix})"
         )
         if prepared.catalog_log_drifted:
-            typer.echo(
+            output.echo_wrapped(
                 "Warning: index.md/log.md changed since the merge; unmerge "
-                "restores the pre-merge snapshot and will discard those changes."
+                "restores the pre-merge snapshot and will discard those changes.",
+                hanging="  ",
             )
         if prepared.survivor_drift_unverifiable:
-            typer.echo(
+            output.echo_wrapped(
                 f"Warning: {survivor_canonical!r}'s merge ledger entry predates "
                 "the survivor-edit check (#1110); cannot confirm its current "
-                "bytes still match what the merge wrote, proceeding anyway."
+                "bytes still match what the merge wrote, proceeding anyway.",
+                hanging="  ",
             )
         if prepared.survivor_edits_discarded:
-            typer.echo(
+            output.echo_wrapped(
                 f"Warning: {survivor_canonical!r}'s post-merge edits are being "
                 "discarded (--discard-survivor-edits) -- it will be restored to "
                 "its pre-merge state, and anything changed on it since the "
-                "merge is gone unless you copied it somewhere safe first."
+                "merge is gone unless you copied it somewhere safe first.",
+                hanging="  ",
             )
 
     def restored(self, summary: unmerge_service.UnmergeSummary) -> None:
+        output.section_break()
         typer.echo(
-            f"openkos unmerge: restored 'bundle/{summary.absorbed_canonical}.md' "
-            f"from 'bundle/{summary.survivor_canonical}.md' "
+            f"openkos unmerge: restored '{summary.absorbed_canonical}' "
+            f"from '{summary.survivor_canonical}' "
             f"({summary.index_name}, {summary.log_name} updated)."
         )
 
     def unwind_planned(self, plan: unmerge_service.UnwindPlan) -> None:
         total = len(plan.steps)
+        output.section_break()
         typer.echo(
             f"openkos unmerge: unwind plan for '{plan.survivor_canonical}' -- "
             f"{total} step{'s' if total != 1 else ''}, newest merge first:"
@@ -9440,6 +9459,7 @@ class _CliReconcileObserver(reconcile_service.ReconcileObserver):
                 status_suffix_a = suffix
             else:
                 status_suffix_b = suffix
+        output.section_break()
         typer.echo("openkos reconcile: proposed changes:")
         if pair.holder_canonical is not None:
             # Directed mode: name the edge itself first, so the reviewer sees
@@ -9465,6 +9485,7 @@ class _CliReconcileObserver(reconcile_service.ReconcileObserver):
 
     def written(self, written: reconcile_service.ReconcileWritten) -> None:
         pair = written.pair
+        output.section_break()
         if pair.holder_canonical is None:
             typer.echo(
                 "openkos reconcile: recorded a symmetric reconciliation between "
@@ -9693,6 +9714,9 @@ def _run_reconcile_from_findings(
     changed_pairs = 0
     skipped = 0
     declined: list[str] = []
+    # The header above already ends in a blank line, so only the items after
+    # the first need a separator of their own.
+    shown_item = False
 
     if not actionable:
         typer.echo(
@@ -9714,11 +9738,14 @@ def _run_reconcile_from_findings(
             skipped += 1
             continue
 
+        if shown_item:
+            output.section_break()
+        shown_item = True
         typer.echo(f"{canonical_a} <-> {canonical_b}")
         typer.echo(
             f"  verdict: {finding.verdict} (confidence: {finding.confidence:.2f})"
         )
-        typer.echo(f"  rationale: {finding.rationale}")
+        output.echo_wrapped(f"  rationale: {finding.rationale}", hanging="    ")
         if not curate_module._confirm(
             f"Reconcile {canonical_a} <-> {canonical_b} as symmetric "
             "'reconciled_with'? [y/N]"
@@ -9786,6 +9813,9 @@ def _run_reconcile_from_findings(
             continue
 
         verdict = _revision_verdict_from_finding(revision_finding)
+        if shown_item:
+            output.section_break()
+        shown_item = True
         typer.echo(f"{canonical_a} <-> {canonical_b}")
         typer.echo(
             f"  verdict: {revision_finding.verdict} "
@@ -9799,7 +9829,9 @@ def _run_reconcile_from_findings(
             f"  {canonical_b} ({revision_finding.dates[1] or 'unknown date'}): "
             f"{revision_finding.quotes[1]}"
         )
-        typer.echo(f"  rationale: {revision_finding.rationale}")
+        output.echo_wrapped(
+            f"  rationale: {revision_finding.rationale}", hanging="    "
+        )
 
         edge_type: Literal["supersedes", "revises"]
         holder: str

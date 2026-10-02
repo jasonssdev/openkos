@@ -16,7 +16,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'bundle/concepts/absorbed.md' into 'bundle/concepts/survivor.md' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_confidential_commit_notice": {
     "commits": [
@@ -33,7 +33,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos: NOTICE -- this commit includes content marked 'sensitivity: confidential'. openkos commits to LOCAL git only and never pushes to a remote.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: confidential -> confidential\n  + stack absorbed body: 17 unreconciled char(s) (22% of merged body -- bodies were appended, not reconciled)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'bundle/concepts/absorbed.md' into 'bundle/concepts/survivor.md' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: confidential -> confidential\n  + stack absorbed body: 17 unreconciled char(s) (22% of merged body -- bodies were appended, not reconciled)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_conflicting_reconcile_flags": {
     "commits": [
@@ -69,7 +69,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos merge: refusing to write -- 1 delete target(s) changed on disk after this run computed its plan: bundle/concepts/absorbed.md. Nothing was written, nothing was deleted. Re-run to recompute over the current bundle.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\n"
+    "stdout": "\nopenkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\n"
   },
   "merge_drift_unprompted": {
     "commits": [
@@ -138,7 +138,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'bundle/concepts/absorbed.md' into 'bundle/concepts/survivor.md' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_non_tty_refusal": {
     "commits": [
@@ -174,7 +174,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos: WARNING -- not a git repository; skipped auto-commit (writes are on disk).\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'bundle/concepts/absorbed.md' into 'bundle/concepts/survivor.md' (index.md, log.md updated).\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\n"
   },
   "merge_not_a_workspace": {
     "exit_code": 1,
@@ -214,7 +214,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 217 unreconciled char(s) (45% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'bundle/concepts/absorbed.md' into 'bundle/concepts/survivor.md' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 217 unreconciled char(s) (45% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_reconciliation_confidential_skip": {
     "commits": [
@@ -231,7 +231,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos merge: skipped body reconciliation -- concepts/survivor is confidential and the backend is not local; the stacked body was kept.\nopenkos: NOTICE -- this commit includes content marked 'sensitivity: confidential'. openkos commits to LOCAL git only and never pushes to a remote.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: confidential -> confidential\n  + stack absorbed body: 258 unreconciled char(s) (50% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'bundle/concepts/absorbed.md' into 'bundle/concepts/survivor.md' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: confidential -> confidential\n  + stack absorbed body: 258 unreconciled char(s) (50% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_reconciliation_failed": {
     "commits": [
@@ -248,7 +248,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos merge: notice -- reconciliation failed (the model reply failed validation); kept the stacked body.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 217 unreconciled char(s) (45% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'bundle/concepts/absorbed.md' into 'bundle/concepts/survivor.md' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 217 unreconciled char(s) (45% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_same_id": {
     "commits": [
@@ -304,7 +304,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "\ropenkos merge: embedding doc 1/2 - <N>s...\ropenkos merge: embedding doc 2/2 - <N>s...\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nProceed with these changes? [y/N]: y\nopenkos merge: merged 'bundle/concepts/absorbed.md' into 'bundle/concepts/survivor.md' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "\nopenkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nProceed with these changes? [y/N]: y\n\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_tty_declined": {
     "commits": [
@@ -322,7 +322,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "\u001b[31mAborted.\u001b[0m\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nProceed with these changes? [y/N]: n\n"
+    "stdout": "\nopenkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nProceed with these changes? [y/N]: n\n"
   },
   "merge_unknown_absorbed": {
     "commits": [
@@ -374,7 +374,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos reconcile: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/beta.md. Nothing was written. Re-run to recompute over the current bundle.\n",
-    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n"
+    "stdout": "\nopenkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n"
   },
   "reconcile_drift_unprompted": {
     "commits": [
@@ -411,7 +411,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: Recorded a symmetric 'reconciled_with' between [concepts/alpha](/concepts/alpha.md) and [concepts/beta](/concepts/beta.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "\ropenkos reconcile: embedding doc 1/4 - <N>s...\ropenkos reconcile: embedding doc 2/4 - <N>s...\ropenkos reconcile: embedding doc 3/4 - <N>s...\ropenkos reconcile: embedding doc 4/4 - <N>s...\n",
-    "stdout": "openkos reconcile --from-findings: workspace at <ROOT>\n\nconcepts/alpha <-> concepts/beta\n  verdict: contradicts (confidence: 0.90)\n  rationale: they disagree\nReconcile concepts/alpha <-> concepts/beta as symmetric 'reconciled_with'? [y/N]: y\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\nconcepts/gamma <-> concepts/delta\n  verdict: contradicts (confidence: 0.90)\n  rationale: they disagree\nReconcile concepts/gamma <-> concepts/delta as symmetric 'reconciled_with'? [y/N]: n\nNo open revision findings to apply. Findings are recorded by `openkos revisions`.\n\nopenkos reconcile --from-findings: applied 1, skipped 0, declined 1.\n  declined: concepts/gamma <-> concepts/delta\n"
+    "stdout": "openkos reconcile --from-findings: workspace at <ROOT>\n\nconcepts/alpha <-> concepts/beta\n  verdict: contradicts (confidence: 0.90)\n  rationale: they disagree\nReconcile concepts/alpha <-> concepts/beta as symmetric 'reconciled_with'? [y/N]: y\n\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n\nconcepts/gamma <-> concepts/delta\n  verdict: contradicts (confidence: 0.90)\n  rationale: they disagree\nReconcile concepts/gamma <-> concepts/delta as symmetric 'reconciled_with'? [y/N]: n\nNo open revision findings to apply. Findings are recorded by `openkos revisions`.\n\nopenkos reconcile --from-findings: applied 1, skipped 0, declined 1.\n  declined: concepts/gamma <-> concepts/delta\n"
   },
   "reconcile_from_findings_conflict": {
     "commits": [
@@ -583,7 +583,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: Recorded a symmetric 'reconciled_with' between [concepts/alpha](/concepts/alpha.md) and [concepts/beta](/concepts/beta.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "\ropenkos reconcile: embedding doc 1/2 - <N>s...\ropenkos reconcile: embedding doc 2/2 - <N>s...\n",
-    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nProceed with these changes? [y/N]: y\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n"
+    "stdout": "\nopenkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nProceed with these changes? [y/N]: y\n\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n"
   },
   "reconcile_tty_declined": {
     "commits": [
@@ -599,7 +599,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "\u001b[31mAborted.\u001b[0m\n",
-    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nProceed with these changes? [y/N]: n\n"
+    "stdout": "\nopenkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nProceed with these changes? [y/N]: n\n"
   },
   "reconcile_unknown_id": {
     "commits": [
@@ -774,7 +774,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'bundle/concepts/absorbed.md' from 'bundle/concepts/survivor.md' (index.md, log.md updated).\n"
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
   },
   "unmerge_both_forms": {
     "commits": [
@@ -813,7 +813,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n\nlater log line\n"
     },
     "stderr": "",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'bundle/concepts/absorbed.md' from 'bundle/concepts/survivor.md' (index.md, log.md updated).\n"
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
   },
   "unmerge_discard_survivor_edits": {
     "commits": [
@@ -833,7 +833,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nWarning: 'concepts/survivor''s post-merge edits are being discarded (--discard-survivor-edits) -- it will be restored to its pre-merge state, and anything changed on it since the merge is gone unless you copied it somewhere safe first.\nopenkos unmerge: restored 'bundle/concepts/absorbed.md' from 'bundle/concepts/survivor.md' (index.md, log.md updated).\n"
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nWarning: 'concepts/survivor''s post-merge edits are being discarded (--discard-survivor-edits) -- it will be restored to its pre-merge state, and anything changed on it since the merge is gone unless you copied it somewhere safe first.\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
   },
   "unmerge_drift_after_prompt": {
     "commits": [
@@ -852,7 +852,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos unmerge: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/linker.md. Nothing was written. Copy your edit somewhere safe before re-running: a re-run restores the pre-merge snapshots over index.md, log.md, and the survivor (overwriting the edit), and keeps refusing on an edited rewrite file until that edit is reverted.\n",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
+    "stdout": "\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
   },
   "unmerge_drift_unprompted": {
     "commits": [
@@ -891,7 +891,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nWarning: 'concepts/survivor''s merge ledger entry predates the survivor-edit check (#1110); cannot confirm its current bytes still match what the merge wrote, proceeding anyway.\nopenkos unmerge: restored 'bundle/concepts/absorbed.md' from 'bundle/concepts/survivor.md' (index.md, log.md updated).\n"
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nWarning: 'concepts/survivor''s merge ledger entry predates the survivor-edit check (#1110); cannot confirm its current bytes still match what the merge wrote, proceeding anyway.\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
   },
   "unmerge_no_target": {
     "commits": [
@@ -998,7 +998,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Unmerge**: Restored [concepts/third](/concepts/third.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "",
-    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nopenkos unmerge: restored 'bundle/concepts/third.md' from 'bundle/concepts/survivor.md' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'bundle/concepts/absorbed.md' from 'bundle/concepts/survivor.md' (index.md, log.md updated).\n"
+    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nopenkos unmerge: restored 'concepts/third' from 'concepts/survivor' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
   },
   "unmerge_to_chain_non_tty": {
     "commits": [
@@ -1042,7 +1042,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/third](/concepts/third.md) from [concepts/survivor](/concepts/survivor.md).\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos unmerge: failed while writing the unmerge -- simulated failure mid-chain.\nopenkos unmerge: --to unwind stopped at step 2 of 2 (restore 'concepts/absorbed') -- steps 1..1 completed and left a consistent bundle (git-recoverable); completed steps are not rolled back.\n",
-    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nopenkos unmerge: restored 'bundle/concepts/third.md' from 'bundle/concepts/survivor.md' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
+    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nopenkos unmerge: restored 'concepts/third' from 'concepts/survivor' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
   },
   "unmerge_to_chain_tty": {
     "commits": [
@@ -1066,7 +1066,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Unmerge**: Restored [concepts/third](/concepts/third.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "\ropenkos unmerge: embedding doc 1/4 - <N>s...\ropenkos unmerge: embedding doc 2/4 - <N>s...\ropenkos unmerge: embedding doc 3/4 - <N>s...\ropenkos unmerge: embedding doc 4/4 - <N>s...\n",
-    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: y\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nopenkos unmerge: restored 'bundle/concepts/third.md' from 'bundle/concepts/survivor.md' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'bundle/concepts/absorbed.md' from 'bundle/concepts/survivor.md' (index.md, log.md updated).\n"
+    "stdout": "\nopenkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: y\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\n\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\n\nopenkos unmerge: restored 'concepts/third' from 'concepts/survivor' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\n\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
   },
   "unmerge_to_unknown": {
     "commits": [
@@ -1127,7 +1127,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "\ropenkos unmerge: embedding doc 1/3 - <N>s...\ropenkos unmerge: embedding doc 2/3 - <N>s...\ropenkos unmerge: embedding doc 3/3 - <N>s...\n",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: y\nopenkos unmerge: restored 'bundle/concepts/absorbed.md' from 'bundle/concepts/survivor.md' (index.md, log.md updated).\n"
+    "stdout": "\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: y\n\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
   },
   "unmerge_tty_declined": {
     "commits": [
@@ -1146,7 +1146,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "\u001b[31mAborted.\u001b[0m\n",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: n\n"
+    "stdout": "\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: n\n"
   },
   "unmerge_write_failure": {
     "commits": [
