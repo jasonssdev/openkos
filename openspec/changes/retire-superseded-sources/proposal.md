@@ -161,6 +161,14 @@ like any forget.
 (The default for attach and the body-merge strategy are the other two
 questions; they are in `attach-at-ingest`'s proposal.)
 
+## Resolved Decisions (owner, #1268)
+
+1. Retiring a superseded Source removes the `supersedes` edge and detaches
+   the old Source from surviving concepts' provenance and `## Related`, in
+   the same confirmed forget (option a, as specified).
+2. In `attach-at-ingest`: `attach_at_ingest` defaults on for every path with a
+   kill switch, and new evidence is a deterministic append.
+
 ## Success Criteria
 
 - [ ] A concept whose every provenance entry is a superseded Source is

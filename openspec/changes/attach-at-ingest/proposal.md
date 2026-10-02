@@ -180,6 +180,18 @@ quietly resurrect a superseded concept; refusing would add a queue row for a
 rare case. The cost is a `-N` twin when a retired concept's subject returns,
 which `curate` already handles. Say so if you want it revived instead.
 
+## Resolved Decisions (owner, #1268)
+
+1. `attach_at_ingest` is ON by default on every ingest path, including the
+   unattended watch, with the key as the kill switch (option a).
+2. New evidence enters an existing body by deterministic append, no model
+   call (option a).
+3. Retiring the old Source removes the `supersedes` edge and detaches the old
+   Source from surviving concepts in the same confirmed forget (option a;
+   implemented by `retire-superseded-sources`).
+4. A deprecated same-key match is never an attach target (the smaller call
+   above stands).
+
 ## Success Criteria
 
 - [ ] A candidate with the same type and normalized key as an existing
