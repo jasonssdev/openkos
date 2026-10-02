@@ -43,6 +43,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   exit codes and row-oriented verbs are unchanged. Human stderr text is not a
   supported parsing interface.
 
+- **The maintenance verbs follow the same convention**
+  ([#1235](https://github.com/jasonssdev/openkos/issues/1235)). On a terminal,
+  `init`, `doctor`, `reindex`, `repair`, `sync-tags`, `normalize-names`,
+  `backfill-sensitivity`, `backfill-source-titles` and the `daemon`'s watch
+  warning prefix their advisories with `note:` / `warning:`, separate
+  proposals, results and next steps with a blank line, and wrap long prose;
+  `doctor` keeps one line per check. Piped output is unchanged except the line
+  after you confirm in `normalize-names`, `backfill-sensitivity` and
+  `backfill-source-titles`, which no longer repeats the renamed pairs, raised
+  paths or retitled Sources the proposal already listed.
+
 - **The transitional temp-directory workspace lock is no longer taken.** 0.3.1
   moved the lock to the per-user state directory and, for that one release,
   also took the old lock under the OS temp directory so an older `openkos`
