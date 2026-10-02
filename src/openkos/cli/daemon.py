@@ -71,7 +71,7 @@ from openkos.application.runner import (
 )
 from openkos.application.runtime import StopToken
 from openkos.application.watch import BudgetedRun, WatchPorts
-from openkos.cli import observability
+from openkos.cli import observability, output
 from openkos.graph import sqlite_graph
 from openkos.resolution import contradiction, edge_typing, volatility_typing
 from openkos.state.vectorstore import open_vector_store
@@ -550,7 +550,9 @@ def _open_notifier(
     opened = watch_notify.open_notifier(unattended.watch_backend, unattended.inbox)
     if opened.warning is not None:
         log.warning("native watch backend unavailable; polling")
-        typer.echo(f"openkos daemon: {opened.warning}", err=True)
+        output.notice(
+            f"openkos daemon: {opened.warning}", kind="warning", verb="daemon"
+        )
     return opened.notifier
 
 

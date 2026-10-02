@@ -1545,11 +1545,11 @@ def init(
     # still prints later; this one reaches the reader while they are deciding.
     stickiness_stated_at_the_picker = sys.stdin.isatty() and embedding_model is None
     if stickiness_stated_at_the_picker:
-        typer.echo(
+        _advisory(
+            "init",
             "openkos init: note -- the embedding model you pick here is "
             "sticky: changing it in this workspace later forces a full "
             "corpus re-embed on the next `openkos reindex`.",
-            err=True,
         )
 
     try:
@@ -1565,10 +1565,10 @@ def init(
         embedding_model is not None
         and resolved_embedding_model not in config.EMBEDDING_MODEL_ALLOWLIST
     ):
-        typer.echo(
+        _advisory(
+            "init",
             f"openkos init: WARNING -- '{resolved_embedding_model}' is not "
             "on the vetted embedding-model allowlist; writing it anyway.",
-            err=True,
         )
 
     layout = config.WorkspaceLayout(root)
@@ -1596,18 +1596,18 @@ def init(
     # sentence again a few lines down: when the picker already carried the
     # explanation, this line only confirms which tag it applies to.
     if stickiness_stated_at_the_picker:
-        typer.echo(
+        _advisory(
+            "init",
             f"openkos init: the sticky embedding model is "
             f"'{resolved_embedding_model}'.",
-            err=True,
         )
     else:
-        typer.echo(
+        _advisory(
+            "init",
             f"openkos init: note -- the embedding model "
             f"('{resolved_embedding_model}') is sticky: editing it in this "
             "workspace's openkos.yaml later forces a full corpus re-embed the "
             "next time `openkos reindex` runs.",
-            err=True,
         )
     # Best-effort git setup (Slice 1, git-lifecycle): runs strictly AFTER
     # Phase B's last write (`openkos.yaml`, just above), so any git failure
@@ -1675,29 +1675,30 @@ def init(
                 setup = "already a git repository; created .gitignore"
             else:
                 setup = "already a git repository"
-            typer.echo(
+            output.echo_wrapped(
                 f"openkos init: the workspace is version-controlled "
                 f"({setup}) and the files above are committed. Every openkos "
                 "command commits its own changes: `git log` reviews them, "
-                "`git revert <commit>` undoes one."
+                "`git revert <commit>` undoes one.",
+                hanging="  ",
             )
         else:
-            typer.echo(
+            _advisory(
+                "init",
                 "openkos init: WARNING -- git identity unset; skipped the "
                 "initial commit (the workspace and .gitignore are still "
                 "created).",
-                err=True,
             )
     except (vcs_git.GitError, OSError) as exc:
         # Honest for ALL failure modes: a repo/.gitignore may already have
         # been created and files staged before this error hit, so "skipped"
         # would be misleading here. Actionable: points at `git status` to
         # inspect and finish setup manually.
-        typer.echo(
+        _advisory(
+            "init",
             f"openkos init: WARNING -- git setup did not complete cleanly ({exc}). "
             "The workspace itself is still valid; run `git status` in it to "
             "inspect and finish git setup manually if needed.",
-            err=True,
         )
 
     # The call to action lands AFTER the git block (issue #800), because the
@@ -1707,6 +1708,7 @@ def init(
     # and that applies with more force to a safety net than to a warning.
     # Moving it here also puts the degradation WARNINGs above the hint
     # instead of orphaning them under it.
+    output.section_break()
     typer.echo("Next: run `openkos ingest <path>` to import your first source.")
 
     # A second call to action, for the audience the first one misses
@@ -1734,7 +1736,7 @@ def init(
     # is initializing, so `bundle/` is unambiguous, and interpolating
     # `layout.bundle_dir` would put a machine-specific absolute path into
     # output that users and tests compare verbatim.
-    typer.echo(
+    output.echo_wrapped(
         "To read your knowledge in an editor, open `bundle/` (not the "
         "workspace root) as an Obsidian vault or a VS Code folder."
     )
@@ -1758,11 +1760,11 @@ def init(
     except Exception:  # noqa: BLE001 -- an unreachable or misbehaving probe means not ready; init notes it below
         ready = False
     if not ready:
-        typer.echo(
+        _advisory(
+            "init",
             "openkos init: note -- Ollama isn't ready for model "
             f"'{resolved_model}' yet. Run `openkos doctor` to diagnose "
             "(ingest and query need it; the workspace was still created).",
-            err=True,
         )
 
     # Sticky re-embed warning (spec: Sticky Re-Embed Warning On Every
@@ -1777,6 +1779,25 @@ def init(
     # revision blamed "a future init of a different workspace", which cannot
     # force a re-embed here and read as a non-sequitur to anyone who did not
     # already know the model-tag gate is per-workspace.
+
+
+def _advisory(verb: str, message: str) -> None:
+    """One advisory line on stderr under the ADR-0042 convention.
+
+    `message` is the piped text, `openkos <verb>: [WARNING -- |note -- ]body`.
+    Piped it is written verbatim. On a terminal the lead and the inline
+    marker give way to a `warning:` / `note:` prefix, wrapped by
+    `output.notice`."""
+    lead = f"openkos {verb}: "
+    body = message[len(lead) :] if message.startswith(lead) else message
+    kind: output.NoticeKind = "note"
+    if body.startswith("WARNING -- "):
+        body, kind = body[len("WARNING -- ") :], "warning"
+    elif body.startswith("note -- "):
+        body = body[len("note -- ") :]
+    output.notice(
+        f"{lead}{body}" if output.is_tty(err=True) else message, kind=kind, verb=verb
+    )
 
 
 def _plural(n: int) -> str:
@@ -3746,11 +3767,11 @@ def _warn_if_nonlocal_embed_host(
     if locality.is_local:
         return
     endpoint_name = application_backends.endpoint_label(cfg, purpose="embed")
-    typer.echo(
+    _advisory(
+        command,
         f"openkos {command}: note -- embedding host '{locality.display_host}' "
         f"is not this machine ({endpoint_name}); document text and embedding "
         "vectors will leave this machine.",
-        err=True,
     )
 
 
@@ -3779,13 +3800,13 @@ def _warn_withheld_from_embedding(
     if withheld <= 0:
         return
     endpoint_name = application_backends.endpoint_label(cfg, purpose="embed")
-    typer.echo(
+    _advisory(
+        command,
         f"openkos {command}: {withheld} document{_plural(withheld)} withheld "
         "from embedding -- their sensitivity blocks sending them to a backend "
         "that is not this machine, so they have no vector and dense retrieval "
         f"will not surface them. Point {endpoint_name} at this machine and "
         "re-run, or lower the sensitivity if it is wrong.",
-        err=True,
     )
 
 
@@ -7450,6 +7471,7 @@ def backfill_sensitivity_cmd(
         )
         raise typer.Exit(code=1) from exc
 
+    output.section_break()
     typer.echo("openkos backfill-sensitivity: proposed changes:")
     for descendant_raise in descendant_raises:
         typer.echo(
@@ -7515,13 +7537,10 @@ def backfill_sensitivity_cmd(
         )
         raise typer.Exit(code=1) from exc
 
-    propagated = ", ".join(
-        f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
-        for descendant_raise in descendant_raises
-    )
+    output.section_break()
     typer.echo(
         f"openkos backfill-sensitivity: raised {len(descendant_raises)} "
-        f"document(s) ({log_path.name} updated): {propagated}."
+        f"document(s) ({log_path.name} updated)."
     )
 
     _autocommit(
@@ -7651,24 +7670,25 @@ def sync_tags_cmd(
 
     for skip in prepared.skips:
         if skip.reason == "malformed-tags":
-            typer.echo(
+            _advisory(
+                "sync-tags",
                 f"openkos sync-tags: WARNING -- 'bundle/{skip.concept_id}.md' "
                 "has a malformed 'tags' value; left unchanged.",
-                err=True,
             )
         else:
-            typer.echo(
+            _advisory(
+                "sync-tags",
                 f"openkos sync-tags: note -- 'bundle/{skip.concept_id}.md' is "
                 "below its Source's sensitivity; run 'openkos "
                 "set-sensitivity' (or 'openkos backfill-sensitivity') to "
                 "raise it first.",
-                err=True,
             )
 
     if not prepared.additions:
         typer.echo("openkos sync-tags: nothing to sync.")
         return
 
+    output.section_break()
     typer.echo("openkos sync-tags: proposed changes:")
     for addition in prepared.additions:
         typer.echo(
@@ -7714,6 +7734,7 @@ def sync_tags_cmd(
             )
             raise typer.Exit(code=1) from exc
 
+        output.section_break()
         typer.echo(
             f"openkos sync-tags: added tags to {len(prepared.additions)} "
             f"concept(s) ({log_path.name} updated)."
@@ -7835,13 +7856,13 @@ def normalize_names_cmd(
 
     for stranded in stranded_temps:
         rel = stranded.relative_to(root).as_posix()
-        typer.echo(
+        _advisory(
+            "normalize-names",
             f"openkos normalize-names: WARNING -- {rel!r} looks like a "
             "rename left stranded by an interrupted run (temp prefix "
             f"{fsio.RENAME_TEMP_PREFIX!r}); its original spelling is not "
             "recoverable from the temp name, so it is left untouched -- "
             "rename it by hand once you know what it should be.",
-            err=True,
         )
 
     planned: list[lint_check.NonNfcEntry] = []
@@ -7882,6 +7903,7 @@ def normalize_names_cmd(
     confirm_enabled = not auto and cfg.review
     prompt_will_run = confirm_enabled and sys.stdin.isatty()
 
+    output.section_break()
     typer.echo(
         f"openkos normalize-names: proposed renames ({len(planned)}, "
         f"deepest first), {len(skips)} skipped:"
@@ -8054,9 +8076,10 @@ def normalize_names_cmd(
             )
             raise typer.Exit(code=1) from exc
 
+        output.section_break()
         typer.echo(
             f"openkos normalize-names: renamed {len(final_renames)} on-disk "
-            f"name(s) ({log_path.name} updated): {pairs}."
+            f"name(s) ({log_path.name} updated)."
         )
 
         _autocommit(root, landed, "openkos: normalize-names")
@@ -8206,6 +8229,7 @@ def backfill_source_titles_cmd(
         )
         raise typer.Exit(code=1) from exc
 
+    output.section_break()
     typer.echo("openkos backfill-source-titles: proposed changes:")
     for retitle in backfill.staged:
         typer.echo(
@@ -8319,10 +8343,11 @@ def backfill_source_titles_cmd(
         )
         raise typer.Exit(code=1) from exc
 
+    output.section_break()
     typer.echo(
         f"openkos backfill-source-titles: retitled {len(backfill.staged)} "
         f"Source(s) ({index_path.name}: {relabeled_total} catalog label(s) "
-        f"relabeled, {log_path.name} updated): {retitled}."
+        f"relabeled, {log_path.name} updated)."
     )
 
     _autocommit(root, landed, "openkos: backfill-source-titles")
@@ -14084,11 +14109,12 @@ def _render_reindex_summary(
     )
     _warn_withheld_from_embedding("reindex", report.withheld_confidential, cfg)
     if report.prune_skipped:
-        typer.echo(
+        output.echo_wrapped(
             "openkos reindex: prune pass was skipped this run -- a "
             "directory-scan error made part of the bundle unreadable, so no "
             "concept was pruned even if some appeared absent (review "
-            "carry-over, fold-in #3)."
+            "carry-over, fold-in #3).",
+            hanging="  ",
         )
     # Model-tag force observability (review correction, WARNING finding):
     # a model-tag mismatch triggers an operationally heavy full re-embed
@@ -14118,18 +14144,20 @@ def _render_reindex_summary(
         report.skipped + report.embed_failed + report.withheld_confidential
     )
     if report.model_reembedded and incomplete_count == 0:
-        typer.echo(
+        output.echo_wrapped(
             "openkos reindex: re-embedded all vectors -- "
             f"{_reembed_trigger_wording(previous_model_tag, report.effective_model_tag)}; "
-            f"embed_calls={report.embed_calls}."
+            f"embed_calls={report.embed_calls}.",
+            hanging="  ",
         )
     elif report.model_reembedded:
-        typer.echo(
+        output.echo_wrapped(
             f"openkos reindex: "
             f"{_reembed_trigger_wording(previous_model_tag, report.effective_model_tag)}; "
             "re-embedding all vectors -- INCOMPLETE: "
             f"{incomplete_count} doc{_plural(incomplete_count)} could not be "
-            f"re-embedded, will retry next run; embed_calls={report.embed_calls}."
+            f"re-embedded, will retry next run; embed_calls={report.embed_calls}.",
+            hanging="  ",
         )
     # Actionable re-run notice (reindex-embedding-resilience): keys ONLY on
     # `embed_failed` -- transient embed-EOF skips (retry budget exhausted at
@@ -14141,12 +14169,13 @@ def _render_reindex_summary(
     # fatal ladder above (`BackendUnavailable`/`BackendModelNotFound`) exits 1
     # before the summary is ever printed.
     if report.embed_failed > 0:
-        typer.echo(
+        output.notice(
             "openkos reindex: INCOMPLETE -- "
             f"{report.embed_failed} doc{_plural(report.embed_failed)} could "
             "not be embedded (transient failure). Run `openkos reindex` "
             "again to complete it.",
-            err=True,
+            kind="warning",
+            verb="reindex",
         )
 
 
@@ -14191,7 +14220,7 @@ def _render_check(r: application_doctor.CheckResult) -> None:
         line += f" — {r.detail}"
     typer.echo(line)
     if r.status == "fail" and r.remediation:
-        typer.echo(f"  -> {r.remediation}")
+        output.echo_wrapped(f"  -> {r.remediation}", hanging="     ")
 
 
 @app.command(
@@ -14363,6 +14392,7 @@ def doctor() -> None:
     # counts as completed, matching the exit rule below so the printed line
     # and the exit code always agree about what "completed" means.
     n = sum(1 for r in results if r.status == read_outcome.NOT_RUN)
+    output.section_break()
     typer.echo(f"{len(results) - n} check(s) completed, {n} did not run.")
 
     # Exit rule (ADR-0022, design.md Decision 4): precedence is the whole
@@ -14459,40 +14489,44 @@ def repair() -> None:
     # behind the has_work early return.
     if plan.blocked_export_ids:
         n = len(plan.blocked_export_ids)
-        typer.echo(
+        output.echo_wrapped(
             f"openkos repair: blocked -- {n} concept(s) superseded but not "
             "exported (own status is neither absent/stable/legacy active "
-            f"nor an existing valid export): {', '.join(plan.blocked_export_ids)}"
+            f"nor an existing valid export): {', '.join(plan.blocked_export_ids)}",
+            hanging="  ",
         )
     if plan.skipped_withdrawal_ids:
         n = len(plan.skipped_withdrawal_ids)
-        typer.echo(
+        output.echo_wrapped(
             f"openkos repair: skipped -- {n} withdrawal(s) could not be "
             "confirmed (the edge walk is incomplete): "
-            f"{', '.join(plan.skipped_withdrawal_ids)}"
+            f"{', '.join(plan.skipped_withdrawal_ids)}",
+            hanging="  ",
         )
 
     if not plan.has_work:
-        typer.echo(
+        output.echo_wrapped(
             "openkos repair: nothing to repair -- no unmigrated merge "
             "ledger, no OKF 0.1 content, and no deprecated-status export "
-            "drift found."
+            "drift found.",
+            hanging="  ",
         )
         return
 
     if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
-        typer.echo(
+        output.echo_wrapped(
             "openkos repair: this run's writes can be undone with `git "
             "reset --hard HEAD` before this run's own auto-commit lands, "
-            "or `git reset --hard <commit-before-this-run>` after."
+            "or `git reset --hard <commit-before-this-run>` after.",
+            hanging="  ",
         )
     else:
-        typer.echo(
+        _advisory(
+            "repair",
             "openkos repair: WARNING -- no git reset point is available in "
             "this workspace (no repository, no configured git identity, or "
             "no commit history); this run's writes cannot be undone via "
             "git.",
-            err=True,
         )
 
     # The commit phase (#1137): `plan_repair`'s whole-bundle walk above held no
@@ -14517,6 +14551,7 @@ def repair() -> None:
             )
             raise typer.Exit(code=1) from exc
 
+        output.section_break()
         if plan.extraction:
             n = len(plan.extraction)
             typer.echo(
@@ -14581,10 +14616,11 @@ def repair() -> None:
             n = len(plan.legacy_citations_ids)
             noun = "document" if n == 1 else "documents"
             verb = "keeps" if n == 1 else "keep"
-            typer.echo(
+            output.echo_wrapped(
                 f"openkos repair: left in place -- {n} {noun} {verb} a "
                 "hand-written # Citations list (legacy, OKF 0.2 section 13.1): "
-                f"{', '.join(plan.legacy_citations_ids)}"
+                f"{', '.join(plan.legacy_citations_ids)}",
+                hanging="  ",
             )
 
         parts: list[str] = []
