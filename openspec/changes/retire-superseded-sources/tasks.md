@@ -66,7 +66,7 @@ written against its shape.
       test: edit watched file, watch imports, `relate`, `forget` without
       `--force`, then `lint` is clean and `answer` cites only the live
       Source. (`cli`)
-- [ ] 3.5 `purge` regression tests: a `supersedes` relation to a purge-set
+- [x] 3.5 `purge` regression tests: a `supersedes` relation to a purge-set
       Source still refuses, and no out-of-set file is rewritten. (`cli`)
 
 ## Phase 4: Proof and docs

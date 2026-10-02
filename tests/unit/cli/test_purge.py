@@ -2498,3 +2498,40 @@ def test_purge_residue_report_survives_a_raising_bookkeeping_step(
     assert isinstance(result.exception, RuntimeError)
     assert "findings.db" in result.output
     assert str(tmp_git_repo.root / ".openkos" / "findings.db") in result.output
+
+
+# --- retire-superseded-sources: purge does NOT take the retire path ---------
+
+
+def test_purge_still_refuses_a_superseding_source_and_rewrites_nothing(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """A superseding Source's `supersedes` relation and a shared concept's
+    generated references are HISTORICAL for `forget`, but an irreversible
+    erasure keeps its strict rail 1: it refuses, exits non-zero, and does
+    not rewrite a single out-of-set file."""
+    root = tmp_git_repo.root
+    source_id = tmp_git_repo.source_id
+    (root / "bundle" / "sources" / "v2.md").write_text(
+        "---\ntype: Source\ntitle: V2\nrelations:\n"
+        f"  - target: {source_id}\n    type: supersedes\n---\n\n# V2\n",
+        encoding="utf-8",
+    )
+    shared = root / "bundle" / "concepts" / "shared.md"
+    shared.parent.mkdir(parents=True, exist_ok=True)
+    shared.write_text(
+        "---\ntype: Concept\ntitle: Shared\nprovenance:\n"
+        f"  - {source_id}\n  - sources/v2\n---\n\n# Shared\n\n## Related\n\n"
+        f"- [{source_id}](/{source_id}.md) — source this was extracted from\n"
+        "- [sources/v2](/sources/v2.md) — source this was extracted from\n",
+        encoding="utf-8",
+    )
+    before = snapshot_with_mtime(root)
+
+    result = runner.invoke(app, ["purge", source_id, "--scope", "source"])
+
+    assert result.exit_code == 1
+    assert "inbound reference" in result.output.lower()
+    assert "~ bundle/" not in result.output
+    assert changed_paths(before, snapshot_with_mtime(root)) == set()
+    assert _blob_history_contains(root, f"bundle/{source_id}.md")
