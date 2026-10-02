@@ -60,6 +60,8 @@ class _Env:
         self.notices: list[str] = []
         self.stop = StopToken()
         self.on_commit: Callable[[], None] | None = None
+        self.refreshes: list[Path] = []
+        self.refresh_error: Exception | None = None
 
     def ingest_ports(
         self, section: CommitSection, run_budget: budget.BudgetedRun
@@ -78,7 +80,7 @@ class _Env:
 
     def ports(self) -> runner.RunnerPorts:
         return runner.RunnerPorts(
-            refresh_derived=lambda root: None,
+            refresh_derived=self.refresh_derived,
             commit_paths=lambda root, paths, message: None,
             paths_dirty=lambda root, paths: False,
             repo_root=lambda root: root,
@@ -92,6 +94,12 @@ class _Env:
                 ingest_ports=self.ingest_ports, notify=self.notices.append
             ),
         )
+
+    def refresh_derived(self, root: Path) -> object:
+        self.refreshes.append(root)
+        if self.refresh_error is not None:
+            raise self.refresh_error
+        return None
 
     def cfg(self, **kw: Any) -> config.UnattendedConfig:
         return config.UnattendedConfig(inbox=self.inbox, quiet_seconds=_QUIET, **kw)
@@ -524,3 +532,50 @@ def test_the_watch_is_off_without_an_inbox(env: _Env) -> None:
     )
 
     assert result is None
+
+
+# --- derived indexes (#1260) -------------------------------------------------
+
+
+def _settled_drop(env: _Env, *names: str) -> None:
+    for name in names:
+        env.drop(name)
+    env.job()  # observe
+    env.settle()
+
+
+def test_imports_refresh_the_derived_indexes_once_per_job(env: _Env) -> None:
+    _settled_drop(env, "a.md", "b.md")
+    result = env.job()
+    assert result is not None
+    assert result.units_done == 2
+    assert env.refreshes == [env.root]
+
+
+def test_a_job_that_imports_nothing_refreshes_nothing(env: _Env) -> None:
+    env.drop("a.md")
+    env.job()
+    assert env.refreshes == []
+
+
+def test_a_contended_refresh_never_fails_the_import(env: _Env) -> None:
+    from openkos.application.reindex_service import LockContention
+
+    env.refresh_error = LockContention("busy")
+    _settled_drop(env, "a.md")
+    result = env.job()
+    assert result is not None
+    assert result.outcome == "completed"
+    assert result.units_done == 1
+    assert any("derived" in n for n in env.notices)
+
+
+def test_a_refused_refresh_never_fails_the_import(env: _Env) -> None:
+    from openkos.application.reindex_service import ReindexRefused
+
+    env.refresh_error = ReindexRefused("no")
+    _settled_drop(env, "a.md")
+    result = env.job()
+    assert result is not None
+    assert result.outcome == "completed"
+    assert any("derived" in n for n in env.notices)

@@ -35,6 +35,11 @@ gone from the inbox for a whole quiet window (the window is what lets a rename
 land its new name first, so the row can move to `applied` instead); the ingest
 service moves it to `applied` when a raw copy with the refused bytes lands.
 
+**Derived indexes.** After its last import a job runs the runner's incremental
+refresh (`RunnerPorts.refresh_derived`) once, so what it imported is searchable
+without waiting for the maintenance job. A refresh that cannot run is advised,
+never an import failure.
+
 Everything a job cannot import for budget, stop, deadline, lock contention or
 a moved file stays a candidate for the next job.
 """
@@ -61,6 +66,7 @@ from openkos.application import pending as application_pending
 from openkos.application import queue_producers as producers
 from openkos.application import runner
 from openkos.application.lock_wait import CommitSection
+from openkos.application.reindex_service import ReindexRefused
 from openkos.application.runtime import Deadline, Halt, StopToken, check_halt
 from openkos.bundle import source_titles
 from openkos.extraction.concept import estimate_extraction_calls
@@ -196,6 +202,7 @@ class _Tally:
     halt: Halt | None = None
     failure: str | None = None
     busy: bool = False
+    imported: int = 0
 
 
 def _stamp(moment: datetime) -> str:
@@ -572,6 +579,7 @@ def _run_candidates(
             _queue_supersessions(queue, outcome, base_section)
             _record(conn, cand, digest=digest, outcome=IMPORTED)
             tally.done += 1
+            tally.imported += 1
         if refusal is not None and not _file_refusal(
             conn,
             queue,
@@ -668,6 +676,33 @@ def _retire_gone(
         jobs.forget_observations(conn, list(expired))
 
 
+def _refresh_derived(
+    root: Path,
+    stop: StopToken,
+    deadline: Deadline,
+    ports: RunnerPorts,
+    watch: WatchPorts,
+) -> None:
+    """Bring the derived indexes up to date with what the job imported, once per
+    job (the incremental refresh the maintenance job runs, so a file dropped in
+    the inbox is searchable now rather than a maintenance interval later). The
+    imports are already durable, so a refresh that cannot run is advised, never
+    raised: the next maintenance pass catches the indexes up."""
+    try:
+        runner._retry_derived_contention(
+            lambda: ports.refresh_derived(root),
+            ports=ports,
+            stop=stop,
+            deadline=deadline,
+        )
+    except (ReindexRefused, runner._Halted) as exc:
+        log.warning("watch: derived indexes not refreshed (%s)", type(exc).__name__)
+        watch.notify(
+            "openkos daemon: watch: the derived indexes were not refreshed after "
+            "the import; the next maintenance pass or `openkos reindex` does it."
+        )
+
+
 def _run_job(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -713,6 +748,8 @@ def _run_job(
         queue=queue,
         tally=tally,
     )
+    if tally.imported:
+        _refresh_derived(root, stop, deadline, ports, watch)
     outcome, detail = _outcome(tally)
     recorded = runner._finish(
         conn,
