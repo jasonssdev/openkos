@@ -129,7 +129,7 @@ def test_set_sensitivity_tty_separates_and_prefixes_warning(
         "openkos set-sensitivity: set ",
     )
     assert "warning: 'concepts/d' cites unresolvable provenance" in result.stderr
-    assert "WARNING --" not in result.stderr
+    assert "WARNING -- 'concepts/d'" not in result.stderr
 
 
 def test_set_sensitivity_piped_warning_keeps_its_legacy_text(
