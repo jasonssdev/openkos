@@ -299,3 +299,32 @@ def test_attach_reads_its_baseline_after_extraction(
 
     assert "edited during extraction" in target.read_text(encoding="utf-8")
     assert config.read_config(workspace).attach_at_ingest is True
+
+
+def test_an_interrupted_attach_is_completed_without_a_second_bump(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run was killed after the attach landed but before the Source lost
+    its `ingest_pending` marker (#1136): the next run finds the concept already
+    carrying the source, treats it as the same-source no-op, and finishes."""
+    _extracts(monkeypatch, _skill())
+    _ingest(workspace, tmp_path, "a.txt", "notes about skills one\n")
+    _extracts(monkeypatch, _skill("More."))
+    _ingest(workspace, tmp_path, "b.txt", "notes about skills two\n")
+    target = workspace / "bundle" / "concepts" / "skill.md"
+    revised = target.read_bytes()
+    source_b = workspace / "bundle" / "sources" / "b.md"
+    source_b.write_text(
+        okf.mark_ingest_pending(source_b.read_text(encoding="utf-8")),
+        encoding="utf-8",
+    )
+
+    outcome = _ingest(workspace, tmp_path, "b.txt", "notes about skills two\n")
+
+    assert isinstance(outcome, svc.IngestWritten)
+    assert outcome.attached_count == 0
+    assert target.read_bytes() == revised
+    assert _bundle_files(workspace, "concepts") == ["skill.md"]
+    assert not application_ingest.prior_ingest_pending(
+        source_b.read_text(encoding="utf-8")
+    )
