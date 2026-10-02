@@ -42,6 +42,27 @@ ids MUST be rejected with no write.
 - WHEN `merge` runs
 - THEN it exits non-zero and writes nothing
 
+### Requirement: Merge Refuses A Cross-Type Pair Unless Opted In
+
+`merge` MUST refuse (exit 1, nothing written) when the survivor and the
+absorbed declare DIFFERENT OKF types, or when either type is unreadable or
+absent, unless `--include-cross-type` is passed. The refusal MUST name the
+reason and the flag, and MUST precede any preparation or preview. With the
+flag the merge proceeds, the preview carries its cross-type note, and the
+merged document's `type` follows the survivor-wins scalar rule below.
+
+#### Scenario: A Concept is not absorbed into a Procedure by default
+
+- GIVEN `procedures/installing-x` (Procedure) and `concepts/x` (Concept)
+- WHEN `merge procedures/installing-x concepts/x --auto` runs
+- THEN it exits 1 naming `--include-cross-type` and no file changes
+
+#### Scenario: The opt-in merges them
+
+- GIVEN the same pair
+- WHEN the same command runs with `--include-cross-type`
+- THEN the merge completes with the survivor's type
+
 ### Requirement: The Stacked Form Keeps One Document Root
 
 The APPEND stacks the absorbed body under a

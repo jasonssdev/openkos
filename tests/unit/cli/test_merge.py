@@ -1122,7 +1122,14 @@ def test_merge_absorbing_non_source_concept_still_retargets_third_party_provenan
     )
 
     result = runner.invoke(
-        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+        app,
+        [
+            "merge",
+            "concepts/survivor",
+            "concepts/absorbed",
+            "--auto",
+            "--include-cross-type",
+        ],
     )
 
     assert result.exit_code == 0, result.stderr
@@ -1537,7 +1544,13 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     """
     _pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
     target_path = tmp_path / "bundle" / "concepts" / "survivor.md"
-    concurrent = "hand-edited the instant the snapshot returned\n"
+    # Keeps a valid `type:` so the edit reads as an ordinary same-type edit:
+    # the cross-type refusal (#1258) re-reads the member and would otherwise
+    # answer first, hiding the drift refusal this test pins.
+    concurrent = (
+        "---\ntype: Concept\ntitle: Survivor\n---\n"
+        "hand-edited the instant the snapshot returned\n"
+    )
     real_snapshot_read = fsio.snapshot_read
     fired = False
 
@@ -1973,12 +1986,58 @@ def test_cross_type_merge_warns_before_the_gate(
     )
 
     result = runner.invoke(
-        app, ["merge", "events/afg-coordination", "projects/evaluacion", "--auto"]
+        app,
+        [
+            "merge",
+            "events/afg-coordination",
+            "projects/evaluacion",
+            "--auto",
+            "--include-cross-type",
+        ],
     )
 
     assert result.exit_code == 0, result.stderr
     assert "cross-type SAME" in result.stdout
     assert "Event / Project" in result.stdout
+
+
+def test_cross_type_merge_is_refused_without_the_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1258: `merge` is the manual door every skip message names, so it
+    carries the guard too -- a Concept is never absorbed into a Procedure
+    about it unless `--include-cross-type` says so. Nothing is written."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_provenance(
+        tmp_path,
+        "procedures/installing-claude-code",
+        title="Installing Claude Code",
+        concept_type="Procedure",
+        provenance=["sources/transcript-1"],
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/claude-code",
+        title="Claude Code",
+        concept_type="Concept",
+        provenance=["sources/transcript-1"],
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "merge",
+            "procedures/installing-claude-code",
+            "concepts/claude-code",
+            "--auto",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "cross-type" in result.stderr
+    assert "--include-cross-type" in result.stderr
+    assert _snapshot(tmp_path) == before
 
 
 def test_a_same_type_merge_carries_no_cross_type_warning(

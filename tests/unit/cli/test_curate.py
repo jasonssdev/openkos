@@ -5949,15 +5949,15 @@ def test_identity_walk_states_the_survivor_criterion_and_cross_source_note(
     )
 
 
-def test_identity_walk_renders_the_cross_type_note(
+def test_identity_walk_skips_a_cross_type_pair(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#904 on the recommended path: curate's Identity walk renders the
-    cross-type warning `adjudicate --apply` renders, before its [y/N]
-    prompt. The two walks share one note constant by design -- a guard
-    landing in one and forgotten in the other is exactly #796's drift."""
+    """#1258 on the recommended path: curate's Identity walk refuses the
+    cross-type pair `adjudicate --apply` refuses, through the same skip
+    line -- a guard landing in one walk and forgotten in the other is
+    exactly #796's drift."""
     _stub_later_stages_empty(monkeypatch)
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_bodied_doc(
@@ -6006,19 +6006,18 @@ def test_identity_walk_renders_the_cross_type_note(
     )
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["curate"], input="y\nn\n")
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
 
     assert result.exit_code == 0, result.output
-    assert "note: cross-type SAME" in result.stdout
     out = result.stdout
-    # The PROJECT carries the richer body here, so it survives -- and the
-    # note must lead with its type, matching the survivor line and the
-    # merge prompt rather than raw `member_ids` order.
-    assert "survivor: projects/evaluacion" in out
-    assert "(Project / Event)" in out
-    assert out.index("note: cross-type SAME") < out.index(
-        "Merge events/m1 into projects/evaluacion? [y/N]"
-    )
+    # #1258: the Project would have been the richer-body survivor and the
+    # Event absorbed into it. The walk no longer offers the pair: no merge
+    # prompt, both files untouched, the manual command carries the opt-in.
+    assert "Merge events/m1 into projects/evaluacion? [y/N]" not in out
+    assert "skipped (cross-type SAME" in out
+    assert "openkos merge --include-cross-type projects/evaluacion events/m1" in out
+    assert (tmp_path / "bundle" / "events" / "m1.md").is_file()
+    assert (tmp_path / "bundle" / "projects" / "evaluacion.md").is_file()
 
 
 # --- issue #799: Structure serves what suggest-relations already paid for -

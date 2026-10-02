@@ -973,6 +973,47 @@ flagging on absence would mark every hand-written concept forever.
 - WHEN any adjudicate surface renders them
 - THEN neither carries the cross-source note nor is excluded from the batch
 
+### Requirement: Cross-Type SAME Verdicts Are Refused In Every Merge Walk
+
+A SAME verdict over a 2-member group whose members declare DIFFERENT OKF
+`type:` values is the class that absorbs one kind of thing into another --
+a Concept into a Procedure that is merely about it -- because the
+richer-body survivor rule cannot tell a general object from an activity
+involving it. Such a pair MUST NOT be offered for merging by any walk
+unless the operator opts in: `adjudicate --apply-same` MUST exclude it
+from the batch, and `adjudicate --apply` and `curate`'s Identity stage
+MUST skip it before any preview or `[y/N]` prompt. Every exclusion MUST
+print one skip line naming the reason and the exact manual command
+`openkos merge --include-cross-type <survivor> <absorbed>`, and MUST be
+counted in the summary (`cross-type: N`). The decision MUST use the one
+shared predicate (`cross_type_concern`), so a member that declares no
+usable `type:` or cannot be read is refused too: an unknown type is not
+agreement. `--include-cross-type` is the opt-in for `--apply-same` and
+`--apply`, and MUST be refused (exit 2) without one of them; `curate` has
+no opt-in of its own, the manual `merge` command is its deliberate route.
+With the opt-in the pair is previewed with its `note: cross-type SAME`
+warning and still needs the walk's own consent.
+
+#### Scenario: The interactive walk skips a cross-type pair
+
+- GIVEN a SAME 2-member group declaring types Concept and Procedure
+- WHEN `adjudicate --apply` runs without `--include-cross-type`
+- THEN no preview or prompt is shown for the pair, no file changes, the
+  skip line names `openkos merge --include-cross-type <survivor> <absorbed>`,
+  and the summary carries `cross-type: 1`
+
+#### Scenario: curate's Identity stage skips it identically
+
+- GIVEN the same group in `curate`'s Identity stage
+- WHEN the stage runs
+- THEN the pair is skipped with the same skip line and nothing is written
+
+#### Scenario: --include-cross-type restores the per-item walk
+
+- GIVEN the same group
+- WHEN `adjudicate --apply --include-cross-type` runs
+- THEN the pair is previewed with the cross-type note and merged on `y`
+
 ### Requirement: Prompt Response Semantics
 
 The prompt MUST be validated by the same helper `curate`'s per-item walks

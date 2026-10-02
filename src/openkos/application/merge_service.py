@@ -73,6 +73,10 @@ class MergePolicy:
     `auto`, it never skips the confirmation."""
     no_reconcile: bool = False
     reconcile: bool = False
+    include_cross_type: bool = False
+    """`--include-cross-type`: merge members declaring different OKF types.
+    Without it the service refuses such a pair (#1258) -- the survivor of a
+    cross-type merge must be a human's choice, never a body-length outcome."""
 
 
 @dataclass(frozen=True)
@@ -308,6 +312,20 @@ def merge_concepts(
         raise Refused(
             f"openkos merge: failed while preparing the merge -- {exc}."
         ) from exc
+
+    # #1258: refused AFTER the pure preparation so a member that cannot be
+    # parsed still reports its parse failure, and BEFORE the preview or any
+    # write -- Phase A wrote nothing, so the refusal leaves the bundle as it
+    # was.
+    if not policy.include_cross_type:
+        cross_type = application_lifecycle.cross_type_concern(
+            layout.bundle_dir, (survivor_canonical, absorbed_canonical)
+        )
+        if cross_type is not None:
+            raise Refused(
+                f"openkos merge: refusing a cross-type merge -- {cross_type}; "
+                "re-run with --include-cross-type to merge them anyway."
+            )
 
     # #645 (ruling: opt-out): the reconciliation pass is planned when the
     # stacked share reaches the threshold, disclosed in the plan -- before the
