@@ -122,6 +122,7 @@ from adjudication_prompts import (  # noqa: E402
     TREATMENT_SYSTEM_PROMPT,
 )
 from harness_report import arm_identity_line  # noqa: E402
+from harness_stamp import build_stamp  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
@@ -586,6 +587,13 @@ def main(argv: list[str] | None = None) -> int:
                 "runs": completed,
                 "runs_requested": args.runs,
                 "generated_at": stamp,
+                # #1269: per-run wall-clock and the identity stamp; the prompt
+                # is read AFTER any arm swap, so it is what was sent.
+                "run_latencies_s": latencies,
+                "stamp": build_stamp(
+                    model=args.model,
+                    prompts={"adjudication/system": adjudication_mod._SYSTEM_PROMPT},
+                ),
                 # The client settings are part of the arm's identity, not
                 # trivia (#700): they were unpinned before that issue, so a
                 # stored run that does not name them cannot be told apart from

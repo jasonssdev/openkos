@@ -76,6 +76,7 @@ sys.path.append(str(REPO_ROOT / "evals"))
 
 from fixtures import DOCS, EDGES, LabelledEdge  # noqa: E402
 from harness_report import arm_identity_line  # noqa: E402
+from harness_stamp import build_stamp  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
@@ -85,6 +86,7 @@ from openkos.graph.base import Edge  # noqa: E402
 from openkos.llm.ollama import OllamaClient  # noqa: E402
 from openkos.model import okf, types  # noqa: E402
 from openkos.model.relations import ASYMMETRIC_RELATION_TYPES  # noqa: E402
+from openkos.resolution import edge_typing as edge_typing_mod  # noqa: E402
 from openkos.resolution.edge_typing import (  # noqa: E402
     _DIRECTION_TYPE_SIGNATURES,
     _contradicts_object_type_direction,
@@ -682,6 +684,12 @@ def main() -> None:
                 # baseline run afterwards. `null` IS the answer for every
                 # arm measured before #812.
                 "rationale_language": args.rationale_language,
+                # #1269: per-run wall-clock and the identity stamp.
+                "run_latencies_s": latencies,
+                "stamp": build_stamp(
+                    model=args.model,
+                    prompts={"edge_typing/system": edge_typing_mod._SYSTEM_PROMPT},
+                ),
                 "regimes": regimes,
                 "direction": {"pairs": direction_pair_count, **direction},
                 "outcomes": rows,

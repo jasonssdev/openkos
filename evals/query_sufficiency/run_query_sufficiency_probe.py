@@ -74,6 +74,7 @@ then looks hung.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import pathlib
 import statistics
@@ -92,6 +93,7 @@ sys.path.append(str(_EVALS))
 sys.path.append(str(_EVALS / "query_grounding"))
 
 from grounding_corpus import ADJACENT, DOCS, GROUNDED, QUESTIONS  # noqa: E402
+from harness_stamp import build_stamp  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
@@ -178,6 +180,25 @@ negative cannot distinguish "this mechanism does not work" from "this
 wording does not work"."""
 
 
+def _arms_in(rows: Sequence[Row]) -> list[str]:
+    """The arms `rows` actually hold, in `ARMS` order (#1269: `--arms` can
+    run one arm, so a report must not score an arm it never ran)."""
+    return [arm for arm in ARMS if any(r.arm == arm for r in rows)]
+
+
+@functools.cache
+def _stamp(model: str) -> dict[str, Any]:
+    """#1269 identity stamp, built once per run: `_write_runs` checkpoints
+    after every check and must not re-query git and Ollama each time."""
+    return build_stamp(
+        model=model,
+        prompts={
+            "answer/sufficiency": _QUOTE_PROMPT,
+            "probe/sufficiency-binary": _BINARY_PROMPT,
+        },
+    )
+
+
 def _verdict(arm: str, reply: str) -> bool:
     """`True` when the arm judges the context SUFFICIENT.
 
@@ -249,7 +270,11 @@ def _write_corpus(root: pathlib.Path) -> pathlib.Path:
 
 
 def generate(
-    model: str, runs: int, timeout: float, stamp: str
+    model: str,
+    runs: int,
+    timeout: float,
+    stamp: str,
+    arms: Sequence[str] = ARMS,
 ) -> tuple[list[Row], list[dict[str, Any]]]:
     """Retrieve and assemble exactly as production does, then run each arm's
     check over that context. Synthesis is never called -- the mechanism under
@@ -313,7 +338,7 @@ def generate(
                         context = "CONTEXT:\n\n" + "\n\n".join(
                             f"[{n}] {b}" for n, b in enumerate(blocks, 1)
                         )
-                        for arm in ARMS:
+                        for arm in arms:
                             system = (
                                 _BINARY_PROMPT if arm == "binary" else _QUOTE_PROMPT
                             )
@@ -403,7 +428,8 @@ def _write_runs(
                 "generated_at": stamp,
                 "limit": LIMIT,
                 "corpus_docs": len(DOCS),
-                "arms": list(ARMS),
+                "arms": _arms_in(rows),
+                "stamp": _stamp(model),
                 "rows": [row.__dict__ for row in rows],
                 "failures": list(failures),
             },
@@ -506,7 +532,7 @@ def render(rows: Sequence[Row], *, model: str, runs: int) -> str:
         "adjacent refused (all runs) | attribution survivors caught | median s |",
         "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
-    scores = [score(rows, arm) for arm in ARMS]
+    scores = [score(rows, arm) for arm in _arms_in(rows)]
     for s in scores:
         lines.append(
             f"| `{s.arm}` | {s.grounded_refused_any} of {s.grounded_total} "
@@ -520,7 +546,7 @@ def render(rows: Sequence[Row], *, model: str, runs: int) -> str:
         lines.append(f"- **`{s.arm}`** — {verdict(s)}")
 
     lines += ["", "## Per-question, the three survivors", ""]
-    for arm in ARMS:
+    for arm in _arms_in(rows):
         grouped = _by_question(rows, arm)
         lines.append(f"`{arm}`:")
         lines.append("")
@@ -536,7 +562,7 @@ def render(rows: Sequence[Row], *, model: str, runs: int) -> str:
         "## Every grounded question, because the cost is the point",
         "",
     ]
-    for arm in ARMS:
+    for arm in _arms_in(rows):
         grouped = _by_question(rows, arm)
         lines.append(f"`{arm}`:")
         lines.append("")
@@ -651,6 +677,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--stamp", default="manual")
+    parser.add_argument(
+        "--arms",
+        choices=("both", *ARMS),
+        default="both",
+        help="which arm(s) to run (#1269 runs `quote` only, the shipped prompt)",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -662,7 +694,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(render(rows, model=payload["model"], runs=payload["runs"]))
         return 0
 
-    rows, failures = generate(args.model, args.runs, args.timeout, args.stamp)
+    arms = ARMS if args.arms == "both" else (args.arms,)
+    rows, failures = generate(args.model, args.runs, args.timeout, args.stamp, arms)
     if not rows:
         print("no rows produced")
         return 1
