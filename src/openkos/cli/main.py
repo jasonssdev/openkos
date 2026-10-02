@@ -1784,14 +1784,14 @@ def init(
 def _advisory(verb: str, message: str) -> None:
     """One advisory line on stderr under the ADR-0042 convention.
 
-    `message` is the piped text, `openkos <verb>: [WARNING -- |note -- ]body`.
+    `message` is the piped text, `openkos <verb>: [WARNING -- |warning -- |note -- ]body`.
     Piped it is written verbatim. On a terminal the lead and the inline
     marker give way to a `warning:` / `note:` prefix, wrapped by
     `output.notice`."""
     lead = f"openkos {verb}: "
     body = message[len(lead) :] if message.startswith(lead) else message
     kind: output.NoticeKind = "note"
-    if body.startswith("WARNING -- "):
+    if body.startswith(("WARNING -- ", "warning -- ")):
         body, kind = body[len("WARNING -- ") :], "warning"
     elif body.startswith("note -- "):
         body = body[len("note -- ") :]
@@ -9907,6 +9907,18 @@ def _bundle_content_lines(survey: okf.BundleSurvey) -> list[tuple[str, int]]:
     return lines
 
 
+def _echo_report(text: str) -> None:
+    """Echo report text, wrapping each line to the terminal under a hanging
+    indent that continues its own indentation (ADR-0042 rule 4). Not a
+    terminal: exactly `typer.echo(text)`."""
+    typer.echo(
+        "\n".join(
+            output.wrapped(line, hanging=line[: len(line) - len(line.lstrip())] + "  ")
+            for line in text.split("\n")
+        )
+    )
+
+
 @app.command(
     help=(
         "Report what the bundle contains right now: counts by type, recent "
@@ -9996,7 +10008,7 @@ def status() -> None:
         typer.echo("  No activity recorded yet.")
     else:
         for entry in overview.recent_entries:
-            typer.echo(f"  {entry.date}  {entry.text}")
+            _echo_report(f"  {entry.date}  {entry.text}")
     typer.echo()
     # This header goes out BEFORE `build_status_report` (called below),
     # not after -- rendering it after would emit strictly less on the
@@ -10112,9 +10124,9 @@ def status() -> None:
         typer.echo("  Nothing needs attention.")
     else:
         for line in needs_attention:
-            typer.echo(f"  {line}")
+            _echo_report(f"  {line}")
     for notice in queue_lines.notices:
-        typer.echo(f"  {notice}")
+        _echo_report(f"  {notice}")
     # The empty-graph notice stays a separate, purely INFORMATIONAL line
     # (spec: "or an adjacent informational line") -- never appended to
     # `needs_attention`, so a healthy workspace still prints "Nothing needs
@@ -10135,7 +10147,7 @@ def status() -> None:
     # attention."), and only when the identical-titles line did NOT fire,
     # which already names the same verb.
     if not report.exact_title_group_count:
-        typer.echo(
+        _echo_report(
             "  Similar-title candidates are not counted here — run "
             "`openkos duplicates` for the full scan."
         )
@@ -10671,7 +10683,7 @@ def lint() -> None:
 
     typer.echo(f"openkos lint: workspace at {root}")
     for notice_line in report.notices:
-        typer.echo(notice_line)
+        _echo_report(notice_line)
     typer.echo()
     # Checks that did not run (design.md Decision 5, ADR-0022): rendered
     # FIRST -- after notices, before the findings sections below -- so a
@@ -10683,49 +10695,49 @@ def lint() -> None:
         typer.echo("  No checks failed to run.")
     else:
         for not_run_check in report.not_run:
-            typer.echo(f"  {not_run_check.label}: {not_run_check.reason}")
+            _echo_report(f"  {not_run_check.label}: {not_run_check.reason}")
     typer.echo()
     typer.echo("Stale stamps:")
     if not report.stale:
         typer.echo("  No stale stamps.")
     else:
         for finding in report.stale:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Orphan pages:")
     if not report.orphans:
         typer.echo("  No orphan pages.")
     else:
         for finding in report.orphans:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Dangling references:")
     if not report.dangling:
         typer.echo("  No dangling references.")
     else:
         for finding in report.dangling:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Dangling provenance:")
     if not report.dangling_provenance:
         typer.echo("  No dangling provenance findings.")
     else:
         for finding in report.dangling_provenance:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Unextracted sources:")
     if not report.unextracted:
         typer.echo("  No unextracted sources.")
     else:
         for finding in report.unextracted:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Unjudged extractions:")
     if not report.unjudged:
         typer.echo("  No unjudged extractions.")
     else:
         for finding in report.unjudged:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     # #801: its OWN section, immediately after the one it is most likely to
     # be confused with. The judge tokens mean no quality selection ran over
@@ -10737,7 +10749,7 @@ def lint() -> None:
         typer.echo("  No unevidenced objects.")
     else:
         for finding in report.unevidenced:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     # #843: its OWN section, beside the two other extraction_notice
     # readers. The judge tokens mean the stored set skipped selection,
@@ -10749,28 +10761,28 @@ def lint() -> None:
         typer.echo("  No staging-dropped candidates.")
     else:
         for finding in report.staging_dropped:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Below-source sensitivity:")
     if not report.below_source:
         typer.echo("  No below-source sensitivity findings.")
     else:
         for finding in report.below_source:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Multi-source uncovered:")
     if not report.multi_source_uncovered:
         typer.echo("  No multi-source uncovered findings.")
     else:
         for finding in report.multi_source_uncovered:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Unbacked provenance:")
     if not report.unbacked_provenance:
         typer.echo("  No unbacked provenance claims.")
     else:
         for finding in report.unbacked_provenance:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Non-NFC names:")
     if not report.non_nfc:
@@ -10780,35 +10792,35 @@ def lint() -> None:
         # on-disk entry (possibly a directory or non-`.md` file), not a
         # concept object, so the path is the honest spelling.
         for finding in report.non_nfc:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            _echo_report(f"  {finding.path}: {finding.detail}")
     typer.echo()
     typer.echo("State-dir markdown:")
     if not report.state_dir_markdown:
         typer.echo("  No `.md` files under bundle/.state/.")
     else:
         for finding in report.state_dir_markdown:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            _echo_report(f"  {finding.path}: {finding.detail}")
     typer.echo()
     typer.echo("Dot-directory markdown:")
     if not report.dot_dir_markdown:
         typer.echo("  No `.md` files under a dot-directory.")
     else:
         for finding in report.dot_dir_markdown:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            _echo_report(f"  {finding.path}: {finding.detail}")
     typer.echo()
     typer.echo("Symlinked markdown:")
     if not report.symlinked_markdown:
         typer.echo("  No symlinked `.md` files or directories under bundle/.")
     else:
         for finding in report.symlinked_markdown:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            _echo_report(f"  {finding.path}: {finding.detail}")
     typer.echo()
     typer.echo("Deprecated-status exports:")
     if not report.status_export:
         typer.echo("  No deprecated-status export findings.")
     else:
         for finding in report.status_export:
-            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+            _echo_report(f"  {finding.concept_id}: {finding.detail}")
 
     # Completed/not-run counts (design.md Decision 5, ADR-0022): against
     # `application_lint.TOTAL_CHECKS` (15 calls), NOT the 16 `LintReport`
@@ -10979,12 +10991,12 @@ def duplicates(
         raise typer.Exit(code=1) from exc
 
     if report.truncation_notice is not None:
-        typer.echo(report.truncation_notice, err=True)
+        output.notice(report.truncation_notice, verb="duplicates")
 
     typer.echo(f"openkos duplicates: workspace at {root}")
     typer.echo()
     if report.suppressed:
-        typer.echo(
+        _echo_report(
             f"Hiding {report.suppressed} group{_plural(report.suppressed)} you "
             "ruled distinct (`openkos duplicates --kept-distinct` lists them)."
         )
@@ -10998,7 +11010,7 @@ def duplicates(
     acronym_count = sum(1 for group in groups if group.tier is Tier.ACRONYM)
     low_count = len(groups) - high_count - acronym_count
     typer.echo(_format_group_tally(high_count, acronym_count, low_count))
-    typer.echo(
+    _echo_report(
         "Legend: [tier] type -- trigger. The tier is the MATCH METHOD, "
         "not a strength ranking: HIGH = exact normalized key, "
         "ACRONYM = one title's token is the initials of a word run in the "
@@ -11647,24 +11659,24 @@ class _SuggestRelationsObserver:
 
     def candidate_notices(self, truncation: str | None, quarantine: str | None) -> None:
         if truncation is not None:
-            typer.echo(truncation)
+            _echo_report(truncation)
             typer.echo()
         if quarantine is not None:
-            typer.echo(quarantine)
+            _echo_report(quarantine)
             typer.echo()
 
     def no_candidates(self, message: str) -> None:
         typer.echo(message)
 
     def warn(self, message: str) -> None:
-        typer.echo(message, err=True)
+        output.notice(message, verb="suggest-relations")
 
     def serve_split(self, served: int, total: int, fresh: int) -> None:
-        typer.echo(
+        output.notice(
             f"openkos suggest-relations: {served} of {total} "
             "candidate edge(s) served from persisted suggestions; "
             f"{fresh} typed fresh.",
-            err=True,
+            verb="suggest-relations",
         )
 
     def confirm_cost(self, quote: relations_service.CostQuote) -> bool:
@@ -11702,6 +11714,7 @@ class _ApplyObserver:
     #398/#483 contract)."""
 
     def degraded(self, edge: Edge) -> None:
+        output.section_break()
         typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
         typer.echo("  note: no valid type suggested")
 
@@ -11713,8 +11726,9 @@ class _ApplyObserver:
         # invites bulk application must not be the one surface missing the
         # documented warning. Rendered on the preview line AND inside the
         # consent prompt, mirroring curate exactly.
+        output.section_break()
         typer.echo(f"[{suggested_type}] {edge.source_id} -> {edge.target_id}{caveat}")
-        typer.echo(f"  rationale: {rationale}")
+        _echo_report(f"  rationale: {rationale}")
 
     def confirm_relate(self, edge: Edge, suggested_type: str, caveat: str) -> bool:
         return curate_module._confirm(
@@ -11923,10 +11937,10 @@ def suggest_relations_cmd(
                     f"[{result.suggested_type}] {edge.source_id} -> "
                     f"{edge.target_id}{_suggestion_caveat(result.suggested_type)}"
                 )
-                typer.echo(f"  rationale: {result.rationale}")
+                _echo_report(f"  rationale: {result.rationale}")
             typer.echo()
 
-        typer.echo(
+        _echo_report(
             "Next: openkos suggest-relations --apply (per-item consent), or "
             "openkos relate <source> <type> <target>"
         )
@@ -11935,7 +11949,7 @@ def suggest_relations_cmd(
         # Issue #560: the cap is not a dead end -- an applied/related pair
         # becomes a typed edge and leaves the candidate set, so the next
         # run's cap budget reaches the candidates dropped this time.
-        typer.echo(
+        _echo_report(
             "Candidates beyond the cap are not lost: type the edges shown "
             "(--apply or relate), then re-run suggest-relations to surface "
             "the next batch."
@@ -11944,7 +11958,7 @@ def suggest_relations_cmd(
             # #567: browsing without typing -- name the exact offset the
             # next ranked batch starts at, gated on a visible pair actually
             # existing beyond this run's window.
-            typer.echo(
+            _echo_report(
                 f"Or browse it without typing these: re-run with "
                 f"--edge-offset {outcome.next_offset}."
             )
@@ -12080,7 +12094,7 @@ def suggest_volatility_cmd(
             typer.echo("  note: no valid tier suggested")
         else:
             typer.echo(f"[{result.suggested_tier}] {result.type_name}")
-            typer.echo(f"  rationale: {result.rationale}")
+            _echo_report(f"  rationale: {result.rationale}")
         typer.echo()
 
     typer.echo("Next: openkos set-volatility <ConceptType> <tier>")
@@ -12606,13 +12620,13 @@ class _CliContradictionsObserver(contradictions_service.ContradictionsObserver):
         )
 
     def vacuous_coverage(self, notice: str) -> None:
-        typer.echo(f"openkos contradictions: {notice}", err=True)
+        output.notice(f"openkos contradictions: {notice}", verb="contradictions")
 
     def persisted_findings_unreadable(self, error: Exception) -> None:
-        typer.echo(
+        _advisory(
+            "contradictions",
             "openkos contradictions: warning -- failed to read persisted "
             f"findings ({error}); judging every candidate fresh.",
-            err=True,
         )
 
     def progress_callback(self) -> Callable[[int, int, object], None] | None:
@@ -12621,11 +12635,11 @@ class _CliContradictionsObserver(contradictions_service.ContradictionsObserver):
         return observability.progress_callback("contradictions", "checking pair")
 
     def persist_failed(self, error: Exception) -> None:
-        typer.echo(
+        _advisory(
+            "contradictions",
             "openkos contradictions: warning -- failed to persist "
             f"findings ({error}); this run's verdicts are shown below "
             "but will not be served from the store on a later run.",
-            err=True,
         )
 
 
@@ -12726,24 +12740,24 @@ def _run_contradictions_report(
         # (`batch.results`), never the planned `judged_plan.specs` -- on a
         # partial batch the two differ, and printing the plan here overstated
         # the spend the stderr epilogue then contradicted.
-        typer.echo(
+        _echo_report(
             f"{outcome.served_count} of {len(outcome.plan.specs)} candidate(s) "
             "served from persisted findings; "
             f"{outcome.fresh_count} judged fresh."
         )
         typer.echo()
     if outcome.candidate_notice is not None:
-        typer.echo(outcome.candidate_notice)
+        _echo_report(outcome.candidate_notice)
         typer.echo()
     if outcome.quarantine_notice is not None:
-        typer.echo(outcome.quarantine_notice)
+        _echo_report(outcome.quarantine_notice)
         typer.echo()
     if outcome.zero_state is not None:
         typer.echo(outcome.zero_state)
         return
 
     if outcome.truncation_notice is not None:
-        typer.echo(outcome.truncation_notice)
+        _echo_report(outcome.truncation_notice)
         typer.echo()
     if not outcome.displayed:
         # No early return (#441): the partial-batch failure epilogue below must
@@ -12764,8 +12778,8 @@ def _run_contradictions_report(
     for result in outcome.displayed:
         render_contradiction_header(result)
         for claim in result.conflicting_claims:
-            typer.echo(f"  - {claim}")
-        typer.echo(f"  rationale: {result.rationale}")
+            _echo_report(f"  - {claim}")
+        _echo_report(f"  rationale: {result.rationale}")
         typer.echo()
 
     if outcome.batch.failure is not None:
@@ -12970,10 +12984,10 @@ class _RevisionsObserver:
     hands it typed data and this class owns every word and the TTY question."""
 
     def started(self) -> None:
-        typer.echo(revisions_service.EXPERIMENTAL_NOTICE, err=True)
+        output.notice(revisions_service.EXPERIMENTAL_NOTICE, verb="revisions")
 
     def truncation_notice(self, notice: str) -> None:
-        typer.echo(notice, err=True)
+        output.notice(notice, verb="revisions")
 
     def cost_gate(self, plan: revisions_service.RevisionPlan) -> None:
         typer.echo(
@@ -13118,7 +13132,7 @@ def revisions(
     report = run.report
     if report is None:
         return
-    typer.echo(
+    _echo_report(
         revisions_report(
             report.plan,
             report.outcome,
