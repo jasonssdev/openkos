@@ -5,13 +5,16 @@ MVP-3 gap #8 · S1).
 (FTS/vector/graph) and candidate-load surface (contradiction detection,
 adjudication) filters against before fusion/candidate emission — see
 `openspec/changes/status-aware-retrieval/design.md`. It imports only
-`openkos.model.okf` + stdlib, a package-root leaf like `lint.py`/`config.py`:
+`openkos.model.okf`, the canonical `openkos.bundle.provenance` closure and
+stdlib (never `state`, `retrieval` or `graph`), a package-root leaf like
+`lint.py`/`config.py`:
 both `retrieval/` and `resolution/` depend on it with no cycle and no
 retrieval<->resolution coupling.
 
 A concept is effective-deprecated iff its own `status` frontmatter field
 equals `"deprecated"`, OR it is the TARGET of ANY other concept's outbound
-`supersedes` edge. Self-`supersedes` edges (source == target) are dropped
+`supersedes` edge, OR it is a PROVENANCE ORPHAN of a superseded Source
+(`provenance_orphans`: its whole provenance is a superseded Source). Self-`supersedes` edges (source == target) are dropped
 before set-building, so they never mark a concept deprecated — that is the
 only exemption this predicate makes.
 
@@ -26,11 +29,12 @@ in-cycle edge. Contradictory or cyclic supersession is treated as
 unresolved and hidden rather than guessed at.
 """
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf
 
 
@@ -62,6 +66,28 @@ def _superseded_ids(supersedes: set[tuple[str, str]]) -> frozenset[str]:
     about who is superseded (design: 'the predicate and the export can
     never disagree')."""
     return frozenset(target for source, target in supersedes if target != source)
+
+
+def provenance_orphans(
+    provenance_by_id: Mapping[str, frozenset[str]],
+    superseded_ids: Collection[str],
+) -> frozenset[str]:
+    """Concepts whose ENTIRE provenance is, directly or through other such
+    concepts, a superseded Source (retire-superseded-sources).
+
+    The ONE place the rule is computed: `deprecated_concept_ids` and
+    `bundle.listing.list_objects` both call it. Roots are only the superseded
+    ids under `sources/` -- a superseded `Decision` does not propagate to the
+    Insights citing it. The closure is `forget --scope source`'s own
+    (`bundle.provenance.provenance_closure`), so its non-empty-provenance
+    guard keeps a concept with no recorded provenance, or with any live
+    entry, out of the result. The roots themselves are excluded: a superseded
+    Source is already deprecated by the edge rule. Pure; writes nothing."""
+    roots = frozenset(sid for sid in superseded_ids if sid.startswith("sources/"))
+    if not roots:
+        return frozenset()
+    closure = bundle_provenance.provenance_closure(provenance_by_id, root_ids=roots)
+    return frozenset(closure) - roots
 
 
 @dataclass(frozen=True)

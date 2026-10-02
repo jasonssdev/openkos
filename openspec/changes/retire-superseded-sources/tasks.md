@@ -8,7 +8,7 @@ written against its shape.
 
 ## Phase 1: Deprecation follows provenance
 
-- [ ] 1.1 Pure `provenance_orphans(provenance_by_id, superseded_ids)` in
+- [x] 1.1 Pure `provenance_orphans(provenance_by_id, superseded_ids)` in
       `lifecycle.py`, reusing `bundle.provenance.provenance_closure` and
       rooted only at superseded ids under `sources/`; table-driven tests:
       sole-source, shared with a live Source, empty provenance, transitive

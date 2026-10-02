@@ -444,3 +444,96 @@ def test_filter_hits_with_empty_deprecated_set_returns_all_hits_unchanged() -> N
     result = lifecycle.filter_hits(hits, frozenset())
 
     assert result == hits
+
+
+# --- provenance orphans of a superseded Source (retire-superseded-sources) ---
+
+
+def _fs(*items: str) -> frozenset[str]:
+    return frozenset(items)
+
+
+def test_orphans_sole_source_concept_is_deprecated() -> None:
+    result = lifecycle.provenance_orphans(
+        {"concepts/c": _fs("sources/v1")}, frozenset({"sources/v1"})
+    )
+
+    assert result == frozenset({"concepts/c"})
+
+
+def test_orphans_shared_with_a_live_source_stays_live() -> None:
+    result = lifecycle.provenance_orphans(
+        {"concepts/c": _fs("sources/v1", "sources/v2")}, frozenset({"sources/v1"})
+    )
+
+    assert result == frozenset()
+
+
+def test_orphans_empty_provenance_is_never_swept() -> None:
+    result = lifecycle.provenance_orphans(
+        {"concepts/hand": frozenset()}, frozenset({"sources/v1"})
+    )
+
+    assert result == frozenset()
+
+
+def test_orphans_closure_is_transitive_to_an_insight() -> None:
+    result = lifecycle.provenance_orphans(
+        {
+            "concepts/c": _fs("sources/v1"),
+            "insights/i": _fs("concepts/c"),
+            "insights/live": _fs("concepts/c", "sources/v2"),
+        },
+        frozenset({"sources/v1"}),
+    )
+
+    assert result == frozenset({"concepts/c", "insights/i"})
+
+
+def test_orphans_cycle_adds_nothing_beyond_the_roots_closure() -> None:
+    # a <-> b provenance cycle disjoint from any root is never swept.
+    result = lifecycle.provenance_orphans(
+        {"concepts/a": _fs("concepts/b"), "concepts/b": _fs("concepts/a")},
+        frozenset({"sources/v1"}),
+    )
+
+    assert result == frozenset()
+
+
+def test_orphans_a_superseded_non_source_is_not_a_root() -> None:
+    result = lifecycle.provenance_orphans(
+        {"insights/i": _fs("decisions/d")}, frozenset({"decisions/d"})
+    )
+
+    assert result == frozenset()
+
+
+def test_orphans_roots_are_excluded_from_the_result() -> None:
+    result = lifecycle.provenance_orphans(
+        {"sources/v1": _fs("sources/v0"), "concepts/c": _fs("sources/v1")},
+        frozenset({"sources/v1"}),
+    )
+
+    assert "sources/v1" not in result
+    assert result == frozenset({"concepts/c"})
+
+
+def test_lifecycle_imports_nothing_from_the_derived_layer() -> None:
+    """Import direction: `lifecycle` may use the canonical `bundle` package
+    (the closure lives there) but never `state`, `retrieval` or `graph`."""
+    import ast
+
+    tree = ast.parse(Path(lifecycle.__file__).read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+            imported.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+
+    for forbidden in ("state", "retrieval", "graph"):
+        assert not any(
+            name == f"openkos.{forbidden}" or name.startswith(f"openkos.{forbidden}.")
+            for name in imported
+        ), forbidden
