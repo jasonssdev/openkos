@@ -537,3 +537,91 @@ def test_lifecycle_imports_nothing_from_the_derived_layer() -> None:
             name == f"openkos.{forbidden}" or name.startswith(f"openkos.{forbidden}.")
             for name in imported
         ), forbidden
+
+
+def _write_with_provenance(
+    path: Path,
+    provenance: list[str] | None,
+    relations: list[tuple[str, str]] | None = None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["---", "type: Concept", "title: Stub"]
+    if provenance is not None:
+        lines.append("provenance:")
+        lines.extend(f"  - {entry}" for entry in provenance)
+    if relations:
+        lines.append("relations:")
+        for target, rel_type in relations:
+            lines.append(f"  - target: {target}")
+            lines.append(f"    type: {rel_type}")
+    lines.append("---")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_deprecated_includes_provenance_orphans_of_a_superseded_source(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_with_provenance(bundle_dir / "sources" / "v1.md", None)
+    _write_with_provenance(
+        bundle_dir / "sources" / "v2.md", None, [("sources/v1", "supersedes")]
+    )
+    _write_with_provenance(bundle_dir / "concepts" / "sole.md", ["sources/v1"])
+    _write_with_provenance(
+        bundle_dir / "concepts" / "shared.md", ["sources/v1", "sources/v2"]
+    )
+    _write_with_provenance(bundle_dir / "concepts" / "hand.md", None)
+    _write_with_provenance(bundle_dir / "insights" / "i.md", ["concepts/sole.md"])
+
+    deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+
+    assert deprecated == frozenset({"sources/v1", "concepts/sole", "insights/i"})
+
+
+def test_unrelate_restores_orphans_and_no_file_is_written(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_with_provenance(bundle_dir / "sources" / "v1.md", None)
+    v2 = bundle_dir / "sources" / "v2.md"
+    _write_with_provenance(v2, None, [("sources/v1", "supersedes")])
+    sole = bundle_dir / "concepts" / "sole.md"
+    _write_with_provenance(sole, ["sources/v1"])
+    before = sole.read_bytes()
+
+    assert "concepts/sole" in lifecycle.deprecated_concept_ids(bundle_dir)
+    _write_with_provenance(v2, None)  # the supersession is removed
+
+    assert lifecycle.deprecated_concept_ids(bundle_dir) == frozenset()
+    assert sole.read_bytes() == before
+
+
+def test_unreadable_document_contributes_no_provenance_and_does_not_crash(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_with_provenance(bundle_dir / "sources" / "v1.md", None)
+    _write_with_provenance(
+        bundle_dir / "sources" / "v2.md", None, [("sources/v1", "supersedes")]
+    )
+    broken = bundle_dir / "concepts" / "broken.md"
+    broken.parent.mkdir(parents=True, exist_ok=True)
+    broken.write_text("---\nprovenance: [sources/v1\n---\n", encoding="utf-8")
+
+    deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+
+    assert "concepts/broken" not in deprecated
+
+
+def test_non_list_provenance_is_never_swept(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_with_provenance(bundle_dir / "sources" / "v1.md", None)
+    _write_with_provenance(
+        bundle_dir / "sources" / "v2.md", None, [("sources/v1", "supersedes")]
+    )
+    odd = bundle_dir / "concepts" / "odd.md"
+    odd.parent.mkdir(parents=True, exist_ok=True)
+    odd.write_text(
+        "---\ntype: Concept\ntitle: Odd\nprovenance: sources/v1\n---\n",
+        encoding="utf-8",
+    )
+
+    assert "concepts/odd" not in lifecycle.deprecated_concept_ids(bundle_dir)

@@ -16,7 +16,7 @@ written against its shape.
       result. Settle the import direction (import the closure vs move it to
       a leaf) and pin it with an AST guard that `lifecycle` imports nothing
       from `state`, `retrieval` or `graph`. (`lint`)
-- [ ] 1.2 `deprecated_concept_ids` collects normalized provenance in its
+- [x] 1.2 `deprecated_concept_ids` collects normalized provenance in its
       existing walk and folds the orphans in; tests over a real bundle
       including `unrelate` restoring liveness with no file written, and an
       unreadable document failing safe (no hide, no crash). (`lint`)
