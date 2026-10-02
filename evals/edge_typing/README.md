@@ -55,6 +55,32 @@ folder prefix and frontmatter type agree, that more than one type is
 present, and that at least one labelled edge is cross-type. The first of
 those is the one that would have caught #990 on the day it was introduced.
 
+**Direction** (#1269). Type accuracy cannot see a reversed edge: `member_of`
+on `collection -> member` is a *wrong direction*, and #650 found that is where
+the observed errors live (`trap hits` covers it, but only on the reversed
+probes, with no view of whether the forward twin was right). The direction
+metric scores each **forward/reversed pair** of one document pair together,
+per run:
+
+- `discriminated` — forward answered its label AND the reversed edge did not
+  repeat it: the orientation was right on both sides.
+- `blind` — the same asymmetric type both ways. It asserts a relation that
+  cannot hold in both directions, and forward-only accuracy scores it a pass.
+- `abstained` — no correct forward claim (e.g. an honest `related_to`), so
+  direction is not credited and not charged.
+
+It is defined **only** where a forward edge's label is in
+`relations.ASYMMETRIC_RELATION_TYPES` and its reversed twin's `trap_type` is
+that same type (`direction_pairs`). Symmetric labels, abstentions and forward
+edges without a reversed probe (`depends_on`) are excluded rather than counted
+as passes, and the report prints the denominator as "N of TOTAL labelled
+edges" so the subset cannot hide its complement. On the current corpus that is
+18 of 29 edges (9 pairs). `--self-test` exercises the scorer on an oracle, a
+direction-blind and an all-`related_to` model with known outcomes. **No model
+has been scored on it yet**: every arm stored in `results/` predates the
+metric (the stored emissions can be re-scored, since `runs-*.json` keeps
+per-edge answers).
+
 **Type distribution**. `related_to` is 67% of accepted edges on a real
 bundle (`edge_typing.py:146`), and the rubric's stated aim is *not* to drive
 that share down, so a sharp move in either direction is a finding to explain

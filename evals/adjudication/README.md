@@ -28,7 +28,7 @@ Nothing scored this judge. A prompt fix would have been adopted on
 intuition, which this repository has already paid for (see
 `evals/edge_typing/README.md`, where a longer prompt lost its own A/B).
 
-## The nine probe classes
+## The eleven probe classes
 
 The measurement runs **both directions** of the change, because a rule that
 makes identical Event titles read as a recurring series buys its precision
@@ -45,10 +45,23 @@ somewhere.
 | `part-whole` | 1 | `different` | the exclusion the shipped prompt already states |
 | `aspect-of` | 3 | `different` | #910's title shape: `X` vs `«aspect» of X`, three aspect nouns |
 | `transitivity` | 6 | `different` | #910's triple: one Project anchor, three Events, every triangle scored |
+| `procedure-about` | 3 | `different` | #1258: a Concept against a Procedure that is only about it (installing, building with, configuring) |
+| `ui-component` | 2 | `different` | #1258: a framework against its own web UI or dashboard, both Concepts |
 
 Without `event-same`, a rubric that answered `different` to every Event pair
 would score perfectly; without `asym-same`, one that answered `different`
 whenever detail is asymmetric would too.
+
+The last two classes (#1258, #1269) are hard negatives for the identity judge
+and for the survivor choice downstream of it: the 0.4.0 run judged these
+shapes `same`, and a `same` verdict between a Concept and a Procedure about it
+let body length pick the Procedure as survivor. **No arm has been run on
+them.** Every arm stored in `results/` predates them and was measured on a
+smaller fixture set, so none is comparable with a run that includes them;
+re-run **both** arms of any comparison. The classes have no `same`-expected
+counterpart of their own: the existing `person-same`, `alias-same` and
+`event-same` controls keep a judge that answers `different` to everything from
+scoring well.
 
 ## The 2×2 ablation, 15 runs per arm
 
