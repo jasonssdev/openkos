@@ -28,7 +28,7 @@ written against its shape.
       concept of a superseded Source is absent from FTS, vector and fused
       results and from adjudication/contradiction candidates, and present
       with `--include-deprecated`. (`retrieval`)
-- [ ] 1.5 Export stays edge-only: tests that `relate`, `unrelate`, `forget`,
+- [x] 1.5 Export stays edge-only: tests that `relate`, `unrelate`, `forget`,
       `merge`, `repair` and the `lint` drift scan write and report nothing
       for a provenance orphan; `superseded_from_metadata` unchanged.
       (`lint`)
