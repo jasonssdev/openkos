@@ -54,6 +54,7 @@ PRODUCER_RELATIONS: Final = "suggest-relations/1"
 PRODUCER_VOLATILITY: Final = "suggest-volatility/1"
 PRODUCER_REVISIONS: Final = "revisions/1"
 PRODUCER_WATCH: Final = "watch/1"
+PRODUCER_VERSIONS: Final = "source-supersession/1"
 
 REASON_SOURCE_CHANGED: Final = "source changed after import"
 REASON_EXCEEDS_BUDGET: Final = "exceeds per-pass budget"
@@ -128,6 +129,7 @@ def publish(
         {proposal.decision_key for proposal in proposals},
         complete=complete,
         commit_section=commit_section,
+        exclude_producers=pq.EVENT_DRIVEN_PRODUCERS,
         **clock_kwargs,
     )
     return ProducerResult(
@@ -544,6 +546,84 @@ def enqueue_revisions(
         "revision",
         revision_proposals(findings),
         complete=complete,
+        commit_section=commit_section,
+        bundle_dir=bundle_dir,
+        clock=clock,
+    )
+
+
+# -- source supersession ----------------------------------------------------------
+
+_SUPERSESSION_WHY: Final = {
+    "new_version": (
+        "the watched file changed after import; this Source is its new version"
+    ),
+    "dead_source": (
+        "the earlier Source has no extractable text and this Source replaces it"
+    ),
+}
+
+
+def source_supersession_proposal(
+    *,
+    source_id: str,
+    previous_id: str,
+    reason: str,
+    current_digest: CurrentDigest,
+) -> pq.Proposal | None:
+    """A `relation_type` proposal that `source_id` supersedes `previous_id`
+    (ADR-0041). The direction is known from the order the engine imported the
+    two, never from a model or a modification time; it is still a proposal
+    because writing it deprecates the earlier Source. `None` when either Source
+    cannot be re-read: a row whose inputs cannot be digested could never be
+    told stale."""
+    digests = _file_digests(current_digest, (source_id, previous_id))
+    if digests is None:
+        return None
+    return pq.Proposal(
+        kind="relation_type",
+        key_body=pq.relation_type_key(source_id, previous_id),
+        producer=PRODUCER_VERSIONS,
+        payload=_canonical(
+            {
+                "source_id": source_id,
+                "target_id": previous_id,
+                "effective_source_id": source_id,
+                "effective_target_id": previous_id,
+                "suggested_type": "supersedes",
+                "rationale": _SUPERSESSION_WHY[reason],
+                "reason": reason,
+            }
+        ),
+        targets=(source_id, previous_id),
+        input_digests=digests,
+    )
+
+
+def enqueue_source_supersession(
+    conn: Any,
+    *,
+    source_id: str,
+    previous_id: str,
+    reason: str,
+    current_digest: CurrentDigest,
+    bundle_dir: Path,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] | None = None,
+) -> ProducerResult:
+    """Upsert the one supersession row. Event-driven, never `complete`: it does
+    not retire another row, and no advisor pass retires this one."""
+    proposal = source_supersession_proposal(
+        source_id=source_id,
+        previous_id=previous_id,
+        reason=reason,
+        current_digest=current_digest,
+    )
+    return publish(
+        conn,
+        "relation_type",
+        [] if proposal is None else [proposal],
+        complete=False,
         commit_section=commit_section,
         bundle_dir=bundle_dir,
         clock=clock,

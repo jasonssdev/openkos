@@ -92,6 +92,13 @@ def row_resolving_command(row: pq.PendingItem, inbox: Path | None = None) -> str
             return "openkos adjudicate --apply"
         flags = " ".join(f"--keep-distinct {shlex.quote(t)}" for t in row.targets)
         return f"openkos duplicates {flags}"
+    if row.kind == "relation_type" and payload.get("suggested_type") == "supersedes":
+        newer = payload.get("effective_source_id")
+        older = payload.get("effective_target_id")
+        if isinstance(newer, str) and isinstance(older, str):
+            return (
+                f"openkos relate {shlex.quote(newer)} supersedes {shlex.quote(older)}"
+            )
     inbox_path = payload.get("inbox_path")
     if row.kind == "watch_refusal" and isinstance(inbox_path, str) and inbox_path:
         refused = inbox / inbox_path if inbox is not None else inbox_path

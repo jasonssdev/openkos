@@ -1,12 +1,16 @@
 """`watch_refusal` queue rows (MVP 4 unit 7.3, issue #1142, ADR-0038).
 
-A watched file whose bytes changed after import is refused into the pending-work
-queue once, never re-imported and never an error on every save. Every test drives
+A `watch_refusal` row is one the engine opened and a person has not resolved: an
+over-budget file, or a refusal of changed bytes. Since ADR-0041 the watch imports
+changed bytes as a new version (`test_watch_versions.py`), so the changed-bytes
+refusal is reproduced here by pinning the pre-ADR-0041 policy (`version_changed`
+off), the state every row an older engine left behind is in. Every test drives
 the real watch job over a real workspace and reads the rows back from
 `findings.db`, asserting the carried digest, status and text rather than a count.
 """
 
 import contextlib
+import dataclasses
 import hashlib
 import json
 import os
@@ -31,6 +35,15 @@ _EDITED_AGAIN = "Yet another save, longer than before.\n"
 def env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned_git_identity: None
 ) -> _Env:
+    real_ingest = svc.ingest_source
+
+    def pre_versioning(*args: object, **kwargs: object) -> svc.IngestOutcome:
+        policy = args[2]
+        assert isinstance(policy, svc.IngestPolicy)
+        legacy = dataclasses.replace(policy, version_changed=False)
+        return real_ingest(args[0], args[1], legacy, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(svc, "ingest_source", pre_versioning)
     root = make_workspace(tmp_path, monkeypatch)
     inbox = tmp_path / "inbox"
     inbox.mkdir()

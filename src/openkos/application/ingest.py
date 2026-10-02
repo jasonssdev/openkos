@@ -258,6 +258,31 @@ def first_free_raw_name(family: list[Path], name: str) -> str:
     return f"{stem}-{n}{ext}"
 
 
+def dead_sources_in_family(
+    layout: config.WorkspaceLayout, name: str
+) -> tuple[str, ...]:
+    """The Source concept ids of `name`'s raw collision family whose extraction
+    ended `no-extractable-text` and that no other concept has already
+    superseded (#1224): the dead Sources a replacement imported under the same
+    basename may supersede. Unreadable or malformed Sources are skipped."""
+    dead: list[str] = []
+    for member in raw_collision_family(layout.raw_dir, name):
+        slug = source_titles.slugify(Path(member.name).stem)
+        if not slug:
+            continue
+        concept_path = okf.concept_path_for(f"sources/{slug}", layout.bundle_dir)
+        try:
+            metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, okf.FrontmatterError):
+            continue
+        if (
+            metadata.get(okf.EXTRACTION_STATUS_KEY) == "no-extractable-text"
+            and metadata.get("status") != "deprecated"
+        ):
+            dead.append(f"sources/{slug}")
+    return tuple(dead)
+
+
 def member_source_exists(bundle_dir: Path, member: Path) -> bool:
     """Whether raw file `member` has an owning Source document at all
     (#865). Distinguishes the two cases `raw_member_origin_key` folds into
@@ -369,6 +394,21 @@ def resolve_raw_destination(
         return RawDestination(src.name, False, None, origin_key=origin_key)
     resolved_src = src.resolve(strict=False)
     src_bytes = src.read_bytes()
+    versions = [
+        member
+        for member in family
+        if raw_member_origin_key(layout.bundle_dir, member) == origin_key
+    ]
+    if len(versions) > 1:
+        # One file imported as several versions (source supersession): the
+        # version whose bytes these are, else the newest, so a re-import of any
+        # version stays idempotent and a changed one is judged against the
+        # latest.
+        chosen = next(
+            (member for member in versions if member.read_bytes() == src_bytes),
+            versions[-1],
+        )
+        return RawDestination(chosen.name, True, None, origin_key=origin_key)
     for member in family:
         member_origin = raw_member_origin_key(layout.bundle_dir, member)
         if member_origin is not None and member_origin == origin_key:

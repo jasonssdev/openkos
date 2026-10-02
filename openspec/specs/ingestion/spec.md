@@ -306,6 +306,10 @@ recognize setext headings, and does NOT backfill already-ingested Sources.
 > while belonging to a different file, is not "this source" and MUST NOT
 > trigger this refusal — see the disambiguation requirement below.
 
+> A caller that passes the version policy (the unattended watch, ADR-0041)
+> does not get this refusal. See "A Changed Source Under The Version Policy
+> Imports As A New Raw Copy" below.
+
 #### Scenario: Successful extraction yields a Concept
 
 - GIVEN a source whose content clearly describes an idea, topic, or
@@ -3548,3 +3552,52 @@ MUST be unchanged.
 - WHEN `openkos ingest notes/ --auto` runs
 - THEN all five files are ingested, no deferral is reported, and the exit
   code is what it would be without the `unattended:` section
+
+### Requirement: A Changed Source Under The Version Policy Imports As A New Raw Copy
+
+When the caller passes the version policy and `<path>` matches an existing raw
+copy by `origin_key` but its bytes differ, `ingest` MUST NOT refuse. It MUST
+copy the bytes to the next free `<stem>-N<ext>` name, write a Source for that
+copy recording the same `origin_key`, leave the earlier raw copy and Source
+untouched, and report the proposed supersession (new Source, earlier Source,
+reason `new_version`) in its outcome without writing it. When several versions
+of one origin exist, the version whose bytes are identical to `<path>` MUST be
+the one matched (an idempotent re-ingest), else the newest. A person's
+`openkos ingest` MUST NOT pass the policy and keeps the refusal above.
+
+#### Scenario: A changed file becomes a new raw copy
+
+- GIVEN `notes.txt` was ingested and its bytes then changed
+- WHEN it is ingested under the version policy
+- THEN `raw/notes.txt` is unchanged, `raw/notes-2.txt` holds the new bytes,
+  and the outcome proposes `sources/notes-2` supersedes `sources/notes`
+
+#### Scenario: An imported version is idempotent
+
+- GIVEN `notes.txt` was imported as two versions
+- WHEN it is ingested again, with either version's bytes
+- THEN nothing is written and no supersession is proposed
+
+### Requirement: A Replacement For A Source With No Extractable Text Offers Supersession
+
+When `ingest` copies a file to a disambiguated raw name because its basename
+is held by a different source, and a Source of that name family has
+`extraction_status: no-extractable-text` and is not already deprecated, and the
+new Source itself has extractable text, `ingest` MUST report a proposed
+supersession (reason `dead_source`) and a manual `openkos ingest` MUST print the
+exact command, `openkos relate <new> supersedes <dead>`, on stderr. It MUST NOT
+write the relation.
+
+#### Scenario: A converted file names the command
+
+- GIVEN a Source with no extractable text and the same document converted and
+  ingested under the same basename from another path
+- WHEN `openkos ingest` completes
+- THEN stderr names `openkos relate sources/<new> supersedes sources/<dead>` and
+  the dead Source is unchanged
+
+#### Scenario: A healthy neighbour is never offered
+
+- GIVEN a same-basename Source whose extraction found text
+- WHEN a different file is ingested under a disambiguated name
+- THEN no supersession is proposed
