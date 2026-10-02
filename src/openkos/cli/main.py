@@ -2388,6 +2388,7 @@ def _run_adjudicate_apply(
             skipped_already_merged += 1
             continue
 
+        output.section_break()
         typer.echo(
             _format_merge_preview_line(
                 prepared, no_reconcile=no_reconcile, reconcile=reconcile

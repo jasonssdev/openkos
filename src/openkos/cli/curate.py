@@ -62,7 +62,7 @@ from openkos.application import lifecycle as application_lifecycle
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
 from openkos.application.lock_wait import CommitSection
-from openkos.cli import observability
+from openkos.cli import observability, output
 from openkos.graph.base import Edge
 from openkos.graph.sqlite_graph import build_graph
 from openkos.llm.base import (
@@ -1069,6 +1069,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             skipped += 1
             continue
 
+        output.section_break()
         typer.echo(
             cli_main._format_merge_preview_line(
                 prepared, no_reconcile=ctx.no_reconcile, reconcile=ctx.reconcile
@@ -1490,6 +1491,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         # `edge` itself stays the candidate identity, unswapped, for
         # persistence and reassembly.
         edge = suggestion.effective_edge
+        output.section_break()
         if suggestion.suggested_type is None:
             typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
             typer.echo("  note: no valid type suggested")
@@ -1499,7 +1501,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         typer.echo(
             f"[{suggestion.suggested_type}] {edge.source_id} -> {edge.target_id}"
         )
-        typer.echo(f"  rationale: {suggestion.rationale}")
+        output.echo_wrapped(f"  rationale: {suggestion.rationale}", hanging="    ")
         # #624: an asymmetric suggestion carries no direction evidence --
         # #613 measured both models answering the SAME asymmetric type with
         # SOURCE/TARGET swapped on nearly every edge -- so its consent line
@@ -1816,6 +1818,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     skipped = 0
     declined: list[str] = []
     for result in results:
+        output.section_break()
         if result.suggested_tier is None:
             typer.echo(f"[?] {result.type_name}")
             typer.echo("  note: no valid tier suggested")
@@ -1823,7 +1826,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             continue
 
         typer.echo(f"[{result.suggested_tier}] {result.type_name}")
-        typer.echo(f"  rationale: {result.rationale}")
+        output.echo_wrapped(f"  rationale: {result.rationale}", hanging="    ")
         if not _confirm_item(
             ctx,
             "Metadata",
