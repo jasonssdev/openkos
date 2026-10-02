@@ -30,7 +30,7 @@ is one work unit (one Conventional Commit, scope `ingest`, `okf`,
 
 ## Phase 2: Staging
 
-- [ ] 2.1 Config key `attach_at_ingest` (bool, default per Open Question 1)
+- [x] 2.1 Config key `attach_at_ingest` (bool, default per Open Question 1)
       in `config.read_config`, the workspace template comment, and its
       requirement in the ingestion spec delta so
       `tests/unit/test_config_keys_specified.py` passes; non-boolean refused

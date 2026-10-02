@@ -3631,3 +3631,47 @@ def test_symlinked_segment_returns_none_for_the_boundary_itself(
     bundle_dir.mkdir()
 
     assert config.symlinked_segment(bundle_dir, bundle_dir) is None
+
+
+# --- attach_at_ingest: revise an existing concept instead of forking (#1268) --
+
+
+def test_default_attach_at_ingest_is_true() -> None:
+    assert config.DEFAULT_ATTACH_AT_INGEST is True
+
+
+def test_read_config_attach_at_ingest_defaults_on_when_absent(tmp_path: Path) -> None:
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+
+    assert config.read_config(tmp_path).attach_at_ingest is True
+
+
+def test_read_config_attach_at_ingest_false_is_the_kill_switch(tmp_path: Path) -> None:
+    (tmp_path / "openkos.yaml").write_text(
+        "attach_at_ingest: false\n", encoding="utf-8"
+    )
+
+    assert config.read_config(tmp_path).attach_at_ingest is False
+
+
+@pytest.mark.parametrize(
+    "yaml_body", ["attach_at_ingest: null\n", "attach_at_ingest:\n"]
+)
+def test_read_config_null_attach_at_ingest_falls_back_to_on(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    assert config.read_config(tmp_path).attach_at_ingest is True
+
+
+@pytest.mark.parametrize("value", ["maybe", "0", "1", "[true]"])
+def test_read_config_refuses_a_non_boolean_attach_at_ingest(
+    tmp_path: Path, value: str
+) -> None:
+    (tmp_path / "openkos.yaml").write_text(
+        f"attach_at_ingest: {value}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="'attach_at_ingest' must be a boolean"):
+        config.read_config(tmp_path)
