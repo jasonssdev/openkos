@@ -1659,41 +1659,38 @@ name the preserved level.
 - WHEN `openkos ingest <path>` completes
 - THEN the resolved `sensitivity` is `confidential`
 
-### Requirement: Per-Type Derived-Object Tally Summary
+### Requirement: Post-Confirm Import Summary
 
-After a successful `openkos ingest <path>` run that writes at least one
-derived object, the command MUST print one additional summary line to
-STDOUT of the form `extracted {N} objects — {count} {Type}[, {count}
-{Type}...]`, where `N` is the total count of derived objects written and
-"objects" is pluralized via the existing `_plural` helper (`extracted 1
-object — ...` for `N == 1`). Only types with `count > 0` MUST appear; each
-type MUST be rendered using its canonical `CLASSIFIABLE_TYPES` string, and
-types MUST be ordered by canonical type-registry order, NOT insertion order
-or alphabetical order, so identical input always renders the same string.
-WHEN zero derived objects are written (Source-only degrade), this line MUST
-NOT be emitted. This line is strictly additive: it MUST NOT replace, alter,
-or reorder any existing stdout line, and MUST NOT change any exit code.
+After a successful `openkos ingest <path>` run, the command MUST print ONE
+summary line to STDOUT in place of any per-path list, of the form
+`openkos ingest: imported '{source}' -- {N} objects ({count} {Type}[, {count}
+{Type}...]).`, where `N` is the total count of derived objects written and
+"objects" is pluralized via the existing `_plural` helper (`1 object`). Only
+types with `count > 0` MUST appear, each rendered using its canonical type
+string and ordered by canonical type-registry order, NOT insertion order or
+alphabetical order. WHEN zero derived objects are written (Source-only
+degrade) the line MUST read `openkos ingest: imported '{source}' -- Source
+only.` The line MUST NOT repeat the paths of the proposal the user just
+confirmed (they remain in the proposed-changes preview and in the commit),
+and MUST NOT change any exit code. On a terminal, one blank line precedes the
+proposal and this line (ADR-0040); on a non-terminal stream no blank line is
+added.
 
-#### Scenario: Zero derived objects — no tally line
+#### Scenario: Zero derived objects -- Source only
 
 - GIVEN `openkos ingest <path>` completes with zero derived objects written
   (Source-only degrade)
 - WHEN the command's stdout is inspected
-- THEN no tally line matching `extracted ... objects` appears
+- THEN it contains `openkos ingest: imported '<path>' -- Source only.` and no
+  `extracted ... objects` line
 
 #### Scenario: Single object, singular wording
 
 - GIVEN `openkos ingest <path>` completes writing exactly one derived
   object of type `Concept`
 - WHEN the command's stdout is inspected
-- THEN it contains the line `extracted 1 object — 1 Concept`
-
-#### Scenario: Multiple objects, one type
-
-- GIVEN `openkos ingest <path>` completes writing three derived objects, all
-  of type `Entity`
-- WHEN the command's stdout is inspected
-- THEN it contains the line `extracted 3 objects — 3 Entity`
+- THEN it contains the line `openkos ingest: imported '<path>' -- 1 object
+  (1 Concept).` and no path list
 
 #### Scenario: Multiple objects, mixed types in canonical order
 
@@ -1701,7 +1698,7 @@ or reorder any existing stdout line, and MUST NOT change any exit code.
   `Person`, `Concept`, and `Event` (in that write/reply order), and the
   canonical registry orders these as `Concept`, `Event`, `Person`
 - WHEN the command's stdout is inspected
-- THEN the tally line lists counts in canonical registry order (`Concept`,
+- THEN the summary lists counts in canonical registry order (`Concept`,
   then `Event`, then `Person`), regardless of write or reply order
 
 ### Requirement: Blocking-Extraction Activity Indicator

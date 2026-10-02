@@ -106,7 +106,7 @@ openkos ingest ./call-with-maria-2026-07-14.txt --auto
 ```
 
 ```
-openkos ingest: imported 'call-with-maria-2026-07-14.txt' -> raw/call-with-maria-2026-07-14.txt, bundle/sources/call-with-maria-2026-07-14.md (index.md, log.md updated).
+openkos ingest: imported 'call-with-maria-2026-07-14.txt' -- Source only.
 ```
 
 `--auto` (per command) overrides the default; setting `review: false` in the config makes unattended the standing behavior. Either way the proposed-changes preview and this same success line are printed — review is a preference, not a requirement.

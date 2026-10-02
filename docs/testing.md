@@ -395,8 +395,8 @@ You will hit the confirmation gate (identical across `ingest`/`forget`/`relate`/
 > `openkos ingest: extracting concepts…` is shown on stderr for its duration —
 > if you see it, the tool is working, not hung. (The spinner is stderr-only and
 > no-ops when output is piped, so stdout stays clean for scripting.) On success
-> the summary ends with a per-type tally: `extracted 3 objects — 2 Concept, 1
-> Person`.
+> a one-line summary names what was imported, with a per-type tally: `3 objects
+> (2 Concept, 1 Person)`.
 
 Inspect the result — note that `ingest` **auto-commits** on success, so a clean
 `git status` is the expected outcome and the commit is where the diff lives:
