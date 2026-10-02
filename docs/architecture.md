@@ -69,7 +69,7 @@ openkos/
 │   │   ├── pending.py  consistency.py   # pending-work predicates; MCP consistency warnings
 │   │   ├── next_action.py        # `next`'s ranked tier engine
 │   │   ├── repair.py             # OKF v0.2 migration plan/apply
-│   │   ├── runner.py  runtime.py  budget.py  watch.py   # the unattended runner: jobs, halt control, call budget, inbox watch
+│   │   ├── runner.py  runtime.py  budget.py  watch.py  watch_notify.py   # the unattended runner: jobs, halt control, call budget, inbox watch, optional native wake-up
 │   │   ├── queue_producers.py    # advisor findings enqueued as pending work
 │   │   ├── lock_wait.py  commit_phase.py   # the workspace lock held for a commit phase only
 │   │   ├── revisions.py  revisions_report.py   # decision-revision plan and report

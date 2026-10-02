@@ -116,3 +116,39 @@ def test_run_diagnostics_appends_the_finding_last_and_only_when_exposed(
     exposed = run()
     assert [r.label for r in exposed][:-1] == [r.label for r in healthy]
     assert exposed[-1].label == LABEL
+
+
+# --- the native watch backend line (#1213) ---------------------------------
+
+
+def test_the_watch_backend_line_is_absent_under_poll() -> None:
+    assert (
+        doctor_service.check_watch_backend(
+            config.UnattendedConfig(), native_available=False
+        )
+        is None
+    )
+
+
+def test_native_with_the_extra_installed_passes() -> None:
+    result = doctor_service.check_watch_backend(
+        config.UnattendedConfig(watch_backend="native"), native_available=True
+    )
+
+    assert result is not None
+    assert result.status == "pass"
+    assert result.critical is False
+
+
+def test_native_without_the_extra_fails_naming_the_install_and_the_fallback() -> None:
+    result = doctor_service.check_watch_backend(
+        config.UnattendedConfig(watch_backend="native"), native_available=False
+    )
+
+    assert result is not None
+    assert result.status == "fail"
+    assert result.critical is False
+    assert result.remediation is not None
+    assert "openkos[watch]" in result.remediation
+    assert result.detail is not None
+    assert "polling" in result.detail

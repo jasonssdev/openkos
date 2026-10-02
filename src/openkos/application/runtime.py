@@ -77,13 +77,18 @@ class StopToken:
         clock: Callable[[], float] | None = None,
         sleep: Callable[[float], None] | None = None,
         poll: float = 0.1,
+        wake: Callable[[], bool] | None = None,
     ) -> bool:
         """Block up to `timeout` seconds; `True` as soon as the flag is set,
-        `False` if the timeout elapses first. Clock and sleep are injectable."""
+        `False` if the timeout elapses first -- or, with `wake`, as soon as
+        `wake()` reports a reason to stop idling (still `False`: no stop was
+        requested). Clock and sleep are injectable."""
         now = clock if clock is not None else _monotonic
         nap = sleep if sleep is not None else time.sleep
         end = now() + timeout
         while not self._stopped:
+            if wake is not None and wake():
+                return False
             left = end - now()
             if left <= 0:
                 return False

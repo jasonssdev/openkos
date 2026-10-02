@@ -1051,6 +1051,12 @@ def write_config(
     fsio.write_exclusive(layout.config_path, content)
 
 
+WATCH_BACKENDS: Final = ("poll", "native")
+"""How the daemon learns the inbox changed: `poll` (default) or `native`, an
+optional OS file-notification wake-up (ADR-0040) that only ends the idle wait
+sooner -- polling still runs underneath."""
+
+
 @dataclass(frozen=True)
 class UnattendedConfig:
     """The `unattended:` section of `openkos.yaml`: the spend budget and the
@@ -1069,6 +1075,7 @@ class UnattendedConfig:
     maintenance_interval_seconds: int = 86400
     quiet_seconds: int = 30
     inbox: Path | None = None
+    watch_backend: str = "poll"
 
 
 _UNATTENDED_INT_FLOORS: Final = {
@@ -1129,7 +1136,7 @@ def _read_unattended(root: Path, raw: object, prefix: str) -> UnattendedConfig:
         raise ValueError(
             f"{prefix}: 'unattended' must be a mapping, got {type(raw).__name__}"
         )
-    known = {*_UNATTENDED_INT_FLOORS, "inbox"}
+    known = {*_UNATTENDED_INT_FLOORS, "inbox", "watch_backend"}
     for key in raw:
         if key not in known:
             raise ValueError(
@@ -1157,7 +1164,15 @@ def _read_unattended(root: Path, raw: object, prefix: str) -> UnattendedConfig:
         if inbox_raw is not None
         else None
     )
-    return UnattendedConfig(**ints, inbox=inbox)
+    backend = raw.get("watch_backend", "poll")
+    if backend is None:
+        backend = "poll"
+    if backend not in WATCH_BACKENDS:
+        raise ValueError(
+            f"{prefix}: 'unattended.watch_backend' must be one of "
+            f"{', '.join(WATCH_BACKENDS)}, got {backend!r}"
+        )
+    return UnattendedConfig(**ints, inbox=inbox, watch_backend=backend)
 
 
 @dataclass(frozen=True)
