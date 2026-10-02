@@ -190,6 +190,68 @@ nothing to win, so **no prompt treatment was run and no prompt change
 ships**. The field failure remains unreproduced on synthetic merged
 content; reproducing it likely needs the original bundle.
 
+### Third attempt: the field shapes themselves (#1223) — REPRODUCED, one-sentence treatment REFUTED
+
+A third field occurrence (0.4.0) quoted the exact pairs: a definition
+("CLAUDE.md is a Markdown file ... persistent memory and context") against
+(a) "task-specific guidance belongs in a skill rather than in CLAUDE.md" and
+(b) "a file where Claude saves solutions to problems". Neither shape was in
+the fixture: the attempts above paired two roles, or two wordings of one
+claim, never a definition against a scope remark or a narrower use. The
+merged cases grew from 10 to 22: `merged-scope-guidance` x5 and
+`merged-narrower-use` x5 (all expect `consistent`; two are the verbatim
+public field pairs, the rest invented, English and Spanish, one with a stacked
+earlier merge) plus two `merged-contradiction` guards in the same shapes
+(opposite "belongs in" claims; read-only vs writes-to-it). The pooled
+field-shape count is the primary metric; `--merged-only` was not used, both
+arms ran the whole fixture (22 typed pairs + 22 merged cases).
+
+Pre-registered before any treatment run: R0 baseline wrong >= 15 of 150 field-shape cells or no treatment;
+R1 treatment <= 50% of baseline AND >= 15 cells fewer; R2 guards missed
+<= baseline + 2 of 60, typed TP and evaluative retention >= 0.95; R3 older
+merged compatible classes <= baseline + 3 of 120, typed FP rates <= baseline
++ 0.05; R4 latency <= 1.25x. All five must hold.
+
+`qwen3:8b`, **15 runs per arm**, 2026-10-02, same session:
+
+| arm | field-shape wrong (n of TOTAL) | older merged compatible | guards missed | typed accuracy | run latency |
+| --- | --- | --- | --- | --- | --- |
+| baseline (stamp `20261002T160234Z`) | **44 of 150** | 0 of 120 | 0 of 60 | 1.00 | 121.3s |
+| treatment (stamp `20261002T163314Z`) | **43 of 150** | 0 of 120 | 0 of 60 | 1.00 | 120.6s |
+
+Per case (wrong of 15 runs, baseline -> treatment): the CLAUDE.md scope pair
+15 -> 15, the CLAUDE.md narrower-use pair 15 -> 15, the Spanish `bitacora`
+narrower-use case 14 -> 13; the other seven field-shape cases were 0 of 15 in
+both arms. Every wrong verdict on the two verbatim pairs is `contradicts` at
+0.95, the field value.
+
+**Verdict: R0 passes (the failure reproduces on the verbatim pairs), R1
+fails (44 -> 43; the rule required at least 15 fewer), so the candidate is
+refuted and no prompt change ships.** The sentence ("A narrower statement --
+one particular use of the subject, or where related guidance belongs -- is
+consistent with a broader definition unless it would make that definition
+false") is kept in `contradiction_prompts.py` as the refuted arm so
+`--arm treatment` reproduces. The retention rows (R2, R3, R4) held, so the
+refusal was not bought by loosening anything; the sentence simply did not move
+the judge.
+
+What this does and does not show:
+
+- The failure is real and concentrated: three cases carry every wrong verdict in
+  both arms (44 and 43); the other seven field-shape cases are clean under the shipped prompt. It is
+  not a general weakness on definition-vs-scope pairs. Read "44 of 150" as
+  three persistently wrong cases, not as a 29% rate.
+- One prompt candidate was measured. A different mechanism (asking for the
+  conflicting quotes before the verdict, or a larger judge via
+  `models: {contradiction: ...}`) is untested and was not pre-registered, so
+  nothing here rules it out.
+- The two verbatim pairs share a subject (`CLAUDE.md`) the model may know from
+  training; the invented `bitacora` case fails the same way, which argues the
+  shape rather than the name, but it is one case.
+- Labels remain constructed. The narrower-use shape in particular is a closer
+  call than the scope remark; the labelled `consistent` rests on the second
+  statement not denying the first.
+
 ## What a smaller model costs here (#700 lever 3) — REJECTED
 
 [#700](https://github.com/jasonssdev/openkos/issues/700) ranked "smaller models
