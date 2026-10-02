@@ -20,7 +20,7 @@ is one work unit (one Conventional Commit, scope `ingest`, `okf`,
       with headings demoted via the existing helper; contained-body skip;
       one `## Related` bullet; no `merged_from`; result passes
       `okf.check_conformance`. (`okf`)
-- [ ] 1.3 Promote the eligibility walk in `resolution/candidates.py`
+- [x] 1.3 Promote the eligibility walk in `resolution/candidates.py`
       (`_iter_eligible` / `_eligible_keyed_docs`) to one public
       `keyed_documents`, and promote the base/`-N` identity rule
       (`lifecycle._is_suffix_family` / `ordered_merge_pair`) to a public

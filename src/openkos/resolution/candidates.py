@@ -285,6 +285,22 @@ def _eligible_keyed_docs(
     ]
 
 
+def keyed_documents(
+    bundle_dir: Path, *, include_deprecated: bool = False
+) -> list[tuple[str, str, str]]:
+    """`(concept_id, okf_type, normalized_key)` for every document eligible
+    for exact-title matching: the ONE eligibility rule (readable, typed,
+    titled, not a Source, not deprecated unless asked) that the HIGH tier and
+    ingest's attach lookup both go through, so "same family" means the same
+    thing in `duplicates` and at ingest."""
+    return [
+        (concept_id, okf_type, key)
+        for concept_id, okf_type, key, _ in _eligible_keyed_docs(
+            bundle_dir, include_deprecated=include_deprecated
+        )
+    ]
+
+
 def _keyed_docs_by_type(
     keyed: list[tuple[str, str, str, str | None]],
 ) -> list[tuple[str, list[tuple[str, str]]]]:
