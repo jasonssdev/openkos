@@ -664,9 +664,9 @@ def test_interactive_preview_lists_all_staged_objects(
 def test_final_echo_lists_all_derived_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The final confirmation echo lists the Source path plus every staged
-    derived object's path (0..N), alongside the always-present Source path
-    (Phase 12.4)."""
+    """The proposal lists the Source path plus every staged derived object's
+    path (0..N); the post-confirm line is a summary that does not repeat them
+    (ADR-0042)."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _multi_object_reply(_concept_reply(), _person_reply()))
     source = tmp_path / "notes.txt"
@@ -675,11 +675,19 @@ def test_final_echo_lists_all_derived_paths(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    for path in (
+        "raw/notes.txt",
+        "bundle/sources/notes.md",
+        "bundle/concepts/stoic-dichotomy-of-control.md",
+        "bundle/people/epictetus.md",
+    ):
+        assert f"  + {path}" in lines
     assert (
-        "raw/notes.txt, bundle/sources/notes.md, "
-        "bundle/concepts/stoic-dichotomy-of-control.md, "
-        "bundle/people/epictetus.md" in result.stdout
+        "openkos ingest: imported 'notes.txt' -- 2 objects (1 Concept, 1 Person)."
+        in (lines)
     )
+    assert not any("imported" in line and "->" in line for line in lines)
 
 
 # --- Ingest Progress Feedback (per-type tally + spinner) --------------------
@@ -714,7 +722,9 @@ def test_single_derived_object_prints_singular_tally_line(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert "extracted 1 object — 1 Concept" in result.stdout
+    assert "openkos ingest: imported 'notes.txt' -- 1 object (1 Concept)." in (
+        result.stdout
+    )
 
 
 def test_mixed_derived_objects_print_tally_in_canonical_order(
@@ -735,7 +745,10 @@ def test_mixed_derived_objects_print_tally_in_canonical_order(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert "extracted 3 objects — 1 Concept, 1 Event, 1 Person" in result.stdout
+    assert (
+        "openkos ingest: imported 'notes.txt' -- 3 objects "
+        "(1 Concept, 1 Event, 1 Person)." in result.stdout
+    )
 
 
 def test_non_tty_ingest_stdout_has_no_spinner_control_chars(

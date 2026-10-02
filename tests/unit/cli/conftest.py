@@ -575,3 +575,13 @@ def plain_rich_output(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
     monkeypatch.setenv("TERM", "dumb")
     monkeypatch.setenv("COLUMNS", "200")
+
+
+@pytest.fixture(autouse=True)
+def _pin_terminal_width(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the width the TTY-gated output helpers wrap to (ADR-0042).
+
+    A faked TTY makes `cli/output.py` wrap, and `shutil.get_terminal_size`
+    reads `COLUMNS` first, so without this a goldens run inside a wide
+    terminal would wrap differently from CI."""
+    monkeypatch.setenv("COLUMNS", "80")

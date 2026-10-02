@@ -22,6 +22,24 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- **Human-readable output follows one terminal-gated convention**
+  ([#1235](https://github.com/jasonssdev/openkos/issues/1235),
+  [ADR-0042](docs/adr/0042-human-readable-cli-output-is-a-tty-gated-convention.md)).
+  On a terminal, `ingest` groups its stderr notices under a `note:` /
+  `warning:` prefix, separates the proposal and the result with a blank line,
+  and wraps long lines; `curate` and `adjudicate --apply` render each item of
+  their interactive walks as a separated block with a wrapped rationale. None
+  of that happens on a pipe or redirect, and no colour or escape sequence is
+  ever emitted. Two texts
+  changed everywhere: `ingest`'s line after you confirm is now a summary
+  (`openkos ingest: imported 'notes.txt' -- 8 objects (5 Concept, 2 Person, 1
+  Organization).`, or `-- Source only.`) in place of the path list and the
+  separate `extracted N objects` line, since the proposal you approved and the
+  commit already list the paths; and the `query` refusal for an unanswerable
+  question is two short lines (outcome, then next step). Stdout data, `--json`,
+  exit codes and row-oriented verbs are unchanged. Human stderr text is not a
+  supported parsing interface.
+
 - **The transitional temp-directory workspace lock is no longer taken.** 0.3.1
   moved the lock to the per-user state directory and, for that one release,
   also took the old lock under the OS temp directory so an older `openkos`

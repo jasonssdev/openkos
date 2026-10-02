@@ -73,7 +73,7 @@ from openkos.bundle import log as bundle_log
 from openkos.bundle import provenance as bundle_provenance
 from openkos.cli import curate as curate_module
 from openkos.cli import daemon as daemon_module
-from openkos.cli import observability
+from openkos.cli import observability, output
 from openkos.extraction import judge as judge_mod
 from openkos.extraction.concept import (
     ExtractionReport,
@@ -2388,6 +2388,7 @@ def _run_adjudicate_apply(
             skipped_already_merged += 1
             continue
 
+        output.section_break()
         typer.echo(
             _format_merge_preview_line(
                 prepared, no_reconcile=no_reconcile, reconcile=reconcile
@@ -3580,43 +3581,44 @@ def _render_staging_drop(drop: application_ingest.StagingDrop) -> None:
     `_stage_derived_objects`'s staging loop, now driven by `drop.kind`
     instead."""
     if drop.kind == "empty-slug":
-        typer.echo(
+        output.notice(
             "openkos ingest: extracted title could not be turned into a "
             "slug; skipping this candidate.",
-            err=True,
+            verb="ingest",
         )
     elif drop.kind == "in-batch-collision":
-        typer.echo(
+        output.notice(
             f"openkos ingest: duplicate slug '{drop.slug}' within "
             "this extraction batch; keeping the first, skipping this "
             "candidate.",
-            err=True,
+            verb="ingest",
         )
     elif drop.kind == "run-duplicate":
-        typer.echo(
+        output.notice(
             f"openkos ingest: '{drop.slug}' repeats '{drop.kept_slug}' "
             "(same type, near-match title, same quoted source line); "
             "keeping the richer one, skipping this candidate.",
-            err=True,
+            verb="ingest",
         )
     elif drop.kind == "already-exists":
-        typer.echo(
+        output.notice(
             f"openkos ingest: '{drop.slug}' already exists; "
             "skipping this candidate (create-only).",
-            err=True,
+            verb="ingest",
         )
     elif drop.kind == "disambiguated":
-        typer.echo(
+        output.notice(
             f"openkos ingest: '{drop.slug}' already exists for a "
             f"different source; disambiguating this candidate to "
             f"'{drop.disambiguated_to}'.",
-            err=True,
+            verb="ingest",
         )
     else:  # "build-failed"
-        typer.echo(
+        output.notice(
             f"openkos ingest: extracted content failed validation -- "
             f"{drop.error}; skipping this candidate.",
-            err=True,
+            kind="warning",
+            verb="ingest",
         )
 
 
@@ -3642,19 +3644,19 @@ def _render_staged_derived_objects(
     """
     if staged.report is None:
         if staged.skip_reason == "no-extractable-text":
-            typer.echo(
+            output.notice(
                 "openkos ingest: source has no extractable text; keeping "
                 "the Source only.",
-                err=True,
+                verb="ingest",
             )
         elif staged.skip_reason == "blocked-by-sensitivity":
-            typer.echo(
+            output.notice(
                 "openkos ingest: workspace default_sensitivity floor is "
                 "confidential; skipping concept extraction, keeping the "
                 "Source only. The Source is still added to the embedding "
                 "index so search and candidate relations keep working -- "
                 "the sensitivity floor governs `llm.chat`, not embeddings.",
-                err=True,
+                verb="ingest",
             )
         return
 
@@ -3676,13 +3678,13 @@ def _render_staged_derived_objects(
         _sole_object_notice(report),
     ):
         if notice_text is not None:
-            typer.echo(f"openkos ingest: {notice_text}", err=True)
+            output.notice(f"openkos ingest: {notice_text}", verb="ingest")
 
     if staged.skip_reason == "no-concepts-found":
-        typer.echo(
+        output.notice(
             "openkos ingest: no concept extracted from this source; "
             "keeping the Source only.",
-            err=True,
+            verb="ingest",
         )
         return
 
@@ -3690,12 +3692,13 @@ def _render_staged_derived_objects(
         _render_staging_drop(drop)
 
     if staged.lost_in_staging:
-        typer.echo(
+        output.notice(
             f"openkos ingest: {staged.lost_in_staging} extracted "
             "candidate(s) could not be staged and were dropped; marking "
             "the Source (extraction_notice: "
             f"{okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED}).",
-            err=True,
+            kind="warning",
+            verb="ingest",
         )
 
 
@@ -4878,13 +4881,37 @@ def ingest(
     )
 
 
+_INGEST_WARNING_LEADS = (
+    "openkos ingest: concept extraction skipped",
+    "openkos ingest: ignoring the malformed",
+)
+"""Service notices that report something lost or ignored; every other service
+notice is informational and renders as a `note:` on a terminal."""
+
+
+def _format_import_summary(source: Path | str, type_counts: dict[str, int]) -> str:
+    """The one-line post-confirm summary of an `ingest`: what was imported and
+    how many objects of each type, never the paths (ADR-0042 rule 1)."""
+    if not any(type_counts.values()):
+        return f"openkos ingest: imported '{source}' -- Source only."
+    total = sum(type_counts.values())
+    order = {t: i for i, t in enumerate(_TYPE_TO_SECTION)}
+    parts = ", ".join(
+        f"{type_counts[t]} {t}" for t in sorted(type_counts, key=lambda t: order[t])
+    )
+    return f"openkos ingest: imported '{source}' -- {total} object{_plural(total)} ({parts})."
+
+
 class _CliIngestObserver(ingest_service.IngestObserver):
     """Renders what `ingest_source` reports: advisory lines to stderr, the
     preview and the import summary to stdout, the extraction wait as a
     spinner on a TTY."""
 
     def notice(self, message: str) -> None:
-        typer.echo(message, err=True)
+        kind: output.NoticeKind = (
+            "warning" if message.startswith(_INGEST_WARNING_LEADS) else "note"
+        )
+        output.notice(message, kind=kind, verb="ingest")
 
     def extraction_starting(self) -> None:
         # ONE TTY-gated stage notice before the single long extraction call
@@ -4908,18 +4935,16 @@ class _CliIngestObserver(ingest_service.IngestObserver):
         _echo_ingest_preview(preview)
 
     def imported(self, summary: ingest_service.ImportedSummary) -> None:
-        typer.echo(
-            f"openkos ingest: imported '{summary.source}' -> "
-            f"{', '.join(summary.imported_paths)} "
-            f"({summary.index_name}, {summary.log_name} updated)."
-        )
-        if summary.type_counts:
-            typer.echo(_format_type_tally(summary.type_counts))
+        # A summary, not the path list: the user approved those paths in the
+        # proposal a moment ago, and the commit records them too.
+        output.section_break()
+        typer.echo(_format_import_summary(summary.source, summary.type_counts))
 
 
 def _echo_ingest_preview(preview: ingest_service.IngestPreview) -> None:
     """Print the proposed changes before the confirmation gate."""
     name, slug = preview.name, preview.slug
+    output.section_break()
     if preview.regenerate:
         typer.echo(
             "openkos ingest: proposed changes (re-ingest -- identical source "
@@ -13126,13 +13151,15 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
         # user told to "try different wording" would rephrase a question the
         # bundle simply does not cover, which is the wrong instruction and
         # the reason #760 keeps this cause separate.
+        # ADR-0042: the outcome, then the next step, as two short lines. Why
+        # answering anyway would be the model's own knowledge under the
+        # bundle's citations is explained in the docs, not repeated here.
         return (
             f"Found {fts_hit_count} matching concept{_plural(fts_hit_count)}, "
-            "but none of them answers this question — the compiled bundle "
-            "does not cover it. Answering anyway would be the model's own "
-            "knowledge wearing the bundle's citations. Ingest a source that "
-            "covers it, or set `sufficiency_check: false` in openkos.yaml to "
-            "answer regardless."
+            "but none of them answers this question -- the compiled bundle "
+            "does not cover it.\n"
+            "Next: ingest a source that covers it, or set "
+            "`sufficiency_check: false` in openkos.yaml to answer regardless."
         )
     raise ValueError(f"unexpected no_match_cause: {cause!r}")
 
@@ -13572,7 +13599,10 @@ def query(
             typer.echo(f"  {notice}", err=True)
 
     if result.no_match_cause != "none":
-        typer.echo(_no_match_message(result.no_match_cause, result.fts_hit_count))
+        for line in _no_match_message(
+            result.no_match_cause, result.fts_hit_count
+        ).splitlines():
+            output.echo_wrapped(line, hanging="  ")
         return
 
     typer.echo(result.answer)
