@@ -162,3 +162,18 @@ def test_resolution_relation_types_membership() -> None:
         relations.SUGGESTABLE_RELATION_TYPES
     )
     assert "revises" not in {rt.name for rt in relations.REGISTRY}
+
+
+@pytest.mark.parametrize("rel_type", sorted(relations.RESOLUTION_RELATION_TYPES))
+def test_relation_type_note_is_none_for_a_lifecycle_type(rel_type: str) -> None:
+    """The engine itself recommends `supersedes`; its write path must not
+    call it unknown (#1263)."""
+    assert relations.relation_type_note(rel_type) is None
+    assert relations.relation_type_note(f"  {rel_type}  ") is None
+
+
+def test_lifecycle_types_stay_out_of_the_seeded_and_suggestable_sets() -> None:
+    """Silencing the advisory must not widen what an LLM may propose."""
+    for rel_type in relations.RESOLUTION_RELATION_TYPES:
+        assert rel_type not in relations.SEEDED_RELATION_TYPES
+        assert rel_type not in relations.SUGGESTABLE_RELATION_TYPES

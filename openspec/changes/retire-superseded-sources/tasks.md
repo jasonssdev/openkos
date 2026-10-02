@@ -35,7 +35,7 @@ written against its shape.
 
 ## Phase 2: Vocabulary
 
-- [ ] 2.1 `relation_type_note` returns `None` for
+- [x] 2.1 `relation_type_note` returns `None` for
       `RESOLUTION_RELATION_TYPES`; tests: no note for `supersedes`,
       `revises`, `reconciled_with`; note kept for an unknown type;
       `SUGGESTABLE_RELATION_TYPES` and the seeded set unchanged and
