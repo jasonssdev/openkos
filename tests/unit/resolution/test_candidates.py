@@ -38,6 +38,7 @@ def _write_doc(
     status: str | None = None,
     relations: list[tuple[str, str]] | None = None,
     type_alternative: str | None = None,
+    provenance: list[str] | None = None,
 ) -> None:
     """Write a minimal `doc_type` document. Optional `status`/`relations`
     lifecycle frontmatter (status-aware-retrieval, Phase 3) -- `relations`
@@ -49,6 +50,9 @@ def _write_doc(
         lines.append(f"type_alternative: {type_alternative}")
     if status is not None:
         lines.append(f"status: {status}")
+    if provenance is not None:
+        lines.append("provenance:")
+        lines.extend(f"  - {entry}" for entry in provenance)
     if relations is not None:
         lines.append("relations:")
         for target, rel_type in relations:
@@ -1602,3 +1606,26 @@ def test_an_alternative_naming_its_own_type_opens_no_bridge() -> None:
     ]
 
     assert candidates_mod._bridged_cross_type_pairs(keyed) == []
+
+
+def test_provenance_orphan_of_a_superseded_source_never_joins_a_candidate_group(
+    tmp_path: Path,
+) -> None:
+    """retire-superseded-sources: a v1-only concept is excluded from pairing
+    by default, restored by `include_deprecated=True`."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "sources" / "v1.md", doc_type="Source", title="V1")
+    _write_doc(
+        bundle_dir / "sources" / "v2.md",
+        doc_type="Source",
+        title="V2",
+        relations=[("sources/v1", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "a.md", title="Stoicism")
+    _write_doc(
+        bundle_dir / "concepts" / "b.md", title="STOICISM", provenance=["sources/v1"]
+    )
+
+    assert find_candidates(bundle_dir) == []
+    restored = find_candidates(bundle_dir, include_deprecated=True)
+    assert [g.member_ids for g in restored] == [("concepts/a", "concepts/b")]

@@ -227,3 +227,26 @@ def reverse_relation_rewrites(
             "wrote there"
         )
     return snapshot
+
+
+def remove_relation(text: str, *, target_id: str, rel_type: str) -> str:
+    """Pure: `text` with every `(target_id, rel_type)` entry removed from its
+    own `relations:` (retire-superseded-sources: a forget retiring a
+    superseded Source removes the superseding Source's `supersedes` edge to
+    it). The same removal `unrelate` performs: when the last relation goes,
+    the `relations:` key is omitted rather than left empty. A text holding no
+    such entry is returned unchanged (byte-identical)."""
+    metadata, body = okf.load_frontmatter(text)
+    existing = okf.decode_relations(metadata)
+    remaining = [
+        relation
+        for relation in existing
+        if not (relation.target == target_id and relation.type == rel_type)
+    ]
+    if len(remaining) == len(existing):
+        return text
+    if remaining:
+        metadata[okf.RELATIONS_KEY] = okf.encode_relations(remaining)
+    else:
+        del metadata[okf.RELATIONS_KEY]
+    return okf.dump_frontmatter(metadata, body)

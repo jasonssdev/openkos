@@ -681,3 +681,19 @@ def test_drift_on_the_unprompted_path_is_refused(
     after = snapshot_with_mtime(tmp_path)
     changed = changed_paths(before, after)
     assert changed == {Path(target)}
+
+
+def test_relate_supersedes_emits_no_unseeded_type_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1263: the engine recommends `relate <new> supersedes <old>`; its own
+    write path must not call that type unknown."""
+    _init_workspace(tmp_path, monkeypatch)
+    old_id = _ingest_source(tmp_path, "v1.txt")
+    new_id = _ingest_source(tmp_path, "v2.txt")
+
+    result = runner.invoke(app, ["relate", new_id, "supersedes", old_id, "--auto"])
+
+    assert result.exit_code == 0
+    assert "not a seeded relation type" not in result.output
+    assert "not a seeded relation type" not in result.stderr

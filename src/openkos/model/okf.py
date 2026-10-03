@@ -1419,6 +1419,21 @@ def build_source_concept(
     return dump_frontmatter(metadata, body)
 
 
+def related_bullet(ref: str, note: str) -> str:
+    """The one `## Related` bullet the engine generates for a cited concept:
+    `- [<ref>](/<ref>.md) — <note>`. The single owner of that shape (the
+    builder, an attach and a forget's detach all go through it), so a
+    matcher can never drift from what was written."""
+    return f"- [{ref}](/{ref}.md) — {note}"
+
+
+def source_related_bullet(source_id: str) -> str:
+    """The generated bullet for a Source: the default ingest phrase, which an
+    attach reuses (`ATTACH_RELATED_NOTE`). Any other phrase is hand-written
+    or a different citation kind, never this."""
+    return related_bullet(source_id, ATTACH_RELATED_NOTE)
+
+
 def build_concept(
     *,
     type: str,
@@ -1540,8 +1555,12 @@ def build_concept(
         # stays byte-identical to what this builder emitted before #401.
         metadata[TYPE_ALTERNATIVE_KEY] = type_alternative
     related = "\n".join(
-        f"- [{ref}](/{ref}.md) — "
-        f"{related_notes.get(ref, related_note) if related_notes is not None else related_note}"
+        related_bullet(
+            ref,
+            related_notes.get(ref, related_note)
+            if related_notes is not None
+            else related_note,
+        )
         for ref in provenance
     )
     # `description` is a one-line lede; append `body` only when it adds content,
@@ -3006,7 +3025,7 @@ def build_attached_document(
             f"{_demote_absorbed_headings(evidence)}"
         )
 
-    bullet = f"- [{source_id}](/{source_id}.md) — {ATTACH_RELATED_NOTE}"
+    bullet = related_bullet(source_id, ATTACH_RELATED_NOTE)
     if not tail:
         tail = f"{_RELATED_HEADING}\n\n{bullet}"
     elif f"(/{source_id}.md)" not in tail:

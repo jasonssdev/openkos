@@ -148,12 +148,15 @@ def validate_relation_type(rel_type: str) -> str:
 
 
 def relation_type_note(rel_type: str) -> str | None:
-    """The advisory line for a relation type outside `SEEDED_RELATION_TYPES`,
-    or `None` for a seeded one (spec: "Unknown type accepted with WARN to
+    """The advisory line for a relation type outside `SEEDED_RELATION_TYPES`
+    and `RESOLUTION_RELATION_TYPES`, or `None` for a seeded or lifecycle one (spec: "Unknown type accepted with WARN to
     stderr"). Returned, not printed: the CLI's write path renders it, and a
     preview path (`suggest-relations`) simply never asks for it."""
     stripped = rel_type.strip()
-    if stripped in SEEDED_RELATION_TYPES:
+    if stripped in SEEDED_RELATION_TYPES or stripped in RESOLUTION_RELATION_TYPES:
+        # The lifecycle types are outside the seeded set on purpose (an LLM
+        # must never propose one) but are the engine's own vocabulary, so the
+        # human-facing advisory must not call them unknown (#1263).
         return None
     return (
         f"openkos: note -- '{stripped}' is not a seeded relation type "

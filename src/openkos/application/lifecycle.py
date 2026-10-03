@@ -1705,6 +1705,11 @@ class ForgetPlan:
     immutable), so after the forget they belong to no Source -- and `purge`
     can no longer find them through a concept that is gone (#1262). Sorted;
     drives the disclosure of what remains and how to erase it."""
+    historical_edits: tuple[HistoricalEdit, ...] = ()
+    """The edits that retire a superseded Source cleanly: the superseding
+    Source's `supersedes` relation and a surviving concept's generated
+    references to the forgotten Source (retire-superseded-sources). Empty
+    unless the purge set holds a Source another Source supersedes."""
 
 
 @dataclass(frozen=True)
@@ -1717,6 +1722,19 @@ class StatusWithdrawal:
 
     target: str
     outcome: okf.ExportOutcome
+    new_text: str
+
+
+@dataclass(frozen=True)
+class HistoricalEdit:
+    """One edit a forget retiring a superseded Source makes OUTSIDE the purge
+    set (retire-superseded-sources): `target`'s concept id, a short `detail`
+    for the `~` preview line, and the new document text. Written in Phase B
+    through the same drift-guarded path as `StatusWithdrawal`, before any
+    delete."""
+
+    target: str
+    detail: str
     new_text: str
 
 
@@ -1756,6 +1774,95 @@ class ForgetResult:
     `UnmergeResult`."""
 
     purge_ids: list[str]
+
+
+def _plan_historical_edits(
+    other_files: Mapping[str, str],
+    purge_ids_set: set[str],
+    *,
+    excluded: set[str],
+) -> tuple[tuple[HistoricalEdit, ...], set[tuple[str, str]]]:
+    """Plan the edits that let a forget retire a SUPERSEDED Source cleanly
+    (retire-superseded-sources, #1259/#1263).
+
+    A purge-set Source is superseded when a Source OUTSIDE the purge set
+    holds a `supersedes` relation to it. For each such Source `S`, two kinds
+    of reference are historical rather than blocking, and are removed in the
+    same confirmed forget: the superseding Source's `supersedes` relation to
+    `S`, and an outside concept's references the engine itself generated for
+    `S` (its `provenance`/`sources` entry and its `## Related` bullet).
+
+    An edit is planned for a `(file, S)` pair ONLY when, after applying it,
+    a re-scan finds no remaining reference from that file to `S`: a
+    hand-written link, a bullet with another phrase, another relation type
+    all leave something behind, so the pair is NOT resolved and the original
+    refusal stands. A file whose provenance would become empty is never
+    detached (it belongs to the purge set), and a file the forget already
+    rewrites for another reason (`excluded`) is never double-edited.
+
+    Returns the edits (one per file, sorted) and the `(member, referrer)`
+    pairs they resolve, which the caller drops from the blocking references.
+    Pure: nothing is written."""
+    superseders: dict[str, set[str]] = {}
+    for rel, text in other_files.items():
+        cid = rel.removesuffix(".md")
+        if cid in purge_ids_set or not cid.startswith("sources/"):
+            continue
+        try:
+            relations = okf.decode_relations(okf.load_frontmatter(text)[0])
+        except ValueError:  # unparseable: never a historical referrer
+            continue
+        for relation in relations:
+            if (
+                relation.type == "supersedes"
+                and relation.target in purge_ids_set
+                and relation.target.startswith("sources/")
+                and relation.target != cid
+            ):
+                superseders.setdefault(relation.target, set()).add(cid)
+    if not superseders:
+        return (), set()
+
+    working: dict[str, str] = {}
+    details: dict[str, list[str]] = {}
+    resolved: set[tuple[str, str]] = set()
+    for rel in sorted(other_files):
+        cid = rel.removesuffix(".md")
+        if cid in purge_ids_set or cid in excluded:
+            continue
+        for source_id in sorted(superseders):
+            before = working.get(cid, other_files[rel])
+            candidate = before
+            steps: list[str] = []
+            try:
+                if cid in superseders[source_id]:
+                    candidate = bundle_relations.remove_relation(
+                        candidate, target_id=source_id, rel_type="supersedes"
+                    )
+                    if candidate != before:
+                        steps.append(f"remove supersedes -> {source_id}")
+                detached = bundle_provenance.detach_generated_source_references(
+                    candidate, source_id=source_id
+                )
+            except ValueError:  # unparseable, or provenance would empty
+                continue
+            if detached != candidate:
+                steps.append(f"detach {source_id} from provenance")
+            candidate = detached
+            if candidate == before:
+                continue
+            if bundle_references.find_inbound_references(
+                {rel: candidate}, target_id=source_id
+            ):
+                continue  # something else still points at it: keep blocking
+            working[cid] = candidate
+            details.setdefault(cid, []).extend(steps)
+            resolved.add((source_id, cid))
+    edits = tuple(
+        HistoricalEdit(target=cid, detail=", ".join(details[cid]), new_text=text)
+        for cid, text in sorted(working.items())
+    )
+    return edits, resolved
 
 
 def prepare_forget(
@@ -1922,6 +2029,15 @@ def prepare_forget(
                     )
                 )
 
+    # retire-superseded-sources: references that only record a supersession
+    # of a purge-set Source are historical, not blocking. Files this forget
+    # already rewrites for a status withdrawal are never double-edited.
+    historical_edits, historical_pairs = _plan_historical_edits(
+        other_files,
+        purge_ids_set,
+        excluded={withdrawal.target for withdrawal in status_withdrawals},
+    )
+
     # Set-difference inbound-reference detection (design decision 2):
     # `find_inbound_references` is called once PER purge-set member over
     # the SAME whole-bundle snapshot; any referrer whose id is ITSELF a
@@ -1935,6 +2051,10 @@ def prepare_forget(
         ):
             if ref.referrer_id in purge_ids_set:
                 continue
+            if ref.kind != "unverifiable" and (member, ref.referrer_id) in (
+                historical_pairs
+            ):
+                continue  # removed by the retire path, not blocking
             if ref.kind == "unverifiable":
                 if ref.referrer_id in seen_unverifiable:
                     continue
@@ -2044,6 +2164,7 @@ def prepare_forget(
         skipped_withdrawal_ids=tuple(skipped_withdrawal_ids),
         incomplete_walk_unreadable=incomplete_walk_unreadable,
         catalog_edit=forget_catalog,
+        historical_edits=historical_edits,
     )
 
 
@@ -2136,6 +2257,10 @@ def forget_core(layout: config.WorkspaceLayout, plan: ForgetPlan) -> ForgetResul
             fsio.write_atomic(
                 layout.bundle_dir / f"{withdrawal.target}.md", withdrawal.new_text
             )
+        # retire-superseded-sources: the historical edits go through the same
+        # drift-guarded path, still before any delete.
+        for edit in sorted(plan.historical_edits, key=lambda e: e.target):
+            fsio.write_atomic(layout.bundle_dir / f"{edit.target}.md", edit.new_text)
         # N-delete, LAST, in deterministic sorted order (design decision 5)
         # -- the catalog already reflects every removal before any unlink,
         # so a failure partway through leaves a benign, git-recoverable

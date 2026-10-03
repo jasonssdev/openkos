@@ -5,13 +5,16 @@ MVP-3 gap #8 · S1).
 (FTS/vector/graph) and candidate-load surface (contradiction detection,
 adjudication) filters against before fusion/candidate emission — see
 `openspec/changes/status-aware-retrieval/design.md`. It imports only
-`openkos.model.okf` + stdlib, a package-root leaf like `lint.py`/`config.py`:
+`openkos.model.okf`, the canonical `openkos.bundle.provenance` closure and
+stdlib (never `state`, `retrieval` or `graph`), a package-root leaf like
+`lint.py`/`config.py`:
 both `retrieval/` and `resolution/` depend on it with no cycle and no
 retrieval<->resolution coupling.
 
 A concept is effective-deprecated iff its own `status` frontmatter field
 equals `"deprecated"`, OR it is the TARGET of ANY other concept's outbound
-`supersedes` edge. Self-`supersedes` edges (source == target) are dropped
+`supersedes` edge, OR it is a PROVENANCE ORPHAN of a superseded Source
+(`provenance_orphans`: its whole provenance is a superseded Source). Self-`supersedes` edges (source == target) are dropped
 before set-building, so they never mark a concept deprecated — that is the
 only exemption this predicate makes.
 
@@ -26,11 +29,12 @@ in-cycle edge. Contradictory or cyclic supersession is treated as
 unresolved and hidden rather than guessed at.
 """
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf
 
 
@@ -62,6 +66,39 @@ def _superseded_ids(supersedes: set[tuple[str, str]]) -> frozenset[str]:
     about who is superseded (design: 'the predicate and the export can
     never disagree')."""
     return frozenset(target for source, target in supersedes if target != source)
+
+
+def provenance_ids(meta: Mapping[str, object]) -> frozenset[str] | None:
+    """One document's normalized `provenance` ids, or `None` when the field
+    is absent or not a list (such a document is never swept: fail safe, the
+    direction that hides nothing). Same `.md`-stripping the `forget` closure
+    keys on, so the predicate and `forget` compare identical ids."""
+    raw = meta.get("provenance")
+    if not isinstance(raw, list):
+        return None
+    return frozenset(bundle_provenance.normalize_provenance_id(str(e)) for e in raw)
+
+
+def provenance_orphans(
+    provenance_by_id: Mapping[str, frozenset[str]],
+    superseded_ids: Collection[str],
+) -> frozenset[str]:
+    """Concepts whose ENTIRE provenance is, directly or through other such
+    concepts, a superseded Source (retire-superseded-sources).
+
+    The ONE place the rule is computed: `deprecated_concept_ids` and
+    `bundle.listing.list_objects` both call it. Roots are only the superseded
+    ids under `sources/` -- a superseded `Decision` does not propagate to the
+    Insights citing it. The closure is `forget --scope source`'s own
+    (`bundle.provenance.provenance_closure`), so its non-empty-provenance
+    guard keeps a concept with no recorded provenance, or with any live
+    entry, out of the result. The roots themselves are excluded: a superseded
+    Source is already deprecated by the edge rule. Pure; writes nothing."""
+    roots = frozenset(sid for sid in superseded_ids if sid.startswith("sources/"))
+    if not roots:
+        return frozenset()
+    closure = bundle_provenance.provenance_closure(provenance_by_id, root_ids=roots)
+    return frozenset(closure) - roots
 
 
 @dataclass(frozen=True)
@@ -145,6 +182,7 @@ def deprecated_concept_ids(bundle_dir: Path) -> frozenset[str]:
     is malformed, contributes no status/edges for itself and is otherwise
     skipped (fail-safe: never raises)."""
     status_by_id: dict[str, str] = {}
+    provenance_by_id: dict[str, frozenset[str]] = {}
     supersedes: set[tuple[str, str]] = set()  # (source, target), source != target
     for scan in okf._iter_docs(bundle_dir):
         if scan.read_error is not None or scan.parse_error is not None:
@@ -152,6 +190,9 @@ def deprecated_concept_ids(bundle_dir: Path) -> frozenset[str]:
         cid = okf.concept_id_for(scan.path, bundle_dir)
         meta = scan.metadata or {}
         status_by_id[cid] = "deprecated" if okf.declares_deprecated(meta) else ""
+        provenance = provenance_ids(meta)
+        if provenance is not None:
+            provenance_by_id[cid] = provenance
         try:
             relations = okf.decode_relations(meta)
         except ValueError:
@@ -169,7 +210,9 @@ def deprecated_concept_ids(bundle_dir: Path) -> frozenset[str]:
     own_deprecated = {
         cid for cid, status in status_by_id.items() if status == "deprecated"
     }
-    return frozenset(own_deprecated | superseded)
+    return frozenset(
+        own_deprecated | superseded | provenance_orphans(provenance_by_id, superseded)
+    )
 
 
 def filter_hits[H: _HasConceptId](hits: list[H], deprecated: frozenset[str]) -> list[H]:

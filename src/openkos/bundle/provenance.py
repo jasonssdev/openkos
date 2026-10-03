@@ -1062,3 +1062,45 @@ def reverse_provenance_rewrites(
             "wrote there"
         )
     return snapshot
+
+
+def _remove_provenance_entry(metadata: dict[str, object], source_id: str) -> bool:
+    """Drop `source_id` from `metadata["provenance"]` in place (matched on
+    the normalized id, so `sources/x` and `sources/x.md` are one entry) and
+    re-project `sources`. `False` when the entry was not there. Raises
+    `ValueError` rather than leave `provenance` empty: a derived concept
+    always cites a Source, and one whose whole provenance is the forgotten
+    Source belongs to the purge set, never to a detach."""
+    raw = metadata.get("provenance")
+    if not isinstance(raw, list):
+        return False
+    key = _normalize_id(source_id)
+    kept = [entry for entry in raw if _normalize_id(str(entry)) != key]
+    if len(kept) == len(raw):
+        return False
+    if not kept:
+        raise ValueError(f"cannot detach {source_id!r}: provenance would become empty")
+    metadata["provenance"] = kept
+    return True
+
+
+def detach_generated_source_references(text: str, *, source_id: str) -> str:
+    """Pure: the surviving concept's `text` with the references the engine
+    itself GENERATED for `source_id` removed (retire-superseded-sources): its
+    `provenance` entry (and the projected `sources` entry) and its
+    `## Related` bullet in the builder's exact shape
+    (`okf.source_related_bullet`).
+
+    Only those shapes. A bullet with any other phrase, a link in prose and
+    every other mention are left byte-identical, so a caller that re-scans
+    the result still finds them and keeps refusing. Other frontmatter
+    (`sensitivity`, `version`, ...) is carried through untouched; a text that
+    never named the Source is returned unchanged. Raises `ValueError` if the
+    provenance would become empty."""
+    metadata, body = okf.load_frontmatter(text)
+    if not _remove_provenance_entry(metadata, source_id):
+        return text
+    metadata = okf.refresh_sources(metadata)
+    bullet = okf.source_related_bullet(_normalize_id(source_id))
+    kept_lines = [line for line in body.split("\n") if line.rstrip() != bullet]
+    return okf.dump_frontmatter(metadata, "\n".join(kept_lines))

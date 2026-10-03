@@ -5485,6 +5485,9 @@ def forget(
         if scope == "source" and ref.kind != "unverifiable":
             line += f" -> {ref.member}"
         typer.echo(line)
+    # retire-superseded-sources: historical references are edited, not blocking.
+    for edit in plan.historical_edits:
+        typer.echo(f"  ~ bundle/{edit.target}.md ({edit.detail})")
     status_outcome_by_target = {
         withdrawal.target: withdrawal.outcome for withdrawal in plan.status_withdrawals
     }
@@ -5605,6 +5608,14 @@ def forget(
                     )
                     for withdrawal in plan.status_withdrawals
                 },
+                # retire-superseded-sources: a historical edit target is a
+                # write target too, guarded against the same pre-prompt read.
+                **{
+                    layout.bundle_dir / f"{edit.target}.md": _require_member_baseline(
+                        "forget", plan.other_bytes, edit.target
+                    )
+                    for edit in plan.historical_edits
+                },
             },
             "forget",
             # #319: the purge-set members are UNLINKED below, not written --
@@ -5628,9 +5639,11 @@ def forget(
         # (the gate drops intra-set referrers), so it is declared a read
         # dependency here, and a document that appeared since the snapshot -- which
         # has no baseline -- is refused too.
-        _written_ids = set(plan.purge_ids) | {
-            withdrawal.target for withdrawal in plan.status_withdrawals
-        }
+        _written_ids = (
+            set(plan.purge_ids)
+            | {withdrawal.target for withdrawal in plan.status_withdrawals}
+            | {edit.target for edit in plan.historical_edits}
+        )
         _reject_read_drift(
             layout,
             application_commit_phase.ReadDependencies(
@@ -5727,6 +5740,7 @@ def forget(
                 "bundle/index.md",
                 "bundle/log.md",
                 *(f"bundle/{member}.md" for member in plan.purge_ids),
+                *(f"bundle/{edit.target}.md" for edit in plan.historical_edits),
                 *(
                     f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
                     for p in (*ledger_touched, *decisions_touched)
