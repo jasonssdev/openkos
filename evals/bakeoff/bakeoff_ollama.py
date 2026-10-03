@@ -45,6 +45,27 @@ from bakeoff_spec import (
 GB = 1e9
 """Decimal gigabyte: the unit `ollama list` and `ollama ps` print."""
 
+ELIGIBILITY_VERSION = 3
+"""Bumped whenever a rule that reads a stored eligibility record changes, so a
+record written under older rules is re-measured on the next run instead of
+being trusted (v3: the memory figure is a validated or explicitly estimated
+candidate + `bge-m3` sum, judged arithmetically against the budget)."""
+
+MIN_RESIDENT_FRACTION = 0.9
+"""A resident chat model holds at least its weights, so `ollama ps` reporting
+less than this fraction of the on-disk size (`/api/tags` `size`) is not the
+model's footprint. Correct readings sit at 1.0x-1.2x of disk; a gemma4 reading
+of 0.13x is the case this refuses to take at face value (it is estimated)."""
+
+MAX_EMBEDDER_RELOADS = 2
+"""How often a snapshot without `bge-m3` is retried (a minimal embed call, then
+a fresh `ollama ps`) before the sum is estimated instead. Eviction here is load
+order, not memory pressure, so a reload usually restores co-residency."""
+
+METHOD_MEASURED = "measured"
+METHOD_EMBEDDER_ESTIMATED = "estimated: bge-m3 not co-resident"
+METHOD_DISK_PLUS_REPORTED = "estimated (disk + reported)"
+
 LOAD_TIMEOUT_S = 900.0
 """A cold load of a 24 GB model from disk can take minutes."""
 _KEEP_ALIVE = "10m"
@@ -129,27 +150,53 @@ class OllamaLocal:
         )
         return self._clock() - started
 
-    def measure_memory(self, model: str, num_ctx: int) -> dict[str, Any]:
-        """Peak resident memory with `bge-m3` loaded and `model` loaded at
-        `num_ctx`: every other model is unloaded first, so the sum is exactly
-        the two. `total_bytes` sums `size` (all memory, GPU and CPU) across
-        what `ollama ps` lists."""
-        self.unload_all()
-        self.load_embedder()
-        load_s = self.load_chat(model, num_ctx)
-        resident = self.ps()
-        per_model = {
+    def _snapshot(self) -> dict[str, dict[str, int]]:
+        return {
             str(e["name"]): {
                 "size": int(e.get("size", 0)),
                 "size_vram": int(e.get("size_vram", 0)),
             }
-            for e in resident
+            for e in self.ps()
         }
+
+    def measure_memory(
+        self, model: str, num_ctx: int, disk_bytes: int | None = None
+    ) -> dict[str, Any]:
+        """Memory with `bge-m3` loaded and `model` loaded at `num_ctx`: every
+        other model is unloaded first. The budget is judged on candidate +
+        `bge-m3` (see `resolve_memory`), not on whatever `ollama ps` lists.
+
+        A snapshot without `bge-m3` (the server evicted it on load order) is
+        retried up to `MAX_EMBEDDER_RELOADS` times with a minimal embed call
+        and a fresh snapshot. `bge-m3`'s own size is read once, right after it
+        loads alone, so a sum can still be built if co-residency is never
+        observed. `disk_bytes` is the model's `/api/tags` size."""
+        self.unload_all()
+        self.load_embedder()
+        alone = _resident(self._snapshot(), EMBEDDING_MODEL)
+        embedder_alone = int(alone["size"]) if alone else None
+        load_s = self.load_chat(model, num_ctx)
+        per_model = self._snapshot()
+        reloads = 0
+        while (
+            _resident(per_model, EMBEDDING_MODEL) is None
+            and reloads < MAX_EMBEDDER_RELOADS
+        ):
+            self.load_embedder()
+            reloads += 1
+            per_model = self._snapshot()
+        resolved = resolve_memory(per_model, model, disk_bytes, embedder_alone)
+        observed = sum(m["size"] for m in per_model.values())
         return {
             "num_ctx": num_ctx,
             "load_s": round(load_s, 2),
-            "total_bytes": sum(m["size"] for m in per_model.values()),
+            "observed_bytes": observed,
+            "total_bytes": resolved.get("total_bytes", observed),
             "per_model": per_model,
+            "disk_bytes": disk_bytes,
+            "embedder_alone_bytes": embedder_alone,
+            "embedder_reloads": reloads,
+            "check": resolved,
         }
 
 
@@ -186,6 +233,94 @@ def native_context(show: Mapping[str, Any]) -> int | None:
     return max(values) if values else None
 
 
+def listed_size(tags: Sequence[Mapping[str, Any]], model: str) -> int | None:
+    """The model's on-disk size from `/api/tags`, or `None` when not listed."""
+    for entry in tags:
+        names = (str(entry.get("name", "")), str(entry.get("model", "")))
+        if model in names or f"{model}:latest" in names:
+            size = entry.get("size")
+            return int(size) if isinstance(size, int | float) and size > 0 else None
+    return None
+
+
+def _resident(per_model: Mapping[str, Any], model: str) -> Mapping[str, Any] | None:
+    for name, usage in per_model.items():
+        if name == model or name == f"{model}:latest" or name.startswith(f"{model}:"):
+            return dict(usage)
+    return None
+
+
+def resolve_memory(
+    per_model: Mapping[str, Any],
+    model: str,
+    disk_bytes: int | None,
+    embedder_alone_bytes: int | None,
+) -> dict[str, Any]:
+    """Turn one `ollama ps` snapshot into the figure the budget is judged on.
+
+    The pre-registered budget (#1269) is arithmetic: the chat model, its KV
+    cache AND `bge-m3` ("24 GB must hold the chat model(s), the KV cache at
+    production settings ... and `bge-m3`"). The result is `verdict: ok` with
+    `total_bytes` = candidate + `bge-m3`, or `verdict: invalid` with a reason.
+    `method` says how it was obtained, and `estimated` is true for anything
+    but a plain measurement:
+
+    - candidate: the reported size, unless it is under `MIN_RESIDENT_FRACTION`
+      of the on-disk weights (then not its footprint): the estimate is the
+      on-disk size + the reported size (weights + the KV/graph it reports).
+    - `bge-m3`: its resident size, or, when it is absent from the snapshot,
+      the size measured when it loaded alone.
+
+    Invalid (never eligible): the candidate is not resident, there is no
+    on-disk size to hold the reading to, or `bge-m3`'s size is unknown."""
+    candidate = _resident(per_model, model)
+    if candidate is None:
+        return {"verdict": "invalid", "reason": f"{model} is not resident"}
+    if disk_bytes is None or disk_bytes <= 0:
+        return {
+            "verdict": "invalid",
+            "reason": f"no on-disk size for {model} to validate the reading against",
+        }
+    methods: list[str] = []
+    reasons: list[str] = []
+    reported = int(candidate.get("size", 0))
+    if reported < int(MIN_RESIDENT_FRACTION * disk_bytes):
+        candidate_bytes = disk_bytes + reported
+        methods.append(METHOD_DISK_PLUS_REPORTED)
+        reasons.append(
+            f"{model} reports {reported / GB:.2f} GB resident, under "
+            f"{MIN_RESIDENT_FRACTION:.0%} of its {disk_bytes / GB:.2f} GB weights: "
+            f"estimated as {disk_bytes / GB:.2f} GB on disk + {reported / GB:.2f} GB "
+            "reported"
+        )
+    else:
+        candidate_bytes = reported
+    embedder = _resident(per_model, EMBEDDING_MODEL)
+    if embedder is not None:
+        embedder_bytes = int(embedder.get("size", 0))
+    elif embedder_alone_bytes:
+        embedder_bytes = embedder_alone_bytes
+        methods.append(METHOD_EMBEDDER_ESTIMATED)
+        reasons.append(
+            f"{EMBEDDING_MODEL} never co-resided after {MAX_EMBEDDER_RELOADS} "
+            f"reloads: its {embedder_alone_bytes / GB:.2f} GB loaded alone is added"
+        )
+    else:
+        return {
+            "verdict": "invalid",
+            "reason": f"{EMBEDDING_MODEL} is not resident and its size was not measured",
+        }
+    return {
+        "verdict": "ok",
+        "method": "; ".join(methods) or METHOD_MEASURED,
+        "estimated": bool(methods),
+        "reason": "; ".join(reasons),
+        "candidate_bytes": candidate_bytes,
+        "embedder_bytes": embedder_bytes,
+        "total_bytes": candidate_bytes + embedder_bytes,
+    }
+
+
 def listed_digest(tags: Sequence[Mapping[str, Any]], model: str) -> str | None:
     for entry in tags:
         names = (str(entry.get("name", "")), str(entry.get("model", "")))
@@ -201,6 +336,7 @@ def decide_eligibility(
     license_id: str | None,
     native_ctx: int | None,
     memory_bytes_at_production: int | None,
+    memory_check: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """`{"state": eligible|ineligible|pending, "reasons": [...]}`.
 
@@ -211,8 +347,20 @@ def decide_eligibility(
     `ineligible` is final (a license, context or memory failure -- the pre-reg
     drops it for every family). `pending` means a fact is missing (not pulled,
     memory not measured yet) and nothing is decided. Every failed gate is
-    listed, not only the first: the report should say all of why."""
+    listed, not only the first: the report should say all of why.
+
+    A memory figure counts only with a `memory_check` (`resolve_memory`)
+    whose verdict is `ok`; it is judged against the budget, estimated or not
+    (an estimate says so in the reason). An invalid or absent check leaves the
+    state `pending`, never `eligible`."""
     reasons: list[str] = []
+    invalid: list[str] = []
+    check = memory_check or {}
+    if memory_bytes_at_production is not None and check.get("verdict") != "ok":
+        invalid.append(
+            "memory reading is invalid: "
+            + (check.get("reason") or "no validity check ran")
+        )
     if license_id is not None and license_id not in LICENSE_ALLOWLIST:
         reasons.append(
             f"license {license_id!r} is not in the allowlist {list(LICENSE_ALLOWLIST)}"
@@ -223,10 +371,12 @@ def decide_eligibility(
         )
     if (
         memory_bytes_at_production is not None
+        and check.get("verdict") == "ok"
         and memory_bytes_at_production > BUDGET_GB * GB
     ):
+        how = f" ({check['method']})" if check.get("estimated") else ""
         reasons.append(
-            f"{memory_bytes_at_production / GB:.1f} GB resident at num_ctx "
+            f"{memory_bytes_at_production / GB:.1f} GB{how} at num_ctx "
             f"{PRODUCTION_NUM_CTX} with {EMBEDDING_MODEL} exceeds the "
             f"{BUDGET_GB:.0f} GB budget"
         )
@@ -239,6 +389,7 @@ def decide_eligibility(
         pending.append("native context not reported by /api/show")
     if memory_bytes_at_production is None:
         pending.append("memory at the production context not measured yet")
+    pending.extend(invalid)
     if pending:
         return {"state": "pending", "reasons": pending}
     return {"state": "eligible", "reasons": []}
@@ -261,6 +412,9 @@ class _FakeResponse:
 
     def __exit__(self, *_exc: object) -> None:
         return None
+
+
+_OK = {"verdict": "ok", "method": METHOD_MEASURED, "estimated": False, "reason": ""}
 
 
 def _self_test() -> int:
@@ -330,6 +484,7 @@ def _self_test() -> int:
             license_id="mit",
             native_ctx=16384,
             memory_bytes_at_production=ok_bytes,
+            memory_check=_OK,
         ),
         {"state": "eligible", "reasons": []},
     )
@@ -340,6 +495,7 @@ def _self_test() -> int:
             license_id="mit",
             native_ctx=16384,
             memory_bytes_at_production=int(24 * GB),
+            memory_check=_OK,
         )["state"],
         "eligible",
     )
@@ -348,6 +504,7 @@ def _self_test() -> int:
         license_id="apache-2.0",
         native_ctx=40960,
         memory_bytes_at_production=over_bytes,
+        memory_check=_OK,
     )
     check("over budget is ineligible", over["state"], "ineligible")
     check(
@@ -358,6 +515,7 @@ def _self_test() -> int:
         license_id="apache-2.0",
         native_ctx=8192,
         memory_bytes_at_production=ok_bytes,
+        memory_check=_OK,
     )
     check(
         "native context below 12288 is ineligible (gemma2)",
@@ -369,6 +527,7 @@ def _self_test() -> int:
         license_id="mit",
         native_ctx=12288,
         memory_bytes_at_production=ok_bytes,
+        memory_check=_OK,
     )
     check("native context of exactly 12288 passes", exactly["state"], "eligible")
     gemma = decide_eligibility(
@@ -376,6 +535,7 @@ def _self_test() -> int:
         license_id="other",
         native_ctx=8192,
         memory_bytes_at_production=over_bytes,
+        memory_check=_OK,
     )
     check("every failed gate is listed", len(gemma["reasons"]), 3)
     check(
@@ -385,6 +545,7 @@ def _self_test() -> int:
             license_id="unknown",
             native_ctx=16384,
             memory_bytes_at_production=ok_bytes,
+            memory_check=_OK,
         )["state"],
         "ineligible",
     )
@@ -412,6 +573,7 @@ def _self_test() -> int:
     # A fake server: records every call, answers /api/ps from what was loaded.
     calls: list[tuple[str, Any]] = []
     resident: dict[str, int] = {"old:1b": 1_000_000_000}
+    evict = {"on_load": False, "sticky": False}
 
     def fake_open(request: Any, timeout: float) -> _FakeResponse:
         body: dict[str, Any] = {}
@@ -434,10 +596,15 @@ def _self_test() -> int:
             resident.pop(body["model"], None)
         elif path == "/api/generate":
             resident[body["model"]] = 8_000_000_000 + body["options"]["num_ctx"] * 1000
+            if evict["on_load"]:
+                resident.pop(EMBEDDING_MODEL, None)
         elif path == "/api/embed":
-            resident[EMBEDDING_MODEL] = 1_200_000_000
+            if not (evict["sticky"] and len(resident) > 0):
+                resident[EMBEDDING_MODEL] = 1_200_000_000
         elif path == "/api/tags":
-            return _FakeResponse({"models": [{"name": "m:1b", "digest": "dd"}]})
+            return _FakeResponse(
+                {"models": [{"name": "m:1b", "digest": "dd", "size": 7_000_000_000}]}
+            )
         elif path == "/api/show":
             return _FakeResponse(
                 {"license": mit, "model_info": {"x.context_length": 32768}}
@@ -445,9 +612,15 @@ def _self_test() -> int:
         return _FakeResponse({})
 
     client = OllamaLocal(
-        "127.0.0.1:11434", opener=fake_open, clock=iter([0.0, 7.5]).__next__
+        "127.0.0.1:11434",
+        opener=fake_open,
+        clock=iter([0.0, 7.5, *([0.0, 1.0] * 8)]).__next__,
     )
-    check("tags are listed", client.tags(), [{"name": "m:1b", "digest": "dd"}])
+    check(
+        "tags are listed",
+        client.tags(),
+        [{"name": "m:1b", "digest": "dd", "size": 7_000_000_000}],
+    )
     show = client.show("m:1b")
     check(
         "show feeds the pure gates",
@@ -455,7 +628,7 @@ def _self_test() -> int:
         ("mit", 32768),
     )
     calls.clear()
-    measured = client.measure_memory("m:1b", 12288)
+    measured = client.measure_memory("m:1b", 12288, 7_000_000_000)
     check(
         "unloads the stranger first",
         calls[1],
@@ -478,6 +651,198 @@ def _self_test() -> int:
         1_200_000_000 + 8_000_000_000 + 12288 * 1000,
     )
     check("load seconds come from the injected clock", measured["load_s"], 7.5)
+    check("a good snapshot passes its check", measured["check"]["verdict"], "ok")
+    check("the on-disk size is recorded", measured["disk_bytes"], 7_000_000_000)
+
+    check(
+        "a measured snapshot is not an estimate", measured["check"]["estimated"], False
+    )
+    check("no reload when bge-m3 co-resides", measured["embedder_reloads"], 0)
+
+    # bge-m3 evicted on load order, restored by one reload: measured, not estimated
+    evict["on_load"] = True
+    calls.clear()
+    reloaded = client.measure_memory("m:1b", 12288, 7_000_000_000)
+    check(
+        "an evicted bge-m3 is reloaded and re-snapshotted",
+        (reloaded["embedder_reloads"], reloaded["check"]["method"]),
+        (1, METHOD_MEASURED),
+    )
+    check(
+        "the reload is a minimal embed call, one beyond the first",
+        [c[0] for c in calls].count("/api/embed"),
+        2,
+    )
+    # bge-m3 never co-resides: bounded retries, then an estimate that says so
+    evict["sticky"] = True
+    calls.clear()
+    sticky = client.measure_memory("m:1b", 12288, 7_000_000_000)
+    check(
+        "retries are bounded",
+        (sticky["embedder_reloads"], [c[0] for c in calls].count("/api/embed")),
+        (MAX_EMBEDDER_RELOADS, 1 + MAX_EMBEDDER_RELOADS),
+    )
+    check(
+        "never co-resident: summed from the candidate and bge-m3 loaded alone",
+        (
+            sticky["check"]["method"],
+            sticky["check"]["estimated"],
+            sticky["total_bytes"],
+        ),
+        (METHOD_EMBEDDER_ESTIMATED, True, 1_200_000_000 + 8_000_000_000 + 12288 * 1000),
+    )
+    evict["on_load"] = evict["sticky"] = False
+
+    # --- the memory figure (#1269): exact shapes from the live run ---
+    emb = {"size": 664_660_868, "size_vram": 664_660_868}
+    emb_name = EMBEDDING_MODEL + ":latest"
+    gemma_12b = {
+        "gemma4:12b": {"size": 1_030_488_062, "size_vram": 1_030_488_062},
+        emb_name: emb,
+    }
+    gemma_26b = {
+        "gemma4:26b-a4b": {"size": 985_304_923, "size_vram": 985_304_923},
+        emb_name: emb,
+    }
+    qwen35_alone = {
+        "qwen3.6:35b-a3b": {"size": 22_265_976_584, "size_vram": 22_265_976_584}
+    }
+    qwen35_at_32k = {
+        "qwen3.6:35b-a3b": {"size": 22_403_937_728, "size_vram": 22_403_937_728},
+        emb_name: emb,
+    }
+    good = {
+        "mistral-small3.2:24b": {"size": 15_637_000_000, "size_vram": 15_637_000_000},
+        emb_name: emb,
+    }
+    qwen35_disk = 22_621_314_381
+    g12 = resolve_memory(gemma_12b, "gemma4:12b", 8_021_618_941, 664_660_868)
+    check(
+        "gemma4:12b is estimated as disk + reported + bge-m3 (~9.7 GB)",
+        (g12["verdict"], g12["method"], g12["estimated"], g12["total_bytes"]),
+        (
+            "ok",
+            METHOD_DISK_PLUS_REPORTED,
+            True,
+            8_021_618_941 + 1_030_488_062 + 664_660_868,
+        ),
+    )
+    check("the estimate states its reason", "estimated as" in g12["reason"], True)
+    g26 = resolve_memory(gemma_26b, "gemma4:26b-a4b", 18_731_025_629, 664_660_868)
+    check(
+        "gemma4:26b-a4b is estimated (~19.6 GB)",
+        (g26["method"], round(g26["total_bytes"] / GB, 1)),
+        (METHOD_DISK_PLUS_REPORTED, 20.4),
+    )
+    q12 = resolve_memory(qwen35_alone, "qwen3.6:35b-a3b", qwen35_disk, 664_660_868)
+    check(
+        "qwen3.6:35b at 12288 without bge-m3 is the 22.93 GB estimated sum",
+        (q12["method"], round(q12["total_bytes"] / GB, 2)),
+        (METHOD_EMBEDDER_ESTIMATED, 22.93),
+    )
+    check(
+        "qwen3.6:35b at 32768 with both resident is a plain measurement",
+        resolve_memory(qwen35_at_32k, "qwen3.6:35b-a3b", qwen35_disk, None)["method"],
+        METHOD_MEASURED,
+    )
+    ok_good = resolve_memory(good, "mistral-small3.2:24b", 15_177_384_862, None)
+    check(
+        "a correct reading is measured, summed, and not estimated",
+        (ok_good["method"], ok_good["estimated"], ok_good["total_bytes"]),
+        (METHOD_MEASURED, False, 15_637_000_000 + 664_660_868),
+    )
+    check(
+        "a candidate that is not resident is invalid",
+        resolve_memory({emb_name: emb}, "m:1b", 7_000_000_000, 1)["verdict"],
+        "invalid",
+    )
+    check(
+        "a reading with no on-disk size stays invalid",
+        resolve_memory(gemma_12b, "gemma4:12b", None, 664_660_868)["verdict"],
+        "invalid",
+    )
+    check(
+        "no bge-m3 anywhere is invalid",
+        resolve_memory(qwen35_alone, "qwen3.6:35b-a3b", qwen35_disk, None)["verdict"],
+        "invalid",
+    )
+    floor = int(MIN_RESIDENT_FRACTION * 10_000_000_000)
+    check(
+        "exactly the plausibility floor is not estimated",
+        resolve_memory({"m:1b": {"size": floor}, emb_name: emb}, "m:1b", 10**10, 0)[
+            "estimated"
+        ],
+        False,
+    )
+    check(
+        "one byte under the floor is estimated",
+        resolve_memory({"m:1b": {"size": floor - 1}, emb_name: emb}, "m:1b", 10**10, 0)[
+            "method"
+        ],
+        METHOD_DISK_PLUS_REPORTED,
+    )
+    est = decide_eligibility(
+        pulled=True,
+        license_id="apache-2.0",
+        native_ctx=262144,
+        memory_bytes_at_production=g12["total_bytes"],
+        memory_check=g12,
+    )
+    check(
+        "an estimated 9.7 GB is judged against 24 GB: eligible",
+        est["state"],
+        "eligible",
+    )
+    q = decide_eligibility(
+        pulled=True,
+        license_id="apache-2.0",
+        native_ctx=262144,
+        memory_bytes_at_production=q12["total_bytes"],
+        memory_check=q12,
+    )
+    check("the 22.93 GB estimated sum is eligible, not dropped", q["state"], "eligible")
+    over_est = decide_eligibility(
+        pulled=True,
+        license_id="apache-2.0",
+        native_ctx=262144,
+        memory_bytes_at_production=int(24.5 * GB),
+        memory_check=q12 | {"total_bytes": int(24.5 * GB)},
+    )
+    check(
+        "an estimate over 24 GB is ineligible and the reason says it is estimated",
+        (
+            over_est["state"],
+            "estimated: bge-m3 not co-resident" in over_est["reasons"][0],
+        ),
+        ("ineligible", True),
+    )
+    check(
+        "an invalid reading is pending, never eligible",
+        decide_eligibility(
+            pulled=True,
+            license_id="apache-2.0",
+            native_ctx=262144,
+            memory_bytes_at_production=1_695_148_930,
+            memory_check=resolve_memory(gemma_12b, "gemma4:12b", None, 1),
+        )["state"],
+        "pending",
+    )
+    check(
+        "a memory figure with no check is not eligible",
+        decide_eligibility(
+            pulled=True,
+            license_id="mit",
+            native_ctx=16384,
+            memory_bytes_at_production=ok_bytes,
+        )["state"],
+        "pending",
+    )
+    check(
+        "tags size is read for the plausibility floor",
+        listed_size([{"name": "m:1b", "size": 5}], "m:1b"),
+        5,
+    )
+    check("a missing tags size is None", listed_size([{"name": "m:1b"}], "m:1b"), None)
     check("the stranger really left", "old:1b" in measured["per_model"], False)
 
     try:

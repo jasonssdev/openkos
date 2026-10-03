@@ -36,7 +36,23 @@ Each has its own `--self-test`; `evals/run_self_tests.py` sweeps them.
    at `num_ctx` 12288 and 32768 with `bge-m3` loaded against the 24 GB budget.
    Only the 12288 peak gates; 32768 is reported with a "fits beside the
    baseline" column. A model that is not pulled is **pending**: the driver
-   never downloads one.
+   never downloads one. The budget is judged
+   arithmetically on candidate + `bge-m3` at each `num_ctx`. If `bge-m3` is
+   missing from the `ollama ps` snapshot (evicted on load order, not memory
+   pressure) the driver reloads it with a minimal embed call and re-snapshots,
+   at most twice; if it never co-resides, `bge-m3`'s size measured when it
+   loaded alone is added and the figure is marked
+   `estimated: bge-m3 not co-resident`. A candidate reading under 90% of its
+   on-disk size (gemma4 reports about 1 GB for 8 to 19 GB of weights) is not
+   its footprint: it is estimated as on-disk size + reported size +
+   `bge-m3`, marked `estimated (disk + reported)`. An estimate is judged
+   against 24 GB like a measurement but is never hidden: the eligibility JSON
+   carries `memory_method` and `memory_estimated`, the plan note says
+   `memory estimated: ...`, and the report prefixes the GB with `~` and has a
+   method column. No on-disk size, or no `bge-m3` size, is an invalid reading
+   (**pending**, never eligible). Records carry an `ELIGIBILITY_VERSION`; one
+   written under older rules is re-measured on the next `--run`, so nothing
+   has to be deleted by hand.
 2. **Baseline** (`qwen3:8b`) on every harness at n=15, twice where the
    pre-registration says no 15-run baseline exists on the current fixture. The
    second repeat only ever runs in a **later invocation** (`--session`), so the
