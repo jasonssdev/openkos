@@ -162,6 +162,113 @@ scorer:
   explicitly declines to decide on it (*"eso necesita una medición antes que una
   decisión"*), so it never becomes a thing the corpus knows.
 
+### The 2026-10-03 bake-off additions (#1269)
+
+Judged blind, as the aliases above. Each family follows a ruling already in
+this file: the approximate index and its pending measurement are a means the
+meeting declines to decide on (`Índice aproximado`, `Conjunto de consultas de
+control`), the exhaustive comparison is the latency's cause as the temporaries
+are the incident's, the version tag and the regeneration are the two halves of
+the drift, and the late alert is the incident's lesson. The proposed fix for
+the duplicates (pass the already-named list to the next chunk) is filed by the
+same reasoning as the approximate index: proposed, explicitly "sin decisión".
+Titles fusing two subjects into one open-items object are agenda scaffolding,
+the shape of `Puntos pendientes`.
+
+CONTESTED, recorded here in the reading that does NOT credit the subject, with
+the other reading stated so it is never resolved silently:
+
+The four participant roles (`Ingeniero de datos` and the rest) were emitted as
+`Person` objects in replies that never emitted the participants' names. Filed
+as facets, a role being an attribute of the person. The other reading is that
+each is the participant itself under a definite description unique in this
+transcript, which would make it an alias of that person.
+
+The approximate-index and latency-measurement family (`Postergación de la
+decisión sobre índices aproximados`, `Medición de latencia de búsqueda
+vectorial`, `Búsqueda vectorial con comparación exhaustiva` and kin) is, in
+many replies, the ONLY title touching the latency arc. Filed as facets per the
+`Índice aproximado` ruling. The other reading is that such a reply named the
+latency subject by the meeting's outcome on it, as `Decisión sobre cifrado de
+respaldos` names the backup decision, which would make them aliases of
+`Latencia de la búsqueda vectorial`.
+
+- Análisis de impacto para optimización de búsqueda
+- Aplazamiento de decisión sobre índices aproximados y exactitud
+- Búsqueda exhaustiva vs. Índice aproximado
+- Búsqueda vectorial con comparación exhaustiva
+- Búsqueda vectorial exhaustiva vs. aproximada
+- Búsqueda Vectorial Exhaustiva vs. Índices Aproximados
+- Búsqueda vectorial y comparación exhaustiva
+- Comparación exhaustiva vs. Índices aproximados
+- Creación de conjunto de pruebas para evaluación de latencia
+- Diferir decisión de implementación de índice aproximado
+- Medición comparativa para evaluar índice aproximado en búsqueda vectorial
+- Medición comparativa para latencia de búsqueda vectorial
+- Medición de exactitud para índice aproximado
+- Medición de impacto antes de implementar índice aproximado para búsqueda vectorial
+- Medición de impacto de la búsqueda vectorial exhaustiva versus índice aproximado
+- Medición de impacto del índice aproximado en búsqueda vectorial
+- Medición de latencia antes de decidir sobre índice aproximado
+- Medición de latencia antes de decisión sobre índice aproximado
+- Medición de latencia de búsqueda vectorial
+- Medición de latencia y exactitud en búsqueda vectorial
+- Medición pendiente para cambio a índice aproximado
+- Medición previa para decisión de índice aproximado en búsqueda vectorial
+- Pendiente de medición para la decisión sobre índice aproximado
+- Posposición de decisión sobre índices aproximados para reducción de latencia
+- Pospuesta decisión sobre índice aproximado para búsqueda vectorial
+- Postergación de decisión sobre índice aproximado
+- Postergación de decisión sobre índice aproximado de búsqueda
+- Postergación de decisión sobre índice aproximado de búsqueda hasta completar medición
+- Postergación de decisión sobre índice aproximado por latencia
+- Postergación de la decisión sobre índice aproximado por medición previa
+- Postergación de la decisión sobre índices aproximados
+- Postergación de la decisión sobre índices aproximados hasta medición de exactitud
+- Postergación de la decisión sobre índices aproximados hasta nueva medición
+- Clasificación del incidente de caída de servicio como aprendizaje de monitoreo
+- Falla de Monitoreo por Umbrales de Alerta
+- Gestión de archivos temporales de reconstrucción
+- Gestión de archivos temporales en reconstrucción
+- Lección aprendida: Falta de visibilidad del incidente
+- Protocolo de respuesta tras incidente por llenado de disco
+- Revisar umbrales de alerta de disco en la revisión de monitoreo
+- Revisión de umbrales de monitoreo como aprendizaje post-incidente
+- Coordinadora del equipo de infraestructura
+- Desarrollador del motor de búsqueda
+- Encargada de seguridad de la información
+- Ingeniero de datos
+- Discusión sobre problemas de deriva del modelo de embeddings y duplicados en el corpus
+- Gestión pendiente de latencia vectorial y deriva de embeddings
+- Seguimiento de latencia vectorial y deriva de embeddings
+- Documentación del fallo en componentes de solo lectura vs escritura
+- Procedimiento de documentación y fallback seguro
+- Estándar de etiquetado de versiones para vectores de embeddings
+- Guardar etiqueta de versión del modelo con cada vector para prevenir deriva de embeddings
+- Guardar etiqueta de versión del modelo junto a cada vector
+- Guardar etiqueta del modelo junto a cada vector
+- Guardar etiqueta del modelo junto a cada vector para prevenir deriva de embeddings
+- Guardar la etiqueta del modelo junto a cada vector
+- Guardar la etiqueta del modelo junto a cada vector de embeddings
+- Guardar la etiqueta del modelo junto a cada vector para gestionar la deriva de embeddings
+- Guardar la etiqueta del modelo junto a cada vector para gestionar la deriva y la trazabilidad
+- Guardar la etiqueta del modelo junto a cada vector para prevenir la deriva
+- Guardar la etiqueta del modelo junto a cada vector para prevenir la deriva del modelo de embeddings
+- Implementación de etiqueta de versión en la base de embeddings
+- Implementación de etiquetas de versión en vectores y limpieza del corpus
+- Implementar guardado de etiqueta de versión junto a cada vector
+- Regeneración incremental de vectores antiguos
+- Registro de etiqueta de versión del modelo en los vectores
+- Registro de etiquetas de versión en vectores de embeddings
+- Registro de etiquetas de versión para vectores de embeddings
+- Incluir lista de nombres existentes al procesar trozos de documentos
+- Pasaje de contexto de nombres existentes para prevenir duplicación de documentos en la ingesta
+- Pasar la lista de nombres existentes para evitar duplicación en la ingestión de documentos
+- Pasarle al sistema la lista de nombres ya creados al procesar nuevos trozos para evitar duplicados
+- Transmitir la lista de nombres existentes al procesar nuevos trozos de documento
+- Transmitir lista de nombres previos al procesar segmentos de documentos para evitar duplicados
+
+
 ## Aliases
 
 Not pre-listed. This corpus's rule, set in `small-04-pre-build-skills.md`:
@@ -219,6 +326,99 @@ The three `embeddings` variants are aliased rather than split because each run
 emitted **exactly one** of them — they are five samples of one naming decision,
 not evidence of fragmentation. Contrast the backup pair below, which co-occurs.
 
+### The 2026-10-03 bake-off additions (#1269)
+
+From the #1269 model bake-off: five 15-run sweeps (union+judge) over this
+fixture, 163 distinct unjudged titles after normalization. They were judged
+from a BLIND list — titles pooled across every sweep, de-duplicated, sorted
+alphabetically, no model name attached — against the source and the rulings
+already in this file. The same mechanical rule as 2026-08-15 split alias from
+near-duplicate: a title that is the only name for its subject in at least one
+reply is an alias here (a repeat in another reply is already charged by the
+scorer's first-occurrence-wins precision); a title that NEVER appears without
+another name for the same subject in its reply is a near-duplicate below.
+
+Two shapes recur. Titles that carry the key custody into the backup decision
+(`... y custodia de llaves`) are the decision sentence itself, not a facet: the
+decision is stated as encryption AND custody in one clause. And a title whose
+head noun is the duplicates problem is an alias of it even when framed as its
+mitigation (`Prevención de duplicados ...`), while a title whose head noun is
+the proposed mechanism (`Pasar la lista de nombres ...`) is a facet — the same
+line the drift arc draws between `Mitigación de la deriva` and `Guardar la
+etiqueta`.
+
+- Incidente de indisponibilidad del servicio | Incidente de caimiento de servicio por llenado de disco de índices
+- Incidente de indisponibilidad del servicio | Incidente de caída de servicio por llenado de disco
+- Incidente de indisponibilidad del servicio | Incidente de caída del servicio de búsqueda
+- Incidente de indisponibilidad del servicio | Incidente de caída del servicio de búsqueda (martes pasado)
+- Incidente de indisponibilidad del servicio | Incidente de caída del servicio por disco lleno
+- Incidente de indisponibilidad del servicio | Incidente de caída del servicio por disco lleno y alertas tardías
+- Incidente de indisponibilidad del servicio | Incidente de caída del servicio por llenado de disco
+- Incidente de indisponibilidad del servicio | Incidente de saturación de disco por archivos temporales
+- Incidente de indisponibilidad del servicio | Incidente del servicio
+- Incidente de indisponibilidad del servicio | Incidente por llenado de disco
+- Incidente de indisponibilidad del servicio | Incidente por llenado de disco y fallas de monitoreo
+- Incidente de indisponibilidad del servicio | Resolución del incidente por llenado de disco
+- Latencia de la búsqueda vectorial | Búsqueda Vectorial y Latencia
+- Latencia de la búsqueda vectorial | Enfoque para resolver la latencia de búsqueda
+- Latencia de la búsqueda vectorial | Latencia de búsqueda vectorial y escalabilidad
+- Latencia de la búsqueda vectorial | Optimización de latencia en búsqueda vectorial
+- Latencia de la búsqueda vectorial | Resolución de latencia en búsqueda vectorial
+- Latencia de la búsqueda vectorial | Sobre la resolución del problema de latencia de búsqueda
+- Deriva del modelo de embeddings | Cambio de versión del modelo de embeddings
+- Deriva del modelo de embeddings | Cambios en el modelo de embeddings
+- Deriva del modelo de embeddings | Deriva del modelo de embeddings (Model Drift)
+- Deriva del modelo de embeddings | Estrategia para abordar la deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Estrategia para mitigar la deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Gestión de la deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Mitigación de la deriva del modelo de embeddings mediante etiquetado y regeneración
+- Deriva del modelo de embeddings | Resolución sobre deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Resolución sobre deriva del modelo de embeddings y trazabilidad
+- Deriva del modelo de embeddings | Resolución sobre la deriva del modelo de embeddings
+- Duplicación de objetos por procesamiento en trozos | Documentos duplicados en el corpus
+- Duplicación de objetos por procesamiento en trozos | Duplicidad estructural por fragmentación de documentos
+- Duplicación de objetos por procesamiento en trozos | Mitigación de documentos duplicados en el corpus
+- Duplicación de objetos por procesamiento en trozos | Mitigación de duplicados en la ingestión de documentos
+- Duplicación de objetos por procesamiento en trozos | Prevención de documentos duplicados en el corpus mediante transmisión de contexto
+- Duplicación de objetos por procesamiento en trozos | Prevención de duplicación mediante contexto cruzado
+- Duplicación de objetos por procesamiento en trozos | Prevención de duplicados en documentos particionados
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad estructural en el procesamiento de documentos
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad estructural en el procesamiento de trozos
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad estructural en el procesamiento de trozos (chunks)
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad estructural por fragmentación de documentos
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad por procesamiento de fragmentos
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad por procesamiento de trozos
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad por procesamiento de trozos (chunks)
+- Duplicación de objetos por procesamiento en trozos | Resolución de duplicados por fragmentación de documentos
+- Duplicación de objetos por procesamiento en trozos | Solución a documentos duplicados por fragmentación
+- Duplicación de objetos por procesamiento en trozos | Solución al problema de documentos duplicados por procesamiento en trozos
+- Duplicación de objetos por procesamiento en trozos | Solución para evitar duplicados en el corpus por procesamiento de trozos
+- Cifrado de los respaldos en reposo | Cifrado de respaldos con gestor de secretos
+- Cifrado de los respaldos en reposo | Cifrado de Respaldos del Bundle
+- Cifrado de los respaldos en reposo | Cifrado de respaldos del bundle y custodia de claves
+- Cifrado de los respaldos en reposo | Cifrado de respaldos del bundle y custodia de llaves
+- Cifrado de los respaldos en reposo | Cifrado de respaldos en reposo
+- Cifrado de los respaldos en reposo | Cifrado de respaldos en reposo y custodia de claves
+- Cifrado de los respaldos en reposo | Cifrado de respaldos en reposo y custodia de llave
+- Cifrado de los respaldos en reposo | Cifrado de respaldos en reposo y custodia de llaves
+- Cifrado de los respaldos en reposo | Cifrado de respaldos y custodia de claves
+- Cifrado de los respaldos en reposo | Cifrado de respaldos y custodia de llaves
+- Cifrado de los respaldos en reposo | Cifrado de respaldos y gestión de llaves
+- Retención de los registros de acceso a noventa días | Plazo de retención de registros de acceso
+- Retención de los registros de acceso a noventa días | Política de Retención de Registros de Acceso
+- Retención de los registros de acceso a noventa días | Retención de registros de acceso según minimización de datos
+- Retención de los registros de acceso a noventa días | Retención de registros de acceso y agregados
+- Retención de los registros de acceso a noventa días | Retención de registros de acceso y datos agregados
+- Retención de los registros de acceso a noventa días | Retención de registros de noventa días
+- Procedimiento de rotación de credenciales | Adopción del procedimiento de rotación de credenciales
+- Procedimiento de rotación de credenciales | Aprobación de procedimiento de rotación de credenciales
+- Procedimiento de rotación de credenciales | Procedimiento de rotación de credenciales de base de datos
+- Procedimiento de rotación de credenciales | Procedimiento de rotación de credenciales seguras
+- Procedimiento de rotación de credenciales | Procedimiento de rotación segura de credenciales de base de datos
+- Procedimiento de rotación de credenciales | Procedimiento para rotación de credenciales
+- Procedimiento de rotación de credenciales | Rotación segura de credenciales
+
+
 ## Near-duplicates
 
 Pairs are written `Canonical Subject | the duplicate phrasing`. Adjudicated
@@ -256,6 +456,35 @@ Tomás quotes *"latencia del índice"* and *"latencia en las consultas del
 They are two strings inside a turn, never observed as emissions, and listing
 them would credit this ground truth for a prediction it has not earned.
 
+### The 2026-10-03 bake-off additions (#1269)
+
+Every line below failed the co-occurrence rule in EVERY reply that emitted it:
+each time, the same reply already named the subject another way. Note the
+near-identical pair this produces on purpose — `Aprobación de procedimiento de
+rotación de credenciales` is an alias (one reply, alone) while `Aprobación del
+procedimiento ...` is a near-duplicate (one reply, beside another name). The
+rule reads replies, not spellings.
+
+- Deriva del modelo de embeddings | Análisis de deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Deuda técnica en la generación de vectores de embeddings
+- Deriva del modelo de embeddings | Estrategia de resolución de deriva de embeddings
+- Deriva del modelo de embeddings | Plan para abordar la deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Trabajo pendiente sobre la deriva del modelo
+- Duplicación de objetos por procesamiento en trozos | Duplicidad estructural de objetos por fragmentación de documentos
+- Duplicación de objetos por procesamiento en trozos | Evitar duplicados en el corpus
+- Duplicación de objetos por procesamiento en trozos | Manejo de documentos duplicados en el corpus
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad por procesamiento fragmentado
+- Duplicación de objetos por procesamiento en trozos | Solución para evitar duplicidad de objetos en el corpus
+- Duplicación de objetos por procesamiento en trozos | Solución para la deduplicación de documentos en la ingesta
+- Duplicación de objetos por procesamiento en trozos | Solución propuesta para la deduplicación de nombres en el corpus
+- Procedimiento de rotación de credenciales | Actualización del manual de operación con protocolo de rotación de credenciales
+- Procedimiento de rotación de credenciales | Aprobación del procedimiento de rotación de credenciales
+- Procedimiento de rotación de credenciales | Documentación del procedimiento de rotación de credenciales
+- Procedimiento de rotación de credenciales | Procedimiento de rotación de credenciales en cuatro pasos
+- Procedimiento de rotación de credenciales | Rotación de credenciales de bases de datos
+- Procedimiento de rotación de credenciales | Ruta de rotación de credenciales de base de datos
+
+
 ## Out of scope
 
 Named in the transcript and not what it is about. Kept apart from facets so a
@@ -276,6 +505,14 @@ an object.
 Note that three of the four came from ONE run — carry-titles run 5, the run
 that also produced the sweep's only `F` and its only `D`. Its extra output is
 mentions promoted to objects, not subjects nobody listed.
+
+`Procedimiento de respaldo` (2026-10-03 bake-off, #1269) is the same kind
+of pointer: Paula files the rotation procedure *"junto al procedimiento de
+respaldo"* in the operations manual — an existing artefact, not the encryption
+decision.
+
+- Procedimiento de respaldo
+
 
 ## Notes
 
