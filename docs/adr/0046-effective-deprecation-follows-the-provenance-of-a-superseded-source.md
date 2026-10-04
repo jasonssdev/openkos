@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0046: Effective deprecation follows the provenance of a superseded Source; its export stays edge-only"
 description: A concept whose entire provenance is a superseded Source is deprecated at read time through the shared effective-status predicate, using forget's own orphan closure; the OKF status export stays a projection of supersedes edges only, and forgetting a superseded Source detaches its generated historical references in the same confirmed forget.
-status: Proposed
+status: Accepted
 date: 2026-10-02
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0046: Effective deprecation follows the provenance of a superseded Source; its export stays edge-only
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-02
 - **Issues:** [#1268](https://github.com/jasonssdev/openkos/issues/1268), [#1259](https://github.com/jasonssdev/openkos/issues/1259), [#1263](https://github.com/jasonssdev/openkos/issues/1263)
 

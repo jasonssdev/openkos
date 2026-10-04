@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0043: LLM prompts are files in one folder, versioned by content hash"
 description: System prompts live one per file under src/openkos/prompts/ grouped by task, are read through one loader, and are identified by a derived content hash pinned by a registry test.
-status: Proposed
+status: Accepted
 date: 2026-10-02
 tags:
   - openkos
@@ -15,7 +15,7 @@ sensitivity: public
 
 # ADR-0043: LLM prompts are files in one folder, versioned by content hash
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-02
 
 ## Context

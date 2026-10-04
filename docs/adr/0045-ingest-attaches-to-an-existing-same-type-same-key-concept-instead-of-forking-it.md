@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0045: Ingest attaches to an existing same-type, same-key concept instead of forking it"
 description: When an extracted candidate has the same OKF type and the same normalized title key as an existing, non-deprecated concept, ingest revises that concept (provenance appended, evidence appended deterministically, version bumped, Concept ID kept) instead of writing a numeric-suffixed copy; Event and Person are excluded, and attach_at_ingest turns it off.
-status: Proposed
+status: Accepted
 date: 2026-10-02
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0045: Ingest attaches to an existing same-type, same-key concept instead of forking it
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-02
 - **Issues:** [#1268](https://github.com/jasonssdev/openkos/issues/1268), [#1259](https://github.com/jasonssdev/openkos/issues/1259)
 
