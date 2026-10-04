@@ -1535,14 +1535,12 @@ def compose_source_document(
     if raw_content is None:
         description = (
             f"Raw source imported from '{source_display_path}' as {resource}; "
-            "binary/non-text content could not be embedded, not yet "
-            "extracted into concepts."
+            "binary/non-text content could not be embedded."
         )
     else:
         description = (
             f"Raw source imported from '{source_display_path}' as {resource}; "
-            "full text embedded verbatim below, not yet extracted into "
-            "concepts."
+            "full text embedded verbatim below."
         )
 
     if concept_text is not None:
