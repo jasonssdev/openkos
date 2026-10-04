@@ -106,6 +106,63 @@ post-fix emission for this subject is bare `MCP` -- aliased above. The
 fabricated variants stay listed so PRE-fix stored runs keep rescoring the
 same; the pipeline can no longer emit them.
 
+### The 2026-10-04 bake-off additions (#1269)
+
+Second #1269 bake-off pass: five 15-run sweeps (union+judge), one per
+candidate model, judged from a BLIND list — titles pooled across every sweep,
+de-duplicated with the harness's own `normalize`, sorted alphabetically, no
+model name attached — against the source and the rulings already in this file.
+Alias against near-duplicate follows the mechanical co-occurrence rule written
+into `medium-10-reunion-plataforma.md` on 2026-08-15: a title that is the only
+name for its subject in at least one reply is an alias; a title that never
+appears without another name for the same subject in its reply is a
+near-duplicate. One repair to the rule, needed once two NEW phrasings meet:
+where every name a reply gave a subject is a new phrasing, the rule as written
+charges all of them and credits none, so the first-positioned one is taken as
+that reply's name for it (an alias) and the rest stay near-duplicates. No new
+subject was minted.
+
+`MCP Workflows` is credited only where a title uses the document's own frame
+for that arc (`Workflows con MCP`, `## Combinando Skills, MCP y Prompting`,
+`## Workflow Completo`, `workflows empresariales`). Bare `Workflow` is
+admitted with the reservation `medium-10` recorded for `Respaldos`: generic,
+but emitted in replies listing the H1's parts as short names, on a source
+whose only workflow arc is this one. `Lineamientos de marca` is the
+brand-guidelines skill in a reply that names the three skills of `## Workflow
+Completo` in Spanish.
+
+- BigQuery Integration | BigQuery Integration with Claude
+- BigQuery Integration | Integrating BigQuery with Claude via MCP
+- BigQuery Integration | Integrating BigQuery with Claude via MCP to Build a Marketing Workflow
+- BigQuery Integration | Integrating BigQuery with Custom Skills via MCP
+- BigQuery Integration | Integrating BigQuery with Skills via MCP
+- BigQuery Integration | Integrating Claude with BigQuery via MCP for Marketing Analysis
+- BigQuery Integration | Integration with BigQuery via MCP
+- BigQuery Integration | MCP Integration for BigQuery
+- Brand Guidelines Skill | Automated Brand Guidelines Skill Creation
+- Brand Guidelines Skill | Creating a Brand Guidelines Skill
+- Brand Guidelines Skill | Generating a Brand Guidelines Skill
+- Brand Guidelines Skill | Lineamientos de marca
+- MCP Workflows | Building and Integrating Enterprise Workflows with Claude Skills and MCP
+- MCP Workflows | Building Business Workflows with Claude Skills and MCP
+- MCP Workflows | Building Enterprise Workflows with Claude Skills and MCP
+- MCP Workflows | Flujo de trabajo empresarial automatizado con Skills, MCP y BigQuery
+- MCP Workflows | Multi-Skill Enterprise Workflow
+- MCP Workflows | Workflow
+- MCP Workflows | Workflow Combining Skills, MCP, and Prompting
+- MCP Workflows | Workflow Completo de Generación de Presentaciones con Skills y MCP
+- MCP Workflows | Workflow Completo: Análisis de Marketing y Generación de Presentaciones
+- MCP Workflows | Workflows with MCP
+- Model Context Protocol (MCP) | MCP Integration
+- PowerPoint Presentation Skill | Skill de PowerPoint
+- Pre-built Skills | Anthropic Pre-built Skills
+- Pre-built Skills | Sistema de Skills Preconstruidas en Claude
+- Pre-built Skills | Skills preconstruidas de Anthropic para Claude
+- Pre-built Skills | Skills preconstruidas en Claude AI
+- Pre-built Skills | Skills preconstruídas no ecossistema Claude (Anthropic)
+- Skill Creator | Skill Creator (skill-creator)
+- Skill Creator | Using Skill Creator to Generate Custom Skills
+
 ## Facets, not subjects
 
 Steps, components and section scaffolding, not knowledge objects. An extractor
@@ -174,6 +231,119 @@ highest ratio of the three. The English original spreads comparable material
 over more than twice the length, so this version hands the model many more
 candidate headings per kilobyte — the shape most likely to trigger enumeration.
 
+### The 2026-10-04 bake-off additions (#1269)
+
+Families follow the rulings already here and in `large-03-skills-vs-tools.md`:
+`Proceso de creación` / `Skill Creation Process` for the creation process,
+`Marketing Analysis Skill` for the analysis step, `Presentation Generation`
+for the presentation step, `SKILL.md`. Titles fusing two or three subjects
+into one object are scaffolding.
+
+CONTESTED, recorded here in the reading that does NOT credit the subject — the
+same three families and the same two readings as in
+`large-03-skills-vs-tools.md`, which this file must not contradict: the
+end-to-end demo described as a workflow (the other reading: the `MCP
+Workflows` arc, which `Workflows empresariales` already names here), the
+umbrella `skills` concept (the other reading: `Pre-built Skills`), and the
+marketing-analysis workflow on BigQuery (the other reading: `BigQuery
+Integration`).
+
+- Anthropic MCP Skills Ecosystem
+- Anthropic Pre-built Skills and Skill Creator
+- Anthropic Skills and Skill Creator
+- Anthropic's Pre-built AI Skills and Skill Creator
+- Análisis de marketing
+- Creating a Brand Guidelines Skill and Executing a Full Marketing Workflow
+- Creating a custom skill using Skill Creator
+- Creating a Skill Using Skill Creator
+- Creating a Skill with Skill Creator
+- Creating and Configuring a Skill using Skill Creator and MCP
+- Creating and Using a Custom Skill via Skill Creator
+- Creating Custom AI Skills via Skill Creator
+- Creating Custom AI Skills with Skill Creator
+- Flujo de creación de Skills con Skill Creator
+- Generación de presentaciones
+- Pre-built Skills and Skill Creator in Claude
+- Pre-built Skills y Skill Creator en Claude
+- Proceso de creación y configuración de Skills con Skill Creator y MCP
+- Processo de criação e integração de Skills com MCP no ecossistema Claude
+- Sistema de Skills y Skill Creator en Claude
+- Skill Creation Process via Skill Creator
+- Skill Creator Process
+- Skill Creator Workflow
+- Skill Development Process
+- Skill Structure (SKILL.md)
+- Workflow for Creating and Using Custom Skills with Skill Creator
+- Workflow for Generating Presentations
+
+The CONTESTED rows, in the non-crediting reading:
+
+- Anthropic Skills
+- Anthropic Skills Ecosystem
+- Anthropic Skills Ecosystem and Structure
+- Anthropic Skills Framework
+- Automated Executive Presentation Workflow
+- Automated Executive Presentation Workflow using Claude Skills and MCP
+- Automated Marketing Analysis to PowerPoint Workflow
+- Automated Marketing Presentation Workflow
+- Automated Marketing Workflow with MCP and Skills
+- Automated Marketing-to-Presentation Workflow
+- Building a BigQuery-Integrated Marketing Analysis Workflow
+- Building a Data-to-Presentation Workflow with MCP
+- Building a Marketing Analysis and Brand Guidelines Workflow with MCP
+- Building a Marketing Analysis Workflow with MCP and BigQuery
+- Building a Marketing Presentation Workflow with BigQuery and Brand Guidelines
+- Building a Marketing-to-PowerPoint Workflow with MCP
+- Building an Automated Marketing Presentation Workflow
+- Building an Automated Marketing-to-PowerPoint Workflow with MCP
+- Building an End-to-End Marketing Presentation Workflow
+- Building an End-to-End Marketing Reporting Workflow
+- Claude AI Skills
+- Claude Skills
+- Creating and Executing an Automated Marketing Workflow with Claude Skills and MCP
+- Creating and Integrating AI Skills with MCP and BigQuery
+- Creating and Integrating Skills with MCP and BigQuery
+- End-to-End Marketing Analysis Workflow
+- End-to-End Marketing Presentation Workflow
+- End-to-End Marketing to PowerPoint Workflow
+- End-to-End Marketing Workflow with MCP and Skills
+- Flujo de trabajo integrado MCP-BigQuery-PowerPoint
+- Full Marketing Analysis to PowerPoint Workflow
+- Generación automática de presentaciones corporativas con Skills y MCP
+- Integración de Skills con MCP y BigQuery para Flujos de Trabajo
+- Integration of Claude Skills with MCP and BigQuery for Automated Presentations
+- Integration of Claude Skills with MCP and BigQuery for Marketing Workflows
+- Marketing Analysis and Presentation Workflow
+- Marketing Analysis to PowerPoint Workflow
+- Marketing Analysis Workflow with BigQuery and Brand Guidelines
+- Marketing Analysis Workflow with MCP and Skills
+- Skills
+- Skills (Anthropic Framework)
+- Skills (Anthropic)
+- Skills Ecosystem in Claude (Anthropic)
+- Skills in the Claude Ecosystem
+- Workflow de Análisis de Marketing y Generación de Presentaciones con MCP y BigQuery
+- Workflow de Automatización Marketing-BigQuery-PowerPoint mediante MCP y Skills
+- Workflow de generación automática de presentaciones empresariales
+- Workflow for Automated Marketing Analysis and Presentation Generation
+- Workflow for Automated Marketing Presentation Generation
+- Workflow for Automated Marketing Presentation Generation using MCP and Skills
+- Workflow for Automating Marketing Presentations via Claude and MCP
+- Workflow for Creating a BigQuery-Integrated Marketing Presentation
+- Workflow for creating branded marketing presentations using Claude AI, MCP, and BigQuery
+- Workflow for Generating Brand-Compliant Marketing Presentations via BigQuery and MCP
+- Workflow for Generating Branded Marketing Presentations via MCP and BigQuery
+- Workflow for Generating Executive Presentations via Claude Skills and MCP
+- Workflow for Generating Executive Presentations via Skills and MCP
+- Workflow for Generating Executive Presentations with BigQuery via MCP
+- Workflow for Generating Presentations via Skills and MCP
+- Workflow for Marketing Analysis and Presentation Generation
+- Workflow: Automated Marketing Presentation Generation
+- Workflow: Creating a BigQuery-powered Marketing Presentation
+- Workflow: Data to Executive Presentation
+- Workflow: Data-to-Presentation Automation
+- Workflow: Generating Branded Marketing Presentations from BigQuery
+
 ## Near-duplicates
 
 Pairs are written `Canonical Subject | the duplicate phrasing`.
@@ -190,6 +360,21 @@ must not disagree about the same pair.
 `Model Context Protocol (MCP)` against `MCP Workflows` was examined and
 rejected for the same reason as in `large-03-skills-vs-tools.md`: the protocol
 and the workflows built on it are separate things.
+
+### The 2026-10-04 bake-off additions (#1269)
+
+Every line below failed the co-occurrence rule in EVERY reply that emitted it
+in the 2026-10-04 bake-off pass: each time, the same reply already named the
+subject another way.
+
+**Flagged, not changed: `Document Skills` now fails the rule this line was
+decided by**, here as in `large-03-skills-vs-tools.md`: in the 2026-10-04 pass
+it is the ONLY name for `Pre-built Skills` in two replies. Left as it is;
+re-deciding an existing ruling is a separate change from working a queue, and
+the pair must move together if it moves.
+
+- BigQuery Integration | BigQuery Integration Workflow
+- BigQuery Integration | Modifying a Skill to Use BigQuery via MCP
 
 ## Notes
 

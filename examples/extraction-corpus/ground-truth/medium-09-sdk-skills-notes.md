@@ -115,6 +115,47 @@ concrete server this application mounts). `medium-08` flags that split as its
 most contestable call; if a later reader rejudges it there, rejudge it here
 identically — the pair must never disagree about the shared body.
 
+### The 2026-10-04 bake-off additions (#1269)
+
+Second #1269 bake-off pass: five 15-run sweeps (union+judge), one per
+candidate model, judged from a BLIND list — titles pooled across every sweep,
+de-duplicated with the harness's own `normalize`, sorted alphabetically, no
+model name attached — against the source and the rulings already in this file.
+Alias against near-duplicate follows the mechanical co-occurrence rule written
+into `medium-10-reunion-plataforma.md` on 2026-08-15: a title that is the only
+name for its subject in at least one reply is an alias; a title that never
+appears without another name for the same subject in its reply is a
+near-duplicate. One repair to the rule, needed once two NEW phrasings meet:
+where every name a reply gave a subject is a new phrasing, the rule as written
+charges all of them and credits none, so the first-positioned one is taken as
+that reply's name for it (an alias) and the rest stay near-duplicates. No new
+subject was minted.
+
+- Building a Research Agent with the Claude Agent SDK | Building a Multi-Agent Research Application with Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Building a Multi-Agent Research Application with the Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Claude Agent SDK Research Application
+- Building a Research Agent with the Claude Agent SDK | Constructing a Multi-Agent Research Application with Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Implementation of the Research Agent Application
+- Building a Research Agent with the Claude Agent SDK | Multi-agent Research Application Project
+- Building a Research Agent with the Claude Agent SDK | Multi-agent research application using Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Research-Agent-App
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Guardrails for AI Agents
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Interrupts
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Interrupts for Agent Safety
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Interrupts for Agent Security
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Safety Guardrails
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Security Guardrails for Autonomous Agents
+- Human-in-the-Loop Guardrails | Implementation of Human-in-the-Loop Guardrails for Agent Safety
+- Human-in-the-Loop Guardrails | Implementation of Human-in-the-Loop Guardrails for Agent Security
+- Human-in-the-Loop Guardrails | Implementing Human-in-the-Loop Guardrails
+- Human-in-the-Loop Guardrails | Implementing Human-in-the-Loop Guardrails for Agent Safety
+- Human-in-the-Loop Guardrails | Implementing Human-in-the-Loop Guardrails for Agent Security
+- Human-in-the-Loop Guardrails | Implementing Human-in-the-Loop guardrails for autonomous agents
+- Human-in-the-Loop Guardrails | Implementing Human-in-the-Loop Guardrails in Agent SDK
+- Human-in-the-Loop Guardrails | Implementing Human-in-the-Loop Security Guardrails
+- Human-in-the-Loop Guardrails | Security Guardrails Implementation Strategy
+- Model Context Protocol (MCP) | Model Context Protocol (MCP) Integration
+
 ## Facets, not subjects
 
 Steps and components of the procedure above, not knowledge objects. An
@@ -159,6 +200,89 @@ one bolded sentence, no section of its own, rejected for promotion.
 four agent-role titles name the components of the orchestrator-workers
 layout, itself a facet.
 
+### The 2026-10-04 bake-off additions (#1269)
+
+Each family follows a ruling inherited from `medium-08` and must stay
+identical there: the `Orchestrator-Workers` layout, `Research Agent
+Architecture`, the code, steps and environment setup of `Technical
+Implementation: agent.py`, the orchestration skill, the MinerU case study and
+the Notion sync.
+
+CONTESTED, recorded here in the reading that does NOT credit the subject, with
+the other reading stated so it is never resolved silently. Three families are,
+in many replies, the only procedure-shaped title — which matters more here
+than on `medium-08`, since the canonical title appears nowhere in this source:
+
+  * Setting up the application (`Setting Up the Research Agent Application`,
+    `Research Agent Application Setup and Execution` and kin): filed as the
+    environment-setup step. The other reading is that setting up the
+    application is building it, which would make them aliases of the
+    `Procedure`.
+  * Researching an open-source tool (`Researching an Open-Source Tool with
+    Claude Agent SDK` and kin): filed as the live case study generalised, as
+    `Researching MinerU` is a facet. The other reading is that they name the
+    procedure by its stated purpose (the lede: the application exists "to
+    research an open-source tool").
+  * The application's workflow (`Multi-Agent Research Application Workflow`,
+    `Multi-Agent Research Workflow using Claude Agent SDK`): filed as the
+    orchestration skill's two-phase workflow. The other reading is the
+    procedure itself.
+
+- Agent Definition
+- Agent Execution Loop
+- Agent Implementation
+- Agent Implementation (agent.py)
+- Agent Initialization
+- Agent Initialization and Setup
+- Agent Orchestration Guidelines
+- Agent Setup and Execution
+- Agent.py Implementation
+- Claude Agent SDK Environment Setup
+- Claude Agent SDK Multi-Agent Architecture
+- Claude Agent SDK Orchestrator-Workers Pattern
+- Implementing the Agent Framework in Python
+- Implementing the Claude Agent SDK in Python
+- Initializing and running the Claude Agent SDK research environment
+- Learning-a-Tool Skill Workflow
+- MinerU Research Application Implementation
+- MinerU Research Case Study
+- Orchestrator-Workers Pattern for Autonomous Agents
+- Orchestrator-Workers pattern for multi-agent systems
+- Orchestrator-Workers Pattern in Agent SDKs
+- Orchestrator-Workers Pattern in Agent Systems
+- Orchestrator-Workers Pattern in Autonomous Agents
+- Orchestrator-Workers Pattern in Claude Agent SDK
+- Progressive Learning Guide Structure
+- Research Agent Environment Setup
+- Researching MinerU Case Study
+- Researching MinerU Using the Agent Framework
+- Researching MinerU Using the Claude Agent SDK
+- Researching MinerU with Claude Agent SDK
+- Researching MinerU with the Claude Agent SDK
+- Setting up a Claude Agent SDK Research Environment
+- Setting Up the Claude Agent SDK Environment
+- Setting up the Claude Agent SDK Research Environment
+- Setting Up the Research Environment
+- Syncing Research to Notion via MCP Server
+- Syncing Research to Notion via the MCP Server
+
+The CONTESTED rows, in the non-crediting reading:
+
+- Claude Agent SDK Research Application Setup
+- Multi-Agent Research Application Workflow
+- Multi-Agent Research Workflow using Claude Agent SDK
+- Research Agent Application Setup
+- Research Agent Application Setup and Execution
+- Research Agent Application Setup and Implementation
+- Researching a Tool with Claude Agent SDK
+- Researching an open-source tool using Claude Agent SDK
+- Researching an Open-Source Tool via Claude Agent SDK
+- Researching an Open-Source Tool with Claude Agent SDK
+- Setting up a Multi-Agent Research Application
+- Setting up a Multi-Agent Research Application with Claude Agent SDK
+- Setting Up the Research Agent Application
+- Setup and Implementation of Claude Agent SDK Application
+
 ## Out of scope
 
 Things this document MENTIONS but is not ABOUT — plus, on this fixture, the
@@ -182,13 +306,35 @@ scoring (it is the exact derived title); one that survives — a Procedure-typed
 emission under the #413 exemption, or a sole-object reply under the floor —
 scores here as a scope error.
 
+`Agent SDK Course Final Session` is the container H1 above, reworded
+(2026-10-04 bake-off pass, #1269).
+
+- Agent SDK Course Final Session
+
 ## Near-duplicates
 
-None identified.
+Pairs are written `Canonical Subject | the duplicate phrasing`. The section
+read "None identified." until the 2026-10-04 bake-off pass (#1269).
 
 The same call as `medium-08`: `Claude Agent SDK` against the `Procedure` was
 considered there and rejected — the SDK is a tool, the procedure is what you
 do with it, and the document develops both.
+
+### The 2026-10-04 bake-off additions (#1269)
+
+Every line below failed the co-occurrence rule in EVERY reply that emitted it
+in the 2026-10-04 bake-off pass: each time, the same reply already named the
+subject another way.
+
+- Building a Research Agent with the Claude Agent SDK | Agent SDK Multi-Agent Research Application
+- Building a Research Agent with the Claude Agent SDK | Building a Multi-Agent Research App with Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Building a Multi-Agent Research Application
+- Building a Research Agent with the Claude Agent SDK | Building Multi-Agent Applications with Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Implementing a Claude Agent SDK Research Application
+- Building a Research Agent with the Claude Agent SDK | Implementing a Multi-Agent Research Application with Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Implementing a Research Agent with Claude Agent SDK
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Guardrails for Agentic Shell Access
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Guardrails for Agentic Workflows
 
 ## Notes
 
