@@ -2387,16 +2387,16 @@ def test_resolve_task_model_survives_a_hand_built_non_mapping_models() -> None:
 # --- #513/#650: `edge_typing` recommendation, no longer a packaged default ---
 
 
-def test_default_task_models_packages_no_model() -> None:
-    """`DEFAULT_TASK_MODELS` no longer ships a value for any task (#650).
-
-    #513 packaged `gemma2:27b` for `edge_typing` on #516's type-accuracy
-    sweep; #650 inverts the onboarding default: the 15.6 GB pull is the
-    barrier to entry, direction (where the observed errors live) was never
-    measured, and asymmetric suggestions sit behind per-item consent since
-    #624 anyway. The key stays listed so the opt-in surface is visible; its
-    `None` value means `resolve_task_model` follows the global `model:`."""
-    assert config.DEFAULT_TASK_MODELS == {"edge_typing": None}
+def test_default_task_models_packages_the_judge_model_for_two_roles() -> None:
+    """`DEFAULT_TASK_MODELS` ships `gemma4:26b-a4b` for exactly the two judge
+    roles where it met every pre-registered bar (#1269 "Adoption decision"):
+    `contradiction` and `adjudication`. `edge_typing` keeps its listed-but-
+    `None` entry (#650: no Label winner), and no other task is named."""
+    assert config.DEFAULT_TASK_MODELS == {
+        "edge_typing": None,
+        "adjudication": "gemma4:26b-a4b",
+        "contradiction": "gemma4:26b-a4b",
+    }
     assert set(config.DEFAULT_TASK_MODELS) <= config.TASK_MODEL_KEYS
 
 
@@ -2432,14 +2432,72 @@ def test_edge_typing_opt_in_resolves_to_the_configured_model(
     assert config.resolve_task_model(cfg, "extraction") == "qwen3:8b"
 
 
-def test_the_packaged_default_covers_only_edge_typing(tmp_path: Path) -> None:
+def test_the_judge_default_covers_only_the_two_judge_tasks(tmp_path: Path) -> None:
     """Every other task still resolves to the global `model:`. The packaged
-    default is one task wide, not a second global."""
+    default is two tasks wide, not a second global."""
     (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
     cfg = config.read_config(tmp_path)
 
-    for task in sorted(config.TASK_MODEL_KEYS - {"edge_typing"}):
+    judge = {"adjudication", "contradiction"}
+    for task in sorted(config.TASK_MODEL_KEYS - judge):
         assert config.resolve_task_model(cfg, task) == "qwen3:8b"
+    for task in sorted(judge):
+        assert config.resolve_task_model(cfg, task) == "gemma4:26b-a4b"
+
+
+def test_the_judge_default_applies_on_an_unconfigured_workspace(
+    tmp_path: Path,
+) -> None:
+    """No `models:` key at all still resolves the judge roles to the
+    packaged tag (#1269); `task=None` callers (query) stay on `model:`."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "contradiction") == "gemma4:26b-a4b"
+    assert config.resolve_task_model(cfg, "adjudication") == "gemma4:26b-a4b"
+    assert config.resolve_task_model(cfg, None) == "qwen3:8b"
+
+
+def test_the_judge_default_is_ollama_only(tmp_path: Path) -> None:
+    """A model tag means nothing to another provider: on the opt-in
+    `openai-compatible` backend the packaged per-task defaults do not apply
+    and the judge roles follow `model:` (#1269)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "backend: openai-compatible\nbase_url: http://localhost:8080/v1\n"
+        "model: my-served-model\n",
+        encoding="utf-8",
+    )
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "contradiction") == "my-served-model"
+    assert config.resolve_task_model(cfg, "adjudication") == "my-served-model"
+
+
+def test_an_explicit_entry_still_wins_on_the_openai_compatible_backend(
+    tmp_path: Path,
+) -> None:
+    """The Ollama-only gate removes the PACKAGED default only; a stated
+    `models:` entry is honored on every backend."""
+    (tmp_path / "openkos.yaml").write_text(
+        "backend: openai-compatible\nbase_url: http://localhost:8080/v1\n"
+        "model: my-served-model\nmodels:\n  contradiction: big-judge\n",
+        encoding="utf-8",
+    )
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "contradiction") == "big-judge"
+
+
+def test_an_explicit_null_declines_the_judge_default(tmp_path: Path) -> None:
+    """`contradiction: null` is the opt-out of the 18 GB-class default: the
+    task follows `model:` (the only way to decline a packaged default)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: qwen3:8b\nmodels:\n  contradiction: null\n", encoding="utf-8"
+    )
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "contradiction") == "qwen3:8b"
+    assert config.resolve_task_model(cfg, "adjudication") == "gemma4:26b-a4b"
 
 
 def test_an_explicit_models_entry_beats_the_packaged_default(

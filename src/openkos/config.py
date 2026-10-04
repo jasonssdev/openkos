@@ -40,24 +40,41 @@ is advisable: #508's rule is that a per-task default must be justified on a
 fixture, and three of these have no fixture at all. The docs say which is
 which; the schema does not pretend to."""
 
-DEFAULT_TASK_MODELS: dict[str, str | None] = {"edge_typing": None}
-"""Packaged per-task model defaults (issue #513), overriding `DEFAULT_MODEL`
-for the tasks listed here and no others. Since #650 no task ships a value:
-`edge_typing`'s key stays listed so the opt-in surface remains visible, and
-its `None` means `resolve_task_model` follows the global `model:`.
+DEFAULT_JUDGE_MODEL = "gemma4:26b-a4b"
+"""The packaged chat model for the two judge roles, `contradiction` and
+`adjudication` (issue #1269, ADR-0047). It met every pre-registered bar on
+those two roles and no other; Label and Generate had no winner, so every
+other task stays on `DEFAULT_MODEL`. It is a 26B-parameter mixture-of-
+experts model (about 20 GB resident with `bge-m3`), so it does not
+co-reside with `qwen3:8b` inside the 24 GB budget of the 32 GB hardware
+floor: the engine runs one chat model at a time and Ollama swaps them by
+stage."""
 
-#513 packaged `gemma2:27b` here on #516's sweep (0.81 relation-TYPE
-accuracy on `evals/edge_typing/`'s 17-edge fixture against `qwen3:8b`'s
-0.44). #650 inverted the default for three reasons, none disputing that
-measurement: (1) the 15.6 GB pull made the out-of-the-box curation path
-the broken one -- for a local-first tool the download IS the barrier to
-entry; (2) DIRECTION was never measured, and direction is where the
-observed errors live (the 2026-08-13 e2e saw `gemma2:27b` reverse at
-least two of five asymmetric edges); (3) since #624 every asymmetric
-suggestion sits behind per-item consent marked `direction
-model-suggested, unverified`, so the accuracy gap buys fewer operator
-rejections, not graph quality. Works on install, better if you opt in --
-see `RECOMMENDED_TASK_MODELS`."""
+DEFAULT_TASK_MODELS: dict[str, str | None] = {
+    "edge_typing": None,
+    "adjudication": DEFAULT_JUDGE_MODEL,
+    "contradiction": DEFAULT_JUDGE_MODEL,
+}
+"""Packaged per-task model defaults (issue #513), overriding `DEFAULT_MODEL`
+for the tasks listed here and no others, on the `ollama` backend only (see
+`resolve_task_model`). Since #1269 the two judge roles ship
+`DEFAULT_JUDGE_MODEL`; `edge_typing`'s key stays listed so the opt-in
+surface remains visible, and its `None` means `resolve_task_model` follows
+the global `model:`.
+
+#513 packaged `gemma2:27b` for `edge_typing` on #516's sweep (0.81
+relation-TYPE accuracy on `evals/edge_typing/`'s 17-edge fixture against
+`qwen3:8b`'s 0.44). #650 inverted that default for three reasons, none
+disputing that measurement: (1) the 15.6 GB pull made the out-of-the-box
+curation path the broken one; (2) DIRECTION was never measured, and
+direction is where the observed errors live; (3) since #624 every
+asymmetric suggestion sits behind per-item consent, so the accuracy gap
+buys fewer operator rejections, not graph quality. #1269 reopened the
+packaged-default question for the judge roles on a different footing: a
+pre-registered, n=15 sweep in which the candidate won on the role's own
+primary metric (0 of 150 wrong field shapes against 44 of 150) and held
+every veto. A missing judge model fails only the stage that named it, with
+the pull hint for that model -- never a silent fallback to `model:`."""
 
 RECOMMENDED_TASK_MODELS: dict[str, str] = {"edge_typing": "gemma2:27b"}
 """The documented per-task recommendations (#650): tags that measured best
@@ -2012,9 +2029,10 @@ def resolve_task_model(cfg: Config, task: str | None) -> str:
     1. `cfg.models[task]` -- what the workspace explicitly asked for. An
        explicit YAML null here DECLINES a packaged default and falls to
        `cfg.model`, which is the only way to opt out of one.
-    2. `DEFAULT_TASK_MODELS[task]` -- the packaged per-task default. Empty
-       since #650 (`edge_typing`'s value is `None`), kept as a mechanism:
-       the precedence is measured and pinned, only the shipped map changed.
+    2. `DEFAULT_TASK_MODELS[task]` -- the packaged per-task default, on the
+       `ollama` backend only: the two judge roles ship `DEFAULT_JUDGE_MODEL`
+       (#1269) and `edge_typing`'s value is `None`. Another backend skips
+       this rung, since a model tag is meaningful only to its own provider.
     3. `cfg.model` -- the global default.
 
     The operator's stated choice always beats a shipped one, and the shipped
@@ -2059,6 +2077,11 @@ def resolve_task_model(cfg: Config, task: str | None) -> str:
         # degraded rather than raising, since this runs at every chat seam.
         if isinstance(tag, str) and tag.strip():
             return tag.strip()
+        return cfg.model
+    if cfg.backend != DEFAULT_BACKEND:
+        # A packaged tag is an Ollama tag; it means nothing to another
+        # provider (#1269). Only an explicit `models:` entry, handled above,
+        # names a model there.
         return cfg.model
     packaged = DEFAULT_TASK_MODELS.get(task)
     if isinstance(packaged, str) and packaged.strip():

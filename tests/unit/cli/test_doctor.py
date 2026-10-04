@@ -64,6 +64,11 @@ from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 runner = CliRunner()
 
 
+JUDGE_MODEL = "gemma4:26b-a4b"
+"""The packaged default for the `adjudication` and `contradiction` tasks
+(#1269): a stock workspace is only fully healthy when it is installed."""
+
+
 @pytest.fixture(autouse=True)
 def _private_umask() -> Iterator[None]:
     """Hand-built `.openkos/` fixtures below get the modes a user with a
@@ -148,9 +153,9 @@ def test_doctor_all_healthy_exits_zero(
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(
-            # `gemma2:27b` is the packaged `edge_typing` default (#513): a
-            # workspace missing it is no longer "fully healthy".
-            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, "gemma2:27b"]
+            # The judge model is the packaged default for two tasks (#1269):
+            # a workspace missing it is no longer "fully healthy".
+            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, JUDGE_MODEL]
         ),
     )
     monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
@@ -552,11 +557,11 @@ def test_doctor_model_installed_honors_latest_normalization(
             installed=[
                 f"{configured_model}:latest",
                 DEFAULT_EMBEDDING_MODEL,
-                # #513 packages a per-task default for `edge_typing`, so a
+                # #1269 packages the judge model for two tasks, so a
                 # workspace is only fully healthy when that model is present
                 # too. Listed here so this test keeps pinning `:latest`
                 # normalization rather than the packaged default's absence.
-                "gemma2:27b",
+                JUDGE_MODEL,
             ]
         ),
     )
@@ -734,7 +739,9 @@ def test_doctor_vector_extension_loadable_shows_pass(
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
-        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+        _fake_ollama_client(
+            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, JUDGE_MODEL]
+        ),
     )
     monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
@@ -744,8 +751,8 @@ def test_doctor_vector_extension_loadable_shows_pass(
 
     assert result.exit_code == 0
     assert "[PASS] Vector extension loadable" in result.stdout
-    # 13, not 12: since #650 a stock workspace passes the task-model check
-    # too (nothing packaged is left to be missing).
+    # 14, not 12: a stock workspace with the judge model pulled passes the
+    # task-model check too.
     assert result.stdout.count("[PASS]") == 14
 
 
@@ -998,7 +1005,7 @@ def test_doctor_prints_version_banner_first(
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(
-            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, "gemma2:27b"]
+            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, JUDGE_MODEL]
         ),
     )
     monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
@@ -1273,7 +1280,12 @@ def test_doctor_passes_when_every_task_model_is_installed(
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(
-            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, "gemma2:27b"]
+            installed=[
+                DEFAULT_MODEL,
+                DEFAULT_EMBEDDING_MODEL,
+                "gemma2:27b",
+                JUDGE_MODEL,
+            ]
         ),
     )
     monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
@@ -1291,11 +1303,43 @@ def test_doctor_passes_when_every_task_model_is_installed(
 def test_a_stock_workspace_passes_and_names_the_optional_upgrade(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#650 end to end: a workspace that configured nothing passes the
-    task-model check without any 15.6 GB pull, and the check's detail
-    names `gemma2:27b` as `edge_typing`'s optional measured upgrade so
-    the recommendation is discoverable exactly where the old default
-    used to be diagnosed."""
+    """#650 end to end: a workspace that configured nothing and has the
+    packaged judge model pulled passes the task-model check without any
+    15.6 GB pull, and the check's detail still names `gemma2:27b` as
+    `edge_typing`'s optional measured upgrade, next to the judge tasks it
+    lists, so the recommendation stays discoverable exactly where the old
+    default used to be diagnosed (#1269 must not hide it)."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
+    (openkos_dir / "fts.db").write_bytes(b"")
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, JUDGE_MODEL]
+        ),
+    )
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[PASS] Task models installed" in result.stdout
+    assert "[FAIL]" not in result.stdout
+    assert "edge_typing" in result.stdout
+    assert "gemma2:27b" in result.stdout
+
+
+def test_a_stock_workspace_without_the_judge_model_fails_informationally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1269: the packaged judge model is a recommended pull, never a
+    required one. `doctor` prints `[FAIL]` naming both judge tasks and the
+    exact pull command, and still exits 0 -- a missing per-task model fails
+    only the stage that named it."""
     _init_workspace(tmp_path, monkeypatch)
     openkos_dir = tmp_path / ".openkos"
     openkos_dir.mkdir(parents=True, exist_ok=True)
@@ -1312,10 +1356,36 @@ def test_a_stock_workspace_passes_and_names_the_optional_upgrade(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
+    assert "[FAIL] Task models installed" in result.stdout
+    assert "adjudication -> gemma4:26b-a4b" in result.stdout
+    assert "contradiction -> gemma4:26b-a4b" in result.stdout
+    assert "ollama pull gemma4:26b-a4b" in result.stdout
+
+
+def test_a_declined_judge_default_leaves_the_task_check_passing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit nulls decline the packaged judge: with nothing differing from
+    the global model, the check passes without the judge being installed."""
+    _init_workspace(tmp_path, monkeypatch)
+    cfg_path = tmp_path / "openkos.yaml"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8")
+        + "\nmodels:\n  adjudication: null\n  contradiction: null\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
     assert "[PASS] Task models installed" in result.stdout
-    assert "[FAIL]" not in result.stdout
-    assert "edge_typing" in result.stdout
-    assert "gemma2:27b" in result.stdout
+    assert JUDGE_MODEL not in result.stdout
 
 
 def test_task_model_check_skips_when_ollama_is_unreachable(

@@ -317,10 +317,12 @@ def test_contradictions_model_not_found_maps_to_exit_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _init_workspace(tmp_path, monkeypatch)
-    configured_model = "llama3.2:1b-openkos-test"
+    global_model = "llama3.2:1b-openkos-test"
     (tmp_path / "openkos.yaml").write_text(
-        f"model: {configured_model}\n", encoding="utf-8"
+        f"model: {global_model}\nmodels:\n  contradiction: {global_model}-judge\n",
+        encoding="utf-8",
     )
+    configured_model = f"{global_model}-judge"
     before = _snapshot(tmp_path)
 
     def _raise_model_not_found(
@@ -340,6 +342,32 @@ def test_contradictions_model_not_found_maps_to_exit_one(
     assert "openkos doctor" not in result.stderr
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path) == before
+
+
+def test_contradictions_default_judge_not_pulled_names_the_judge_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no `models:` key the contradiction task resolves to the packaged
+    judge model (#1269), so a missing model is reported BY THAT TAG with its
+    pull hint -- not the global `model:`, and never a silent fallback to it."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "openkos.yaml").write_text(
+        "model: llama3.2:1b-openkos-test\n", encoding="utf-8"
+    )
+
+    def _raise_model_not_found(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        raise OllamaModelNotFound("Model not found (404): {}")
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _raise_model_not_found)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 1
+    assert "model 'gemma4:26b-a4b' is not installed" in result.stderr
+    assert "ollama pull gemma4:26b-a4b" in result.stderr
+    assert "llama3.2:1b-openkos-test" not in result.stderr
 
 
 def test_contradictions_generic_ollama_error_maps_to_exit_one(
@@ -1075,14 +1103,43 @@ def test_contradictions_renders_merged_body_verdict_distinctly_from_pair_verdict
 def test_contradictions_builds_ollama_client_from_configured_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`contradictions` builds the `OllamaClient` from the model configured
-    in `openkos.yaml`, not a hardcoded value (spec: mirrors `adjudicate`'s
+    """`contradictions` builds the `OllamaClient` from the model the
+    contradiction task resolves from `openkos.yaml`, not a hardcoded value (spec: mirrors `adjudicate`'s
     wiring)."""
     _init_workspace(tmp_path, monkeypatch)
     configured_model = "llama3.2:1b-openkos-test"
     (tmp_path / "openkos.yaml").write_text(
-        f"model: {configured_model}\n", encoding="utf-8"
+        f"model: qwen3:8b\nmodels:\n  contradiction: {configured_model}\n",
+        encoding="utf-8",
     )
+    captured: dict[str, object] = {}
+
+    def _recording_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        captured["kwargs"] = kwargs
+        return _found([], 0)
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _recording_find)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    llm = kwargs["llm"]
+    assert isinstance(llm, OllamaClient)
+    assert llm._model == configured_model
+
+
+def test_contradictions_builds_ollama_client_from_the_packaged_judge_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no `models:` key `contradictions` builds its client on the
+    packaged judge model, not the global `model:` (#1269)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_model = "gemma4:26b-a4b"
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
     captured: dict[str, object] = {}
 
     def _recording_find(
@@ -1732,9 +1789,9 @@ def test_contradictions_partial_batch_model_not_found_keeps_pull_hint(
     `ollama pull` remediation alongside the completed-of-total counts
     (#441)."""
     _init_workspace(tmp_path, monkeypatch)
-    configured_model = "llama3.2:1b-openkos-test"
+    configured_model = "gemma4:26b-a4b"
     (tmp_path / "openkos.yaml").write_text(
-        f"model: {configured_model}\n", encoding="utf-8"
+        "model: llama3.2:1b-openkos-test\n", encoding="utf-8"
     )
     _two_candidate_partial_batch(
         monkeypatch, OllamaModelNotFound("Model not found (404)")

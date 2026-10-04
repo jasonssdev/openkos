@@ -766,8 +766,38 @@ def test_adjudicate_builds_ollama_client_from_configured_model(
     _init_workspace(tmp_path, monkeypatch)
     configured_model = "llama3.2:1b-openkos-test"
     (tmp_path / "openkos.yaml").write_text(
-        f"model: {configured_model}\n", encoding="utf-8"
+        f"model: qwen3:8b\nmodels:\n  adjudication: {configured_model}\n",
+        encoding="utf-8",
     )
+    captured: dict[str, object] = {}
+
+    def _recording_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        captured["kwargs"] = kwargs
+        return AdjudicationBatch(results=[])
+
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _recording_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    llm = kwargs["llm"]
+    assert isinstance(llm, OllamaClient)
+    assert llm._model == configured_model
+    assert kwargs["bundle_dir"] == tmp_path / "bundle"
+
+
+def test_adjudicate_builds_ollama_client_from_the_packaged_judge_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no `models:` key `adjudicate` builds its client on the packaged
+    judge model, not the global `model:` (#1269)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_model = "gemma4:26b-a4b"
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
     captured: dict[str, object] = {}
 
     def _recording_adjudicate(
@@ -829,9 +859,11 @@ def test_adjudicate_model_not_found_maps_to_exit_one(
     printed with the CONFIGURED model tag and `ollama pull <model>`
     remediation, exits 1, and writes nothing."""
     _init_workspace(tmp_path, monkeypatch)
-    configured_model = "llama3.2:1b-openkos-test"
+    global_model = "llama3.2:1b-openkos-test"
+    configured_model = f"{global_model}-judge"
     (tmp_path / "openkos.yaml").write_text(
-        f"model: {configured_model}\n", encoding="utf-8"
+        f"model: {global_model}\nmodels:\n  adjudication: {configured_model}\n",
+        encoding="utf-8",
     )
     # #779: adjudicate persists verdicts under .openkos/ (derived
     # state, the contradictions precedent) -- the no-write guarantee
@@ -857,6 +889,34 @@ def test_adjudicate_model_not_found_maps_to_exit_one(
     assert "openkos doctor" not in result.stderr
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path / "bundle") == before
+
+
+def test_adjudicate_default_judge_not_pulled_names_the_judge_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no `models:` key the adjudication task resolves to the packaged
+    judge model (#1269), so a missing model is reported BY THAT TAG with its
+    pull hint -- not the global `model:`, and never a silent fallback."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "openkos.yaml").write_text(
+        "model: llama3.2:1b-openkos-test\n", encoding="utf-8"
+    )
+
+    def _raise_model_not_found(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        raise OllamaModelNotFound("Model not found (404): {}")
+
+    monkeypatch.setattr(
+        "openkos.cli.main.adjudicate_candidates", _raise_model_not_found
+    )
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 1
+    assert "model 'gemma4:26b-a4b' is not installed" in result.stderr
+    assert "ollama pull gemma4:26b-a4b" in result.stderr
+    assert "llama3.2:1b-openkos-test" not in result.stderr
 
 
 def _init_openai_compatible_workspace(
@@ -1086,6 +1146,27 @@ def test_adjudicate_partial_batch_unavailable_keeps_remediation_and_counts(
     assert result.stderr.rstrip("\n").endswith(
         "Or run `openkos doctor` to diagnose the environment."
     )
+    assert "kept work" in result.stdout
+
+
+def test_adjudicate_partial_batch_model_not_found_names_the_judge_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-batch `OllamaModelNotFound` names the model the adjudication
+    task resolved (the packaged judge, #1269) with its pull command, not the
+    global `model:`, alongside the completed-of-total counts."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "openkos.yaml").write_text(
+        "model: llama3.2:1b-openkos-test\n", encoding="utf-8"
+    )
+    _two_group_partial_batch(monkeypatch, OllamaModelNotFound("Model not found"))
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 1
+    assert "1 of 2" in result.stderr
+    assert "ollama pull gemma4:26b-a4b" in result.stderr
+    assert "llama3.2:1b-openkos-test" not in result.stderr
     assert "kept work" in result.stdout
 
 
