@@ -1916,15 +1916,17 @@ def test_identity_partial_batch_model_not_found_still_walks_then_skips_later_sta
     # before the sequencer ever consults the unavailable notice.
     edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
-    # `edge_typing: null` declines the packaged default (#513) so Structure
-    # shares Identity's model again. Without it Structure resolves
-    # `gemma2:27b`, a DIFFERENT model, and is correctly no longer skipped --
+    # `edge_typing: null` and `adjudication: null` decline any packaged
+    # default so Structure shares Identity's model again. Without them
+    # Identity resolves the packaged judge model (#1269), a DIFFERENT model
+    # from the global one Structure follows, and is correctly no longer skipped --
     # which would make this test about the per-model keying rather than
     # about the skip reaching later stages. That keying has its own test
     # (`test_unavailability_no_longer_skips_a_stage_on_a_DIFFERENT_model`).
     cfg_path = tmp_path / "openkos.yaml"
     cfg_path.write_text(
-        cfg_path.read_text(encoding="utf-8") + "\nmodels:\n  edge_typing: null\n",
+        cfg_path.read_text(encoding="utf-8")
+        + "\nmodels:\n  edge_typing: null\n  adjudication: null\n",
         encoding="utf-8",
     )
     _partial_identity_batch(tmp_path, monkeypatch, OllamaModelNotFound("model missing"))
@@ -5415,7 +5417,7 @@ def test_unavailability_still_skips_a_later_stage_on_the_SAME_model(
 
     The per-model keying is what #515 changed, not the skip itself. Both
     tasks here are deliberately ones WITHOUT a packaged default (#513
-    ships one for `edge_typing`), so with no `models:` override they
+    ships one for the judge tasks), so with no `models:` override they
     resolve the same global tag -- which is the condition this test is
     about.
     """
@@ -5447,7 +5449,7 @@ def test_unavailability_still_skips_a_later_stage_on_the_SAME_model(
         probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
         run=_second_run,
         writes=False,
-        task="contradiction",
+        task="extraction",
     )
     monkeypatch.setattr(curate, "_STAGES", (first, second))
 
@@ -5494,7 +5496,7 @@ def test_stages_sharing_a_model_share_one_client(
         for name, task in (
             ("First", "edge_typing"),
             ("Second", "volatility_typing"),
-            ("Third", "contradiction"),
+            ("Third", "extraction"),
         )
     )
     monkeypatch.setattr(curate, "_STAGES", stages)
@@ -5594,6 +5596,45 @@ def test_model_not_found_names_the_STAGE_model_not_the_global_one(
     assert "stub-model" not in notice
 
 
+def test_a_missing_packaged_judge_fails_its_stage_with_the_judge_pull_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1269: with no `models:` key the Contradictions task resolves to the
+    packaged judge model, so a missing model surfaces as that tag's pull
+    command on that stage -- never the global model's, never a fallback."""
+    _patch_stdin_isatty(monkeypatch, True)
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: True)
+
+    def _failing_run(
+        ctx: curate.CurateContext, probe: curate.StageProbe
+    ) -> curate.StageOutcome:
+        raise OllamaModelNotFound("model missing")
+
+    stage = _fake_stage(
+        "Contradictions",
+        probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
+        run=_failing_run,
+        writes=False,
+        task="contradiction",
+    )
+    monkeypatch.setattr(curate, "_STAGES", (stage,))
+
+    ctx = _fake_ctx(
+        Path("unused-root"),
+        auto=True,
+        backend_factories=application_backends.BackendFactories(
+            ollama=lambda **kwargs: _OfflineOllama(),
+            openai_compatible=lambda **kwargs: _OfflineOllama(),
+        ),
+    )
+    outcomes = curate.run_curate(ctx)
+
+    notice = outcomes[0].notice or ""
+    assert outcomes[0].status == "unavailable"
+    assert "ollama pull gemma4:26b-a4b" in notice
+    assert "stub-model" not in notice
+
+
 def test_cost_gate_names_the_model_when_the_stage_resolves_a_different_one(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -5632,9 +5673,49 @@ def test_cost_gate_output_is_unchanged_when_the_stage_uses_the_global_model(
     output identical to today's, byte for byte.
     """
     _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Metadata", noun="concept", task="volatility_typing")
+    probe = curate.StageProbe(items=(1,), llm_calls=6)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    assert capsys.readouterr().err == "6 concept(s) -> 6 LLM call(s)\n"
+
+
+def test_cost_gate_discloses_the_packaged_judge_model_for_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#1269: Identity resolves the packaged judge model on the `ollama`
+    backend, so its gate says so on a separate line (the pinned `cost_line`
+    literal is untouched) before asking for consent."""
+    _patch_stdin_isatty(monkeypatch, True)
     stage = _fake_stage("Identity", noun="candidate group", task="adjudication")
     probe = curate.StageProbe(items=(1,), llm_calls=6)
     ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    err = capsys.readouterr().err
+    assert "6 candidate group(s) -> 6 LLM call(s)\n" in err
+    assert "Identity: this stage runs on 'gemma4:26b-a4b'." in err
+
+
+def test_cost_gate_keeps_the_global_model_for_identity_on_openai_compatible(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The packaged judge is an Ollama tag: on `openai-compatible` Identity's
+    gate prints the byte-identical pre-#515 output with no model line."""
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Identity", noun="candidate group", task="adjudication")
+    probe = curate.StageProbe(items=(1,), llm_calls=6)
+    ctx = _fake_ctx(
+        Path("unused-root"),
+        auto=True,
+        backend="openai-compatible",
+        base_url="http://localhost:8080/v1",
+    )
 
     curate.gate(stage, probe, ctx)
 

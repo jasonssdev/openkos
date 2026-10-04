@@ -593,9 +593,12 @@ def run_contradictions(
                 f"{application_backends.DOCTOR_HINT}"
             ) from exc
         except BackendModelNotFound as exc:
+            # The model THIS task resolved (#1269), not the global `model:`:
+            # the contradiction task ships its own packaged judge model.
+            judge = config.resolve_task_model(cfg, "contradiction")
             raise ModelNotInstalled(
-                f"openkos {_VERB}: failed -- model '{cfg.model}' is not "
-                f"installed. Pull it with `ollama pull {cfg.model}`, then try "
+                f"openkos {_VERB}: failed -- model '{judge}' is not "
+                f"installed. Pull it with `ollama pull {judge}`, then try "
                 "again."
             ) from exc
         # The two specific handlers above MUST precede this generic handler:
@@ -672,7 +675,7 @@ def run_contradictions(
         ]
 
     return ContradictionsOutcome(
-        model=cfg.model,
+        model=config.resolve_task_model(cfg, "contradiction"),
         plan=plan,
         judged_plan=judged_plan,
         batch=batch,

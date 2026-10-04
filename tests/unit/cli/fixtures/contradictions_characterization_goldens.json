@@ -459,7 +459,7 @@
       }
     ],
     "state_files": {},
-    "stderr": "openkos contradictions: failed after judging 1 of 2 planned candidate(s) -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
+    "stderr": "openkos contradictions: failed after judging 1 of 2 planned candidate(s) -- model 'gemma4:26b-a4b' is not installed. Pull it with `ollama pull gemma4:26b-a4b`, then try again.\n",
     "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 2 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/a <-> concepts/b (confidence: 0.90)\n  - claim one\n  - claim two\n  rationale: kept work\n\n"
   },
   "partial_unavailable": {
@@ -515,7 +515,7 @@
     "exit_code": 1,
     "findings_rows": null,
     "state_files": {},
-    "stderr": "openkos contradictions: failed -- model 'qwen3:8b' is not installed. Pull it with `ollama pull qwen3:8b`, then try again.\n",
+    "stderr": "openkos contradictions: failed -- model 'gemma4:26b-a4b' is not installed. Pull it with `ollama pull gemma4:26b-a4b`, then try again.\n",
     "stdout": ""
   },
   "raise_unavailable": {

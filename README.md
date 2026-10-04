@@ -19,14 +19,17 @@ Five steps from a fresh machine to your first cited answer. Everything runs on y
 
 **1 · Install [Ollama](https://ollama.com)** — the local AI runtime OpenKOS talks to. Download it, open it once, and it stays running in the background.
 
-**2 · Pull the two default models** (one time, ~6 GB total):
+**2 · Pull the default models** (one time):
 
 ```bash
-ollama pull qwen3:8b   # chat model — extraction and answers (~5 GB)
-ollama pull bge-m3     # embedding model — semantic search (~1.2 GB)
+ollama pull qwen3:8b        # chat model — extraction and answers (~5 GB)
+ollama pull bge-m3          # embedding model — semantic search (~1.2 GB)
+ollama pull gemma4:26b-a4b  # judge model — contradictions and identity (large; ~21.5 GB in memory)
 ```
 
-> These two are all curation needs out of the box. For naming relations during curation there is an **optional measured upgrade** (`ollama pull gemma2:27b`, **15.6 GB**) that nearly doubles relation-type accuracy — opt in later with `models: {edge_typing: gemma2:27b}` in `openkos.yaml`; `openkos doctor` and `curate` both point at it.
+> The first two cover ingest, query and everything else. The third is the default for the two judging jobs, `contradictions` and `adjudicate` (and `curate`'s Identity and Contradictions stages); without it only those fail, with the exact pull command. It is large, so the engine runs one chat model at a time (it swaps between `qwen3:8b` and the judge as stages change), and you want a machine with 32 GB or more. On a smaller one, opt out per task with `models: {contradiction: null, adjudication: null}` in `openkos.yaml` and the judges follow `model:`.
+>
+> For naming relations during curation there is also an **optional measured upgrade** (`ollama pull gemma2:27b`, **15.6 GB**) that nearly doubles relation-type accuracy — opt in later with `models: {edge_typing: gemma2:27b}` in `openkos.yaml`; `openkos doctor` and `curate` both point at it.
 
 **3 · Install the engine** (needs Python 3.12+ and [git](https://git-scm.com)):
 

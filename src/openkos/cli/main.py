@@ -11601,9 +11601,11 @@ def adjudicate(
         )
         raise typer.Exit(code=1) from exc
     except BackendModelNotFound as exc:
+        # The model THIS task resolved (#1269), not the global `model:`.
+        judge = config.resolve_task_model(cfg, "adjudication")
         typer.echo(
-            f"openkos adjudicate: failed -- model '{cfg.model}' is not "
-            f"installed. {application_backends.install_hint(cfg, cfg.model)}, "
+            f"openkos adjudicate: failed -- model '{judge}' is not "
+            f"installed. {application_backends.install_hint(cfg, judge)}, "
             "then try again.",
             err=True,
         )
@@ -11703,7 +11705,11 @@ def adjudicate(
         # completed verdicts exactly as a complete run over that list -- the
         # paid-for work is never discarded -- so all that remains is the one
         # stderr failure line and the BackendError-family exit code.
-        _echo_adjudicate_batch_failure(batch, total=len(candidates), model=cfg.model)
+        _echo_adjudicate_batch_failure(
+            batch,
+            total=len(candidates),
+            model=config.resolve_task_model(cfg, "adjudication"),
+        )
         raise typer.Exit(code=1) from batch.failure
 
 

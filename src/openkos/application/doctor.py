@@ -632,30 +632,33 @@ def run_diagnostics(
         }
     extra_models = {task: tag for task, tag in task_models.items() if tag != model}
     task_label = "Task models installed"
+    # #650: the un-adopted measured upgrade(s) stay discoverable in every
+    # passing detail, naming any task the workspace never keyed in `models:`.
+    # Computed once: since #1269 a stock workspace resolves the judge tasks
+    # to a packaged model, so it lands in the "extras" branch below, and the
+    # recommendation must not vanish just because something else is listed.
+    recommendations = {
+        task: tag
+        for task, tag in sorted(config.RECOMMENDED_TASK_MODELS.items())
+        if cfg is not None
+        and task not in cfg.models
+        and config.resolve_task_model(cfg, task) != tag
+    }
+    upgrade_detail = ""
+    if recommendations:
+        named_upgrades = ", ".join(
+            f"{task} -> {tag}" for task, tag in recommendations.items()
+        )
+        upgrade_detail = (
+            f"; optional measured upgrade: {named_upgrades} (see docs/cli.md)"
+        )
     if not extra_models:
-        # #650: nothing is packaged anymore, so a stock workspace lands
-        # here -- the pass detail is where the recommendation stays
-        # discoverable, naming the un-adopted measured upgrade(s) for any
-        # task the workspace never keyed in `models:`.
-        recommendations = {
-            task: tag
-            for task, tag in sorted(config.RECOMMENDED_TASK_MODELS.items())
-            if cfg is not None
-            and task not in cfg.models
-            and config.resolve_task_model(cfg, task) != tag
-        }
-        detail = "none configured beyond the global model"
-        if recommendations:
-            named = ", ".join(
-                f"{task} -> {tag}" for task, tag in recommendations.items()
-            )
-            detail += f"; optional measured upgrade: {named} (see docs/cli.md)"
         results.append(
             CheckResult(
                 task_label,
                 "pass",
                 critical=False,
-                detail=detail,
+                detail="none configured beyond the global model" + upgrade_detail,
             )
         )
     elif not reachable:
@@ -696,7 +699,12 @@ def run_diagnostics(
         else:
             named = ", ".join(f"{task} -> {tag}" for task, tag in extra_models.items())
             results.append(
-                CheckResult(task_label, "pass", critical=False, detail=named)
+                CheckResult(
+                    task_label,
+                    "pass",
+                    critical=False,
+                    detail=named + upgrade_detail,
+                )
             )
 
     # 6. bundle-readable (informational, workspace-only; SKIP outside).

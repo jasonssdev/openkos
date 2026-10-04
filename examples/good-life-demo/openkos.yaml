@@ -52,21 +52,27 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # above the floor. The high-water-mark over cited
                           # sources still wins whenever it is higher.
                           # See docs/adr/0015 and docs/adr/0017.
-# models:                 # per-task model overrides. Every task follows
-#   edge_typing: gemma2:27b  # `model:` by default, so nothing here needs a
-                          # second `ollama pull`. gemma2:27b is the one
-                          # measured upgrade: it names relations better
+# models:                 # per-task model overrides. The packaged defaults:
+#   edge_typing: gemma2:27b  # every task follows `model:` EXCEPT `adjudication`
+                          # and `contradiction`, which run on gemma4:26b-a4b
+                          # (the judge model: `ollama pull gemma4:26b-a4b`;
+                          # see docs/adr/0047). It does not fit in memory next
+                          # to `model:`, so Ollama swaps them by stage. Opt out
+                          # per task with `contradiction: null` (follows
+                          # `model:`), or name another tag. The packaged judge
+                          # applies on the ollama backend only. A missing judge
+                          # fails only its own stage, naming the pull command.
+                          # gemma2:27b is the one measured upgrade for
+                          # edge_typing: it names relations better
                           # (0.81 vs qwen3:8b's 0.44 on evals/edge_typing/)
                           # but costs `ollama pull gemma2:27b` -- 15.6 GB.
                           # Uncomment BOTH lines above to opt in; uncommenting
                           # only one is invalid YAML. Keep it scoped to
                           # edge_typing -- it is the worst extractor measured,
                           # so it must never become `model:`. `openkos doctor`
-                          # reports whether it is installed.
-                          # Only edge_typing has a harness; measure before
-                          # adding a key. Valid tasks: extraction,
-                          # adjudication, edge_typing, volatility_typing,
-                          # contradiction.
+                          # reports whether each is installed.
+                          # Valid tasks: extraction, adjudication, edge_typing,
+                          # volatility_typing, contradiction.
 # union_judge: true       # union-of-runs + selector-judge extraction (default
                           # on); set false to restore the single-run, single-cap
                           # extraction path byte-for-byte

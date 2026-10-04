@@ -296,7 +296,7 @@ def test_a_fresh_run_judges_the_plan_persists_and_reports_the_split(
     assert calls.find_kwargs["include_deprecated"] is True
     assert calls.find_kwargs["include_confidential"] is True
     assert calls.find_kwargs["local_exemption"] is True
-    assert outcome.model == "llama3.1"
+    assert outcome.model == "gemma4:26b-a4b"
     assert (outcome.served_count, outcome.fresh_count) == (0, 1)
     assert [v.rationale for v in outcome.displayed] == ["because"]
     assert outcome.zero_state is None
@@ -496,8 +496,8 @@ def test_low_confidence_and_declined_verdicts_are_hidden_unless_all_is_asked(
         (
             BackendModelNotFound("gone"),
             service.ModelNotInstalled,
-            "openkos contradictions: failed -- model 'llama3.1' is not "
-            "installed. Pull it with `ollama pull llama3.1`, then try again.",
+            "openkos contradictions: failed -- model 'gemma4:26b-a4b' is not "
+            "installed. Pull it with `ollama pull gemma4:26b-a4b`, then try again.",
         ),
         (
             BackendError("boom"),
