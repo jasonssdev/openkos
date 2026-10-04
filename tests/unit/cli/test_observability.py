@@ -649,3 +649,55 @@ def test_phase_callback_never_writes_to_a_stream_itself(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+# ---------------------------------------------------------------------------
+# #1267 -- a message printed while the in-place counter line is open
+# ---------------------------------------------------------------------------
+
+
+def _written(stream: _FakeTtyStderr) -> str:
+    """Everything written, as text: `typer.echo` may hand a stream bytes."""
+    chunks: list[object] = list(stream.writes)
+    return "".join(
+        chunk.decode() if isinstance(chunk, bytes) else str(chunk) for chunk in chunks
+    )
+
+
+def test_stage_notice_starts_on_a_fresh_line_after_an_unfinished_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The counter ends its line only on the final item, so a message printed
+    between items used to land glued to it (`...1/21 - 0s...openkos ingest:
+    extracting ...`)."""
+    stream = _fake_tty_stderr(monkeypatch)
+    _fake_monotonic(monkeypatch, [100.0, 100.0])
+    callback = observability.progress_callback("ingest", "ingesting file")
+    assert callback is not None
+
+    callback(1, 3, object())
+    observability.stage_notice("ingest", "extracting derived objects...")
+
+    assert _written(stream) == (
+        "\ropenkos ingest: ingesting file 1/3 - 0s...\n"
+        "openkos ingest: extracting derived objects...\n"
+    )
+
+
+def test_stage_notice_adds_no_blank_line_when_no_counter_line_is_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = _fake_tty_stderr(monkeypatch)
+    _fake_monotonic(monkeypatch, [100.0, 100.0])
+    callback = observability.progress_callback("ingest", "ingesting file")
+    assert callback is not None
+
+    callback(1, 1, object())
+    observability.stage_notice("ingest", "extracting derived objects...")
+    observability.stage_notice("ingest", "again...")
+
+    assert _written(stream) == (
+        "\ropenkos ingest: ingesting file 1/1 - 0s...\n"
+        "openkos ingest: extracting derived objects...\n"
+        "openkos ingest: again...\n"
+    )

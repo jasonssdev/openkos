@@ -38,6 +38,29 @@ def is_tty(*, err: bool = False) -> bool:
     return bool(stream.isatty())
 
 
+_open_line_stream: object | None = None
+"""The stderr stream whose in-place counter line is still unterminated, or
+`None`. Keyed on the stream object, not a bare flag, so a stale mark cannot
+outlive the stream it described."""
+
+
+def mark_in_place_line(open_: bool) -> None:
+    """Record that stderr's current line is (or no longer is) an unterminated
+    in-place counter line, for `end_in_place_line` to close."""
+    global _open_line_stream
+    _open_line_stream = sys.stderr if open_ else None
+
+
+def end_in_place_line() -> None:
+    """Finish an unterminated in-place counter line on stderr, so the message
+    about to be printed starts on its own line instead of being glued to the
+    counter. A no-op when no such line is open."""
+    global _open_line_stream
+    if _open_line_stream is sys.stderr:
+        _open_line_stream = None
+        typer.echo(err=True)
+
+
 def _terminal_width() -> int:
     return shutil.get_terminal_size((_FALLBACK_WIDTH, 24)).columns
 
@@ -77,6 +100,7 @@ def notice(message: str, *, kind: NoticeKind = "note", verb: str | None = None) 
     if not is_tty(err=True):
         typer.echo(message, err=True)
         return
+    end_in_place_line()
     body = message
     leads = ("openkos: ",) if verb is None else (f"openkos {verb}: ", "openkos: ")
     for lead in leads:
