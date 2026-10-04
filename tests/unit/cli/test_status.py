@@ -419,15 +419,40 @@ def test_status_lists_unjudged_under_needs_attention(
     assert "openkos ingest raw/notes.txt" in result.stdout
 
 
-def test_status_lists_unevidenced_under_needs_attention(
+def test_status_summarizes_unevidenced_sources_as_a_count_pointing_at_lint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A Source with `extraction_notice: objects-without-evidence` is listed
-    under "needs attention", and `status` still exits 0.
+    """Sources with `extraction_notice: objects-without-evidence` are counted
+    in ONE "needs attention" line that points at `lint`, and `status` still
+    exits 0. Repeating `lint`'s per-Source block here made a 33-Source
+    backlog a 33-line wall of identical sentences (#1267); `lint` keeps the
+    per-Source list."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    for stem in ("notes", "diary"):
+        (sources_dir / f"{stem}.md").write_text(
+            f"---\ntype: Source\ntitle: {stem}\nresource: raw/{stem}.txt\n"
+            "extraction_notice: objects-without-evidence\n---\nBody.\n",
+            encoding="utf-8",
+        )
 
-    `status` is the surface an operator checks without being told to, so a
-    check `lint` renders and `status` does not is half-wired -- the same
-    reasoning #772 recorded when it folded the unjudged finding in here."""
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "no line quoted from this source" not in result.stdout
+    assert (
+        "  2 Sources stored derived objects that quote no line from them "
+        "-- run `openkos lint` to list them." in result.stdout.splitlines()
+    )
+
+    lint_result = runner.invoke(app, ["lint"])
+    assert "no line quoted from this source" in lint_result.stdout
+
+
+def test_status_unevidenced_summary_is_singular_for_one_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _init_workspace(tmp_path, monkeypatch)
     sources_dir = tmp_path / "bundle" / "sources"
     sources_dir.mkdir()
@@ -439,8 +464,10 @@ def test_status_lists_unevidenced_under_needs_attention(
 
     result = runner.invoke(app, ["status"])
 
-    assert result.exit_code == 0
-    assert "no line quoted from this source" in result.stdout
+    assert (
+        "  1 Source stored derived objects that quote no line from it "
+        "-- run `openkos lint` to list it." in result.stdout.splitlines()
+    )
 
 
 def test_status_lists_staging_dropped_under_needs_attention(

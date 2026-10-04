@@ -10232,9 +10232,16 @@ def status() -> None:
     needs_attention.extend(
         f"{finding.concept_id}: {finding.detail}" for finding in report.unjudged
     )
-    needs_attention.extend(
-        f"{finding.concept_id}: {finding.detail}" for finding in report.unevidenced
-    )
+    # One count, not one block per Source: `lint` owns the per-Source list, and
+    # repeating its identical sentence for every Source buried the rest of this
+    # section.
+    if report.unevidenced:
+        count = len(report.unevidenced)
+        needs_attention.append(
+            f"{count} Source{_plural(count)} stored derived objects that quote "
+            f"no line from {'it' if count == 1 else 'them'} -- run "
+            f"`openkos lint` to list {'it' if count == 1 else 'them'}."
+        )
     needs_attention.extend(
         f"{finding.concept_id}: {finding.detail}" for finding in report.staging_dropped
     )
