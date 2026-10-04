@@ -268,6 +268,79 @@ respaldos` names the backup decision, which would make them aliases of
 - Transmitir la lista de nombres existentes al procesar nuevos trozos de documento
 - Transmitir lista de nombres previos al procesar segmentos de documentos para evitar duplicados
 
+### The 2026-10-04 bake-off additions (#1269)
+
+Same families and rulings as the 2026-10-03 additions above, including the
+CONTESTED approximate-index and latency-measurement family, recorded in the
+non-crediting reading with the other reading as stated there.
+
+- Acumulación de archivos temporales en la reconstrucción de índices
+- Anotar como aprendizaje del incidente de caída del servicio
+- Análisis de causa raíz del incidente de caída del servicio
+- Análisis de causa raíz del incidente de disco
+- Aprendizaje del incidente
+- Atribución del incidente a umbral de alerta inadecuado
+- Causa del incidente de caída de servicio
+- Clasificación del aprendizaje sobre el incidente de monitoreo
+- Clasificación del incidente de saturación de disco como lección aprendida y derivación a revisión de monitoreo
+- Evaluación de búsqueda vectorial y modelos de embeddings
+- Gestión de archivos temporales en reconstrucción de índices
+- Guardar etiqueta de versión del modelo con cada vector
+- Guardar etiqueta de versión del modelo en la base de datos
+- Guardar etiqueta de versión junto a cada vector para prevenir deriva del modelo
+- Guardar etiqueta del modelo junto a cada vector de embeddings
+- Guardar etiqueta del modelo junto a cada vector para prevenir la deriva
+- Guardar la etiqueta de versión del modelo junto a cada vector
+- Guardar la etiqueta del modelo junto a cada vector para mitigar la deriva
+- Implementación de etiqueta de versión de modelo para embeddings
+- Implementación de etiqueta de versión de modelo para vectores de embeddings
+- Incluir lista de nombres existentes al procesar nuevos trozos para evitar duplicados
+- Lección aprendida: Fallo en detección temprana de llenado de disco por acumulación de temporales
+- Mantenimiento del disco del índice
+- Pendientes de evaluación: Latencia y deriva de embeddings
+- Pendientes técnicos sobre búsqueda vectorial y embeddings
+- Problema de acumulación de temporales
+- Problema de monitoreo y alertas
+- Problema de regeneración de vectores de embeddings
+- Regeneración de corpus antiguo para corregir deriva de embeddings
+- Regeneración de vectores antiguos y adopción de etiquetado de modelo para prevenir deriva
+- Regeneración incremental de vectores obsoletos
+- Registro de etiquetas de versión de modelo en la base de datos
+
+The CONTESTED rows, in the non-crediting reading:
+
+- Abandonar la búsqueda vectorial exhaustiva en favor de índices aproximados (pendiente de decisión)
+- Acción pendiente: Medición comparativa para solución de latencia de búsqueda
+- Análisis y medición de latencia en búsqueda vectorial
+- Aplazamiento de decisión sobre índices aproximados
+- Aprobación del proceso de medición de latencia
+- Búsqueda Vectorial con Comparación Exhaustiva vs. Índice Aproximado
+- Medición de exactitud para índices aproximados
+- Medición de impacto para cambio a índice aproximado en búsqueda vectorial
+- Medición de latencia vs cambio a índice aproximado
+- Medición de latencia y exactitud para búsqueda vectorial
+- Medición de pérdida de exactitud antes de decidir índice aproximado
+- Medición de rendimiento de búsqueda
+- Medir la latencia antes de decidir sobre índice aproximado
+- Medir la pérdida de exactitud antes de implementar índice aproximado
+- Pendiente de medición para decisión de índice aproximado en búsquedas vectoriales
+- Pendiente de medición para la decisión de índice aproximado
+- Pospone la decisión sobre índice aproximado hasta tener mediciones de latencia y pérdida de exactitud
+- Posponeción de decisión sobre índice aproximado
+- Posponer decisión sobre índice aproximado para realizar mediciones previas
+- Postergación de decisión sobre índice aproximado para búsqueda vectorial
+- Postergación de decisión sobre índice aproximado por falta de métricas
+- Postergación de decisión sobre índice aproximado por medición pendiente
+- Postergación de decisión sobre índices aproximados
+- Postergación de decisión sobre índices aproximados para búsqueda vectorial
+- Postergación de la decisión sobre índice aproximado mediante mediciones preliminares
+- Postergación de la decisión sobre índice aproximado para búsqueda
+- Postergación de la decisión sobre índice de búsqueda aproximado
+- Postergación de la decisión sobre índices de búsqueda aproximada
+- Postergación de la transición a índice aproximado para búsqueda vectorial
+- Realizar mediciones comparativas para latencia de búsqueda
+- Retraso en decisión sobre Índice Aproximado
+- Índice aproximado para búsqueda vectorial
 
 ## Aliases
 
@@ -418,6 +491,81 @@ etiqueta`.
 - Procedimiento de rotación de credenciales | Procedimiento para rotación de credenciales
 - Procedimiento de rotación de credenciales | Rotación segura de credenciales
 
+### The 2026-10-04 bake-off additions (#1269)
+
+Second #1269 bake-off pass: five 15-run sweeps (union+judge), one per
+candidate model, judged from a BLIND list — titles pooled across every sweep,
+de-duplicated with the harness's own `normalize`, sorted alphabetically, no
+model name attached — against the source and the rulings already in this file.
+Alias against near-duplicate follows the mechanical co-occurrence rule written
+into `medium-10-reunion-plataforma.md` on 2026-08-15: a title that is the only
+name for its subject in at least one reply is an alias; a title that never
+appears without another name for the same subject in its reply is a
+near-duplicate. One repair to the rule, needed once two NEW phrasings meet:
+where every name a reply gave a subject is a new phrasing, the rule as written
+charges all of them and credits none, so the first-positioned one is taken as
+that reply's name for it (an alias) and the rest stay near-duplicates. No new
+subject was minted.
+
+- Cifrado de los respaldos en reposo | Cifrado de respaldos del bundle en reposo
+- Deriva del modelo de embeddings | Cambio en el modelo de embeddings
+- Deriva del modelo de embeddings | Decisión sobre la gestión de la deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Decisión sobre la gestión de la deriva del modelo de embeddings y los vectores
+- Deriva del modelo de embeddings | Decisión sobre la regeneración y prevención de la deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Deriva del modelo de embeddings por versiones mixtas
+- Deriva del modelo de embeddings | Deuda técnica en la generación de embeddings
+- Deriva del modelo de embeddings | Estrategia para corregir la deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Inconsistencia en la generación de vectores de embeddings
+- Deriva del modelo de embeddings | Manejo de la deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Mitigación de la deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Plan de mitigación de deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Plan de mitigación para la deriva del modelo de embeddings
+- Deriva del modelo de embeddings | Solución a la deriva del modelo de embeddings
+- Duplicación de objetos por procesamiento en trozos | Causa estructural de duplicidad de objetos en la ingesta de documentos
+- Duplicación de objetos por procesamiento en trozos | Duplicación estructural de objetos por trozos
+- Duplicación de objetos por procesamiento en trozos | Eliminación de duplicados en el corpus
+- Duplicación de objetos por procesamiento en trozos | Estrategia para prevenir la duplicación de objetos en el corpus
+- Duplicación de objetos por procesamiento en trozos | Generación de duplicados por procesamiento independiente de trozos
+- Duplicación de objetos por procesamiento en trozos | Mejorar el procesamiento de trozos para evitar duplicados en el corpus
+- Duplicación de objetos por procesamiento en trozos | Mitigación estructural de duplicados de objetos en la ingesta de documentos
+- Duplicación de objetos por procesamiento en trozos | Prevención de documentos duplicados mediante paso de contexto histórico
+- Duplicación de objetos por procesamiento en trozos | Prevención de duplicados en documentos fragmentados
+- Duplicación de objetos por procesamiento en trozos | Prevención de duplicados en la ingesta de documentos mediante contexto compartido
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicación de objetos por procesamiento de trozos aislados
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicados estructurales en la ingestión de documentos
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicados por fragmentación de documentos
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad estructural en documentos largos
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad estructural en documentos particionados
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad estructural en el corpus
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad estructural por procesamiento de trozos
+- Duplicación de objetos por procesamiento en trozos | Problema de duplicidad estructural por segmentación
+- Duplicación de objetos por procesamiento en trozos | Solución a duplicados estructurales en ingestión de documentos largos
+- Duplicación de objetos por procesamiento en trozos | Solución para la deduplicación de objetos en el origen
+- Duplicación de objetos por procesamiento en trozos | Solución para la duplicidad de objetos en el corpus
+- Duplicación de objetos por procesamiento en trozos | Solución técnica para la duplicación de documentos por fragmentación
+- Incidente de indisponibilidad del servicio | Análisis de incidente de llenado de disco
+- Incidente de indisponibilidad del servicio | Incidente de caída de servicio por disco lleno
+- Incidente de indisponibilidad del servicio | Incidente de caída del servicio de plataforma
+- Incidente de indisponibilidad del servicio | Incidente de caída del servicio de índice
+- Incidente de indisponibilidad del servicio | Incidente de caída por llenado de disco
+- Incidente de indisponibilidad del servicio | Incidente de caídas del servicio
+- Incidente de indisponibilidad del servicio | Incidente por llenado de disco en máquina de índices
+- Incidente de indisponibilidad del servicio | Incidente por llenado de disco en índice
+- Incidente de indisponibilidad del servicio | Resolución de incidencia por llenado de disco
+- Latencia de la búsqueda vectorial | Escalabilidad no lineal de la búsqueda vectorial exhaustiva
+- Latencia de la búsqueda vectorial | Estatus del problema de latencia
+- Latencia de la búsqueda vectorial | Medición y optimización de latencia de búsqueda
+- Latencia de la búsqueda vectorial | Optimización de latencia de búsqueda vectorial
+- Latencia de la búsqueda vectorial | Problema de latencia en la búsqueda vectorial
+- Procedimiento de rotación de credenciales | Adopción de procedimiento de rotación de credenciales
+- Procedimiento de rotación de credenciales | Procedimiento de rotación segura de credenciales
+- Procedimiento de rotación de credenciales | Procedimiento para la rotación de credenciales
+- Procedimiento de rotación de credenciales | Rotación de credenciales de base de datos
+- Procedimiento de rotación de credenciales | Rotación segura de credenciales de base de datos
+- Retención de los registros de acceso a noventa días | Plazo de retención de registros de acceso y datos agregados
+- Retención de los registros de acceso a noventa días | Retención de registros de acceso agregados
+- Retención de los registros de acceso a noventa días | Retención de registros de acceso por 90 días
+- Retención de los registros de acceso a noventa días | Retención y eliminación de registros de acceso
 
 ## Near-duplicates
 
@@ -484,6 +632,27 @@ rule reads replies, not spellings.
 - Procedimiento de rotación de credenciales | Rotación de credenciales de bases de datos
 - Procedimiento de rotación de credenciales | Ruta de rotación de credenciales de base de datos
 
+### The 2026-10-04 bake-off additions (#1269)
+
+Every line below failed the co-occurrence rule in EVERY reply that emitted it
+in the 2026-10-04 bake-off pass: each time, the same reply already named the
+subject another way.
+
+**Flagged, not changed: two 2026-10-03 lines now fail the rule they were
+decided by.** `Problema de duplicidad por procesamiento fragmentado` and `Plan
+para abordar la deriva del modelo de embeddings` are each the ONLY name for
+their subject in one reply of the 2026-10-04 pass. Left as they are for the
+same reason as `Document Skills` in `large-03`: re-deciding a line is a
+separate change from working a queue.
+
+- Deriva del modelo de embeddings | Solución a la deriva del modelo y trazabilidad
+- Duplicación de objetos por procesamiento en trozos | Manejo de documentos duplicados
+- Duplicación de objetos por procesamiento en trozos | Solución a documentos duplicados en el corpus
+- Duplicación de objetos por procesamiento en trozos | Solución para evitar duplicados en el corpus
+- Duplicación de objetos por procesamiento en trozos | Solución para la deduplicación de objetos en el corpus
+- Duplicación de objetos por procesamiento en trozos | Solución para la deduplicación de objetos en la ingesta
+- Duplicación de objetos por procesamiento en trozos | Trabajo pendiente sobre duplicados en el corpus
+- Procedimiento de rotación de credenciales | Rotación de credenciales en cuatro pasos
 
 ## Out of scope
 
@@ -513,6 +682,11 @@ decision.
 
 - Procedimiento de respaldo
 
+Two more pointers to existing documentation, the `Procedimiento de respaldo`
+shape (2026-10-04 bake-off pass, #1269):
+
+- Ubicación del procedimiento de respaldo en la documentación
+- Ubicación y contenido de documentación técnica pendiente
 
 ## Notes
 

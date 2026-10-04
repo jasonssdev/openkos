@@ -148,6 +148,34 @@ Human-in-the-Loop Guardrails`, that subject's home section; the counter-reading
 (too generic to credit) was considered and rejected because nothing else in
 this document is a candidate for it.
 
+### The 2026-10-04 bake-off additions (#1269)
+
+Second #1269 bake-off pass: five 15-run sweeps (union+judge), one per
+candidate model, judged from a BLIND list — titles pooled across every sweep,
+de-duplicated with the harness's own `normalize`, sorted alphabetically, no
+model name attached — against the source and the rulings already in this file.
+Alias against near-duplicate follows the mechanical co-occurrence rule written
+into `medium-10-reunion-plataforma.md` on 2026-08-15: a title that is the only
+name for its subject in at least one reply is an alias; a title that never
+appears without another name for the same subject in its reply is a
+near-duplicate. One repair to the rule, needed once two NEW phrasings meet:
+where every name a reply gave a subject is a new phrasing, the rule as written
+charges all of them and credits none, so the first-positioned one is taken as
+that reply's name for it (an alias) and the rest stay near-duplicates. No new
+subject was minted.
+
+- Building a Research Agent with the Claude Agent SDK | Building a Multi-Agent Research Application with Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Building a Research Agent
+- Building a Research Agent with the Claude Agent SDK | Building a Research Agent with Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Research Agent using Claude Agent SDK
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Guardrails for Autonomous Agents
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Interrupts
+- Human-in-the-Loop Guardrails | Implementation of Human-in-the-Loop Guardrails
+- Human-in-the-Loop Guardrails | Implementing Human-in-the-Loop Guardrails
+- Human-in-the-Loop Guardrails | Implementing Human-in-the-Loop Guardrails for Agent Safety
+- Human-in-the-Loop Guardrails | Implementing Human-in-the-Loop Security Guardrails
+- Model Context Protocol (MCP) | Model Context Protocol (MCP) Integration
+
 ## Facets, not subjects
 
 Steps and components of the procedure above, not knowledge objects. An
@@ -206,6 +234,27 @@ section above). `Research Agent Architecture` names the layout of the app the
 procedure builds; the SDK subject already owns `## Architecture Overview`'s
 knowledge about the SDK itself.
 
+### The 2026-10-04 bake-off additions (#1269)
+
+Each family follows a ruling already in this file: the `Orchestrator-Workers`
+layout (rejected for promotion), `Research Agent Architecture`, the code and
+steps of `Technical Implementation: agent.py`, the orchestration skill, and
+the MinerU case study.
+
+- Claude Agent SDK Multi-Agent Research Architecture
+- Claude Agent SDK Orchestrator-Workers Pattern
+- Interactive Development Loop
+- Learning-a-tool Skill Workflow
+- MinerU Research Case Study
+- MinerU Research Project
+- Orchestrator-Workers Architecture
+- Orchestrator-Workers Multi-Agent Pattern
+- Orchestrator-Workers Pattern for AI Agents
+- Orchestrator-Workers Pattern in Agent Systems
+- Orchestrator-Workers Pattern in AI Agents
+- Orchestrator-Workers Pattern in Autonomous Agents
+- Orchestrator-Workers Pattern in Claude Agent SDK
+
 ## Out of scope
 
 Things this document MENTIONS but is not ABOUT. Kept apart from facets on
@@ -217,12 +266,26 @@ figure — which is precisely the number that argues AGAINST raising the cap.
 
 ## Near-duplicates
 
-None identified.
+Pairs are written `Canonical Subject | the duplicate phrasing`. The section
+read "None identified." until the 2026-10-04 bake-off pass (#1269).
 
 `Claude Agent SDK` against the `Procedure` was considered and rejected — the SDK
 is a tool, the procedure is what you do with it, and the document develops both.
 That is the same reasoning that kept `Model Context Protocol (MCP)` and
 `MCP Workflows` separate in `large-03-skills-vs-tools.md`.
+
+### The 2026-10-04 bake-off additions (#1269)
+
+Every line below failed the co-occurrence rule in EVERY reply that emitted it
+in the 2026-10-04 bake-off pass: each time, the same reply already named the
+subject another way.
+
+- Building a Research Agent with the Claude Agent SDK | Building a Multi-Agent Research Application with the Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Building a Research Agent Application
+- Building a Research Agent with the Claude Agent SDK | Research Agent App
+- Building a Research Agent with the Claude Agent SDK | Research Agent Implementation with Claude Agent SDK
+- Building a Research Agent with the Claude Agent SDK | Research Agent with Claude Agent SDK
+- Human-in-the-Loop Guardrails | Human-in-the-Loop Interrupts in Autonomous Agents
 
 ## Notes
 
