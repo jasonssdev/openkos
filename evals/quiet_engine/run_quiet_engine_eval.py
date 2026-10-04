@@ -2205,6 +2205,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", default=DEFAULT_CHAT_MODEL)
     parser.add_argument("--work-root", type=Path)
     parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=RESULTS_DIR,
+        help="where runs-*.json and reports go (a pilot uses results/pilot-<stamp>/)",
+    )
+    parser.add_argument(
         "--plan", action="store_true", help="print the protocol forecast; no run"
     )
     parser.add_argument(
@@ -2230,8 +2236,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.report:
         arms = [json.loads(p.read_text(encoding="utf-8")) for p in args.report]
         text = render_report(arms, args.baseline)
-        RESULTS_DIR.mkdir(exist_ok=True)
-        out = RESULTS_DIR / f"report-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.md"
+        args.results_dir.mkdir(parents=True, exist_ok=True)
+        out = (
+            args.results_dir
+            / f"report-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.md"
+        )
         out.write_text(text, encoding="utf-8")
         print(text)
         print(f"wrote {out}")
@@ -2242,9 +2251,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     work_root = args.work_root or Path(tempfile.mkdtemp(prefix="quiet-engine-"))
     work_root.mkdir(parents=True, exist_ok=True)
-    RESULTS_DIR.mkdir(exist_ok=True)
+    args.results_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    out = RESULTS_DIR / f"runs-{args.arm}-{stamp}-{args.model.replace(':', '-')}.json"
+    out = (
+        args.results_dir
+        / f"runs-{args.arm}-{stamp}-{args.model.replace(':', '-')}.json"
+    )
     minutes, _notes = forecast(args.arm, args.runs)
     print(
         f"forecast: ~{minutes / 60:.1f} h; workspaces under {work_root}; results {out}"
