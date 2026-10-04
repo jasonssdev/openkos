@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0047: The contradiction and identity judges default to gemma4:26b-a4b, and the engine runs one chat model at a time"
 description: The packaged per-task default for the contradiction and adjudication roles is gemma4:26b-a4b on the ollama backend, on a pre-registered sweep in which it won both roles; every other role stays on qwen3:8b, a missing judge fails only the stage that named it, and the 32 GB floor runs one chat model resident at a time.
-status: Proposed
+status: Accepted
 date: 2026-10-04
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0047: The contradiction and identity judges default to gemma4:26b-a4b, and the engine runs one chat model at a time
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-04
 - **Issues:** [#1269](https://github.com/jasonssdev/openkos/issues/1269)
 

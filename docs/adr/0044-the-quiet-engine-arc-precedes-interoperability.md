@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0044: The Quiet Engine arc precedes Interoperability"
 description: A named arc that cuts the decisions OpenKOS asks per source is placed between MVP 4 and MVP 5; MVP numbers stay, and the structural auto-merge class stays opt-in under ADR-0034.
-status: Proposed
+status: Accepted
 date: 2026-10-02
 tags:
   - openkos
@@ -15,7 +15,7 @@ sensitivity: public
 
 # ADR-0044: The Quiet Engine arc precedes Interoperability
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-02
 
 ## Context
