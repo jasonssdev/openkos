@@ -3304,6 +3304,33 @@ def test_insufficient_refusal_is_an_outcome_line_then_a_next_step(
     ]
 
 
+def test_insufficient_refusal_counts_the_fused_concepts_the_summary_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal's "Found N" must agree with the `retrieval:` line printed
+    just above it (#1267): `10 FTS + 10 dense -> 5 fused` is five concepts
+    judged, not ten."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=10,
+        llm_invoked=False,
+        no_match_cause="insufficient_context",
+        skip_notices=[],
+        dense_hit_count=10,
+        fused_count=5,
+        context_block_count=5,
+    )
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "what is quantisation?"])
+
+    assert result.exit_code == 0
+    assert "5 fused" in result.stderr
+    assert result.stdout.startswith("Found 5 matching concepts, but none of them")
+
+
 def test_insufficient_refusal_wraps_on_a_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

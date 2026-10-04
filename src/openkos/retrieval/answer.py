@@ -97,6 +97,14 @@ NO_MATCH = "No matching concepts were found in the compiled bundle for this ques
 """Stable no-match text (D3): zero or all-skipped hits short-circuit to this,
 without calling `llm.chat`."""
 
+NO_ANSWER_IN_CONTEXT = (
+    "Matching concepts were found in the compiled bundle, but none of them "
+    "answers this question."
+)
+"""The reply text of a sufficiency refusal. Concepts were retrieved and read,
+so `NO_MATCH` ("no matching concepts") would be false; `no_match_cause`
+stays `insufficient_context` for every consumer that branches on it."""
+
 Attribution = Literal["reported", "absent", "unparsed"]
 """How `AnswerResult.citations` was decided for this call (#753).
 
@@ -1493,7 +1501,7 @@ def answer(
         holds = True
     if not holds:
         return AnswerResult(
-            answer=NO_MATCH,
+            answer=NO_ANSWER_IN_CONTEXT,
             citations=[],
             fts_hit_count=len(hits),
             llm_invoked=False,

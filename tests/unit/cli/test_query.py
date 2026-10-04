@@ -283,6 +283,7 @@ def test_query_all_unreadable_renders_corruption_message(
         llm_invoked=False,
         no_match_cause="all_unreadable",
         skip_notices=[],
+        fused_count=2,
     )
     monkeypatch.setattr(
         "openkos.application.query.answer", lambda *args, **kwargs: fake_result
@@ -298,7 +299,7 @@ def test_query_all_unreadable_renders_corruption_message(
     )
     assert "Citations:" not in result.stdout
     assert result.stderr == (
-        "retrieval: 2 FTS + 0 dense → 0 fused → LLM skipped → 0 cited\n"
+        "retrieval: 2 FTS + 0 dense → 2 fused → LLM skipped → 0 cited\n"
     )
 
 

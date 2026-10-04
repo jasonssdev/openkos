@@ -2998,6 +2998,11 @@ def test_an_insufficient_context_refuses_before_synthesis(tmp_path: Path) -> Non
     assert result.no_match_cause == "insufficient_context"
     assert result.citations == []
     assert result.llm_invoked is False
+    # Concepts WERE found and judged, so the reply text must not claim none
+    # matched -- the MCP `query` tool returns this text verbatim (#1267).
+    assert result.answer != answer_mod.NO_MATCH
+    assert "No matching concepts" not in result.answer
+    assert result.answer == answer_mod.NO_ANSWER_IN_CONTEXT
 
 
 def test_a_sufficient_context_proceeds_to_synthesis(tmp_path: Path) -> None:

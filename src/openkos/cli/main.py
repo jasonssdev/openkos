@@ -13401,7 +13401,7 @@ def revisions(
         raise typer.Exit(code=1) from report.outcome.failure
 
 
-def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
+def _no_match_message(cause: NoMatchCause, found_count: int) -> str:
     """Map `AnswerResult.no_match_cause` to an actionable STDOUT message,
     distinguishing the three causes `query` must not conflate: nothing
     matched, matches existed but were unreadable, or no question was asked.
@@ -13417,7 +13417,7 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
         )
     if cause == "all_unreadable":
         return (
-            f"Found {fts_hit_count} matching concept{_plural(fts_hit_count)}, "
+            f"Found {found_count} matching concept{_plural(found_count)}, "
             "but none could be read from the compiled bundle — it may be "
             "corrupted. Run `openkos lint` to check bundle health."
         )
@@ -13436,7 +13436,7 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
         # answering anyway would be the model's own knowledge under the
         # bundle's citations is explained in the docs, not repeated here.
         return (
-            f"Found {fts_hit_count} matching concept{_plural(fts_hit_count)}, "
+            f"Found {found_count} matching concept{_plural(found_count)}, "
             "but none of them answers this question -- the compiled bundle "
             "does not cover it.\n"
             "Next: ingest a source that covers it, or set "
@@ -13881,9 +13881,10 @@ def query(
 
     if result.no_match_cause != "none":
         for line in _no_match_message(
-            result.no_match_cause, result.fts_hit_count
+            result.no_match_cause, result.fused_count
         ).splitlines():
             output.echo_wrapped(line, hanging="  ")
+        # The fused count is the one the `retrieval:` summary above reports.
         return
 
     typer.echo(result.answer)
