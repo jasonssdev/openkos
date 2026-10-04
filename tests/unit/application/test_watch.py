@@ -57,6 +57,7 @@ class _Env:
         self.time = _Time()
         self.model = _Model()
         self.commits: list[list[str]] = []
+        self.sha: str | None = None
         self.notices: list[str] = []
         self.stop = StopToken()
         self.on_commit: Callable[[], None] | None = None
@@ -66,10 +67,11 @@ class _Env:
     def ingest_ports(
         self, section: CommitSection, run_budget: budget.BudgetedRun
     ) -> svc.IngestPorts:
-        def autocommit(r: Path, paths: Sequence[str], message: str) -> None:
+        def autocommit(r: Path, paths: Sequence[str], message: str) -> str | None:
             self.commits.append(list(paths))
             if self.on_commit is not None:
                 self.on_commit()
+            return self.sha
 
         return svc.IngestPorts(
             chat_client=run_budget.wrap_chat_client(lambda cfg: self.model),
@@ -186,6 +188,34 @@ def test_a_settled_file_is_imported_through_the_ingest_service(env: _Env) -> Non
     assert env.commits
     assert "raw/a.md" in env.commits[0]
     assert env.observation("a.md").outcome == watch.IMPORTED
+
+
+def test_an_import_reports_its_commit_as_an_automatic_action(env: _Env) -> None:
+    env.sha = "9c1d2e3"
+    env.drop("a.md")
+    env.job()
+    env.settle()
+
+    result = env.job()
+
+    assert result is not None
+    (action,) = result.actions
+    assert action.sha == "9c1d2e3"
+    assert action.undo == "git revert 9c1d2e3"
+    assert "ingest a.md" in action.summary
+    assert "sources/a" in action.concept_ids
+
+
+def test_an_import_whose_commit_was_skipped_reports_no_action(env: _Env) -> None:
+    env.sha = None  # not a repository, identity unset, or a failed commit
+    env.drop("a.md")
+    env.job()
+    env.settle()
+
+    result = env.job()
+
+    assert result is not None
+    assert result.actions == ()
 
 
 def test_a_legacy_encoded_file_is_decoded_and_extracted(env: _Env) -> None:
