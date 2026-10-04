@@ -50,6 +50,7 @@ import typer
 from openkos import config, logsetup, resolution
 from openkos.application import (
     contradictions_service,
+    digest,
     duplicates_service,
     reindex_service,
     revisions,
@@ -503,6 +504,23 @@ def _report(result: JobResult) -> None:
     )
 
 
+def _report_digest(results: Sequence[JobResult]) -> None:
+    """End a pass that committed on its own with the 'what changed' digest: each
+    commit's short sha, the concepts it touched and its undo on ONE line, newest
+    first (#1268). Stdout, beside the job reports; silent when the pass made no
+    commit. On a terminal it is its own section and wraps under a hanging
+    indent; piped, the lines are the text they always are."""
+    rendered = digest.render([a for r in results for a in r.actions])
+    if rendered is None:
+        return
+    header, items, note = rendered
+    output.section_break()
+    typer.echo(f"openkos daemon: {header}")
+    for item in items:
+        output.echo_wrapped(f"  {item}", hanging="    ")
+    output.echo_wrapped(f"  {note}", hanging="  ")
+
+
 def _idle_seconds(
     unattended: config.UnattendedConfig, results: Sequence[JobResult]
 ) -> float:
@@ -622,6 +640,7 @@ def serve(
             )
             for result in results:
                 _report(result)
+            _report_digest(results)
             if results:
                 announcer.reset()
             if once or token.is_set():

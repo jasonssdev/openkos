@@ -55,18 +55,18 @@ import logging
 import os
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from openkos import config, fsio, lock
 from openkos.application import budget as budget_module
+from openkos.application import digest, runner
 from openkos.application import ingest as application_ingest
 from openkos.application import ingest_service as svc
 from openkos.application import pending as application_pending
 from openkos.application import queue_producers as producers
-from openkos.application import runner
 from openkos.application.lock_wait import CommitSection
 from openkos.application.reindex_service import ReindexRefused
 from openkos.application.runtime import Deadline, Halt, StopToken, check_halt
@@ -205,6 +205,8 @@ class _Tally:
     failure: str | None = None
     busy: bool = False
     imported: int = 0
+    ledger: digest.ActionLedger = field(default_factory=digest.ActionLedger)
+    """The commits the job's imports made (#1268)."""
 
 
 def _stamp(moment: datetime) -> str:
@@ -474,6 +476,7 @@ def _import_one(
     base_section: CommitSection,
     run_budget: budget_module.BudgetedRun,
     watch: WatchPorts,
+    ledger: digest.ActionLedger,
 ) -> svc.IngestOutcome:
     @contextlib.contextmanager
     def guarded() -> Iterator[None]:
@@ -483,11 +486,14 @@ def _import_one(
                 raise _NotSettled
             yield
 
+    ingest_ports = watch.ingest_ports(guarded, run_budget)
     return svc.ingest_source(
         root,
         cand.path,
         svc.IngestPolicy(skip_confirmation=True, version_changed=True),
-        ports=watch.ingest_ports(guarded, run_budget),
+        ports=dataclasses.replace(
+            ingest_ports, autocommit=ledger.wrap(ingest_ports.autocommit)
+        ),
         observer=_WatchObserver(cand.path.name, watch.notify),
         confirm=None,
     )
@@ -553,6 +559,7 @@ def _run_candidates(
                 base_section=base_section,
                 run_budget=run_budget,
                 watch=watch,
+                ledger=tally.ledger,
             )
         except runner._Halted as halted:
             _record(conn, cand, digest=digest, outcome=DEFERRED)
@@ -785,6 +792,7 @@ def _run_job(
         units_done=tally.done,
         units_deferred=tally.deferred,
         recorded=recorded,
+        actions=tuple(tally.ledger.actions),
     )
 
 

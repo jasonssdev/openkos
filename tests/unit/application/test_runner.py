@@ -633,6 +633,24 @@ def test_commit_failed_is_retried_first_and_clears_on_success(root: Path) -> Non
         conn.close()
 
 
+def test_a_commit_retry_reports_its_commit_as_an_automatic_action(
+    root: Path,
+) -> None:
+    _seed_commit_failed(root, ["bundle/a.md"])
+    git = _Git()
+    git.dirty = {"bundle/a.md"}
+    (retry,) = runner.run_due_jobs(
+        root,
+        unattended=_unattended(),
+        stop=StopToken(),
+        ports=_ports(_Clock(), git),
+        maintenance_due=False,
+    )
+    (action,) = retry.actions
+    assert (action.sha, action.concept_ids) == ("abc1234", ("a",))
+    assert action.undo == "git revert abc1234"
+
+
 def test_a_failing_retry_stays_recorded_and_is_commit_failed(root: Path) -> None:
     from openkos.vcs.git import GitError
 

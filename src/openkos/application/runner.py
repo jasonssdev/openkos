@@ -60,6 +60,7 @@ from typing import TYPE_CHECKING, Final
 
 from openkos import config, lock
 from openkos.application import budget as budget_module
+from openkos.application import digest
 from openkos.application import lint as lint_service
 from openkos.application.lock_wait import (
     INITIAL_BACKOFF_SECONDS,
@@ -221,6 +222,9 @@ class JobResult:
     lint_counts: Mapping[str, int] | None = None
     recorded: bool = True
     """Whether the outcome reached `jobs.db` (it still ended if it did not)."""
+    actions: tuple[digest.AutomaticAction, ...] = ()
+    """The commits this job made on its own, in the order it made them; the
+    daemon's 'what changed' digest lists them (#1268)."""
 
 
 # -- the job frame -------------------------------------------------------------------
@@ -608,7 +612,7 @@ def run_commit_retry_job(
         recorded_paths = jobs.uncommitted_paths(conn)
         deadline = Deadline(unattended.job_deadline_seconds, clock=ports.monotonic)
         job_id = jobs.start_job(conn, "commit-retry", _utc_stamp(ports.now()))
-        outcome, detail, done, deferred = _retry_commit(
+        outcome, detail, done, deferred, actions = _retry_commit(
             root, conn, recorded_paths, ports, stop, deadline
         )
         recorded = _finish(
@@ -629,6 +633,7 @@ def run_commit_retry_job(
             units_done=done,
             units_deferred=deferred,
             recorded=recorded,
+            actions=actions,
         )
     finally:
         conn.close()
@@ -641,26 +646,31 @@ def _retry_commit(
     ports: RunnerPorts,
     stop: StopToken,
     deadline: Deadline,
-) -> tuple[str, str | None, int, int]:
+) -> tuple[str, str | None, int, int, tuple[digest.AutomaticAction, ...]]:
     try:
         dirty = tuple(p for p in recorded_paths if ports.paths_dirty(root, [p]))
     except Exception as exc:  # noqa: BLE001 -- recorded by class only
-        return "commit_failed", _snake(type(exc).__name__), 0, 1
+        return "commit_failed", _snake(type(exc).__name__), 0, 1, ()
     if not dirty:
         jobs.clear_uncommitted_paths(conn)
-        return "completed", "already_committed", 1, 0
+        return "completed", "already_committed", 1, 0, ()
     section = _commit_section(root, ports, stop, deadline)
     try:
         with section():
             result = attempt_commit(root, dirty, COMMIT_RETRY_MESSAGE, ports=ports)
     except _Halted as halted:
-        return halted.halt, None, 0, 1
+        return halted.halt, None, 0, 1, ()
     except lock.WorkspaceBusyError:
-        return "busy", None, 0, 1
+        return "busy", None, 0, 1, ()
     if isinstance(result, Committed):
         jobs.clear_uncommitted_paths(conn)
-        return "completed", None, 1, 0
-    return "commit_failed", result.reason, 0, 1
+        actions = (
+            (digest.record_action(result.sha, dirty, COMMIT_RETRY_MESSAGE),)
+            if result.sha
+            else ()
+        )
+        return "completed", None, 1, 0, actions
+    return "commit_failed", result.reason, 0, 1, ()
 
 
 # -- due jobs ----------------------------------------------------------------------------

@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- `openkos daemon` ends a pass that committed on its own with a "what changed" digest on stdout: one line per automatic commit, newest first, each with its short sha, the concepts it touched and its `git revert` undo (#1268).
+
 ## [0.4.0] - 2026-10-02
 
 The Unattended Engine, hardened. The daemon can now wake on an OS file event (optional `openkos[watch]`), a watched file edited after import lands as a new version with its supersession queued for you to confirm, `openkos unrelate` removes a typed relation, and every verb's human-readable output follows one terminal-gated convention. A repeated key in `openkos.yaml` is now refused, and the transitional temp-directory workspace lock is gone.
