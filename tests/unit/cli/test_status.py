@@ -2139,3 +2139,23 @@ def test_status_an_unreadable_job_record_is_not_available(
 
     assert "  Unattended job record not available: jobs.db could not be read." in lines
     assert "  No unattended run recorded." not in lines
+
+
+def test_status_does_not_deny_relationships_while_typing_proposals_are_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """ "No concept relationships yet." beside an open `relation_type` row is
+    two contradictory claims in one report (#1267): a pending typing proposal
+    IS a candidate relationship. With the queue empty the line still prints."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+
+    assert "  No concept relationships yet." in _status_lines()
+
+    _queue_row(tmp_path, "relation_type", ("concepts/a", "concepts/b"))
+    lines = _status_lines()
+
+    assert "  No concept relationships yet." not in lines
+    assert any("1 relation_type" in line for line in lines)

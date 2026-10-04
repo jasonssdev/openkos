@@ -10333,10 +10333,15 @@ def status() -> None:
     # (spec: "or an adjacent informational line") -- never appended to
     # `needs_attention`, so a healthy workspace still prints "Nothing needs
     # attention." above.
+    # A pending `relation_type` row is a candidate relationship awaiting a
+    # type, so the queue lines above would contradict the empty-graph claim.
     if (
         report.edge_summary is not None
         and report.edge_summary[0] == 0
         and not report.asserted_relations
+        and not any(
+            item.kind == "relation_type" for item in report.unattended.open_items
+        )
     ):
         typer.echo("  No concept relationships yet.")
     # #593: the duplicate check above counts identical-title groups ONLY.
