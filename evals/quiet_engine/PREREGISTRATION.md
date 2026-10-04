@@ -1,6 +1,6 @@
-# Pre-registration (DRAFT): The Quiet Engine product metrics
+# Pre-registration: The Quiet Engine product metrics
 
-**Status: DRAFT.** Written before any live run. It becomes binding when the owner fixes the items marked **OWNER** and it is posted on [#1268](https://github.com/jasonssdev/openkos/issues/1268). Until then every bar below is a proposal. The harness is [`run_quiet_engine_eval.py`](run_quiet_engine_eval.py). It encodes these definitions and bars and has a model-free `--self-test`.
+**Status: Approved, not yet run.** Written before any live run. The owner decided the open questions on 2026-10-04 (see "Decisions" below), and the bars are binding as written. Its record is [#1268](https://github.com/jasonssdev/openkos/issues/1268). The harness is [`run_quiet_engine_eval.py`](run_quiet_engine_eval.py). It encodes these definitions and bars and has a model-free `--self-test`.
 
 ## Question
 
@@ -55,7 +55,7 @@ Denominator: **22 fed files** (20 sources, the probe, and its new version).
 
 **Why only `curate`.** `curate` runs `adjudicate --apply`'s merge walk as its Identity stage. Running both would count every identity decision twice.
 
-**What is not a decision.** Contradiction findings, which `curate` prints without asking. Pending-only rows: the `supersedes` relation row, watch refusals, revisions. Both are reported, never counted (see G1 and open question 4).
+**What is not a decision.** Contradiction findings, which `curate` prints without asking. Pending-only rows: the `supersedes` relation row, watch refusals, revisions. Both are reported, never counted (see G1 and decision 4).
 
 ### (b) Time from drop to the first cited answer (primary)
 
@@ -85,8 +85,8 @@ Denominator: **22 fed files** (20 sources, the probe, and its new version).
 | **B2** | every `main` run: S1 = 0 | "Zero `-N` duplicates created for same-type, same-key concepts outside the excluded types" |
 | **B3** | every `main` run: S2 = 0 | "No false sufficiency refusal attributable to a stale index" |
 | **B4** | every `main` run: every automatic action listed with undo | "Every automatic action listed with its undo" |
-| **B5** (**OWNER**) | every `main` run cites the probe within 300 s, and the median is <= 120 s | none yet: #1268 names metric (b) without a bar |
-| **G1** (**OWNER**) | every `main` run's final open pending rows <= the `v0.4.0` median | none: proposed guard |
+| **B5** | every `main` run cites the probe within 300 s, and the median is <= 120 s | metric (b); #1268 named it without a bar, and the owner fixed this one (decision 3) |
+| **G1** | every `main` run's final open pending rows <= the `v0.4.0` median | guard against moving decisions into the queue (decision 4) |
 
 **Validity floor.** B1 reads **INCONCLUSIVE**, never PASS, unless the `v0.4.0` median `D / 22` is at least **2.0**. A corpus that cannot reproduce the load cannot show it was cut. If the floor fails, the corpus is made harder before any re-run, and the bar is not lowered.
 
@@ -117,13 +117,15 @@ From `run_quiet_engine_eval.py --plan`, per run:
 
 Per run: about 102 min for `v0.4.0`, 80 for `main`, and 75 for `main-judges-qwen3`. At n = 3: **about 5.1 h, 4.0 h and 3.8 h, about 12.8 h in total**, plus about 1.5 h of pilots. The first counted run of each arm replaces these estimates with measurements.
 
-## Open questions
+## Decisions
 
-1. **Judge model: as shipped, or pinned?** Main defaults the contradiction and identity judges to `gemma4:26b-a4b` (ADR-0047). v0.4.0 used `qwen3:8b` everywhere. Measuring as shipped mixes the judge change with the arc's structural changes. Pinning both judges to `qwen3:8b` isolates the arc, but it measures a configuration nobody gets by default. **Recommendation:** the primary arm is **as shipped** (`main`), because the exit criteria are product outcomes a user gets. A secondary arm (`main-judges-qwen3`) is reported for attribution, with no bars. If the two arms disagree on a bar, the report says so, and the owner decides whether the arc or the judge earned it.
-2. **Is v0.4.0's non-interactive surface enough?** Partly. Neither version has `--json` on `curate`, `pending` or `query`. v0.4.0 has `adjudicate --json`, but it covers identity only. Both versions refuse `curate`'s per-item walk without a terminal. So the harness drives `curate` on a pseudo-terminal and parses its transcript, using a prompt grammar checked against both versions' source (v0.4.0 identity is `Merge <a> into <b>? [y/N]`, main's adds `[y]es / [s]kip / [d]istinct`). It reads `findings.db`'s `pending_items` table read-only, and the schema is the same in both versions. It parses `query`'s `Citations:` block, whose format is identical in both. Stage attribution relies on the TTY-only `openkos curate: <Stage>: checking...` line, which both versions print. The risk is a wording change the grammar misses. That is what `U` (unrecognized prompts) and the run flag catch. **Recommendation:** accept, and confirm on the pilot.
-3. **The bar for metric (b)** (**OWNER**). #1268 names the metric without a number. **Recommendation:** B5 as drafted. Every run within 300 s and a median within 120 s, against a floor of about 40 s (the default `quiet_seconds` of 30 plus a 10 s poll) for a source that is "searchable as soon as it lands" (deliverable 3).
-4. **Do pending-only rows count as decisions?** The `supersedes` row a new version queues, watch refusals and revisions are things a person must act on that `curate` never presents. **Recommendation:** not in `D`, which stays comparable with the E2E's prompt count. G1 instead guards against decisions moving into the queue.
-5. **One model or two?** #1268 asks whether `qwen3:8b` alone is the measured chat model. **Recommendation:** `qwen3:8b` alone, the packaged default. A second chat model would double the 12.8 h without changing which arc deliverables pass.
-6. **Is n = 3 enough?** It is enough for an every-run bar on a large effect. It is not enough to estimate a mean. If a `main` run lands within 0.2 of the 1.00 bar, the recommendation is to add runs before deciding rather than to read the margin.
-7. **Synthetic corpus vs the E2E corpus.** The E2E corpus was private and is not reproducible here. **Recommendation:** keep the validity floor (v0.4.0 median `D / 22` >= 2.0). If v0.4.0 misses it, extend the corpus (more overlap, longer files) and re-run, without lowering the bar.
-8. **B4's matching rule** is fixed now (short sha, or every touched document, on a line with an undo command), before deliverable 5's digest exists. If the digest lists actions in another shape, for example by concept title, B4 would FAIL on format alone. **Recommendation:** keep the rule and make the digest name ids or shas. If the owner prefers adapting the rule, amend it here before the binding run, never after.
+Each of these was an open question in the draft.
+
+1. **Judge model: as shipped, or pinned?** Main defaults the contradiction and identity judges to `gemma4:26b-a4b` (ADR-0047). v0.4.0 used `qwen3:8b` everywhere. Measuring as shipped mixes the judge change with the arc's structural changes. Pinning both judges to `qwen3:8b` isolates the arc, but it measures a configuration nobody gets by default. **Decided by the owner, 2026-10-04:** the primary arm is **as shipped** (`main`, with its defaults), and the bars apply to it, because the exit criteria are product outcomes a user gets. The secondary arm `main-judges-qwen3` is reported for attribution only, with no bars. If the two arms disagree on a bar, the report says so.
+2. **Is v0.4.0's non-interactive surface enough?** Partly. Neither version has `--json` on `curate`, `pending` or `query`. v0.4.0 has `adjudicate --json`, but it covers identity only. Both versions refuse `curate`'s per-item walk without a terminal. So the harness drives `curate` on a pseudo-terminal and parses its transcript, using a prompt grammar checked against both versions' source (v0.4.0 identity is `Merge <a> into <b>? [y/N]`, main's adds `[y]es / [s]kip / [d]istinct`). It reads `findings.db`'s `pending_items` table read-only, and the schema is the same in both versions. It parses `query`'s `Citations:` block, whose format is identical in both. Stage attribution relies on the TTY-only `openkos curate: <Stage>: checking...` line, which both versions print. The risk is a wording change the grammar misses. That is what `U` (unrecognized prompts) and the run flag catch. **Decided by the owner, 2026-10-04:** accepted. The pilot run confirms it before any counted run.
+3. **The bar for metric (b).** #1268 named the metric without a number. **Decided by the owner, 2026-10-04:** B5 as drafted: every `main` run cites the probe within 300 s, **and** the median is at most 120 s. For comparison, the floor is about 40 s (the default `quiet_seconds` of 30 plus a 10 s poll) for a source that is "searchable as soon as it lands" (deliverable 3).
+4. **Do pending-only rows count as decisions?** The `supersedes` row a new version queues, watch refusals and revisions are things a person must act on that `curate` never presents. **Decided by the owner, 2026-10-04:** decisions are the prompts presented (`D`), which stays comparable with the E2E's prompt count. Pending-only rows are not in `D`. G1 guards the queue against decisions moving into it.
+5. **One model or two?** #1268 asked whether `qwen3:8b` alone is the measured chat model. **Decided by the owner, 2026-10-04:** `qwen3:8b` is the only chat model, the packaged default.
+6. **Is n = 3 enough?** It is enough for an every-run bar on a large effect, not to estimate a mean. **Decided by the owner, 2026-10-04:** n = 3 per arm. If a `main` run lands within 0.2 of the 1.00 bar, runs are added before deciding, rather than reading the margin.
+7. **Synthetic corpus vs the E2E corpus.** The E2E corpus was private and is not reproducible here. **Decided by the owner, 2026-10-04:** the validity floor holds (v0.4.0 median `D / 22` >= 2.0, else B1 is INCONCLUSIVE). If v0.4.0 misses it, the corpus is made harder (more overlap, longer files) and the arms are re-run, without lowering the bar.
+8. **B4's matching rule.** A daemon commit counts as listed when its short sha, or every document it touched, appears on a line with an undo command. This was fixed before deliverable 5's digest exists. **Decided by the owner, 2026-10-04:** the rule is fixed now and does not change. Deliverable 5's digest must name the concept ids or the commit shas of what it lists, so that B4 measures the listing and not its format.
