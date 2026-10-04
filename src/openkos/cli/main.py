@@ -2079,7 +2079,7 @@ def _render_adjudicate_report(
                 bundle_dir, group.member_ids
             )
         ):
-            typer.echo(_CROSS_SOURCE_REPORT_NOTE)
+            typer.echo(_cross_source_report_note(group.member_ids))
         # #904: the other risky class, named in the same read-only slot and
         # independently of the one above -- a pair can be BOTH (different
         # types AND disjoint provenance), and each note answers a different
@@ -2186,6 +2186,32 @@ _CROSS_SOURCE_WALK_NOTE = (
 """The per-item walks' #776 warning, rendered BEFORE the [y/N] prompt --
 ONE constant shared by `adjudicate --apply` and `curate`'s Identity stage
 so the two surfaces cannot drift apart."""
+
+
+_CROSS_SOURCE_COPY_REPORT_NOTE = (
+    "  note: cross-source -- one is the ingest `-N` copy of the other, made "
+    "from a different source; review before merging"
+)
+_CROSS_SOURCE_COPY_WALK_NOTE = (
+    "  note: cross-source SAME -- one is the ingest `-N` copy made when this "
+    "name was already taken, from a different source; the two may still be "
+    "distinct real-world items"
+)
+"""The same two notes for a pair that is an original and its ingest `-N` copy,
+where "members share no source" is true by construction. Still a warning:
+the name collision does not prove the two are one thing."""
+
+
+def _cross_source_report_note(member_ids: Sequence[str]) -> str:
+    if application_lifecycle.is_ingest_copy_pair(member_ids):
+        return _CROSS_SOURCE_COPY_REPORT_NOTE
+    return _CROSS_SOURCE_REPORT_NOTE
+
+
+def _cross_source_walk_note(member_ids: Sequence[str]) -> str:
+    if application_lifecycle.is_ingest_copy_pair(member_ids):
+        return _CROSS_SOURCE_COPY_WALK_NOTE
+    return _CROSS_SOURCE_WALK_NOTE
 
 
 def _cross_type_report_note(reason: str) -> str:
@@ -2508,7 +2534,7 @@ def _run_adjudicate_apply(
             # #776: the interactive walk keeps the pair -- the operator
             # consents per item -- but the risky class is named BEFORE the
             # prompt, not discovered in the wreckage afterwards.
-            typer.echo(_CROSS_SOURCE_WALK_NOTE)
+            typer.echo(_cross_source_walk_note(group.member_ids))
         # #904: same slot, same reasoning, independent class. Ordered from
         # `prepared`, not from raw `member_ids`: the survivor line printed
         # directly above names one direction, and the note must not name
@@ -8839,7 +8865,9 @@ class _CliMergeObserver(merge_service.MergeObserver):
         # the tool recommends stayed open. Printed after the plan and before
         # the gate, so it is the last thing read before consenting.
         if preview.cross_source_same_pair:
-            typer.echo(_CROSS_SOURCE_WALK_NOTE)
+            typer.echo(
+                _cross_source_walk_note((survivor_canonical, absorbed_canonical))
+            )
         # #904 inherits #796's lesson verbatim: `merge` is the command the
         # cross-type skip message itself prints, so guarding only the batch
         # would send the operator through an unguarded door with the exact

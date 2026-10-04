@@ -2139,7 +2139,40 @@ def test_cross_source_merge_warns_before_the_gate(
 
     assert result.exit_code == 0, result.stderr
     assert "cross-source SAME" in result.stdout
-    assert "may be distinct real-world items" in result.stdout
+    # An ingest `-N` copy comes from another source by construction, so the
+    # note says so instead of the generic "members share no source" (#1267),
+    # while still warning that the two may be distinct.
+    assert "ingest `-N` copy" in result.stdout
+    assert "members share no source" not in result.stdout
+    assert "may still be distinct real-world items" in result.stdout
+
+
+def test_cross_source_merge_of_unrelated_ids_keeps_the_generic_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a pair that differs by an ingest `-N` suffix gets the reworded
+    note; any other disjoint-provenance pair keeps the original (#776)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_provenance(
+        tmp_path,
+        "events/afg-eval",
+        title="AFG Eval",
+        provenance=["sources/transcript-1"],
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "events/afg-review",
+        title="AFG Eval",
+        provenance=["sources/transcript-3"],
+    )
+
+    result = runner.invoke(
+        app, ["merge", "events/afg-eval", "events/afg-review", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "members share no source" in result.stdout
+    assert "ingest `-N` copy" not in result.stdout
 
 
 def test_a_shared_source_merge_carries_no_cross_source_warning(

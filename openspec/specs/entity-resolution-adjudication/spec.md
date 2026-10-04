@@ -964,6 +964,10 @@ batch merge as an explicit opt-in, and MUST be refused (exit 2) without
 `--apply-same`, because a silently ignored consent flag is worse than a
 refusal.
 
+When the two members are an original and its ingest `-N` copy (one id is
+exactly the other plus `-N`, N >= 2), the note MUST say so instead of "members
+share no source", and MUST still warn that the two may be distinct.
+
 Absent evidence MUST NOT flag: a member with no `provenance:` key, an
 empty list, or an unreadable/unparseable document gives no signal, and
 flagging on absence would mark every hand-written concept forever.

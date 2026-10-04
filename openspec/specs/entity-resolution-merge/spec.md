@@ -955,6 +955,12 @@ so the four cannot drift apart. Absence of provenance MUST NOT be treated
 as a risk signal: a hand-written concept gives no evidence either way, and
 flagging on absence would mark every hand-authored concept forever.
 
+When the pair is an original and its ingest `-N` copy (one id is exactly the
+other plus `-N`, N >= 2), "members share no source" is true by construction,
+so the note MUST instead say that one is the ingest `-N` copy made from a
+different source, and MUST still warn that the two may be distinct real-world
+items. Every other cross-source pair keeps the generic wording.
+
 This requirement governs DISCLOSURE only. It does not change any verdict,
 and it does not block the merge.
 
