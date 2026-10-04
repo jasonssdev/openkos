@@ -287,6 +287,18 @@ seam.
 - THEN the completed verdicts (if any) report first, the matching message
   prints, no bundle write occurs, and the process exits non-zero
 
+The `BackendModelNotFound` message MUST name the model the `contradiction`
+task resolved (`config.resolve_task_model`), together with its pull command,
+never the global `model:` when the two differ; the verb MUST NOT fall back
+to the global model.
+
+#### Scenario: A missing packaged judge is named by its own tag
+
+- GIVEN `cfg.backend == "ollama"`, no `models:` key, and the model is not
+  installed
+- WHEN `contradictions` runs
+- THEN stderr names `gemma4:26b-a4b` and `ollama pull gemma4:26b-a4b`, not
+  the global `model:`, the process exits 1, and nothing is written
 ### Requirement: Empty Graph Yields Clear Message, No Crash
 
 WHEN `contradictions` finds zero candidate pairs, it MUST distinguish

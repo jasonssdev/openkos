@@ -351,6 +351,12 @@ to diagnose the environment, mirroring `query`'s `BackendUnavailable`
 wording; the `BackendModelNotFound` and generic `BackendError` messages keep
 their own wording, byte-for-byte, with no `openkos doctor` pointer added.
 
+For the `ollama` backend the `BackendModelNotFound` message, and the partial
+batch failure line, MUST name the model the `adjudication` task resolved
+(`config.resolve_task_model`), together with its pull command, never the
+global `model:` when the two differ; the verb MUST NOT fall back to the
+global model.
+
 For the `openai-compatible` backend, `adjudicate` MUST catch the analogous
 `OpenAICompatibleUnavailable`, then `OpenAICompatibleModelNotFound`, then
 generic `OpenAICompatibleError`, in the same subclass order, following the
@@ -394,6 +400,14 @@ reference.
 - THEN stderr names the configured model and advises making it available on
   the configured server, with no `ollama pull` reference
 - AND the process exits 1 with zero bundle writes
+
+#### Scenario: A missing packaged judge is named by its own tag
+
+- GIVEN `cfg.backend == "ollama"`, no `models:` key, and the model is not
+  installed
+- WHEN `openkos adjudicate` runs
+- THEN stderr names `gemma4:26b-a4b` and `ollama pull gemma4:26b-a4b`, not
+  the global `model:`, the process exits 1, and nothing is written
 ### Requirement: Deterministic Given A Fixed Backend
 
 `adjudicate_candidates` MUST be deterministic for a fixed input and a fixed

@@ -369,8 +369,8 @@ Ollama-reachable check.
 ### Requirement: Task-Models-Installed Check
 
 `doctor` MUST report whether every per-task model the workspace resolves
-(`models:` entries and packaged `DEFAULT_TASK_MODELS` defaults)
-is installed, using the same tag-normalized `model_tag_matches()`
+(`models:` entries and packaged `DEFAULT_TASK_MODELS` defaults, the latter
+resolving only on the `ollama` backend) is installed, using the same tag-normalized `model_tag_matches()`
 comparison and `[PASS]`/`[FAIL]`/`[SKIP]` + remediation pattern as the chat
 model-installed check.
 
@@ -389,8 +389,8 @@ for the same one-root-cause reason as the embedding-model check.
 
 #### Scenario: A missing per-task model is reported without failing the run
 
-- GIVEN Ollama is reachable and the packaged `edge_typing` model is not
-  installed
+- GIVEN Ollama is reachable and the packaged judge model `gemma4:26b-a4b`
+  (the default for `adjudication` and `contradiction`) is not installed
 - WHEN `openkos doctor` runs
 - THEN the task-models check prints `[FAIL]`, names the task and its
   model, and offers a pull command for that exact tag, and the process
@@ -398,8 +398,8 @@ for the same one-root-cause reason as the embedding-model check.
 
 #### Scenario: Declining a packaged default leaves nothing to check
 
-- GIVEN `models.edge_typing` is an explicit null and no other task
-  resolves a differing model
+- GIVEN `models.adjudication` and `models.contradiction` are explicit nulls
+  and no other task resolves a differing model
 - WHEN `openkos doctor` runs
 - THEN the task-models check prints `[PASS]`
 
@@ -409,7 +409,6 @@ for the same one-root-cause reason as the embedding-model check.
 - WHEN `openkos doctor` runs
 - THEN the task-models check prints `[SKIP]` with a
   blocked-by-unreachable detail, not `[FAIL]`
-
 ### Requirement: Vector-Extension-Loadable Check
 
 `doctor` MUST report whether the `sqlite-vec` extension is loadable on the

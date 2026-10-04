@@ -401,11 +401,17 @@ no destructive work to disclose.
 Every `needs_llm` stage MUST declare which measured task its LLM calls
 belong to, and MUST contact the model resolved for that task by this
 precedence: an explicit `models:` entry, then the packaged per-task default
-(`DEFAULT_TASK_MODELS`), then the global `model:`. An explicit
+(`DEFAULT_TASK_MODELS`, applied on the `ollama` backend only), then the global
+`model:`. The packaged defaults are `gemma4:26b-a4b` for `adjudication`
+(Identity) and `contradiction` (Contradictions) and nothing for the other
+tasks (ADR-0047). An explicit
 YAML null in `models:` MUST decline a packaged default and resolve to the
 global `model:` — the operator's stated choice always wins over a shipped
 one, and a packaged default that costs a large download MUST have an
-opt-out that does not require restating the global tag.
+opt-out that does not require restating the global tag. The packaged
+defaults MUST NOT apply when `cfg.backend` is `openai-compatible`: a model
+tag is meaningful only to its own provider, so those stages resolve the
+global `model:` unless `models:` names them.
 Stage tasks are `adjudication` (Identity), `edge_typing` (Structure),
 `volatility_typing` (Metadata), and `contradiction` (Contradictions);
 Preconditions makes no LLM calls and declares no task.
@@ -439,18 +445,25 @@ model they named.
 - THEN Structure contacts `gemma2:27b` and every other stage contacts
   `qwen3:8b`
 
-#### Scenario: The packaged default applies without any config
+#### Scenario: The packaged judge default applies without any config
 
-- GIVEN `openkos.yaml` has no `models:` key
-- WHEN `curate` reaches the Structure stage
-- THEN Structure contacts the packaged `edge_typing` model and every other
-  stage contacts the global `model:`
+- GIVEN `cfg.backend == "ollama"` and `openkos.yaml` has no `models:` key
+- WHEN `curate` reaches the Identity and Contradictions stages
+- THEN both contact `gemma4:26b-a4b` and every other stage contacts the
+  global `model:`
+
+#### Scenario: The packaged judge default does not apply on openai-compatible
+
+- GIVEN `cfg.backend == "openai-compatible"` and `openkos.yaml` has no
+  `models:` key
+- WHEN `curate` reaches the Identity and Contradictions stages
+- THEN both contact the global `model:`
 
 #### Scenario: An explicit null declines the packaged default
 
-- GIVEN `openkos.yaml` sets `models.edge_typing: null`
-- WHEN `curate` reaches the Structure stage
-- THEN Structure contacts the global `model:`
+- GIVEN `openkos.yaml` sets `models.contradiction: null`
+- WHEN `curate` reaches the Contradictions stage
+- THEN Contradictions contacts the global `model:`
 
 #### Scenario: The cost gate discloses a non-default model
 
@@ -462,9 +475,20 @@ model they named.
 
 #### Scenario: No per-task model leaves gate output unchanged
 
-- GIVEN a workspace with no `models:` key
-- WHEN any stage's cost gate asks for consent
+- GIVEN a stage that resolves the global `model:` (a stage with no packaged
+  default and no `models:` entry, or any stage on the `openai-compatible`
+  backend with no `models:` entry)
+- WHEN that stage's cost gate asks for consent
 - THEN the printed output is byte-identical to the wording without per-task models
+
+#### Scenario: A missing packaged judge fails only its own stage
+
+- GIVEN `cfg.backend == "ollama"`, no `models:` key, and `gemma4:26b-a4b` is
+  not installed
+- WHEN `curate` runs
+- THEN Identity and Contradictions each report unavailable with
+  `ollama pull gemma4:26b-a4b`, never a fallback to the global `model:`, and
+  Structure and Metadata still run
 
 #### Scenario: A missing task model fails only its own stage
 
@@ -482,7 +506,6 @@ model they named.
 - THEN Structure reports unavailable with a remediation naming THAT model
   and advising the operator to make it available on the configured server,
   with no `ollama pull` reference, and Metadata and Contradictions still run
-
 ### Requirement: `rationale_language` Pins The Language Of Suggested Rationales
 
 The system MUST accept an optional `rationale_language` key in
