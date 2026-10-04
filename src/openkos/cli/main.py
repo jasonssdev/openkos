@@ -4876,7 +4876,7 @@ def ingest(
         "--re-extract",
         help=(
             "Run extraction again on an unchanged, already-extracted source "
-            "(a byte-identical re-ingest skips it by default, #773)."
+            "(a byte-identical re-ingest skips it by default)."
         ),
     ),
     event_date: str | None = typer.Option(
@@ -5285,7 +5285,7 @@ def forget(
             "a single-concept forget. 'source' expands the purge set "
             "to <concept_id> plus every concept whose ENTIRE `provenance` "
             "resolves back to it -- the orphan-after-delete closure "
-            "computed by `bundle.provenance.find_provenance_descendants`; "
+            "computed from each concept's `provenance`; "
             "a concept with ANY surviving provenance entry outside the "
             "purge set is preserved untouched."
         ),
@@ -6137,7 +6137,7 @@ def purge(
             "purge set to <concept_id> plus every concept whose ENTIRE "
             "`provenance` resolves back to it -- the SAME orphan-after-delete "
             "closure `forget --scope source` uses "
-            "(`bundle.provenance.find_provenance_descendants`)."
+            "computed from each concept's `provenance`)."
         ),
     ),
     force: bool = typer.Option(
@@ -8895,7 +8895,7 @@ def merge(
         False,
         "--no-reconcile",
         help=(
-            "Skip the reconciliation pass (#645): keep the merged body as "
+            "Skip the reconciliation pass: keep the merged body as "
             "the survivor's text with the absorbed text appended under a "
             "'## Merged content' heading, with no model call."
         ),
@@ -8904,7 +8904,7 @@ def merge(
         False,
         "--reconcile",
         help=(
-            "Force the reconciliation pass (#645) even below the share "
+            "Force the reconciliation pass even below the share "
             "and merged-length thresholds that decide it by default. "
             "Refused together with --no-reconcile."
         ),
@@ -8913,7 +8913,7 @@ def merge(
         False,
         "--include-cross-type",
         help=(
-            "Merge two concepts that declare different OKF types (#1258) "
+            "Merge two concepts that declare different OKF types "
             "-- refused by default because it absorbs one kind of thing "
             "into another."
         ),
@@ -9228,7 +9228,7 @@ def unmerge(
         False,
         "--discard-survivor-edits",
         help=(
-            "Bypass the survivor-edit refusal (#1110): proceed even though "
+            "Bypass the survivor-edit refusal: proceed even though "
             "the survivor's current bytes no longer match what the merge "
             "wrote, discarding that edit. Independent of --auto -- it never "
             "skips the confirmation prompt or any OTHER refusal (the "
@@ -9434,12 +9434,12 @@ def reconcile(
         "--from-findings",
         help="Walk the persisted open contradiction findings with a per-item "
         "[y/N] consent prompt, writing each accepted pair's symmetric "
-        "reconciliation through the same write path -- no ids to transcribe "
-        "(#567). Also walks fresh, actionable revision findings from "
+        "reconciliation through the same write path -- no ids to transcribe. "
+        "Also walks fresh, actionable revision findings from "
         "'openkos revisions': a directed REVERSES/REFINES offers a "
         "supersedes/revises edge held by the later Decision, an undirected "
         "one asks once which Decision is later and which relation type to "
-        "record (#1014).",
+        "record.",
     ),
 ) -> None:
     """Record a human's resolution of a contradiction between two concepts:
@@ -10458,7 +10458,9 @@ def pending_cmd(
     help=(
         "Run unattended maintenance for this workspace in the foreground: it "
         "refreshes the derived indexes and queues proposals for you to review "
-        "(see `pending`). Never changes your knowledge base itself."
+        "(see `pending`). Never approves a proposal; the only thing it writes "
+        "into your knowledge base is a file dropped in the configured "
+        "`unattended.inbox`, imported as `ingest` would."
     ),
     rich_help_panel="Maintain",
 )
@@ -10480,7 +10482,9 @@ def daemon_cmd(
     A maintenance pass refreshes the derived indexes, counts lint findings and
     runs the advisors (duplicates, relation types, volatility, contradictions,
     decision revisions), recording each proposal as a pending-work row. It
-    writes nothing under `bundle/` and approves nothing. Model calls are bounded
+    approves nothing, and a maintenance pass writes nothing under `bundle/`;
+    only the inbox import (when `unattended.inbox` is set) adds Sources and
+    their concepts, as `ingest` of that file would. Model calls are bounded
     by the `unattended:` budget in `openkos.yaml`. Each job's outcome is recorded
     in `.openkos/jobs.db`; the log goes to the per-user log directory.
 
@@ -10599,7 +10603,7 @@ def list_objects_cmd(
     sources_of: str | None = typer.Option(
         None,
         "--sources",
-        help="Reverse-provenance lookup (#628): list every Source whose "
+        help="Reverse-provenance lookup: list every Source whose "
         "provenance chain reaches this concept id -- transitively, with "
         "each Source's current sensitivity -- so 'protect this object' "
         "finds the Sources that need raising. A whole mode: takes no TYPE "
@@ -11074,7 +11078,7 @@ def duplicates(
         "--keep-distinct",
         help=(
             "Record that these concepts are NOT the same entity and stop "
-            "offering to merge them (#797). Repeat the flag once per member, "
+            "offering to merge them. Repeat the flag once per member, "
             "at least twice. Reversible with --reopen; listed by "
             "--kept-distinct."
         ),
@@ -11312,7 +11316,7 @@ def adjudicate(
         False,
         "--no-reconcile",
         help=(
-            "Skip the reconciliation pass (#645) on merges applied by "
+            "Skip the reconciliation pass on merges applied by "
             "--apply/--apply-same: keep the merged body as the survivor's "
             "text with the absorbed text appended under a '## Merged "
             "content' heading, with no model call. The same opt-out `merge` "
@@ -11323,7 +11327,7 @@ def adjudicate(
         False,
         "--reconcile",
         help=(
-            "Force the reconciliation pass (#645) on merges applied by "
+            "Force the reconciliation pass on merges applied by "
             "--apply/--apply-same, even below the share and merged-length "
             "thresholds that decide it by default. The same opt-in `merge` "
             "and `curate` take. Refused together with --no-reconcile."
@@ -11334,7 +11338,7 @@ def adjudicate(
         "--include-cross-source",
         help=(
             "Let --apply-same batch-merge SAME pairs whose members share "
-            "no provenance source (#776) -- excluded by default because "
+            "no provenance source -- excluded by default because "
             "that is the class that fuses distinct real-world items."
         ),
     ),
@@ -11343,7 +11347,7 @@ def adjudicate(
         "--include-cross-type",
         help=(
             "Let --apply-same and --apply merge SAME pairs whose members "
-            "declare different OKF types (#904, #1258) -- excluded by "
+            "declare different OKF types -- excluded by "
             "default because that is the class that absorbs one kind of "
             "thing into another."
         ),
@@ -11353,7 +11357,7 @@ def adjudicate(
         "--fresh",
         help=(
             "Bypass the persisted-adjudications serve and re-judge every "
-            "candidate group with the model (#779), re-persisting the "
+            "candidate group with the model, re-persisting the "
             "fresh verdicts -- the same lever `contradictions --fresh` is."
         ),
     ),
@@ -12040,7 +12044,7 @@ def suggest_relations_cmd(
         "--fresh",
         help=(
             "Bypass the persisted-suggestions serve and re-type every "
-            "candidate edge with the model (#799), re-persisting the fresh "
+            "candidate edge with the model, re-persisting the fresh "
             "suggestions -- the same lever `adjudicate --fresh` is."
         ),
     ),
@@ -12049,8 +12053,8 @@ def suggest_relations_cmd(
         "--edge-offset",
         min=0,
         help="Skip the first N ranked candidate edges, so the batch beyond "
-        "the cap is browsable without first typing the batch before it "
-        "(#567). The capped run names the next batch's exact offset.",
+        "the cap is browsable without first typing the batch before it. "
+        "The capped run names the next batch's exact offset.",
     ),
 ) -> None:
     """LLM-suggest a relation `type` for every existing UNTYPED body-link
@@ -13099,7 +13103,7 @@ def contradictions(
         "--fresh",
         help="Re-judge every candidate pair with the model. By default, a "
         "pair whose persisted finding is digest-fresh is served from "
-        ".openkos/findings.db without a model call (#653).",
+        ".openkos/findings.db without a model call.",
     ),
 ) -> None:
     """LLM-detect contradictions between already-related concepts: read-only,
@@ -13507,7 +13511,7 @@ def query(
         help=(
             "With --save, file an answer whose citation list is the "
             "retrieval fallback (attribution absent or unparsed) without "
-            "the #774 gate -- the citations become provenance without the "
+            "the attribution gate -- the citations become provenance without the "
             "model ever accounting for them."
         ),
     ),
@@ -13880,11 +13884,11 @@ def query(
             typer.echo(f"  {notice}", err=True)
 
     if result.no_match_cause != "none":
+        # The fused count is the one the `retrieval:` summary above reports.
         for line in _no_match_message(
             result.no_match_cause, result.fused_count
         ).splitlines():
             output.echo_wrapped(line, hanging="  ")
-        # The fused count is the one the `retrieval:` summary above reports.
         return
 
     typer.echo(result.answer)
@@ -14940,7 +14944,7 @@ def curate(
         False,
         "--no-reconcile",
         help=(
-            "Skip the reconciliation pass (#645) on Identity's merges: keep "
+            "Skip the reconciliation pass on Identity's merges: keep "
             "the merged body as the survivor's text with the absorbed text "
             "appended under a '## Merged content' heading, with no model "
             "call. The same opt-out `merge` takes."
@@ -14950,7 +14954,7 @@ def curate(
         False,
         "--reconcile",
         help=(
-            "Force the reconciliation pass (#645) on Identity's merges, "
+            "Force the reconciliation pass on Identity's merges, "
             "even below the share and merged-length thresholds that decide "
             "it by default. The same opt-in `merge` takes. Refused together "
             "with --no-reconcile."
