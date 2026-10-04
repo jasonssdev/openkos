@@ -35,8 +35,8 @@ named it, with that model's pull command; nothing else moves.
 - Pulling a model from `init` or `doctor`: `doctor` stays informational;
   `init` pulls nothing.
 - A fallback from a missing judge to `model:`: refused (#515 decision 2).
-- A direct memory measurement of `gemma4:26b-a4b`: the figure is an estimate
-  and is recorded as one.
+- Re-measuring memory on other Ollama versions: the figure (about 21.5 GB with
+  `bge-m3` at `num_ctx` 12288) was measured once, from the loader's buffer report.
 - `suggest-relations`' and `suggest-volatility`'s not-installed wording, which
   still names `cfg.model` for their tasks; no packaged default moves them.
 

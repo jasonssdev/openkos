@@ -42,9 +42,12 @@ What the sweep measured:
   0; `auto_merge` passed where the baseline failed; the `decision_revisions`
   B1-B8 and `query_sufficiency` vetoes held. Median latency per run was 84 s
   for adjudication and 131 s for contradictions, within budget.
-- **Memory**: `gemma4:26b-a4b` is about 20.4 GB estimated with `bge-m3`
-  (`ollama ps` on Ollama 0.32.9 does not count gemma4's weights, so the figure is
-  on-disk weights plus reported allocation, not a direct reading). It does not
+- **Memory**: `gemma4:26b-a4b` is about 21.5 GB with `bge-m3`, measured at
+  `num_ctx` 12288 from the buffer sizes `llama-server` reports on load: about
+  20.9 GB for the judge (weights 17.0 GB, KV cache 0.34 GB, compute 0.29 GB, the
+  auxiliary model Ollama loads with gemma4 0.95 GB, the vision projector 1.3 GB)
+  plus `bge-m3` 0.66 GB. `ollama ps` on Ollama 0.32.9 does not count gemma4's
+  weights, so it cannot be used for this figure. It does not
   co-reside with `qwen3:8b` inside 24 GB.
 
 The per-task mechanism already exists (#513, #515): `DEFAULT_TASK_MODELS`,
@@ -100,8 +103,9 @@ first default that is.
   `qwen3:8b`. The measured latency budget covered per-run medians with the model
   already loaded; the swap time was recorded separately on the issue and is not
   part of those medians.
-- The gemma4 memory figure is an estimate. It should be confirmed with a direct
-  measurement on the target machine; this ADR does not claim it was.
+- The memory figure was measured on one machine (48 GB, Apple Silicon, Ollama
+  0.32.9) from the loader's own buffer report; it leaves about 2.5 GB of the 24 GB
+  budget, and a different Ollama version may allocate differently.
 - The self-preference hypothesis (a judge from the same family as the
   generator) was not measured and remains open.
 - Label and Generate had no winner; the next round re-registers the blind-share

@@ -1109,7 +1109,7 @@ Full evidence, including the three probes and their `--self-test` modes, lives i
 
 `ollama pull gemma4:26b-a4b` once. If it is not pulled, only the stage that needs it fails — `contradictions`, `adjudicate`, or `curate`'s Identity and Contradictions stages — with that model's pull command; it never falls back to `model:`, because verdicts would then be attributed to a model you did not run. To decline the default, set the task to `null` (`models: {contradiction: null}`), which follows `model:`, or name another tag.
 
-**Memory.** The judge is a 26B mixture-of-experts model, about 20 GB in memory with `bge-m3` (an estimate: Ollama's `ps` does not count gemma4's weights), so it does not sit beside `qwen3:8b` inside a 24 GB budget. The engine therefore runs **one chat model at a time** and Ollama swaps them as stages change; plan on a machine with 32 GB or more, or opt out as above. Mixed runs pay a model load at each switch.
+**Memory.** The judge is a 26B mixture-of-experts model, about 21.5 GB in memory with `bge-m3` at production context, so it does not sit beside `qwen3:8b` inside a 24 GB budget. The engine therefore runs **one chat model at a time** and Ollama swaps them as stages change; plan on a machine with 32 GB or more, or opt out as above. Mixed runs pay a model load at each switch.
 
 `gemma2:27b` remains the **documented recommendation** for `edge_typing` — the measured upgrade, not the default:
 
