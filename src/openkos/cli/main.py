@@ -2312,11 +2312,17 @@ def _format_merge_preview_line(
     exactly as the thresholds decided, never a pass it was not asked for."""
     stacked_note = ""
     guardrail_note = ""
+    reconcile_planned = application_lifecycle.reconcile_planned(
+        prepared, no_reconcile=no_reconcile, reconcile=reconcile
+    )
     if prepared.stacked_body is not None:
-        stacked_note = (
-            f", stacks {prepared.stacked_body.absorbed_chars} unreconciled "
-            f"body char(s) ({prepared.stacked_body.share:.0%} of merged body)"
-        )
+        # A planned pass is the body's one previewed outcome; the stacked
+        # form is only its fallback, so the clause would contradict the note.
+        if not reconcile_planned:
+            stacked_note = (
+                f", stacks {prepared.stacked_body.absorbed_chars} unreconciled "
+                f"body char(s) ({prepared.stacked_body.share:.0%} of merged body)"
+            )
         # Issue #559: a merge whose result would be dominated by the
         # absorbed side is the measured signature of merging a document
         # ABOUT the survivor rather than a second description of it. The
@@ -2331,9 +2337,7 @@ def _format_merge_preview_line(
                 "object. Verify before accepting."
             )
     reconcile_note = ""
-    if application_lifecycle.reconcile_planned(
-        prepared, no_reconcile=no_reconcile, reconcile=reconcile
-    ):
+    if reconcile_planned:
         reconcile_note = f"\n  ~ {_RECONCILE_PLAN_NOTE}"
     return (
         f"  merge {prepared.absorbed_canonical} into {prepared.survivor_canonical} "
@@ -8793,15 +8797,19 @@ class _CliMergeObserver(merge_service.MergeObserver):
         absorbed_canonical = prepared.absorbed_canonical
         output.section_break()
         typer.echo("openkos merge: proposed changes:")
-        typer.echo(
-            f"  ~ sensitivity: {prepared.sensitivity_before} -> "
-            f"{prepared.sensitivity_after}"
-        )
+        if prepared.sensitivity_before != prepared.sensitivity_after:
+            typer.echo(
+                f"  ~ sensitivity: {prepared.sensitivity_before} -> "
+                f"{prepared.sensitivity_after}"
+            )
         for relation in prepared.dropped_self_loops:
             typer.echo(f"  - drop self-loop: {relation.target} ({relation.type})")
         for relation in prepared.deduped_collisions:
             typer.echo(f"  ~ dedupe collision: {relation.target} ({relation.type})")
-        if prepared.stacked_body is not None:
+        # A planned reconcile pass is the body's one previewed outcome: the
+        # stacked form is only its fallback, which `_RECONCILE_PLAN_NOTE`
+        # already names, so describing both would contradict each other.
+        if prepared.stacked_body is not None and not preview.reconcile_planned:
             typer.echo(
                 f"  + stack absorbed body: {prepared.stacked_body.absorbed_chars} "
                 f"unreconciled char(s) ({prepared.stacked_body.share:.0%} of "

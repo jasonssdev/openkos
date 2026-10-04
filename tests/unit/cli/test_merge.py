@@ -1959,6 +1959,54 @@ def test_merge_reconciliation_preview_lands_before_the_confirm_gate(
     assert _snapshot(tmp_path) == before
 
 
+def test_merge_preview_describes_one_outcome_for_the_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reconcile-planned merge previews ONE outcome for the body: the model
+    rewrite, which names the stacked form as its fallback. A second line
+    claiming the bodies "were appended, not reconciled" would contradict it
+    (#1267). Without a planned pass the stacked line is the only description
+    and stays."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor", body=_LONG_BODY)
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed", body=_LONG_BODY)
+    _patch_reconciliation(monkeypatch, _RECONCILED_BODY)
+    _simulate_tty(monkeypatch)
+
+    planned = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed"], input="n\n"
+    )
+    skipped = runner.invoke(
+        app,
+        ["merge", "concepts/survivor", "concepts/absorbed", "--no-reconcile"],
+        input="n\n",
+    )
+
+    assert "reconcile merged body" in planned.stdout
+    assert "stack absorbed body" not in planned.stdout
+    assert "bodies were appended" not in planned.stdout
+    assert "stack absorbed body" in skipped.stdout
+    assert "reconcile merged body" not in skipped.stdout
+
+
+def test_merge_preview_omits_an_unchanged_sensitivity_and_keeps_a_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`~ sensitivity: private -> private` lists a change where nothing
+    changes (#1267); a real raise is still previewed."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/a", title="A", sensitivity="private")
+    _write_concept(tmp_path, "concepts/b", title="B", sensitivity="private")
+    _write_concept(tmp_path, "concepts/c", title="C", sensitivity="confidential")
+    _simulate_tty(monkeypatch)
+
+    same = runner.invoke(app, ["merge", "concepts/a", "concepts/b"], input="n\n")
+    raised = runner.invoke(app, ["merge", "concepts/a", "concepts/c"], input="n\n")
+
+    assert "sensitivity:" not in same.stdout
+    assert "~ sensitivity: private -> confidential" in raised.stdout
+
+
 # --- #904: the cross-type warning reaches plain `merge` too ----------------
 
 

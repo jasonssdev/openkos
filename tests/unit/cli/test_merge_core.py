@@ -835,6 +835,40 @@ def test_format_merge_preview_line_includes_stacked_body_note_when_present(
     assert "unreconciled" in line
 
 
+def test_format_merge_preview_line_drops_the_stacked_note_when_a_pass_is_planned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A planned reconcile pass is the body's one previewed outcome: the line
+    must not also say the bodies are stacked unreconciled (#1267)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body="Real content."
+    )
+    _write_concept(
+        tmp_path, "concepts/absorbed", title="Absorbed", body="Contradicting content."
+    )
+    bundle_dir = tmp_path / "bundle"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+    prepared = application_lifecycle.prepare_merge(
+        bundle_dir,
+        bundle_dir / "index.md",
+        bundle_dir / "log.md",
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    line = _format_merge_preview_line(prepared, reconcile=True)
+
+    assert "reconcile merged body" in line
+    assert "unreconciled" not in line
+
+
 def test_format_merge_preview_line_omits_stacked_body_note_when_absorbed_body_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

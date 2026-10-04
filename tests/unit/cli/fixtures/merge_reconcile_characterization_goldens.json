@@ -33,7 +33,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos: NOTICE -- this commit includes content marked 'sensitivity: confidential'. openkos commits to LOCAL git only and never pushes to a remote.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: confidential -> confidential\n  + stack absorbed body: 17 unreconciled char(s) (22% of merged body -- bodies were appended, not reconciled)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  + stack absorbed body: 17 unreconciled char(s) (22% of merged body -- bodies were appended, not reconciled)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_conflicting_reconcile_flags": {
     "commits": [
@@ -138,7 +138,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_non_tty_refusal": {
     "commits": [
@@ -214,7 +214,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 217 unreconciled char(s) (45% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_reconciliation_confidential_skip": {
     "commits": [
@@ -231,7 +231,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos merge: skipped body reconciliation -- concepts/survivor is confidential and the backend is not local; the stacked body was kept.\nopenkos: NOTICE -- this commit includes content marked 'sensitivity: confidential'. openkos commits to LOCAL git only and never pushes to a remote.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: confidential -> confidential\n  + stack absorbed body: 258 unreconciled char(s) (50% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_reconciliation_failed": {
     "commits": [
@@ -248,7 +248,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "openkos merge: notice -- reconciliation failed (the model reply failed validation); kept the stacked body.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 217 unreconciled char(s) (45% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
   },
   "merge_same_id": {
     "commits": [
