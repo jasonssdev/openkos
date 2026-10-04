@@ -2,7 +2,7 @@
 
 **Question.** Does the arc ([#1268](https://github.com/jasonssdev/openkos/issues/1268), [ADR-0044](../../docs/adr/0044-the-quiet-engine-arc-precedes-interoperability.md)) cut the human decisions per ingested source? Does it make a file dropped into the inbox answerable with a citation soon after it lands? Its secondary exit checks are `-N` duplicates, stale-index false refusals, and automatic actions listed with their undo.
 
-The definitions, arms, `n`, bars and open questions live in [`PREREGISTRATION.md`](PREREGISTRATION.md). This README covers how to run the harness.
+The definitions, arms, `n`, the bars and the owner's decisions live in the approved pre-registration, [`PREREGISTRATION.md`](PREREGISTRATION.md) (#1268). The bars apply to the `main` arm only; `main-judges-qwen3` is reported for attribution. This README covers how to run the harness.
 
 ## What it drives
 

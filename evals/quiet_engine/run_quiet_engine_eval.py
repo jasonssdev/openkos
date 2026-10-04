@@ -1193,7 +1193,7 @@ def _stage_text(transcript: str, stage: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Bars (draft until the owner fixes them; see PREREGISTRATION.md)
+# Bars: the approved pre-registration (evals/quiet_engine/PREREGISTRATION.md, #1268)
 # ---------------------------------------------------------------------------
 
 BARS: Final = {
@@ -1202,8 +1202,13 @@ BARS: Final = {
     "cite_median_s": 120.0,
     "cite_max_s": 300.0,
 }
-"""The pre-registration's DRAFT numbers. Each bar reads every run of the
-treatment arm (no averaging can hide one bad run)."""
+"""The numbers of the approved pre-registration
+(`evals/quiet_engine/PREREGISTRATION.md`, #1268). Each bar reads every run
+of the primary arm (no averaging can hide one bad run)."""
+
+PRIMARY_ARM: Final = "main"
+"""The only arm the bars apply to (main as shipped). Every other non-baseline
+arm is reported for attribution, with no verdict."""
 
 
 def summarize_arm(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -1325,7 +1330,8 @@ def render_report(arms: Sequence[Mapping[str, Any]], baseline_label: str | None)
         "",
         f"_Generated: {datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_ · protocol v{PROTOCOL_VERSION}.",
         "",
-        "Bars are the DRAFT numbers in `PREREGISTRATION.md` until the owner fixes them.",
+        "Bars are the approved pre-registration (`evals/quiet_engine/PREREGISTRATION.md`, #1268); "
+        f"they apply to the primary arm `{PRIMARY_ARM}` only.",
         "",
     ]
     for arm in arms:
@@ -1361,7 +1367,14 @@ def render_report(arms: Sequence[Mapping[str, Any]], baseline_label: str | None)
         for label, s in summaries.items():
             if label == baseline_label:
                 continue
-            lines.append(f"## Exit bars: `{label}` against `{baseline_label}`")
+            if label != PRIMARY_ARM:
+                lines.append(f"## `{label}`: attribution only, no bars")
+                lines.append("")
+                continue
+            lines.append(
+                f"## Exit bars (approved pre-registration, #1268): "
+                f"`{label}` against `{baseline_label}`"
+            )
             lines.append("")
             for bar, verdict in evaluate_bars(s, summaries[baseline_label]).items():
                 lines.append(f"- **{bar}**: {verdict}")
