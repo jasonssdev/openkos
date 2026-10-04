@@ -2,6 +2,8 @@
 
 Pinned BEFORE the field-union core was factored out for attach-at-ingest,
 so the refactor has an oracle: merge output must not change by one byte.
+The one deliberate change since: a merge revises the survivor, so its
+`version` is one more than before (a missing one counts as 1), #1267.
 """
 
 import pytest
@@ -93,9 +95,9 @@ CASES: dict[str, tuple[dict[str, object], str, dict[str, object], str]] = {
 }
 
 GOLDEN = {
-    "basic_union": "---\ndescription: d\nextra: fill\nfreshness: timeless\ngenerated:\n  at: '2026-02-01T00:00:00Z'\n  by: openkos/1\nprovenance:\n- sources/a\n- sources/b\nsensitivity: confidential\nsources:\n- id: sources/a\n  resource: /sources/a.md\n- id: sources/b\n  resource: /sources/b.md\nstatus: stable\ntags:\n- x\n- y\n- z\ntitle: A\ntype: Concept\nversion: 1\n---\n\n# A\n\nbody one\n\n## Related\n\n- [sources/a](/sources/a.md) - src\n\n## Merged content (concepts/b)\n\n### A2\n\n#### Heading\n\nbody two\n",
-    "legacy_timestamp": "---\nfreshness: snapshot\ngenerated:\n  at: '2026-03-01T00:00:00Z'\n  by: openkos/legacy\nprovenance:\n- sources/a\n- sources/b\nsensitivity: private\nsources:\n- id: sources/a\n  resource: /sources/a.md\n- id: sources/b\n  resource: /sources/b.md\nstatus: stable\ntags: []\ntitle: A\ntype: Concept\n---\n\n# A\n\nx\n\n## Merged content (concepts/b)\n\n### B\n\ny\n",
-    "relations": "---\nfreshness: null\ngenerated:\n  at: '2026-01-01T00:00:00Z'\n  by: o\nprovenance:\n- sources/a\n- sources/b\nrelations:\n- target: concepts/q\n  type: references\n- target: concepts/z\n  type: related_to\nsensitivity: public\nsources:\n- id: sources/a\n  resource: /sources/a.md\n- id: sources/b\n  resource: /sources/b.md\ntitle: A\ntype: Concept\n---\n\n# A\n\n## Merged content (concepts/b)\n\n### B\n\nb body\n",
+    "basic_union": "---\ndescription: d\nextra: fill\nfreshness: timeless\ngenerated:\n  at: '2026-02-01T00:00:00Z'\n  by: openkos/1\nprovenance:\n- sources/a\n- sources/b\nsensitivity: confidential\nsources:\n- id: sources/a\n  resource: /sources/a.md\n- id: sources/b\n  resource: /sources/b.md\nstatus: stable\ntags:\n- x\n- y\n- z\ntitle: A\ntype: Concept\nversion: 2\n---\n\n# A\n\nbody one\n\n## Related\n\n- [sources/a](/sources/a.md) - src\n\n## Merged content (concepts/b)\n\n### A2\n\n#### Heading\n\nbody two\n",
+    "legacy_timestamp": "---\nfreshness: snapshot\ngenerated:\n  at: '2026-03-01T00:00:00Z'\n  by: openkos/legacy\nprovenance:\n- sources/a\n- sources/b\nsensitivity: private\nsources:\n- id: sources/a\n  resource: /sources/a.md\n- id: sources/b\n  resource: /sources/b.md\nstatus: stable\ntags: []\ntitle: A\ntype: Concept\nversion: 2\n---\n\n# A\n\nx\n\n## Merged content (concepts/b)\n\n### B\n\ny\n",
+    "relations": "---\nfreshness: null\ngenerated:\n  at: '2026-01-01T00:00:00Z'\n  by: o\nprovenance:\n- sources/a\n- sources/b\nrelations:\n- target: concepts/q\n  type: references\n- target: concepts/z\n  type: related_to\nsensitivity: public\nsources:\n- id: sources/a\n  resource: /sources/a.md\n- id: sources/b\n  resource: /sources/b.md\ntitle: A\ntype: Concept\nversion: 2\n---\n\n# A\n\n## Merged content (concepts/b)\n\n### B\n\nb body\n",
 }
 
 

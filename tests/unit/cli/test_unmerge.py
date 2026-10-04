@@ -2099,6 +2099,44 @@ def test_unmerge_to_unwinds_the_whole_chain_back_to_pre_merge_bytes(
     assert bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle") == []
 
 
+def test_merge_bumps_the_survivors_version_and_unmerge_restores_it_byte_for_byte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each merge adds one to the survivor's `version` (two merges: 5 -> 7),
+    and unmerging restores the pre-merge bytes exactly, version included
+    (#1267)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    survivor_path = tmp_path / "bundle" / "concepts" / "survivor.md"
+    survivor_path.write_text(
+        survivor_path.read_text(encoding="utf-8").replace(
+            "title: Survivor\n", "title: Survivor\nversion: 5\n", 1
+        ),
+        encoding="utf-8",
+    )
+    _write_concept(tmp_path, "concepts/alpha", title="Alpha")
+    _write_concept(tmp_path, "concepts/beta", title="Beta")
+    pre = survivor_path.read_text(encoding="utf-8")
+
+    for slug in ("alpha", "beta"):
+        merged = runner.invoke(
+            app, ["merge", "concepts/survivor", f"concepts/{slug}", "--auto"]
+        )
+        assert merged.exit_code == 0, merged.stderr
+        if slug == "alpha":
+            first, _ = okf.load_frontmatter(survivor_path.read_text(encoding="utf-8"))
+            assert first["version"] == 6
+    after, _ = okf.load_frontmatter(survivor_path.read_text(encoding="utf-8"))
+    assert after["version"] == 7
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/alpha", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert survivor_path.read_text(encoding="utf-8") == pre
+
+
 def test_unmerge_to_partial_unwind_stops_at_the_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

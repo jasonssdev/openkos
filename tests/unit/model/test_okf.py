@@ -1914,7 +1914,61 @@ def test_build_merged_document_scalar_fields_survivor_wins() -> None:
     assert merged["title"] == "Stoicism"
     assert merged["description"] == "Survivor description."
     assert merged["status"] == "stable"
-    assert merged["version"] == 1
+    assert merged["version"] == 2
+
+
+@pytest.mark.parametrize(
+    ("survivor_version", "expected"),
+    [(1, 2), (4, 5), ("x", 2), (True, 2), (None, 2)],
+)
+def test_build_merged_document_bumps_the_survivors_own_version(
+    survivor_version: object, expected: int
+) -> None:
+    """A merge revises the survivor, so its `version` is the survivor's
+    previous value plus one -- never the absorbed side's (which is 3 here),
+    and a missing or non-integer value counts as 1 like an attach does
+    (#1267)."""
+    survivor = _survivor_metadata(version=survivor_version)
+    if survivor_version is None:
+        del survivor["version"]
+
+    merged, _ = okf.build_merged_document(
+        survivor,
+        "Survivor body.",
+        _absorbed_metadata(version=3),
+        "Absorbed body.",
+        "absorbed-id",
+        "survivor-id",
+    )
+
+    assert merged["version"] == expected
+
+
+def test_a_merged_then_attached_concept_keeps_counting_from_the_merged_version() -> (
+    None
+):
+    """Merge and attach share one revision counter: attaching to a concept
+    that was merged once continues from the merged value (1 -> merge 2 ->
+    attach 3)."""
+    merged, merged_body = okf.build_merged_document(
+        _survivor_metadata(version=1),
+        "Survivor body.",
+        _absorbed_metadata(),
+        "Absorbed body.",
+        "absorbed-id",
+        "survivor-id",
+    )
+
+    attached, _ = okf.build_attached_document(
+        merged,
+        merged_body,
+        {"provenance": ["sources/call-c"]},
+        "New body.",
+        source_id="sources/call-c",
+        source_title="Call C",
+    )
+
+    assert attached["version"] == 3
 
 
 def test_build_merged_document_survivor_type_wins_on_a_cross_type_merge() -> None:
