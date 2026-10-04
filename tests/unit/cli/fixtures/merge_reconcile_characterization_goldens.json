@@ -891,7 +891,7 @@
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
     "stderr": "",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nWarning: 'concepts/survivor''s merge ledger entry predates the survivor-edit check (#1110); cannot confirm its current bytes still match what the merge wrote, proceeding anyway.\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nWarning: 'concepts/survivor''s merge ledger entry predates the survivor-edit check; cannot confirm its current bytes still match what the merge wrote, proceeding anyway.\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
   },
   "unmerge_no_target": {
     "commits": [

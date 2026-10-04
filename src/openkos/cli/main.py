@@ -4321,7 +4321,7 @@ def _echo_type_floor_summary(
         typer.echo(
             "openkos ingest: confidential objects are excluded from query, "
             "contradictions, and suggest-relations against a non-local "
-            "backend (#569).",
+            "backend.",
             err=True,
         )
 
@@ -9127,7 +9127,7 @@ class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
         if prepared.survivor_drift_unverifiable:
             output.echo_wrapped(
                 f"Warning: {survivor_canonical!r}'s merge ledger entry predates "
-                "the survivor-edit check (#1110); cannot confirm its current "
+                "the survivor-edit check; cannot confirm its current "
                 "bytes still match what the merge wrote, proceeding anyway.",
                 hanging="  ",
             )
@@ -14262,7 +14262,7 @@ def query(
                 typer.echo(
                     "openkos query: confidential concepts are excluded from "
                     "query, contradictions, and suggest-relations against a "
-                    "non-local backend (#569)."
+                    "non-local backend."
                 )
 
         # #331: `query --save` was the ONE mutating path without the

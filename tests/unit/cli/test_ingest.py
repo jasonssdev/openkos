@@ -361,8 +361,9 @@ def test_ingest_prints_type_floor_advisory_with_confidential_consequence(
     assert "Person -> confidential" in result.stderr
     assert (
         "confidential objects are excluded from query, contradictions, and "
-        "suggest-relations against a non-local backend" in result.stderr
+        "suggest-relations against a non-local backend." in result.stderr
     )
+    assert "#569" not in result.stderr
 
 
 def test_ingest_prints_type_floor_advisory_without_consequence_at_private(

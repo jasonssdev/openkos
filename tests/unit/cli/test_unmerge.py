@@ -385,7 +385,7 @@ def test_unmerge_legacy_ledger_entry_warns_it_cannot_verify_survivor_edit(
 
     assert result.exit_code == 0, result.stderr
     assert "cannot confirm" in result.output.lower()
-    assert "#1110" in result.output
+    assert "#1110" not in result.output
     assert (tmp_path / "bundle" / "concepts" / "absorbed.md").exists()
 
 

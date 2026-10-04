@@ -1856,8 +1856,7 @@ def test_query_save_success_message_names_the_type_default_raise(
     )
     consequence_idx = stdout.index(
         "openkos query: confidential concepts are excluded from query, "
-        "contradictions, and suggest-relations against a non-local backend "
-        "(#569)."
+        "contradictions, and suggest-relations against a non-local backend."
     )
     assert filed_idx < advisory_idx < consequence_idx
 
