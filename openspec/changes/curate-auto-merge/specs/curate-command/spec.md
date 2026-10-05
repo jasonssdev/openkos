@@ -62,8 +62,9 @@ MUST NOT reach a prompt on a pipe.
 - GIVEN stdin is not a TTY, one eligible in-class group and one out-of-class
   `same` group
 - WHEN `curate --auto --auto-merge` runs
-- THEN the in-class group is merged, the out-of-class group is not merged,
-  and the standalone-verb pointer is printed for it
+- THEN the in-class group is merged, the out-of-class group is neither
+  judged nor merged, and the stage notice counts it among the candidate
+  groups left for review and points to running `openkos curate` on a terminal
 
 #### Scenario: The flag does not carry over
 

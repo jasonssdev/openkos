@@ -35,6 +35,7 @@ from openkos import (
     source_title,
 )
 from openkos import lint as lint_check
+from openkos.application import auto_merge as application_auto_merge
 from openkos.application import backends as application_backends
 from openkos.application import catalog_delta as application_catalog_delta
 from openkos.application import commit_phase as application_commit_phase
@@ -2268,6 +2269,14 @@ _RECONCILE_CONFLICT_MESSAGE: Final = (
 A contradiction is REFUSED rather than silently resolved: either
 precedence rule would carry out half of what the operator asked for while
 discarding the other half, with no signal that it did."""
+
+
+_AUTO_MERGE_RECONCILE_MESSAGE: Final = (
+    "--auto-merge merges mechanically and cannot be combined with --reconcile."
+)
+"""The refusal text for `curate --auto-merge --reconcile`. The automatic pass
+writes the stacked body with no model call, so a request to force the model's
+reconciliation contradicts it; refused rather than quietly dropping one."""
 
 
 _RECONCILE_PLAN_NOTE: Final = (
@@ -15188,6 +15197,21 @@ def curate(
             "with --no-reconcile."
         ),
     ),
+    auto_merge: bool = typer.Option(
+        False,
+        "--auto-merge",
+        help=(
+            "Merge, without a per-item prompt, the one class of duplicates "
+            "measured safe: a base id and its -N copy (two members of one "
+            "type, high confidence tier) that the measured model judges the "
+            "same at confidence 0.90 or more. Applies to this run only. "
+            "--auto is still the only consent to model spend. Every such "
+            "merge lands in one commit, and each is undone with `openkos "
+            "unmerge <survivor>`. Refused together with --reconcile; says "
+            "why and falls back to the per-item prompts when the model or "
+            "its settings are not the measured ones."
+        ),
+    ),
 ) -> None:
     """One dependency-ordered decision session over the five kinds of
     pending human judgment: Preconditions, Identity, Structure, Metadata,
@@ -15256,6 +15280,11 @@ def curate(
         # pairs.
         typer.echo(f"openkos curate: {_RECONCILE_CONFLICT_MESSAGE}", err=True)
         raise typer.Exit(code=2)
+    if reconcile and auto_merge:
+        # Same position and exit code: the automatic pass stacks bodies with no
+        # model call, so forcing a reconciliation contradicts it.
+        typer.echo(f"openkos curate: {_AUTO_MERGE_RECONCILE_MESSAGE}", err=True)
+        raise typer.Exit(code=2)
 
     # `--accept`'s vocabulary is checked BEFORE the workspace gate, so a
     # typo is reported as itself rather than as a missing workspace --
@@ -15313,11 +15342,23 @@ def curate(
         ),
         no_reconcile=no_reconcile,
         reconcile=reconcile,
+        auto_merge=auto_merge,
         backend_factories=_backend_factories(),
     )
     outcomes = curate_module.run_curate(ctx)
     for line in curate_module.render_summary(outcomes):
         typer.echo(line)
+    # #1298: a later stage (Structure, Metadata) may have edited a survivor the
+    # automatic pass merged. `unmerge` refuses a survivor edited since its merge
+    # unless told to discard the edit, so say so before it is discovered.
+    for survivor in application_auto_merge.survivors_edited_since(
+        layout, ctx.auto_merged
+    ):
+        typer.echo(
+            f"  note: {survivor} changed after its automatic merge; "
+            f"`openkos unmerge {survivor}` will refuse unless run with "
+            "--discard-survivor-edits, which discards that later edit."
+        )
 
     # #640: once at END of run, only when some stage actually applied a
     # write -- an all-declined/empty session invalidated nothing. NOT per
@@ -15326,6 +15367,12 @@ def curate(
         _refresh_derived_after_write(
             layout, cfg, verb="curate", commit_section=_commit_section_for(root)
         )
+    if ctx.auto_merge_failure is not None:
+        # The automatic pass failed mid-write. Its stage returned `failed` and
+        # every later stage still ran, and the refresh above covered what
+        # landed; exiting 1 is what keeps "1 on a failed mid-walk write" true
+        # for a pass that, unlike the walk, cannot stop the whole run.
+        raise typer.Exit(code=1)
 
 
 @app.command(
