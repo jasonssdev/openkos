@@ -2,8 +2,10 @@
 
 import re
 import unicodedata
+from collections.abc import Set as AbstractSet
 from pathlib import PurePosixPath
 
+from openkos.bundle import links as bundle_links
 from openkos.model import okf
 from openkos.model.types import CANONICAL_SECTION_ORDER as _CANONICAL_SECTION_ORDER
 
@@ -319,6 +321,67 @@ def remove_index_entry(index_text: str, concept_id: str) -> tuple[str, int]:
     if removed == 0:
         return index_text, 0
     return frontmatter_block + "".join(kept_lines), removed
+
+
+def _bullet_withholds(line: str, exported: AbstractSet[str]) -> bool:
+    """Whether ANY `.md` link on an index bullet resolves to a concept outside
+    `exported` -- not only its first, unlike `remove_index_entry`: an entry's
+    description can link a second object, and that one must not leave
+    either."""
+    for match in _LINK_RE.finditer(line):
+        raw_target = match.group(1).split("#", 1)[0].strip()
+        if raw_target.endswith('"') and ' "' in raw_target:
+            raw_target = raw_target.rsplit(' "', 1)[0].strip()
+        if not raw_target.endswith(".md"):
+            continue
+        identity = _link_identity(match.group(1))
+        if (
+            identity is not None
+            and identity not in exported
+            and identity not in ("index", "log")
+        ):
+            return True
+    return False
+
+
+def filter_index_for_export(index_text: str, exported: AbstractSet[str]) -> str:
+    """The root `index.md` an `openkos export` writes (okf-export, #1301):
+    `index_text` without any bullet that links a concept outside `exported`,
+    and without a `# ` section heading left with no content.
+
+    The frontmatter block (the root's `okf_version`, §12) is kept
+    byte-for-byte. Any remaining non-bullet line passes through
+    `bundle.links.withhold_links`, so prose in the index carries no link
+    into a withheld object either."""
+    frontmatter_block, body = _split_frontmatter_verbatim(index_text)
+    preamble: list[str] = []
+    sections: list[list[str]] = []
+    for line in body.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith(_BULLET_MARKERS) and _bullet_withholds(
+            stripped, exported
+        ):
+            continue
+        if line.startswith("# "):
+            sections.append([line])
+        elif sections:
+            sections[-1].append(line)
+        else:
+            preamble.append(line)
+
+    def trimmed(lines: list[str]) -> list[str]:
+        while lines and not lines[-1].strip():
+            lines = lines[:-1]
+        return lines
+
+    blocks = ["\n".join(trimmed(preamble))] if any(p.strip() for p in preamble) else []
+    for section in sections:
+        content = trimmed(section)
+        if len(content) > 1:
+            blocks.append("\n".join(content))
+    new_body = "\n" + "\n\n".join(blocks) + "\n" if blocks else ""
+    new_body = bundle_links.withhold_links(new_body, file_id="index", exported=exported)
+    return frontmatter_block + new_body
 
 
 def removed_entry_restores(

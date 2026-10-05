@@ -195,6 +195,10 @@ _ALLOWED_PROVENANCE_WRITERS = frozenset(
         # retire-superseded-sources: the detach half of the retarget seam; its
         # caller re-projects `sources` via `okf.refresh_sources`.
         "_remove_provenance_entry",
+        # okf-export (#1301): filters `provenance` to the exported ids for a
+        # document written OUTSIDE the workspace, then re-projects `sources`
+        # via `okf.refresh_sources` in the same function.
+        "export_frontmatter",
     }
 )
 """Confirmed against `model/okf.py`'s actual code (task 3.20): the key name

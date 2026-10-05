@@ -696,7 +696,9 @@ def test_sensitivity_module_import_bound() -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported_modules.add(node.module)
 
-    _stdlib_prefixes = ("collections", "pathlib")
+    # `dataclasses` and `enum` carry the export boundary's result types
+    # (okf-export, #1301); still stdlib, so the module stays a leaf.
+    _stdlib_prefixes = ("collections", "pathlib", "dataclasses", "enum")
     for module in imported_modules:
         assert module in ("openkos.model", "openkos.model.okf") or module.startswith(
             _stdlib_prefixes

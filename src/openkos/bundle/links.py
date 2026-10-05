@@ -33,7 +33,10 @@ verbatim across a rewrite, rather than discarded.
 
 import re
 from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
+from pathlib import PurePosixPath
 from typing import Final
+from urllib.parse import unquote
 
 from openkos.model.okf import LinkRewrite
 
@@ -272,3 +275,125 @@ def reverse_link_rewrites(text: str, *, file: str, rewrites: list[LinkRewrite]) 
             )
         text = text[: rewrite.offset] + rewrite.old_link + text[end:]
     return text
+
+
+WITHHELD_LABEL: Final = "[withheld]"
+"""What a link into a withheld object becomes in an exported body
+(okf-export, #1301, ADR-0048): the target and the label both go, because an
+engine-written label is the withheld object's title."""
+
+_ROOT_RESERVED_IDS: Final = frozenset({"index", "log"})
+"""Bundle-root reserved files an export always writes, so a link to them
+never dangles and names no withheld object."""
+
+_SCHEME_RE: Final = re.compile(r"\A[A-Za-z][A-Za-z0-9+.-]*:")
+
+_INLINE_LINK_RE: Final = re.compile(
+    r"!?\[((?:[^\[\]]|\[[^\[\]]*\])*)\]"
+    r"\(\s*(<[^>]*>|[^)\s]+)(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
+)
+"""An inline link or image, `[label](target "title")`, the target optionally
+in angle brackets. Group 2 is the raw target."""
+
+_REFERENCE_DEFINITION_RE: Final = re.compile(
+    r"\A {0,3}\[([^\]^][^\]]*)\]:\s*(<[^>]*>|\S+)(?:\s+.*)?\Z"
+)
+"""A reference-style definition line, `[ref]: target`. A label starting with
+`^` is a footnote, not a link, and does not match."""
+
+_FULL_REFERENCE_RE: Final = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\[([^\]]*)\]")
+_SHORTCUT_REFERENCE_RE: Final = re.compile(r"!?\[([^\[\]^][^\[\]]*)\](?![\[(:])")
+
+
+def _bundle_target_id(target: str, *, file_id: str) -> str | None:
+    """The concept id a markdown link `target` in document `file_id` points
+    at, or `None` when it points at nothing that could be a concept: an
+    external `scheme:` URL, a pure `#anchor`, a path that is not `.md`, or a
+    path that escapes the bundle root. A leading `/` is bundle-relative;
+    anything else is relative to the document's own directory."""
+    target = target.strip()
+    if target.startswith("<") and target.endswith(">"):
+        target = target[1:-1].strip()
+    target = unquote(target.split("#", 1)[0])
+    if not target or _SCHEME_RE.match(target):
+        return None
+    if target.startswith("/"):
+        candidate = PurePosixPath(target.lstrip("/"))
+    else:
+        candidate = PurePosixPath(file_id).parent / target
+    parts: list[str] = []
+    for part in candidate.parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    if not parts or not parts[-1].endswith(".md"):
+        return None
+    return "/".join(parts).removesuffix(".md")
+
+
+def _withholds(target: str, *, file_id: str, exported: AbstractSet[str]) -> bool:
+    concept_id = _bundle_target_id(target, file_id=file_id)
+    return (
+        concept_id is not None
+        and concept_id not in exported
+        and concept_id not in _ROOT_RESERVED_IDS
+    )
+
+
+def withhold_links(body: str, *, file_id: str, exported: AbstractSet[str]) -> str:
+    """`body` with every link into a concept outside `exported` replaced by
+    `WITHHELD_LABEL` (okf-export, #1301, ADR-0048).
+
+    Covers inline links and images in the bundle-relative and relative
+    forms, and reference-style links: a definition into a withheld object
+    is removed, and every use of its reference label becomes
+    `WITHHELD_LABEL`. Links to exported concepts, to the bundle-root
+    `index.md`/`log.md`, to external URLs, to anchors and to non-`.md`
+    paths are kept. Text outside links is kept as written. A line inside a
+    fenced code block is never edited: it is text, not a link, and the
+    export's byte scan is what guards it.
+
+    Returns the SAME `body` object when nothing changed. Unlike
+    `find_inbound_link_rewrites`, this is a one-way export transform with no
+    reversal; it does not change what `merge` or `forget` match."""
+    safe_lines = _iter_safe_lines(body)
+    withheld_refs: set[str] = set()
+    kept: list[tuple[str, bool]] = []
+    for line, is_safe in safe_lines:
+        if is_safe:
+            definition = _REFERENCE_DEFINITION_RE.match(line)
+            if definition is not None and _withholds(
+                definition.group(2), file_id=file_id, exported=exported
+            ):
+                withheld_refs.add(definition.group(1).strip().casefold())
+                continue
+        kept.append((line, is_safe))
+
+    def inline(match: re.Match[str]) -> str:
+        if _withholds(match.group(2), file_id=file_id, exported=exported):
+            return WITHHELD_LABEL
+        return match.group(0)
+
+    def full_reference(match: re.Match[str]) -> str:
+        ref = (match.group(2) or match.group(1)).strip().casefold()
+        return WITHHELD_LABEL if ref in withheld_refs else match.group(0)
+
+    def shortcut_reference(match: re.Match[str]) -> str:
+        ref = match.group(1).strip().casefold()
+        return WITHHELD_LABEL if ref in withheld_refs else match.group(0)
+
+    out: list[str] = []
+    for line, is_safe in kept:
+        if is_safe:
+            line = _INLINE_LINK_RE.sub(inline, line)
+            if withheld_refs:
+                line = _FULL_REFERENCE_RE.sub(full_reference, line)
+                line = _SHORTCUT_REFERENCE_RE.sub(shortcut_reference, line)
+        out.append(line)
+    result = "\n".join(out)
+    return body if result == body else result

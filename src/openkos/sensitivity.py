@@ -102,6 +102,8 @@ value by ranking it as `"confidential"`.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from openkos.model import okf
@@ -356,3 +358,173 @@ def disclosable_concept_ids(
         if not blocks_disclosure(raw, expose_confidential=expose_confidential):
             allowed.add(cid)
     return frozenset(allowed)
+
+
+class ExportReason(StrEnum):
+    """Why `export_boundary` withheld a concept (okf-export, #1301).
+
+    Decided in this precedence order -- the first that applies wins -- so a
+    document is never admitted by falling through to a later check."""
+
+    UNREADABLE = "unreadable"
+    """The document could not be read or parsed, is a symlink, or carries no
+    non-empty `type`: it is not a conformant concept to export."""
+    INCOMPLETE = "incomplete-ingest"
+    """It carries `okf.INGEST_PENDING_KEY`: its compilation never finished."""
+    UNLABELLED = "unlabelled"
+    """Its `sensitivity` is absent, blank, non-string or unrecognized."""
+    CONFIDENTIAL = "confidential"
+    """`confidential` never leaves the device, under any flag."""
+    PRIVATE = "private"
+    """`private`, and the run was not given `--include-private`."""
+    BELOW_SOURCE = "below-source"
+    """Its own label ranks below one of its provenance ancestors', and the run
+    was not given `--allow-below-source` (ADR-0048)."""
+
+
+@dataclass(frozen=True)
+class ExportBoundary:
+    """One `export_boundary` result.
+
+    `allowed` is an ALLOWED set: only ids the call was given and admitted.
+    `withheld` maps every other id it was given to its reason. `below_source`
+    lists, sorted, every id the below-source rule decided -- withheld without
+    `allow_below_source`, admitted with it -- so a preview can name each."""
+
+    allowed: frozenset[str]
+    withheld: Mapping[str, ExportReason]
+    below_source: tuple[str, ...]
+
+
+_CONFIDENTIAL_RANK = okf.SENSITIVITY_ORDER.index("confidential")
+_PRIVATE_RANK = okf.SENSITIVITY_ORDER.index("private")
+_PUBLIC_RANK = okf.SENSITIVITY_ORDER.index("public")
+
+
+def _export_label_rank(value: object) -> int | None:
+    """The rank of a canonical label, or `None` for a doubtful one.
+
+    Stricter than `okf._rank` on purpose: that ranks an absent label
+    `private` (ADR-0003's combine floor), the wrong answer at a boundary --
+    a missing label is a doubtful signal and must not leave."""
+    if isinstance(value, str) and value.strip() in okf.SENSITIVITY_ORDER:
+        return okf.SENSITIVITY_ORDER.index(value.strip())
+    return None
+
+
+def _provenance_parents(metadata: Mapping[str, object]) -> frozenset[str] | None:
+    """The concept ids `metadata`'s `provenance` names, or `None` when the
+    field is present but malformed (a non-list, or any entry that is not a
+    non-empty string). Entries under `raw/` are workspace paths, not concept
+    ids, and are skipped; a leading `/` and a trailing `.md` are removed."""
+    raw = metadata.get("provenance")
+    if raw is None:
+        return frozenset()
+    if not isinstance(raw, list):
+        return None
+    parents: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, str) or not entry.strip():
+            return None
+        if entry.startswith("raw/"):
+            continue
+        parents.add(entry.removeprefix("/").removesuffix(".md"))
+    return frozenset(parents)
+
+
+def _ancestor_ceiling(
+    concept_id: str, docs: Mapping[str, Mapping[str, object] | None]
+) -> int | None:
+    """The highest fail-closed rank among `concept_id`'s transitive provenance
+    ancestors that are documents in `docs`, `-1` when it has none, or `None`
+    when its own or any ancestor's `provenance` is malformed.
+
+    An ancestor that is unreadable (`None`) or carries a doubtful label ranks
+    `confidential`. An id naming no document in `docs` contributes nothing."""
+    ceiling = -1
+    seen: set[str] = {concept_id}
+    frontier = [concept_id]
+    while frontier:
+        meta = docs.get(frontier.pop())
+        if meta is None:
+            continue
+        parents = _provenance_parents(meta)
+        if parents is None:
+            return None
+        for parent in parents:
+            if parent in seen or parent not in docs:
+                continue
+            seen.add(parent)
+            parent_meta = docs[parent]
+            rank = (
+                None
+                if parent_meta is None
+                else _export_label_rank(parent_meta.get("sensitivity"))
+            )
+            ceiling = max(ceiling, _CONFIDENTIAL_RANK if rank is None else rank)
+            frontier.append(parent)
+    return ceiling
+
+
+def export_boundary(
+    docs: Mapping[str, Mapping[str, object] | None],
+    *,
+    include_private: bool,
+    allow_below_source: bool,
+) -> ExportBoundary:
+    """Decide which concept ids may leave the device in an `openkos export`
+    (okf-export, #1301; ADR-0048): the export boundary's predicate, a third
+    boundary beside LLM egress and MCP disclosure (ADR-0028).
+
+    `docs` maps every concept id of ONE walk of the bundle to its parsed
+    frontmatter, or `None` when the document could not be read or parsed.
+    The function is pure over that map, so the caller's drift check compares
+    exactly the bytes this function judged.
+
+    It returns an ALLOWED set: an id is admitted only when its document is
+    readable with a non-empty `type`, is not mid-ingest, and carries a
+    canonical label that is `public`, or `private` with `include_private`.
+    `confidential` and every doubtful label are withheld under every flag;
+    there is deliberately no parameter that admits `confidential` (the
+    knowledge object model: "excluded from exports and sharing").
+
+    An otherwise-admitted object whose own rank sits below the highest rank
+    among its provenance ancestors is withheld as `BELOW_SOURCE` unless
+    `allow_below_source`: a person may have lowered it on purpose
+    (ADR-0008), or a machine label may be stale, and the flag is how the
+    person says which. A malformed `provenance` cannot prove the object is
+    not below its sources, so it counts as below them."""
+    ceiling = _PRIVATE_RANK if include_private else _PUBLIC_RANK
+    allowed: set[str] = set()
+    withheld: dict[str, ExportReason] = {}
+    below_source: list[str] = []
+    for concept_id, meta in docs.items():
+        doc_type = None if meta is None else meta.get("type")
+        if meta is None or not isinstance(doc_type, str) or not doc_type.strip():
+            withheld[concept_id] = ExportReason.UNREADABLE
+            continue
+        if meta.get(okf.INGEST_PENDING_KEY):
+            withheld[concept_id] = ExportReason.INCOMPLETE
+            continue
+        rank = _export_label_rank(meta.get("sensitivity"))
+        if rank is None:
+            withheld[concept_id] = ExportReason.UNLABELLED
+            continue
+        if rank >= _CONFIDENTIAL_RANK:
+            withheld[concept_id] = ExportReason.CONFIDENTIAL
+            continue
+        if rank > ceiling:
+            withheld[concept_id] = ExportReason.PRIVATE
+            continue
+        ancestors = _ancestor_ceiling(concept_id, docs)
+        if ancestors is None or rank < ancestors:
+            below_source.append(concept_id)
+            if not allow_below_source:
+                withheld[concept_id] = ExportReason.BELOW_SOURCE
+                continue
+        allowed.add(concept_id)
+    return ExportBoundary(
+        allowed=frozenset(allowed),
+        withheld=withheld,
+        below_source=tuple(sorted(below_source)),
+    )

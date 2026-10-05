@@ -212,6 +212,40 @@ def test_a_read_only_command_still_runs_while_the_lock_is_held(
         holder.wait(timeout=60)
 
 
+def test_export_runs_while_the_lock_is_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`openkos export` writes only outside the workspace and guards its
+    snapshot by re-reading its inputs, so a writer holding the lock never
+    makes it refuse for contention (okf-export, #1301)."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _init_workspace(ws, monkeypatch)
+    (ws / "bundle" / "open.md").write_text(
+        "---\ntype: Concept\ntitle: Open\nsensitivity: public\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    holder = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-c", _HOLDER, str(ws), str(userstate.locks_dir())],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        cwd=_REPO_ROOT,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ACQUIRED"
+
+        result = runner.invoke(app, ["export", str(tmp_path / "out"), "--auto"])
+
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / "out" / "open.md").is_file()
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=60)
+
+
 def test_help_does_not_take_the_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

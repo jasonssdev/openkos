@@ -17,6 +17,7 @@ import os
 import re
 import unicodedata
 from collections.abc import Hashable, Iterator, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
@@ -702,6 +703,21 @@ def try_load_frontmatter(text: str) -> tuple[dict[str, object], str] | None:
         return load_frontmatter(text)
     except FrontmatterError:
         return None
+
+
+def concept_metadata(text: str) -> dict[str, object] | None:
+    """A concept document's frontmatter mapping, or `None` when `text` has
+    no parseable frontmatter block -- the same two failures `_iter_docs`
+    reports as `parse_error` (an unparseable block, or none at all), for a
+    caller that already holds the text (okf-export, #1301: it keeps the
+    bytes it judged, for its drift check)."""
+    try:
+        post = _parse_post(text)
+    except FrontmatterError:
+        return None
+    if post.handler is None:
+        return None
+    return dict(post.metadata)
 
 
 def parse_frontmatter_fragment(text: str) -> object:
@@ -2591,6 +2607,125 @@ def apply_deprecation_export(
     if decision.outcome in (ExportOutcome.UNCHANGED, ExportOutcome.BLOCKED):
         return decision, text
     return decision, dump_frontmatter(decision.metadata, body)
+
+
+EXPORT_STRIPPED_KEYS: Final = (ORIGIN_KEY_KEY, MERGED_FROM_KEY)
+"""Frontmatter keys `openkos export` removes (okf-export, #1301, design D4).
+
+`ORIGIN_KEY_KEY` is a digest of the ingested file's resolved absolute path:
+meaningless on another machine by its own definition, and a guessable
+fingerprint of the local user and directory layout. `MERGED_FROM_KEY` is the
+pre-ADR-0013 in-frontmatter merge ledger, whose absorbed bodies may have been
+written at a higher sensitivity than the survivor now carries. Every other
+key -- OKF's and OpenKOS's own §4.1 extensions -- is kept."""
+
+
+def _export_provenance(raw: object, allowed: AbstractSet[str]) -> list[str] | None:
+    """`raw` (a document's `provenance` value) with every entry that names a
+    concept outside `allowed` removed, or `None` when nothing remains.
+
+    A `raw/` workspace path is kept: it names no concept and is what a
+    Source's own provenance records. An entry that is not a non-empty string
+    is dropped -- it cannot be checked, so it does not leave."""
+    if not isinstance(raw, list):
+        return None
+    kept: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        if (
+            entry.startswith("raw/")
+            or entry.removeprefix("/").removesuffix(".md") in allowed
+        ):
+            kept.append(entry)
+    return kept or None
+
+
+def export_frontmatter(
+    metadata: Mapping[str, object], allowed: AbstractSet[str]
+) -> dict[str, object]:
+    """The frontmatter an exported document carries (okf-export, #1301):
+    `metadata` with no pointer into a concept outside `allowed`.
+
+    - `relations:` keeps only entries whose target is in `allowed`, and the
+      key goes when none remain. A `relations:` that does not decode is
+      dropped whole: it cannot be filtered entry by entry, and may hold a
+      withheld target. An untouched list keeps its original value.
+    - `provenance` keeps only `raw/` entries and ids in `allowed`, and the
+      key goes when none remain.
+    - `sources` is re-projected from the filtered `provenance` through
+      `refresh_sources` -- never edited, never read back (it is a one-way
+      projection) -- and is never introduced when absent.
+    - `EXPORT_STRIPPED_KEYS` are removed.
+
+    Every other key is kept as is. Returns a copy; `metadata` is untouched."""
+    result = dict(metadata)
+    for key in EXPORT_STRIPPED_KEYS:
+        result.pop(key, None)
+
+    if RELATIONS_KEY in result:
+        try:
+            relations = decode_relations(result)
+        except ValueError:
+            result.pop(RELATIONS_KEY)
+        else:
+            kept_relations = [r for r in relations if r.target in allowed]
+            if not kept_relations:
+                result.pop(RELATIONS_KEY)
+            elif len(kept_relations) != len(relations):
+                result[RELATIONS_KEY] = encode_relations(kept_relations)
+
+    raw_provenance = result.pop("provenance", None)
+    if raw_provenance is not None:
+        kept_provenance = _export_provenance(raw_provenance, allowed)
+        if kept_provenance == raw_provenance:
+            kept_provenance = raw_provenance
+        if kept_provenance is not None:
+            result["provenance"] = kept_provenance
+    return refresh_sources(result)
+
+
+@dataclass(frozen=True)
+class ExportedDocument:
+    """One `export_document` result: the exported `text`, and whether the
+    deprecated-status projection changed it -- the drift `openkos repair`
+    would fix in the workspace, reported, never written back."""
+
+    text: str
+    status_projected: bool
+
+
+def export_document(
+    text: str,
+    *,
+    allowed: AbstractSet[str],
+    superseded: bool,
+    walk_complete: bool,
+) -> ExportedDocument:
+    """The frontmatter half of exporting one concept document (okf-export,
+    #1301): `export_frontmatter`, then the deprecated-status projection
+    (`project_deprecation_export`) applied in memory over the superseded set
+    the caller computed from the WHOLE bundle.
+
+    `walk_complete=False` (an unreadable document, or malformed
+    `relations:`, somewhere in the bundle) never WITHDRAWs an export: the
+    missing document may hold the only edge that supersedes this one. The
+    body is passed through untouched. Returns the SAME `text` object when
+    nothing changed, so an untouched document is exported byte-for-byte."""
+    metadata, body = load_frontmatter(text)
+    exported = export_frontmatter(metadata, allowed)
+    decision = project_deprecation_export(exported, superseded=superseded)
+    status_projected = decision.outcome in (
+        ExportOutcome.EXPORT,
+        ExportOutcome.DROP_MARKER,
+    ) or (decision.outcome is ExportOutcome.WITHDRAW and walk_complete)
+    if status_projected:
+        exported = decision.metadata
+    if exported == metadata:
+        return ExportedDocument(text=text, status_projected=False)
+    return ExportedDocument(
+        text=dump_frontmatter(exported, body), status_projected=status_projected
+    )
 
 
 def is_marked_deprecated(metadata: Mapping[str, object]) -> bool:
