@@ -100,10 +100,9 @@ def test_the_context_flag_is_off_unless_it_is_passed() -> None:
     assert curate.CurateContext.__dataclass_fields__["auto_merge"].default is False
 
 
+@pytest.mark.usefixtures("plain_rich_output")
 def test_help_names_the_class_the_opt_in_the_one_commit_and_the_undo() -> None:
-    result = runner.invoke(
-        app, ["curate", "--help"], env={"COLUMNS": "200", "NO_COLOR": "1"}
-    )
+    result = runner.invoke(app, ["curate", "--help"])
 
     assert result.exit_code == 0
     page = _plain(result.stdout)
