@@ -1,0 +1,911 @@
+{
+  "protocol_version": 1,
+  "arm": "main-judges-qwen3",
+  "cli": [
+    "<checkout>/.venv/bin/openkos"
+  ],
+  "cli_version": "openkos 0.4.0",
+  "checkout_commit": "b87f95cd8fa00296c0aff01a9d8a5dfc5a4e3743",
+  "pin_judges": "qwen3:8b",
+  "judge_model": {
+    "name": "qwen3:8b",
+    "digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41"
+  },
+  "stamp": {
+    "stamp_version": 1,
+    "harness": {
+      "commit": "b87f95cd8fa00296c0aff01a9d8a5dfc5a4e3743",
+      "dirty": false
+    },
+    "model": {
+      "name": "qwen3:8b",
+      "digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41"
+    },
+    "prompts": [
+      {
+        "id": "quiet_engine/question/probe-part-number",
+        "sha256_16": "91ec3d0871134a73"
+      },
+      {
+        "id": "quiet_engine/question/probe-v2-corrected-gust",
+        "sha256_16": "d0ed1d24e6ab500f"
+      },
+      {
+        "id": "quiet_engine/question/mqtt-qos",
+        "sha256_16": "08c0e48d7017919b"
+      },
+      {
+        "id": "quiet_engine/question/raw-retention",
+        "sha256_16": "ded35c87b6b83d16"
+      },
+      {
+        "id": "quiet_engine/question/pole-height",
+        "sha256_16": "259f7ce618b33ad7"
+      }
+    ]
+  },
+  "identity_line": "Generation ceiling `8192` \u00b7 context window `12288` \u00b7 arm `main-judges-qwen3` \u00b7 judges `qwen3:8b` \u00b7 chat `qwen3:8b`.",
+  "corpus_digest": "a9525b12ebd1eb28",
+  "timeouts": {
+    "ingest": 10800,
+    "maintenance": 7200,
+    "cite": 1800,
+    "poll_interval": 20,
+    "landing_poll": 0.5,
+    "imported": 1800,
+    "query": 900,
+    "reindex": 1800,
+    "curate": 14400,
+    "stall": 120,
+    "daemon_stop": 900
+  },
+  "runs": [
+    {
+      "run_dir": "<work-root>/binding-work-20261005T044306Z/main-judges-qwen3/main-judges-qwen3-r1",
+      "phases": {
+        "init": {
+          "args": [
+            "init",
+            "--model",
+            "qwen3:8b",
+            "--embedding-model",
+            "bge-m3"
+          ],
+          "code": 0,
+          "elapsed_s": 0.248,
+          "timed_out": false,
+          "stdout_tail": "openkos init: created workspace in <work-root>/binding-work-20261005T044306Z/main-judges-qwen3/main-judges-qwen3-r1/workspace (raw/, bundle/index.md, bundle/log.md, AGENTS.md, openkos.yaml).\nopenkos init: the workspace is version-controlled (created .git/ and .gitignore) and the files above are committed. Every openkos command commits its own changes: `git log` reviews them, `git revert <commit>` undoes one.\nNext: run `openkos ingest <path>` to import your first source.\nTo read your knowledge in an editor, open `bundle/` (not the workspace root) as an Obsidian vault or a VS Code folder.\n",
+          "stderr_tail": "openkos init: note -- the embedding model ('bge-m3') is sticky: editing it in this workspace's openkos.yaml later forces a full corpus re-embed the next time `openkos reindex` runs.\n"
+        },
+        "ingest": {
+          "args": [
+            "ingest",
+            "<checkout>/evals/quiet_engine/corpus/sources",
+            "--auto"
+          ],
+          "code": 0,
+          "elapsed_s": 1287.618,
+          "timed_out": false,
+          "stdout_tail": "md\n  + bundle/concepts/volunteer-participation.md\n  + bundle/concepts/weather-station-design.md\n  ~ bundle/procedures/sensor-calibration.md (revised -- version 2)\n  + bundle/events/first-season-of-harbor-weather-network.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported '<checkout>/evals/quiet_engine/corpus/sources/20-lessons-learned.md' -- 6 objects (5 Concept, 1 Event); 5 existing objects revised.\n  ~ revised projects/harbor-weather-network (now version 3)\n  ~ revised concepts/mqtt-broker (now version 2)\n  ~ revised concepts/sensor-calibration (now version 2)\n  ~ revised concepts/storm-warning-system (now version 2)\n  ~ revised procedures/sensor-calibration (now version 2)\n  + <checkout>/evals/quiet_engine/corpus/sources/01-project-overview.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/02-hardware-guide.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/03-sensor-calibration.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/04-mqtt-topics.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/05-data-storage.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/06-dashboards.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/07-meeting-2026-03-04-kickoff.md -- ingested (extraction degraded -- Source only; see stderr)\n  + <checkout>/evals/quiet_engine/corpus/sources/08-meeting-2026-03-18-weekly-sync.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/09-meeting-2026-04-01-weekly-sync.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/10-lora-gateway.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/11-solar-power-notes.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/12-site-survey-harbor.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/13-city-council-permit.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/14-alerts-and-thresholds.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/15-data-quality-checklist.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/16-volunteer-onboarding.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/17-firmware-updates.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/18-backup-and-retention.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/19-school-outreach.md -- ingested (revised 1 existing object)\n  + <checkout>/evals/quiet_engine/corpus/sources/20-lessons-learned.md -- ingested (revised 5 existing objects)\nopenkos ingest: batch summary -- 20 file(s): 20 ingested, 0 re-ingested, 0 skipped, 1 extraction-degraded, 8 with extraction notice(s). Their Sources carry `extraction_notice`; `openkos lint` names all but the sole-object and chunk-partial disclosures.\n",
+          "stderr_tail": "ng the Source only.\nopenkos ingest: extraction returned one object restating the source title; 1 extra re-ask call added 5 object(s): Harbour office roof, Store readings in InfluxDB, with downsampling, Use the larger battery on the breakwater station (+2 more)\nopenkos ingest: judge dropped 1 candidate(s): 'Next weekly sync'\nopenkos ingest: 3 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Harbour office roof, Use the larger battery on the breakwater station, IoT data collection project.\nopenkos ingest: extraction returned one object restating the source title; 1 extra re-ask call added 8 object(s): Staged firmware rollout, Student build nights, Storm alert threshold drafting (+5 more)\nopenkos ingest: judge dropped 3 candidate(s): 'LiFePO4 Battery Usage in Solar Systems', 'Solar Panel and Charge Controller Design', 'System Reliability and Maintenance in Solar Power'\nopenkos ingest: judge dropped 1 candidate(s): 'Approval for permanent mount on pole 14'\nopenkos ingest: extraction returned one object restating the source title; 1 extra re-ask call added 9 object(s): Solar-powered weather station, Harbour committee meeting, Approval of the weather station (+6 more)\nopenkos ingest: 4 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Dredging schedule discussion, Fishing cooperative lease renewal, Parking complaint during summer festival (+1 more).\nopenkos ingest: judge dropped 2 candidate(s): 'Storm Warning Trigger Events', 'Alert System Limitations'\nopenkos ingest: 12 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Storm Warning System, Alert Thresholds, Anemometer Health Monitoring (+9 more).\nopenkos ingest: extraction returned one object restating the source title; 1 extra re-ask call added 5 object(s): Weekly checks, Outlier detection, Sensor calibration checks (+2 more)\nopenkos ingest: 1 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Harbor Weather Network.\nopenkos ingest: duplicate slug 'harbor-weather-network' within this extraction batch; keeping the first, skipping this candidate.\nopenkos ingest: 'firmware-versioning' repeats 'versioning-system-for-firmware' (same type, near-match title, same quoted source line); keeping the richer one, skipping this candidate.\nopenkos ingest: judge dropped 8 candidate(s): 'School outreach initiative', 'Weather data collection', 'School outreach initiative' (+5 more)\nopenkos ingest: 'harbor-weather-network' matches existing 'projects/harbor-weather-network' (same type and title); revising it instead of writing a copy.\nopenkos ingest: judge dropped 1 candidate(s): 'Retention Policy'\nopenkos ingest: 3 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Sensor Calibration, LoRa Technology, Sensor Calibration.\nopenkos ingest: 'harbor-weather-network' matches existing 'projects/harbor-weather-network' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 'mqtt-broker' matches existing 'concepts/mqtt-broker' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 'sensor-calibration' matches existing 'concepts/sensor-calibration' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 'storm-warning-system' matches existing 'concepts/storm-warning-system' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 'sensor-calibration' matches existing 'procedures/sensor-calibration' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 126 of 163 derived object(s) recorded a type_alternative on the document (most common: Concept/Procedure).\n"
+        },
+        "daemon_once": {
+          "args": [
+            "daemon",
+            "--once"
+          ],
+          "code": 0,
+          "elapsed_s": 128.365,
+          "timed_out": false,
+          "stdout_tail": "openkos daemon: maintenance: completed -- calls=60 done=7 deferred=0\n",
+          "stderr_tail": ""
+        },
+        "reindex": {
+          "args": [
+            "reindex"
+          ],
+          "code": 0,
+          "elapsed_s": 0.258,
+          "timed_out": false,
+          "stdout_tail": "openkos reindex: 0 embedded, 190 cache-hits, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\n",
+          "stderr_tail": ""
+        }
+      },
+      "flags": [],
+      "config_text": "model: qwen3:8b  # local model served via Ollama; see tech_stack.md\nembedding_model: bge-m3  # 1024-dim; changing it forces a full re-embed\nreview: true              # show proposed changes and confirm before saving\ndefault_sensitivity: private\nconfidential_local_exemption: true  # send confidential concepts to a LOCAL LLM backend\nfreshness_window: 7d      # age after which a stamp is flagged for re-observation\nchat_timeout: 600         # seconds an LLM chat call may take before giving up\nmax_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call may generate\ncontext_window: 12288     # tokens the model holds at once (prompt + reply); unpinned it\n                          # reserves its own 32K default and ~10 GB. Refused below the\n                          # derived floor; blank the value to leave it unpinned.\n# backend: openai-compatible  # LLM backend family: \"ollama\" (default) or\n                          # \"openai-compatible\" (llama.cpp, LM Studio, vLLM, or\n                          # any server exposing /v1/chat/completions and\n                          # /v1/embeddings). Selecting openai-compatible\n                          # REQUIRES base_url below -- there is no packaged\n                          # default endpoint for it, unlike Ollama's. An\n                          # optional API key, if the server needs one, is read\n                          # only from the OPENKOS_OPENAI_API_KEY environment\n                          # variable -- never from this file.\n# base_url: http://127.0.0.1:8080  # chat endpoint for the selected backend.\n                          # UNSET by default: ollama then resolves OLLAMA_HOST\n                          # or its own packaged default; openai-compatible has\n                          # no default and refuses to start without this key.\n# embedding_base_url: http://127.0.0.1:8081  # separate endpoint used only for\n                          # embedding requests, for when the embedding model is\n                          # served by a different process or port than the\n                          # chat model. UNSET by default: embedding requests\n                          # fall back to base_url (or that backend's own\n                          # default).\n# temperature: 0.2        # sampling temperature forwarded as options.temperature.\n                          # UNSET by default -- unpinned, sampling follows whatever\n                          # the model's Modelfile ships (qwen3:8b: 0.6). Pinning it\n                          # REDUCES run-to-run variance; it does NOT guarantee identical\n                          # output across Ollama versions, hardware, or\n                          # OLLAMA_NUM_PARALLEL. 0 is a real, valid value (greedy\n                          # decoding); no value is recommended.\n# seed: 42                # sampling seed forwarded as options.seed. UNSET by default,\n                          # same caveat as temperature: reduces variance, is not a\n                          # determinism guarantee.\n# volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window\n#   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)\n#   volatile: 7d\n# type_tiers:             # per-concept-type volatility tier overrides (overrides\n#   Person: volatile      # the built-in registry default; see docs/adr/0007)\n# type_sensitivity_defaults:  # per-type birth offset above `default_sensitivity`,\n#   Person: 1             # in levels, clamped at confidential. Ships EMPTY --\n                          # every type is born at the floor unless you say\n                          # otherwise. Uncommenting the two lines above is the\n                          # recommended setting if this workspace holds material\n                          # about other people: a Person is then born one level\n                          # above the floor. The high-water-mark over cited\n                          # sources still wins whenever it is higher.\n                          # See docs/adr/0015 and docs/adr/0017.\n# models:                 # per-task model overrides. The packaged defaults:\n#   edge_typing: gemma2:27b  # every task follows `model:` EXCEPT `adjudication`\n                          # and `contradiction`, which run on gemma4:26b-a4b\n                          # (the judge model: `ollama pull gemma4:26b-a4b`;\n                          # see docs/adr/0047). It does not fit in memory next\n                          # to `model:`, so Ollama swaps them by stage. Opt out\n                          # per task with `contradiction: null` (follows\n                          # `model:`), or name another tag. The packaged judge\n                          # applies on the ollama backend only. A missing judge\n                          # fails only its own stage, naming the pull command.\n                          # gemma2:27b is the one measured upgrade for\n                          # edge_typing: it names relations better\n                          # (0.81 vs qwen3:8b's 0.44 on evals/edge_typing/)\n                          # but costs `ollama pull gemma2:27b` -- 15.6 GB.\n                          # Uncomment BOTH lines above to opt in; uncommenting\n                          # only one is invalid YAML. Keep it scoped to\n                          # edge_typing -- it is the worst extractor measured,\n                          # so it must never become `model:`. `openkos doctor`\n                          # reports whether each is installed.\n                          # Valid tasks: extraction, adjudication, edge_typing,\n                          # volatility_typing, contradiction.\n# union_judge: true       # union-of-runs + selector-judge extraction (default\n                          # on); set false to restore the single-run, single-cap\n                          # extraction path byte-for-byte\n# sufficiency_check: true # before answering, ask one cheap model call whether\n                          # the retrieved context can answer the question at\n                          # all, and refuse instead of answering from the\n                          # model's own knowledge (default ON). Measured zero\n                          # false refusals over 100 grounded checks. Costs one\n                          # extra chat call per answered query (median ~1.1s\n                          # against a default Ollama, which serialises); set\n                          # false to remove it and restore the pre-#760 path\n# revision_history: false  # attach each retrieved concept's earlier versions\n                          # (reached via supersedes/revises) to it as labelled\n                          # history (default OFF). UNMEASURED --\n                          # no harness has scored its citation quality or\n                          # prompt-budget cost yet. Not recommended to enable.\n# attach_at_ingest: false  # turn OFF revising an existing concept at ingest\n                          # (default ON). When a newly extracted object has\n                          # the same type and normalized title as an existing\n                          # concept (Event and Person excepted), ingest adds\n                          # the source to that concept instead of writing a\n                          # `-2` copy. `false` restores the copies.\n# concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one\n                          # by one (default OFF). Chunked sources only; below\n                          # the chunk threshold there are no windows to\n                          # overlap. Measured ~20% off a whole ingest -- BUT\n                          # only if the Ollama server was started with\n                          # OLLAMA_NUM_PARALLEL=2 or more, which openkos\n                          # cannot set for you. Against a default server the\n                          # requests just queue: same results, no speedup, and\n                          # each call's chat_timeout runs while it waits, so a\n                          # tight timeout can start firing. Leave it off unless\n                          # the server is configured.\n                          # An on/off switch, not a worker count: the count is\n                          # fixed at 2, where the measured speedup saturates.\n                          # See evals/ingest_concurrency/report.md.\n# rationale_language: Spanish  # language `curate` writes its Metadata and\n                          # Structure RATIONALES in. UNSET by default, and\n                          # unset does NOT mean English: it means each item's\n                          # rationale is written in whichever language that\n                          # concept type's (or that edge's) documents happen to\n                          # dominate, so one report can mix English and Spanish\n                          # rows. Set it to pin them to one language.\n                          # Free-form -- the name is passed to the model\n                          # verbatim, so a name it does not recognise is not an\n                          # error: you get whatever it makes of it, visible in\n                          # the very next curate table. Blank, multi-line and\n                          # non-string values are refused.\n                          # Setting it appends one sentence to both rationale\n                          # prompts; leaving it unset sends the prompt that\n                          # shipped, byte for byte, which is the configuration\n                          # every measurement in evals/ was taken under.\n                          # Affects those two rationales only -- extraction,\n                          # query and adjudication still follow the source\n                          # language, which is correct there.\n# unattended:             # limits for the unattended runner and the folder watch.\n#   max_calls_per_pass: 100   # PROVISIONAL defaults, shown here; absent section\n#   max_calls_per_day: 500    # means all of them. Counted in chat calls; 0 means\n#   max_sources_per_pass: 10  # no model call / no source import. A pass is one\n#   job_deadline_seconds: 1800        # job; the deadline is >= 60. Interactive\n#   maintenance_interval_seconds: 86400  # runs are never limited. Interval >= 300.\n#   quiet_seconds: 30       # a watched file must be unchanged this long (>= 1)\n#   inbox: ../inbox         # folder to watch for new sources; unset = watch off.\n                            # Must be an existing directory, never raw/, bundle/,\n                            # .openkos/ or the workspace root. Read-only to openkos.\n#   watch_backend: poll     # poll (default) | native. native adds an OS\n                            # file-notification wake-up to the daemon's idle wait\n                            # (needs `pip install 'openkos[watch]'`; without it\n                            # the daemon warns and polls). Polling still runs\n                            # underneath, so no file is ever missed.\n\n# Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF\n# bundle root) live next to this file. The engine does not read layout\n# keys from this config; making them configurable is future work.\n\n# quiet_engine harness\nunattended:\n  inbox: \"<work-root>/binding-work-20261005T044306Z/main-judges-qwen3/main-judges-qwen3-r1/inbox\"\nmodels:\n  adjudication: \"qwen3:8b\"\n  contradiction: \"qwen3:8b\"\n",
+      "pending_after_maintenance": {
+        "present": true,
+        "open": 104,
+        "by_kind": {
+          "identity": 50,
+          "relation_type": 50,
+          "volatility": 4
+        }
+      },
+      "time_to_cite": {
+        "question_id": "probe-part-number",
+        "landed_s": 52.431,
+        "first_cited_answer_s": 86.327,
+        "censored_at_s": null,
+        "queries": [
+          {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 6.254,
+            "citations": [],
+            "cites_expected": false,
+            "refused": true,
+            "stale_warning": true,
+            "answer_has_token": false,
+            "t_start_s": 52.431,
+            "t_end_s": 58.686
+          },
+          {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 13.887,
+            "citations": [
+              "decisions/anemometer-repair-and-maintenance-decisions",
+              "sources/21-breakwater-gust-incident"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "t_start_s": 72.44,
+            "t_end_s": 86.327
+          }
+        ],
+        "import_reported": true,
+        "import_reported_s": 86.347
+      },
+      "version_import": {
+        "landed": true,
+        "import_reported": true,
+        "elapsed_s": 82.554
+      },
+      "daemon": {
+        "exit": 0,
+        "log_tail": "openkos daemon: watch: completed -- calls=2 done=1 deferred=0\nopenkos daemon: what changed -- 1 automatic commit\n  69592b9 ingest 21-breakwater-gust-incident.md (+1 concepts) [decisions/anemometer-repair-and-maintenance-decisions, sources/21-breakwater-gust-incident] -- undo: git revert 69592b9\n  undo newest first: every commit appends to log.md, so a revert is safe only while that commit is the latest one.\nopenkos daemon: 50 relation suggestion(s) waiting -- review them with `openkos curate --structure`.\nopenkos ingest: '21-breakwater-gust-incident.md' changed since it was imported; importing it as 'raw/21-breakwater-gust-incident-2.md', a new version. The earlier raw copy is kept.\nopenkos ingest: 'sources/21-breakwater-gust-incident-2' is a new version of 'sources/21-breakwater-gust-incident'; to retire the earlier Source, run: openkos relate sources/21-breakwater-gust-incident-2 supersedes sources/21-breakwater-gust-incident\nopenkos daemon: watch: completed -- calls=3 done=1 deferred=0\nopenkos daemon: what changed -- 1 automatic commit\n  f03e0f9 ingest 21-breakwater-gust-incident-2.md (+4 concepts) [concepts/data-quality-review-process, decisions/replace-anemometer-cups-on-harbour-front-stations, procedures/anemometer-repair-and-calibration-process, procedures/anemometer-repair-procedure, +1 more] -- undo: git revert f03e0f9\n  undo newest first: every commit appends to log.md, so a revert is safe only while that commit is the latest one.\nopenkos daemon: 50 relation suggestion(s) waiting -- review them with `openkos curate --structure`.\nopenkos daemon: stopped.\n"
+      },
+      "stale_check": {
+        "before": {
+          "probe-part-number": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 10.747,
+            "citations": [
+              "procedures/anemometer-repair-procedure",
+              "procedures/anemometer-repair-and-calibration-process",
+              "decisions/anemometer-repair-and-maintenance-decisions",
+              "sources/21-breakwater-gust-incident",
+              "sources/21-breakwater-gust-incident-2"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/21-breakwater-gust-incident",
+              "sources/21-breakwater-gust-incident-2"
+            ]
+          },
+          "probe-v2-corrected-gust": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 10.731,
+            "citations": [
+              "concepts/data-quality-review-process",
+              "sources/21-breakwater-gust-incident-2"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/21-breakwater-gust-incident-2"
+            ]
+          },
+          "mqtt-qos": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 8.871,
+            "citations": [
+              "concepts/mqtt-quality-of-service",
+              "sources/04-mqtt-topics"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": false,
+            "expected_sources": [
+              "sources/04-mqtt-topics"
+            ]
+          },
+          "raw-retention": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 8.678,
+            "citations": [
+              "concepts/data-retention-policies",
+              "sources/05-data-storage",
+              "concepts/data-retention-and-downsampling"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/05-data-storage"
+            ]
+          },
+          "pole-height": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 10.57,
+            "citations": [
+              "decisions/approval-of-the-weather-station",
+              "decisions/harbour-committee-permit-pole-14"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/13-city-council-permit"
+            ]
+          }
+        },
+        "after_reindex": {},
+        "false_refusals": [],
+        "stale_misses": []
+      },
+      "documents": 190,
+      "sources_in_bundle": 22,
+      "suffix_duplicates": {
+        "counted": [],
+        "excluded": [],
+        "count": 0,
+        "excluded_count": 0
+      },
+      "automatic_actions": [
+        {
+          "sha": "69592b99c5752c3aa6173cecf51edd8ceeb3091a",
+          "subject": "openkos: ingest 21-breakwater-gust-incident.md (+1 concepts)",
+          "touched": [
+            "decisions/anemometer-repair-and-maintenance-decisions",
+            "sources/21-breakwater-gust-incident"
+          ],
+          "listed_with_undo": true
+        },
+        {
+          "sha": "f03e0f9e8e7bf42a34ef976d192db61958a886d2",
+          "subject": "openkos: ingest 21-breakwater-gust-incident-2.md (+4 concepts)",
+          "touched": [
+            "concepts/data-quality-review-process",
+            "decisions/replace-anemometer-cups-on-harbour-front-stations",
+            "procedures/anemometer-repair-and-calibration-process",
+            "procedures/anemometer-repair-procedure",
+            "sources/21-breakwater-gust-incident-2"
+          ],
+          "listed_with_undo": true
+        }
+      ],
+      "pending_final": {
+        "present": true,
+        "open": 105,
+        "by_kind": {
+          "identity": 50,
+          "relation_type": 51,
+          "volatility": 4
+        }
+      },
+      "pending_text": "rbor-weather-network\n  - concepts/safety-guidelines-for-harbor-weather-network-station-installation, projects/harbor-weather-network [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct concepts/safety-guidelines-for-harbor-weather-network-station-installation --keep-distinct projects/harbor-weather-network\n  - concepts/troubleshooting-guide-for-harbor-weather-network-stations, projects/harbor-weather-network [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct concepts/troubleshooting-guide-for-harbor-weather-network-stations --keep-distinct projects/harbor-weather-network\n  - events/build-nights, events/student-build-nights [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct events/build-nights --keep-distinct events/student-build-nights\n  - events/weekly-sync-2026-03-18, events/weekly-sync-2026-04-01 [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct events/weekly-sync-2026-03-18 --keep-distinct events/weekly-sync-2026-04-01\n\nrelation_type (51)\n  note: 50 is the per-run candidate cap, so more may exist; `openkos suggest-relations` reports the total.\n  - concepts/alert-communication-channels, concepts/alert-distribution-mechanisms [pending]\n    resolve: openkos curate --structure\n  - concepts/alert-history, concepts/alert-history-and-threshold-review [pending]\n    resolve: openkos curate --structure\n  - concepts/alert-history-and-threshold-review, concepts/threshold-review-process [pending]\n    resolve: openkos curate --structure\n  - concepts/alert-thresholds, concepts/squall-detection-criteria [pending]\n    resolve: openkos curate --structure\n  - concepts/build-night, events/build-nights [pending]\n    resolve: openkos curate --structure\n  - concepts/calibrating-a-replacement-sensor-in-the-field, procedures/sensor-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/cold-weather-considerations-for-solar-systems, concepts/lifepo4-battery-use-in-solar-systems [pending]\n    resolve: openkos curate --structure\n  - concepts/common-calibration-mistakes, procedures/sensor-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard, concepts/grafana [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard, concepts/grafana-dashboard [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard, concepts/grafana-dashboards [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard, concepts/waterfront-overview-dashboard [pending]\n    resolve: openkos curate --structure\n  - concepts/data-querying, concepts/data-querying-and-analysis [pending]\n    resolve: openkos curate --structure\n  - concepts/data-retention-and-downsampling, concepts/data-retention-policies [pending]\n    resolve: openkos curate --structure\n  - concepts/data-retention-policies, decisions/store-readings-in-influxdb-with-downsampling [pending]\n    resolve: openkos curate --structure\n  - concepts/false-alarm-management, concepts/false-alarm-policy [pending]\n    resolve: openkos curate --structure\n  - concepts/firmware-update-infrastructure, concepts/firmware-update-server [pending]\n    resolve: openkos curate --structure\n  - concepts/firmware-update-infrastructure, procedures/firmware-update-process-for-wi-fi-stations [pending]\n    resolve: openkos curate --structure\n  - concepts/firmware-update-testing-framework, procedures/testing-an-image-before-release [pending]\n    resolve: openkos curate --structure\n  - concepts/grafana, concepts/grafana-dashboards [pending]\n    resolve: openkos curate --structure\n  - concepts/grafana-dashboard, concepts/grafana-dashboards [pending]\n    resolve: openkos curate --structure\n  - concepts/harbor-weather-network, concepts/volunteer-onboarding-process [pending]\n    resolve: openkos curate --structure\n  - concepts/harbor-weather-network, concepts/volunteer-roles [pending]\n    resolve: openkos curate --structure\n  - concepts/harbor-weather-network, procedures/volunteer-onboarding [pending]\n    resolve: openkos curate --structure\n  - concepts/harbor-weather-network-station, procedures/building-a-harbor-weather-network-station [pending]\n    resolve: openkos curate --structure\n  - concepts/lora, concepts/lora-technology [pending]\n    resolve: openkos curate --structure\n  - concepts/lora, concepts/remote-station [pending]\n    resolve: openkos curate --structure\n  - concepts/lora-technology, concepts/remote-station [pending]\n    resolve: openkos curate --structure\n  - concepts/safety-guidelines-for-harbor-weather-network-station-installation, procedures/building-a-harbor-weather-network-station [pending]\n    resolve: openkos curate --structure\n  - concepts/sensor-calibration, procedures/sensor-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/squall-detection-criteria, concepts/storm-warning-system [pending]\n    resolve: openkos curate --structure\n  - concepts/staged-rollout-process, decisions/staged-rollout-decision [pending]\n    resolve: openkos curate --structure\n  - concepts/staged-rollout-process, events/staged-firmware-rollout [pending]\n    resolve: openkos curate --structure\n  - concepts/staged-rollout-process, procedures/staged-rollout-of-firmware-updates [pending]\n    resolve: openkos curate --structure\n  - concepts/volunteer-onboarding-process, procedures/volunteer-onboarding [pending]\n    resolve: openkos curate --structure\n  - decisions/approval-of-the-weather-station, decisions/harbour-committee-permit-pole-14 [pending]\n    resolve: openkos curate --structure\n  - decisions/calibration-policy-for-bme280-sensors, procedures/recalibration [pending]\n    resolve: openkos curate --structure\n  - decisions/staged-rollout-decision, events/staged-firmware-rollout [pending]\n    resolve: openkos curate --structure\n  - decisions/staged-rollout-decision, procedures/staged-rollout-of-firmware-updates [pending]\n    resolve: openkos curate --structure\n  - decisions/store-readings-in-influxdb-with-downsampling, procedures/data-storage-process [pending]\n    resolve: openkos curate --structure\n  - entities/calibration-log, procedures/sensor-calibration-checks [pending]\n    resolve: openkos curate --structure\n  - events/lora-gateway-installation, places/harbour-office-roof [pending]\n    resolve: openkos curate --structure\n  - events/staged-firmware-rollout, procedures/staged-rollout-of-firmware-updates [pending]\n    resolve: openkos curate --structure\n  - events/weekly-sync-2026-03-18, events/weekly-sync-2026-04-01 [pending]\n    resolve: openkos curate --structure\n  - procedures/backup-and-retention-procedure, procedures/backup-and-retention-process [pending]\n    resolve: openkos curate --structure\n  - procedures/data-ingestion-process, procedures/data-storage-process [pending]\n    resolve: openkos curate --structure\n  - procedures/data-quality-checklist, procedures/weekly-checks [pending]\n    resolve: openkos curate --structure\n  - procedures/downsampling-process, procedures/downsampling-tasks [pending]\n    resolve: openkos curate --structure\n  - procedures/firmware-update-process-for-lora-stations, procedures/updating-a-lora-station [pending]\n    resolve: openkos curate --structure\n  - procedures/recalibration, procedures/sensor-calibration-checks [pending]\n    resolve: openkos curate --structure\n  - sources/21-breakwater-gust-incident-2, sources/21-breakwater-gust-incident [pending]\n    resolve: openkos relate sources/21-breakwater-gust-incident-2 supersedes sources/21-breakwater-gust-incident\n\nvolatility (4)\n  - type Decision [pending]\n    resolve: openkos curate\n  - type Event [pending]\n    resolve: openkos curate\n  - type Place [pending]\n    resolve: openkos curate\n  - type Project [pending]\n    resolve: openkos curate\n",
+      "curate": {
+        "item_prompts": 18,
+        "item_prompts_by_stage": {
+          "Identity": 8,
+          "Metadata": 10
+        },
+        "manual_merge_commands": [
+          "procedures/sensor-calibration concepts/sensor-calibration",
+          "concepts/sensor-calibration procedures/sensor-calibration-checks",
+          "procedures/volunteer-onboarding concepts/volunteer-onboarding-process",
+          "projects/harbor-weather-network concepts/harbor-weather-network",
+          "projects/harbor-weather-network-goals-for-the-first-year concepts/harbor-weather-network",
+          "projects/harbor-weather-network concepts/harbor-weather-network-station"
+        ],
+        "gate_prompts": 0,
+        "unrecognized_prompts": [],
+        "hidden_by_caps": 32,
+        "decisions": 24,
+        "fed_files": 22,
+        "decisions_per_source": 1.0909,
+        "elapsed_s": 147.004,
+        "exit": 0,
+        "timed_out": false
+      },
+      "wall_clock_s": 1782.4
+    },
+    {
+      "run_dir": "<work-root>/binding-work-20261005T044306Z/main-judges-qwen3/main-judges-qwen3-r2",
+      "phases": {
+        "init": {
+          "args": [
+            "init",
+            "--model",
+            "qwen3:8b",
+            "--embedding-model",
+            "bge-m3"
+          ],
+          "code": 0,
+          "elapsed_s": 0.253,
+          "timed_out": false,
+          "stdout_tail": "openkos init: created workspace in <work-root>/binding-work-20261005T044306Z/main-judges-qwen3/main-judges-qwen3-r2/workspace (raw/, bundle/index.md, bundle/log.md, AGENTS.md, openkos.yaml).\nopenkos init: the workspace is version-controlled (created .git/ and .gitignore) and the files above are committed. Every openkos command commits its own changes: `git log` reviews them, `git revert <commit>` undoes one.\nNext: run `openkos ingest <path>` to import your first source.\nTo read your knowledge in an editor, open `bundle/` (not the workspace root) as an Obsidian vault or a VS Code folder.\n",
+          "stderr_tail": "openkos init: note -- the embedding model ('bge-m3') is sticky: editing it in this workspace's openkos.yaml later forces a full corpus re-embed the next time `openkos reindex` runs.\n"
+        },
+        "ingest": {
+          "args": [
+            "ingest",
+            "<checkout>/evals/quiet_engine/corpus/sources",
+            "--auto"
+          ],
+          "code": 0,
+          "elapsed_s": 1900.643,
+          "timed_out": false,
+          "stdout_tail": "d\n  + bundle/concepts/sensor-calibration-before-mounting.md\n  + bundle/concepts/lora-for-the-remote-sites.md\n  + bundle/concepts/recalibration-rota.md\n  + bundle/concepts/checklist-for-a-station-visit.md\n  + bundle/concepts/how-to-add-a-station-at-a-new-site.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported '<checkout>/evals/quiet_engine/corpus/sources/20-lessons-learned.md' -- 17 objects (15 Concept, 1 Procedure, 1 Decision); 2 existing objects revised.\n  ~ revised projects/harbor-weather-network (now version 2)\n  ~ revised concepts/storm-warning-system (now version 2)\n  + <checkout>/evals/quiet_engine/corpus/sources/01-project-overview.md -- ingested (extraction degraded -- Source only; see stderr)\n  + <checkout>/evals/quiet_engine/corpus/sources/02-hardware-guide.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/03-sensor-calibration.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/04-mqtt-topics.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/05-data-storage.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/06-dashboards.md -- ingested (revised 1 existing object)\n  + <checkout>/evals/quiet_engine/corpus/sources/07-meeting-2026-03-04-kickoff.md -- ingested (extraction degraded -- Source only; see stderr)\n  + <checkout>/evals/quiet_engine/corpus/sources/08-meeting-2026-03-18-weekly-sync.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/09-meeting-2026-04-01-weekly-sync.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/10-lora-gateway.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/11-solar-power-notes.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/12-site-survey-harbor.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/13-city-council-permit.md -- ingested (revised 1 existing object)\n  + <checkout>/evals/quiet_engine/corpus/sources/14-alerts-and-thresholds.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/15-data-quality-checklist.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/16-volunteer-onboarding.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/17-firmware-updates.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/18-backup-and-retention.md -- ingested (revised 3 existing objects)\n  + <checkout>/evals/quiet_engine/corpus/sources/19-school-outreach.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/20-lessons-learned.md -- ingested (revised 2 existing objects)\nopenkos ingest: batch summary -- 20 file(s): 20 ingested, 0 re-ingested, 0 skipped, 2 extraction-degraded, 9 with extraction notice(s). Their Sources carry `extraction_notice`; `openkos lint` names all but the sole-object and chunk-partial disclosures.\n",
+          "stderr_tail": "ed object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Storm Warning System, Squall Detection Thresholds, Alert Distribution (+6 more).\nopenkos ingest: extraction returned one object restating the source title; 1 extra re-ask call added 5 object(s): Weekly checks, Outlier detection, Sensor calibration checks (+2 more)\nopenkos ingest: extraction returned one object restating the source title; 1 extra re-ask call added 16 object(s): Port Alder Makers, Quay Street workshop, Build nights (+13 more)\nopenkos ingest: judge dropped 1 candidate(s): 'Quay'\nopenkos ingest: 'ana-ruiz' already exists for a different source; disambiguating this candidate to 'ana-ruiz-2'.\nopenkos ingest: 'tomas-weber' already exists for a different source; disambiguating this candidate to 'tomas-weber-2'.\nopenkos ingest: judge dropped 1 candidate(s): 'Firmware changelog highlights'\nopenkos ingest: 'firmware-versioning' repeats 'versioning-of-firmware-images' (same type, near-match title, same quoted source line); keeping the richer one, skipping this candidate.\nopenkos ingest: 'firmware-rollback' repeats 'firmware-update-rollback' (same type, near-match title, same quoted source line); keeping the richer one, skipping this candidate.\nopenkos ingest: 'firmware-security' repeats 'firmware-update-security' (same type, near-match title, same quoted source line); keeping the richer one, skipping this candidate.\nopenkos ingest: extraction returned one object restating the source title; 1 extra re-ask call added 37 object(s): First restore test, The workshop burns down, The club server's disk fails (+34 more)\nopenkos ingest: merged extraction union exceeded the 24-candidate pre-judge ceiling; 14 merged candidate(s) never reached the judge: Downsampling, Hourly bucket, Live database (+11 more)\nopenkos ingest: judge dropped 4 candidate(s): 'Tomas Weber', 'Ana Ruiz', 'The club server' (+1 more)\nopenkos ingest: 2 participant candidate(s) not re-admitted after the judge dropped them -- this source is not meeting-shaped, so participant re-admission does not apply to it: Tomas Weber, Ana Ruiz.\nopenkos ingest: 1 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Bridge logs.\nopenkos ingest: 'retention-policy' matches existing 'concepts/retention-policy' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 'bridge' matches existing 'concepts/bridge' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 'calibration-offsets' matches existing 'concepts/calibration-offsets' (same type and title); revising it instead of writing a copy.\nopenkos ingest: judge dropped 4 candidate(s): 'School Field Station Setup', 'School Outreach Weather Station Initiative', 'Decision not to fit rain gauges on sheltered roofs' (+1 more)\nopenkos ingest: 'lena-okafor' already exists for a different source; disambiguating this candidate to 'lena-okafor-2'.\nopenkos ingest: duplicate slug 'harbor-weather-network' within this extraction batch; keeping the first, skipping this candidate.\nopenkos ingest: judge dropped 4 candidate(s): 'Power in March, not December', 'Anemometer cups', 'One-minute gusts' (+1 more)\nopenkos ingest: 5 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Weather Station Maintenance and Calibration, MQTT Broker Implementation, Weather Station Design (+2 more).\nopenkos ingest: 'harbor-weather-network' matches existing 'projects/harbor-weather-network' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 'storm-warning-system' matches existing 'concepts/storm-warning-system' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 128 of 184 derived object(s) recorded a type_alternative on the document (most common: Concept/Procedure).\n"
+        },
+        "daemon_once": {
+          "args": [
+            "daemon",
+            "--once"
+          ],
+          "code": 0,
+          "elapsed_s": 147.495,
+          "timed_out": false,
+          "stdout_tail": "openkos daemon: maintenance: completed -- calls=63 done=7 deferred=0\n",
+          "stderr_tail": ""
+        },
+        "reindex": {
+          "args": [
+            "reindex"
+          ],
+          "code": 0,
+          "elapsed_s": 0.267,
+          "timed_out": false,
+          "stdout_tail": "openkos reindex: 0 embedded, 213 cache-hits, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\n",
+          "stderr_tail": ""
+        }
+      },
+      "flags": [],
+      "config_text": "model: qwen3:8b  # local model served via Ollama; see tech_stack.md\nembedding_model: bge-m3  # 1024-dim; changing it forces a full re-embed\nreview: true              # show proposed changes and confirm before saving\ndefault_sensitivity: private\nconfidential_local_exemption: true  # send confidential concepts to a LOCAL LLM backend\nfreshness_window: 7d      # age after which a stamp is flagged for re-observation\nchat_timeout: 600         # seconds an LLM chat call may take before giving up\nmax_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call may generate\ncontext_window: 12288     # tokens the model holds at once (prompt + reply); unpinned it\n                          # reserves its own 32K default and ~10 GB. Refused below the\n                          # derived floor; blank the value to leave it unpinned.\n# backend: openai-compatible  # LLM backend family: \"ollama\" (default) or\n                          # \"openai-compatible\" (llama.cpp, LM Studio, vLLM, or\n                          # any server exposing /v1/chat/completions and\n                          # /v1/embeddings). Selecting openai-compatible\n                          # REQUIRES base_url below -- there is no packaged\n                          # default endpoint for it, unlike Ollama's. An\n                          # optional API key, if the server needs one, is read\n                          # only from the OPENKOS_OPENAI_API_KEY environment\n                          # variable -- never from this file.\n# base_url: http://127.0.0.1:8080  # chat endpoint for the selected backend.\n                          # UNSET by default: ollama then resolves OLLAMA_HOST\n                          # or its own packaged default; openai-compatible has\n                          # no default and refuses to start without this key.\n# embedding_base_url: http://127.0.0.1:8081  # separate endpoint used only for\n                          # embedding requests, for when the embedding model is\n                          # served by a different process or port than the\n                          # chat model. UNSET by default: embedding requests\n                          # fall back to base_url (or that backend's own\n                          # default).\n# temperature: 0.2        # sampling temperature forwarded as options.temperature.\n                          # UNSET by default -- unpinned, sampling follows whatever\n                          # the model's Modelfile ships (qwen3:8b: 0.6). Pinning it\n                          # REDUCES run-to-run variance; it does NOT guarantee identical\n                          # output across Ollama versions, hardware, or\n                          # OLLAMA_NUM_PARALLEL. 0 is a real, valid value (greedy\n                          # decoding); no value is recommended.\n# seed: 42                # sampling seed forwarded as options.seed. UNSET by default,\n                          # same caveat as temperature: reduces variance, is not a\n                          # determinism guarantee.\n# volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window\n#   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)\n#   volatile: 7d\n# type_tiers:             # per-concept-type volatility tier overrides (overrides\n#   Person: volatile      # the built-in registry default; see docs/adr/0007)\n# type_sensitivity_defaults:  # per-type birth offset above `default_sensitivity`,\n#   Person: 1             # in levels, clamped at confidential. Ships EMPTY --\n                          # every type is born at the floor unless you say\n                          # otherwise. Uncommenting the two lines above is the\n                          # recommended setting if this workspace holds material\n                          # about other people: a Person is then born one level\n                          # above the floor. The high-water-mark over cited\n                          # sources still wins whenever it is higher.\n                          # See docs/adr/0015 and docs/adr/0017.\n# models:                 # per-task model overrides. The packaged defaults:\n#   edge_typing: gemma2:27b  # every task follows `model:` EXCEPT `adjudication`\n                          # and `contradiction`, which run on gemma4:26b-a4b\n                          # (the judge model: `ollama pull gemma4:26b-a4b`;\n                          # see docs/adr/0047). It does not fit in memory next\n                          # to `model:`, so Ollama swaps them by stage. Opt out\n                          # per task with `contradiction: null` (follows\n                          # `model:`), or name another tag. The packaged judge\n                          # applies on the ollama backend only. A missing judge\n                          # fails only its own stage, naming the pull command.\n                          # gemma2:27b is the one measured upgrade for\n                          # edge_typing: it names relations better\n                          # (0.81 vs qwen3:8b's 0.44 on evals/edge_typing/)\n                          # but costs `ollama pull gemma2:27b` -- 15.6 GB.\n                          # Uncomment BOTH lines above to opt in; uncommenting\n                          # only one is invalid YAML. Keep it scoped to\n                          # edge_typing -- it is the worst extractor measured,\n                          # so it must never become `model:`. `openkos doctor`\n                          # reports whether each is installed.\n                          # Valid tasks: extraction, adjudication, edge_typing,\n                          # volatility_typing, contradiction.\n# union_judge: true       # union-of-runs + selector-judge extraction (default\n                          # on); set false to restore the single-run, single-cap\n                          # extraction path byte-for-byte\n# sufficiency_check: true # before answering, ask one cheap model call whether\n                          # the retrieved context can answer the question at\n                          # all, and refuse instead of answering from the\n                          # model's own knowledge (default ON). Measured zero\n                          # false refusals over 100 grounded checks. Costs one\n                          # extra chat call per answered query (median ~1.1s\n                          # against a default Ollama, which serialises); set\n                          # false to remove it and restore the pre-#760 path\n# revision_history: false  # attach each retrieved concept's earlier versions\n                          # (reached via supersedes/revises) to it as labelled\n                          # history (default OFF). UNMEASURED --\n                          # no harness has scored its citation quality or\n                          # prompt-budget cost yet. Not recommended to enable.\n# attach_at_ingest: false  # turn OFF revising an existing concept at ingest\n                          # (default ON). When a newly extracted object has\n                          # the same type and normalized title as an existing\n                          # concept (Event and Person excepted), ingest adds\n                          # the source to that concept instead of writing a\n                          # `-2` copy. `false` restores the copies.\n# concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one\n                          # by one (default OFF). Chunked sources only; below\n                          # the chunk threshold there are no windows to\n                          # overlap. Measured ~20% off a whole ingest -- BUT\n                          # only if the Ollama server was started with\n                          # OLLAMA_NUM_PARALLEL=2 or more, which openkos\n                          # cannot set for you. Against a default server the\n                          # requests just queue: same results, no speedup, and\n                          # each call's chat_timeout runs while it waits, so a\n                          # tight timeout can start firing. Leave it off unless\n                          # the server is configured.\n                          # An on/off switch, not a worker count: the count is\n                          # fixed at 2, where the measured speedup saturates.\n                          # See evals/ingest_concurrency/report.md.\n# rationale_language: Spanish  # language `curate` writes its Metadata and\n                          # Structure RATIONALES in. UNSET by default, and\n                          # unset does NOT mean English: it means each item's\n                          # rationale is written in whichever language that\n                          # concept type's (or that edge's) documents happen to\n                          # dominate, so one report can mix English and Spanish\n                          # rows. Set it to pin them to one language.\n                          # Free-form -- the name is passed to the model\n                          # verbatim, so a name it does not recognise is not an\n                          # error: you get whatever it makes of it, visible in\n                          # the very next curate table. Blank, multi-line and\n                          # non-string values are refused.\n                          # Setting it appends one sentence to both rationale\n                          # prompts; leaving it unset sends the prompt that\n                          # shipped, byte for byte, which is the configuration\n                          # every measurement in evals/ was taken under.\n                          # Affects those two rationales only -- extraction,\n                          # query and adjudication still follow the source\n                          # language, which is correct there.\n# unattended:             # limits for the unattended runner and the folder watch.\n#   max_calls_per_pass: 100   # PROVISIONAL defaults, shown here; absent section\n#   max_calls_per_day: 500    # means all of them. Counted in chat calls; 0 means\n#   max_sources_per_pass: 10  # no model call / no source import. A pass is one\n#   job_deadline_seconds: 1800        # job; the deadline is >= 60. Interactive\n#   maintenance_interval_seconds: 86400  # runs are never limited. Interval >= 300.\n#   quiet_seconds: 30       # a watched file must be unchanged this long (>= 1)\n#   inbox: ../inbox         # folder to watch for new sources; unset = watch off.\n                            # Must be an existing directory, never raw/, bundle/,\n                            # .openkos/ or the workspace root. Read-only to openkos.\n#   watch_backend: poll     # poll (default) | native. native adds an OS\n                            # file-notification wake-up to the daemon's idle wait\n                            # (needs `pip install 'openkos[watch]'`; without it\n                            # the daemon warns and polls). Polling still runs\n                            # underneath, so no file is ever missed.\n\n# Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF\n# bundle root) live next to this file. The engine does not read layout\n# keys from this config; making them configurable is future work.\n\n# quiet_engine harness\nunattended:\n  inbox: \"<work-root>/binding-work-20261005T044306Z/main-judges-qwen3/main-judges-qwen3-r2/inbox\"\nmodels:\n  adjudication: \"qwen3:8b\"\n  contradiction: \"qwen3:8b\"\n",
+      "pending_after_maintenance": {
+        "present": true,
+        "open": 106,
+        "by_kind": {
+          "identity": 50,
+          "relation_type": 50,
+          "revision": 1,
+          "volatility": 5
+        }
+      },
+      "time_to_cite": {
+        "question_id": "probe-part-number",
+        "landed_s": 51.946,
+        "first_cited_answer_s": 65.993,
+        "censored_at_s": null,
+        "queries": [
+          {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 14.047,
+            "citations": [
+              "decisions/anemometer-repair-and-maintenance-decisions",
+              "procedures/anemometer-repair-procedure"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "t_start_s": 51.946,
+            "t_end_s": 65.993
+          }
+        ],
+        "import_reported": true,
+        "import_reported_s": 66.015
+      },
+      "version_import": {
+        "landed": true,
+        "import_reported": true,
+        "elapsed_s": 81.948
+      },
+      "daemon": {
+        "exit": 0,
+        "log_tail": "openkos daemon: watch: completed -- calls=3 done=1 deferred=0\nopenkos daemon: what changed -- 1 automatic commit\n  2330246 ingest 21-breakwater-gust-incident.md (+2 concepts) [decisions/anemometer-repair-and-maintenance-decisions, procedures/anemometer-repair-procedure, sources/21-breakwater-gust-incident] -- undo: git revert 2330246\n  undo newest first: every commit appends to log.md, so a revert is safe only while that commit is the latest one.\nopenkos daemon: 50 relation suggestion(s) waiting -- review them with `openkos curate --structure`.\nopenkos ingest: '21-breakwater-gust-incident.md' changed since it was imported; importing it as 'raw/21-breakwater-gust-incident-2.md', a new version. The earlier raw copy is kept.\nopenkos ingest: 'sources/21-breakwater-gust-incident-2' is a new version of 'sources/21-breakwater-gust-incident'; to retire the earlier Source, run: openkos relate sources/21-breakwater-gust-incident-2 supersedes sources/21-breakwater-gust-incident\nopenkos daemon: watch: completed -- calls=3 done=1 deferred=0\nopenkos daemon: what changed -- 1 automatic commit\n  2ab058f ingest 21-breakwater-gust-incident-2.md (+5 concepts, ~1 revised) [concepts/anemometer-cup-assembly-replacement, concepts/data-quality-review-process, concepts/sensor-calibration-and-health-check, decisions/replace-anemometer-cups-with-hx-7745-sets, +3 more] -- undo: git revert 2ab058f\n  undo newest first: every commit appends to log.md, so a revert is safe only while that commit is the latest one.\nopenkos daemon: 50 relation suggestion(s) waiting -- review them with `openkos curate --structure`.\nopenkos daemon: stopped.\n"
+      },
+      "stale_check": {
+        "before": {
+          "probe-part-number": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 10.924,
+            "citations": [
+              "decisions/anemometer-repair-and-maintenance-decisions",
+              "concepts/anemometer-cup-assembly-replacement",
+              "procedures/anemometer-repair-procedure",
+              "sources/21-breakwater-gust-incident",
+              "sources/21-breakwater-gust-incident-2"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/21-breakwater-gust-incident",
+              "sources/21-breakwater-gust-incident-2"
+            ]
+          },
+          "probe-v2-corrected-gust": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 10.66,
+            "citations": [
+              "concepts/data-quality-review-process",
+              "sources/21-breakwater-gust-incident-2"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/21-breakwater-gust-incident-2"
+            ]
+          },
+          "mqtt-qos": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 12.659,
+            "citations": [
+              "sources/04-mqtt-topics",
+              "events/weekly-sync-2026-03-18"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": false,
+            "expected_sources": [
+              "sources/04-mqtt-topics"
+            ]
+          },
+          "raw-retention": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 11.391,
+            "citations": [
+              "sources/05-data-storage",
+              "concepts/retention-policy"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/05-data-storage"
+            ]
+          },
+          "pole-height": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 8.224,
+            "citations": [
+              "decisions/approval-of-weather-station-on-pole-14",
+              "sources/13-city-council-permit"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/13-city-council-permit"
+            ]
+          }
+        },
+        "after_reindex": {},
+        "false_refusals": [],
+        "stale_misses": []
+      },
+      "documents": 213,
+      "sources_in_bundle": 22,
+      "suffix_duplicates": {
+        "counted": [],
+        "excluded": [
+          {
+            "type": "Person",
+            "key": "ana ruiz",
+            "base": "people/ana-ruiz",
+            "members": [
+              "people/ana-ruiz",
+              "people/ana-ruiz-2"
+            ],
+            "duplicates": 1,
+            "deprecated": []
+          },
+          {
+            "type": "Person",
+            "key": "lena okafor",
+            "base": "people/lena-okafor",
+            "members": [
+              "people/lena-okafor",
+              "people/lena-okafor-2"
+            ],
+            "duplicates": 1,
+            "deprecated": []
+          },
+          {
+            "type": "Person",
+            "key": "tomas weber",
+            "base": "people/tomas-weber",
+            "members": [
+              "people/tomas-weber",
+              "people/tomas-weber-2"
+            ],
+            "duplicates": 1,
+            "deprecated": []
+          }
+        ],
+        "count": 0,
+        "excluded_count": 3
+      },
+      "automatic_actions": [
+        {
+          "sha": "233024607404cdd53a907d457d99f9685f7f6327",
+          "subject": "openkos: ingest 21-breakwater-gust-incident.md (+2 concepts)",
+          "touched": [
+            "decisions/anemometer-repair-and-maintenance-decisions",
+            "procedures/anemometer-repair-procedure",
+            "sources/21-breakwater-gust-incident"
+          ],
+          "listed_with_undo": true
+        },
+        {
+          "sha": "2ab058f3838e7c835445adeb67e8ab2ac5daa2cb",
+          "subject": "openkos: ingest 21-breakwater-gust-incident-2.md (+5 concepts, ~1 revised)",
+          "touched": [
+            "concepts/anemometer-cup-assembly-replacement",
+            "concepts/data-quality-review-process",
+            "concepts/sensor-calibration-and-health-check",
+            "decisions/replace-anemometer-cups-with-hx-7745-sets",
+            "events/breakwater-anemometer-inspection-and-repair",
+            "sources/21-breakwater-gust-incident-2"
+          ],
+          "listed_with_undo": true
+        }
+      ],
+      "pending_final": {
+        "present": true,
+        "open": 107,
+        "by_kind": {
+          "identity": 50,
+          "relation_type": 51,
+          "revision": 1,
+          "volatility": 5
+        }
+      },
+      "pending_text": "staged-rollout --keep-distinct procedures/staged-rollout-of-new-firmware-images\n  - concepts/harbor-weather-network, projects/harbor-weather-network [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct concepts/harbor-weather-network --keep-distinct projects/harbor-weather-network\n  - entities/priya-nair, people/priya-nair [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct entities/priya-nair --keep-distinct people/priya-nair\n  - entities/tomas-weber, people/tomas-weber, people/tomas-weber-2 [pending]\n    resolve: openkos adjudicate --apply (prints the pairwise `openkos merge` commands)\n    or: openkos duplicates --keep-distinct entities/tomas-weber --keep-distinct people/tomas-weber --keep-distinct people/tomas-weber-2\n  - people/ana-ruiz, people/ana-ruiz-2 [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct people/ana-ruiz --keep-distinct people/ana-ruiz-2\n  - people/lena-okafor, people/lena-okafor-2 [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct people/lena-okafor --keep-distinct people/lena-okafor-2\n\nrelation_type (51)\n  note: 50 is the per-run candidate cap, so more may exist; `openkos suggest-relations` reports the total.\n  - concepts/anemometer, entities/anemometer [pending]\n    resolve: openkos curate --structure\n  - concepts/bme280-sensor, entities/bme280 [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-and-anemometer, entities/anemometer [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-and-common-mistakes, procedures/sensor-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-and-data-accuracy, concepts/calibration-and-published-data [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-and-published-data, concepts/calibration-offsets [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-and-published-data, procedures/sensor-calibration-checks [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-and-sensor-drift, decisions/calibration-policy-for-bme280-sensors [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-and-sensor-drift, procedures/sensor-calibration-checks [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-log, concepts/calibration-offsets [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-log, entities/tomas-weber [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-procedure, procedures/sensor-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard, concepts/grafana-dashboard [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard, concepts/grafana-dashboards-and-data-visualization [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard, concepts/harbor-weather-network [pending]\n    resolve: openkos curate --structure\n  - concepts/disk-management, organizations/club [pending]\n    resolve: openkos curate --structure\n  - concepts/downsampling, procedures/downsampling-process [pending]\n    resolve: openkos curate --structure\n  - concepts/downsampling-tasks, events/first-restore-test [pending]\n    resolve: openkos curate --structure\n  - concepts/enclosure, concepts/ip66-enclosure [pending]\n    resolve: openkos curate --structure\n  - concepts/firmware-image-structure, concepts/station-image [pending]\n    resolve: openkos curate --structure\n  - concepts/grafana-dashboard, concepts/grafana-dashboards-and-data-visualization [pending]\n    resolve: openkos curate --structure\n  - concepts/grafana-dashboard, concepts/harbor-weather-network [pending]\n    resolve: openkos curate --structure\n  - concepts/harbor-weather-network-station, concepts/spares-and-maintenance [pending]\n    resolve: openkos curate --structure\n  - concepts/lifepo4-battery, concepts/lifepo4-battery-use-in-solar-systems [pending]\n    resolve: openkos curate --structure\n  - concepts/lora-for-the-remote-sites, concepts/lora-technology [pending]\n    resolve: openkos curate --structure\n  - concepts/lora-packet, concepts/packet-format [pending]\n    resolve: openkos curate --structure\n  - concepts/mqtt-in-the-middle, decisions/mqtt-broker-implementation [pending]\n    resolve: openkos curate --structure\n  - concepts/open-licence, concepts/published-archive [pending]\n    resolve: openkos curate --structure\n  - concepts/published-archive, events/the-published-archive-is-created [pending]\n    resolve: openkos curate --structure\n  - concepts/range-test, concepts/range-testing [pending]\n    resolve: openkos curate --structure\n  - concepts/sensor-calibration-before-mounting, procedures/weather-station-maintenance-and-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/solar-panel, concepts/solar-power-system [pending]\n    resolve: openkos curate --structure\n  - concepts/staged-rollout, decisions/firmware-updates-are-staged [pending]\n    resolve: openkos curate --structure\n  - concepts/staged-rollout, procedures/staged-rollout-of-new-firmware-images [pending]\n    resolve: openkos curate --structure\n  - concepts/weather-station, places/school-field [pending]\n    resolve: openkos curate --structure\n  - decisions/approval-of-weather-station-on-pole-14, projects/solar-powered-weather-station-on-pole-14 [pending]\n    resolve: openkos curate --structure\n  - decisions/calibration-policy-for-bme280-sensors, procedures/sensor-calibration [pending]\n    resolve: openkos curate --structure\n  - decisions/firmware-updates-are-staged, procedures/staged-rollout-of-new-firmware-images [pending]\n    resolve: openkos curate --structure\n  - entities/bme280, procedures/sensor-calibration [pending]\n    resolve: openkos curate --structure\n  - entities/priya-nair, entities/sailing-school-station [pending]\n    resolve: openkos curate --structure\n  - entities/priya-nair, events/calibration-log-entry-for-the-sailing-school-station [pending]\n    resolve: openkos curate --structure\n  - entities/sailing-school-station, events/calibration-log-entry-for-the-sailing-school-station [pending]\n    resolve: openkos curate --structure\n  - events/build-nights, organizations/port-alder-makers [pending]\n    resolve: openkos curate --structure\n  - events/build-nights, places/quay-street-workshop [pending]\n    resolve: openkos curate --structure\n  - events/students-participation, people/lena-okafor [pending]\n    resolve: openkos curate --structure\n  - organizations/port-alder-makers, places/quay-street-workshop [pending]\n    resolve: openkos curate --structure\n  - people/ana-ruiz, people/tomas-weber [pending]\n    resolve: openkos curate --structure\n  - people/lena-okafor-2, projects/harbor-weather-network [pending]\n    resolve: openkos curate --structure\n  - procedures/data-quality-checklist, procedures/weekly-checks [pending]\n    resolve: openkos curate --structure\n  - procedures/firmware-update-process-for-lora-stations, procedures/firmware-update-process-for-wi-fi-stations [pending]\n    resolve: openkos curate --structure\n  - sources/21-breakwater-gust-incident-2, sources/21-breakwater-gust-incident [pending]\n    resolve: openkos relate sources/21-breakwater-gust-incident-2 supersedes sources/21-breakwater-gust-incident\n\nvolatility (5)\n  - type Decision [pending]\n    resolve: openkos curate\n  - type Event [pending]\n    resolve: openkos curate\n  - type Place [pending]\n    resolve: openkos curate\n  - type Procedure [pending]\n    resolve: openkos curate\n  - type Source [pending]\n    resolve: openkos curate\n\nrevision (1)\n  - decisions/approval-for-permanent-mount-on-pole-14, decisions/approval-of-weather-station-on-pole-14 [pending]\n    resolve: openkos revisions\n",
+      "curate": {
+        "item_prompts": 19,
+        "item_prompts_by_stage": {
+          "Identity": 9,
+          "Metadata": 10
+        },
+        "manual_merge_commands": [
+          "concepts/anemometer entities/anemometer",
+          "entities/bme280 concepts/bme280-sensor",
+          "concepts/downsampling procedures/downsampling-process",
+          "concepts/harbor-weather-network projects/harbor-weather-network",
+          "entities/priya-nair people/priya-nair",
+          "entities/tomas-weber people/tomas-weber",
+          "entities/tomas-weber people/tomas-weber-2"
+        ],
+        "gate_prompts": 0,
+        "unrecognized_prompts": [],
+        "hidden_by_caps": 25,
+        "decisions": 26,
+        "fed_files": 22,
+        "decisions_per_source": 1.1818,
+        "elapsed_s": 149.131,
+        "exit": 0,
+        "timed_out": false
+      },
+      "wall_clock_s": 2400.1
+    },
+    {
+      "run_dir": "<work-root>/binding-work-20261005T044306Z/main-judges-qwen3/main-judges-qwen3-r3",
+      "phases": {
+        "init": {
+          "args": [
+            "init",
+            "--model",
+            "qwen3:8b",
+            "--embedding-model",
+            "bge-m3"
+          ],
+          "code": 0,
+          "elapsed_s": 0.253,
+          "timed_out": false,
+          "stdout_tail": "openkos init: created workspace in <work-root>/binding-work-20261005T044306Z/main-judges-qwen3/main-judges-qwen3-r3/workspace (raw/, bundle/index.md, bundle/log.md, AGENTS.md, openkos.yaml).\nopenkos init: the workspace is version-controlled (created .git/ and .gitignore) and the files above are committed. Every openkos command commits its own changes: `git log` reviews them, `git revert <commit>` undoes one.\nNext: run `openkos ingest <path>` to import your first source.\nTo read your knowledge in an editor, open `bundle/` (not the workspace root) as an Obsidian vault or a VS Code folder.\n",
+          "stderr_tail": "openkos init: note -- the embedding model ('bge-m3') is sticky: editing it in this workspace's openkos.yaml later forces a full corpus re-embed the next time `openkos reindex` runs.\n"
+        },
+        "ingest": {
+          "args": [
+            "ingest",
+            "<checkout>/evals/quiet_engine/corpus/sources",
+            "--auto"
+          ],
+          "code": 0,
+          "elapsed_s": 1998.165,
+          "timed_out": false,
+          "stdout_tail": "\n  + bundle/concepts/technical-infrastructure.md\n  + bundle/concepts/lora-communication.md\n  + bundle/concepts/community-and-collaboration.md\n  + bundle/concepts/documentation-and-knowledge-sharing.md\n  + bundle/concepts/future-planning-and-expansion.md\n  ~ index.md (new Source entry)\n  ~ log.md (new dated entry)\nopenkos ingest: imported '<checkout>/evals/quiet_engine/corpus/sources/20-lessons-learned.md' -- 18 objects (14 Concept, 4 Decision); 2 existing objects revised.\n  ~ revised projects/harbor-weather-network (now version 3)\n  ~ revised concepts/storm-warning-system (now version 2)\n  + <checkout>/evals/quiet_engine/corpus/sources/01-project-overview.md -- ingested (extraction degraded -- Source only; see stderr)\n  + <checkout>/evals/quiet_engine/corpus/sources/02-hardware-guide.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/03-sensor-calibration.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/04-mqtt-topics.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/05-data-storage.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/06-dashboards.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/07-meeting-2026-03-04-kickoff.md -- ingested (extraction degraded -- Source only; see stderr)\n  + <checkout>/evals/quiet_engine/corpus/sources/08-meeting-2026-03-18-weekly-sync.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/09-meeting-2026-04-01-weekly-sync.md -- ingested (revised 1 existing object)\n  + <checkout>/evals/quiet_engine/corpus/sources/10-lora-gateway.md -- ingested (extraction degraded -- Source only; see stderr)\n  + <checkout>/evals/quiet_engine/corpus/sources/11-solar-power-notes.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/12-site-survey-harbor.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/13-city-council-permit.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/14-alerts-and-thresholds.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/15-data-quality-checklist.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/16-volunteer-onboarding.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/17-firmware-updates.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/18-backup-and-retention.md -- ingested\n  + <checkout>/evals/quiet_engine/corpus/sources/19-school-outreach.md -- ingested (revised 1 existing object)\n  + <checkout>/evals/quiet_engine/corpus/sources/20-lessons-learned.md -- ingested (revised 2 existing objects)\nopenkos ingest: batch summary -- 20 file(s): 20 ingested, 0 re-ingested, 0 skipped, 3 extraction-degraded, 11 with extraction notice(s). Their Sources carry `extraction_notice`; `openkos lint` names all but the sole-object and chunk-partial disclosures.\n",
+          "stderr_tail": "on building' (+1 more)\nopenkos ingest: 2 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Storm alert thresholds, Deployment of environmental monitoring stations.\nopenkos ingest: 'data-retention-policy' matches existing 'concepts/data-retention-policy' (same type and title); revising it instead of writing a copy.\nopenkos ingest: concept extraction skipped -- Ollama stopped generation at the configured max_generation_tokens ceiling (8192) before the reply finished; the response is truncated and unusable.; keeping the Source only.\nopenkos ingest: extraction returned one object restating the source title; 1 extra re-ask call found nothing further\nopenkos ingest: 1 optional extraction call(s) failed and added nothing (reask: OllamaGenerationCapped); advisory only -- the extracted objects are unaffected and the Source is not marked\nopenkos ingest: judge dropped 5 candidate(s): 'Storm Warning Triggered', 'False Alarm Policy', 'Anemometer Health Monitoring' (+2 more)\nopenkos ingest: 8 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Storm Warning System, Alert Thresholds, Anemometer Health Check (+5 more).\nopenkos ingest: extraction returned one object restating the source title; 1 extra re-ask call found nothing further\nopenkos ingest: the only derived object restates this source; keeping it and marking the Source (extraction_notice: sole-object-restates-source)\nopenkos ingest: judge dropped 1 candidate(s): 'Radiation shield'\nopenkos ingest: 1 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Bench station.\nopenkos ingest: 'security-in-firmware-updates' repeats 'firmware-update-security' (same type, near-match title, same quoted source line); keeping the richer one, skipping this candidate.\nopenkos ingest: extraction returned one object restating the source title; 1 extra re-ask call added 13 object(s): First restore test, The workshop burns down, The club server's disk fails (+10 more)\nopenkos ingest: judge dropped 2 candidate(s): 'The club server', 'The workshop'\nopenkos ingest: 'tomas-weber' already exists for a different source; disambiguating this candidate to 'tomas-weber-2'.\nopenkos ingest: 'ana-ruiz' already exists for a different source; disambiguating this candidate to 'ana-ruiz-2'.\nopenkos ingest: judge dropped 2 candidate(s): 'Weather from data', 'Not to fit rain gauges on sheltered roofs'\nopenkos ingest: 2 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Measurement error, Correlation vs. cause.\nopenkos ingest: 'harbor-weather-network' matches existing 'projects/harbor-weather-network' (same type and title); revising it instead of writing a copy.\nopenkos ingest: merged extraction union exceeded the 24-candidate pre-judge ceiling; 2 merged candidate(s) never reached the judge: Relay and Connectivity Solutions, Environmental Challenges\nopenkos ingest: 11 derived object(s) carry no line quoted from the source -- stored anyway, but they cannot support a citation; check them against the source: Weather Station Design, MQTT Broker Integration, Sensor Calibration (+8 more).\nopenkos ingest: 20 of 24 extracted object(s) kept (cap reached); discarded: Power and Connectivity Solutions, Firmware and Software Updates, Recalibration and Maintenance (+1 more)\nopenkos ingest: 'harbor-weather-network' matches existing 'projects/harbor-weather-network' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 'storm-warning-system' matches existing 'concepts/storm-warning-system' (same type and title); revising it instead of writing a copy.\nopenkos ingest: 115 of 157 derived object(s) recorded a type_alternative on the document (most common: Concept/Procedure).\n"
+        },
+        "daemon_once": {
+          "args": [
+            "daemon",
+            "--once"
+          ],
+          "code": 0,
+          "elapsed_s": 139.444,
+          "timed_out": false,
+          "stdout_tail": "openkos daemon: maintenance: completed -- calls=62 done=7 deferred=0\n",
+          "stderr_tail": ""
+        },
+        "reindex": {
+          "args": [
+            "reindex"
+          ],
+          "code": 0,
+          "elapsed_s": 0.256,
+          "timed_out": false,
+          "stdout_tail": "openkos reindex: 0 embedded, 188 cache-hits, 0 pruned, 0 skipped, 0 embed-failed, 0 withheld.\n",
+          "stderr_tail": ""
+        }
+      },
+      "flags": [],
+      "config_text": "model: qwen3:8b  # local model served via Ollama; see tech_stack.md\nembedding_model: bge-m3  # 1024-dim; changing it forces a full re-embed\nreview: true              # show proposed changes and confirm before saving\ndefault_sensitivity: private\nconfidential_local_exemption: true  # send confidential concepts to a LOCAL LLM backend\nfreshness_window: 7d      # age after which a stamp is flagged for re-observation\nchat_timeout: 600         # seconds an LLM chat call may take before giving up\nmax_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call may generate\ncontext_window: 12288     # tokens the model holds at once (prompt + reply); unpinned it\n                          # reserves its own 32K default and ~10 GB. Refused below the\n                          # derived floor; blank the value to leave it unpinned.\n# backend: openai-compatible  # LLM backend family: \"ollama\" (default) or\n                          # \"openai-compatible\" (llama.cpp, LM Studio, vLLM, or\n                          # any server exposing /v1/chat/completions and\n                          # /v1/embeddings). Selecting openai-compatible\n                          # REQUIRES base_url below -- there is no packaged\n                          # default endpoint for it, unlike Ollama's. An\n                          # optional API key, if the server needs one, is read\n                          # only from the OPENKOS_OPENAI_API_KEY environment\n                          # variable -- never from this file.\n# base_url: http://127.0.0.1:8080  # chat endpoint for the selected backend.\n                          # UNSET by default: ollama then resolves OLLAMA_HOST\n                          # or its own packaged default; openai-compatible has\n                          # no default and refuses to start without this key.\n# embedding_base_url: http://127.0.0.1:8081  # separate endpoint used only for\n                          # embedding requests, for when the embedding model is\n                          # served by a different process or port than the\n                          # chat model. UNSET by default: embedding requests\n                          # fall back to base_url (or that backend's own\n                          # default).\n# temperature: 0.2        # sampling temperature forwarded as options.temperature.\n                          # UNSET by default -- unpinned, sampling follows whatever\n                          # the model's Modelfile ships (qwen3:8b: 0.6). Pinning it\n                          # REDUCES run-to-run variance; it does NOT guarantee identical\n                          # output across Ollama versions, hardware, or\n                          # OLLAMA_NUM_PARALLEL. 0 is a real, valid value (greedy\n                          # decoding); no value is recommended.\n# seed: 42                # sampling seed forwarded as options.seed. UNSET by default,\n                          # same caveat as temperature: reduces variance, is not a\n                          # determinism guarantee.\n# volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window\n#   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)\n#   volatile: 7d\n# type_tiers:             # per-concept-type volatility tier overrides (overrides\n#   Person: volatile      # the built-in registry default; see docs/adr/0007)\n# type_sensitivity_defaults:  # per-type birth offset above `default_sensitivity`,\n#   Person: 1             # in levels, clamped at confidential. Ships EMPTY --\n                          # every type is born at the floor unless you say\n                          # otherwise. Uncommenting the two lines above is the\n                          # recommended setting if this workspace holds material\n                          # about other people: a Person is then born one level\n                          # above the floor. The high-water-mark over cited\n                          # sources still wins whenever it is higher.\n                          # See docs/adr/0015 and docs/adr/0017.\n# models:                 # per-task model overrides. The packaged defaults:\n#   edge_typing: gemma2:27b  # every task follows `model:` EXCEPT `adjudication`\n                          # and `contradiction`, which run on gemma4:26b-a4b\n                          # (the judge model: `ollama pull gemma4:26b-a4b`;\n                          # see docs/adr/0047). It does not fit in memory next\n                          # to `model:`, so Ollama swaps them by stage. Opt out\n                          # per task with `contradiction: null` (follows\n                          # `model:`), or name another tag. The packaged judge\n                          # applies on the ollama backend only. A missing judge\n                          # fails only its own stage, naming the pull command.\n                          # gemma2:27b is the one measured upgrade for\n                          # edge_typing: it names relations better\n                          # (0.81 vs qwen3:8b's 0.44 on evals/edge_typing/)\n                          # but costs `ollama pull gemma2:27b` -- 15.6 GB.\n                          # Uncomment BOTH lines above to opt in; uncommenting\n                          # only one is invalid YAML. Keep it scoped to\n                          # edge_typing -- it is the worst extractor measured,\n                          # so it must never become `model:`. `openkos doctor`\n                          # reports whether each is installed.\n                          # Valid tasks: extraction, adjudication, edge_typing,\n                          # volatility_typing, contradiction.\n# union_judge: true       # union-of-runs + selector-judge extraction (default\n                          # on); set false to restore the single-run, single-cap\n                          # extraction path byte-for-byte\n# sufficiency_check: true # before answering, ask one cheap model call whether\n                          # the retrieved context can answer the question at\n                          # all, and refuse instead of answering from the\n                          # model's own knowledge (default ON). Measured zero\n                          # false refusals over 100 grounded checks. Costs one\n                          # extra chat call per answered query (median ~1.1s\n                          # against a default Ollama, which serialises); set\n                          # false to remove it and restore the pre-#760 path\n# revision_history: false  # attach each retrieved concept's earlier versions\n                          # (reached via supersedes/revises) to it as labelled\n                          # history (default OFF). UNMEASURED --\n                          # no harness has scored its citation quality or\n                          # prompt-budget cost yet. Not recommended to enable.\n# attach_at_ingest: false  # turn OFF revising an existing concept at ingest\n                          # (default ON). When a newly extracted object has\n                          # the same type and normalized title as an existing\n                          # concept (Event and Person excepted), ingest adds\n                          # the source to that concept instead of writing a\n                          # `-2` copy. `false` restores the copies.\n# concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one\n                          # by one (default OFF). Chunked sources only; below\n                          # the chunk threshold there are no windows to\n                          # overlap. Measured ~20% off a whole ingest -- BUT\n                          # only if the Ollama server was started with\n                          # OLLAMA_NUM_PARALLEL=2 or more, which openkos\n                          # cannot set for you. Against a default server the\n                          # requests just queue: same results, no speedup, and\n                          # each call's chat_timeout runs while it waits, so a\n                          # tight timeout can start firing. Leave it off unless\n                          # the server is configured.\n                          # An on/off switch, not a worker count: the count is\n                          # fixed at 2, where the measured speedup saturates.\n                          # See evals/ingest_concurrency/report.md.\n# rationale_language: Spanish  # language `curate` writes its Metadata and\n                          # Structure RATIONALES in. UNSET by default, and\n                          # unset does NOT mean English: it means each item's\n                          # rationale is written in whichever language that\n                          # concept type's (or that edge's) documents happen to\n                          # dominate, so one report can mix English and Spanish\n                          # rows. Set it to pin them to one language.\n                          # Free-form -- the name is passed to the model\n                          # verbatim, so a name it does not recognise is not an\n                          # error: you get whatever it makes of it, visible in\n                          # the very next curate table. Blank, multi-line and\n                          # non-string values are refused.\n                          # Setting it appends one sentence to both rationale\n                          # prompts; leaving it unset sends the prompt that\n                          # shipped, byte for byte, which is the configuration\n                          # every measurement in evals/ was taken under.\n                          # Affects those two rationales only -- extraction,\n                          # query and adjudication still follow the source\n                          # language, which is correct there.\n# unattended:             # limits for the unattended runner and the folder watch.\n#   max_calls_per_pass: 100   # PROVISIONAL defaults, shown here; absent section\n#   max_calls_per_day: 500    # means all of them. Counted in chat calls; 0 means\n#   max_sources_per_pass: 10  # no model call / no source import. A pass is one\n#   job_deadline_seconds: 1800        # job; the deadline is >= 60. Interactive\n#   maintenance_interval_seconds: 86400  # runs are never limited. Interval >= 300.\n#   quiet_seconds: 30       # a watched file must be unchanged this long (>= 1)\n#   inbox: ../inbox         # folder to watch for new sources; unset = watch off.\n                            # Must be an existing directory, never raw/, bundle/,\n                            # .openkos/ or the workspace root. Read-only to openkos.\n#   watch_backend: poll     # poll (default) | native. native adds an OS\n                            # file-notification wake-up to the daemon's idle wait\n                            # (needs `pip install 'openkos[watch]'`; without it\n                            # the daemon warns and polls). Polling still runs\n                            # underneath, so no file is ever missed.\n\n# Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF\n# bundle root) live next to this file. The engine does not read layout\n# keys from this config; making them configurable is future work.\n\n# quiet_engine harness\nunattended:\n  inbox: \"<work-root>/binding-work-20261005T044306Z/main-judges-qwen3/main-judges-qwen3-r3/inbox\"\nmodels:\n  adjudication: \"qwen3:8b\"\n  contradiction: \"qwen3:8b\"\n",
+      "pending_after_maintenance": {
+        "present": true,
+        "open": 105,
+        "by_kind": {
+          "identity": 49,
+          "relation_type": 50,
+          "revision": 1,
+          "volatility": 5
+        }
+      },
+      "time_to_cite": {
+        "question_id": "probe-part-number",
+        "landed_s": 56.011,
+        "first_cited_answer_s": 71.093,
+        "censored_at_s": null,
+        "queries": [
+          {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 15.083,
+            "citations": [
+              "decisions/anemometer-repair-and-spare-parts-order",
+              "procedures/anemometer-maintenance-and-repair-procedure"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": true,
+            "answer_has_token": true,
+            "t_start_s": 56.011,
+            "t_end_s": 71.093
+          }
+        ],
+        "import_reported": true,
+        "import_reported_s": 71.115
+      },
+      "version_import": {
+        "landed": true,
+        "import_reported": true,
+        "elapsed_s": 75.977
+      },
+      "daemon": {
+        "exit": 0,
+        "log_tail": "openkos daemon: watch: completed -- calls=3 done=1 deferred=0\nopenkos daemon: what changed -- 1 automatic commit\n  ee0ecca ingest 21-breakwater-gust-incident.md (+4 concepts) [concepts/anemometer-calibration-and-sensor-health, decisions/anemometer-repair-and-spare-parts-order, events/anemometer-health-check-alert, procedures/anemometer-maintenance-and-repair-procedure, +1 more] -- undo: git revert ee0ecca\n  undo newest first: every commit appends to log.md, so a revert is safe only while that commit is the latest one.\nopenkos daemon: 50 relation suggestion(s) waiting -- review them with `openkos curate --structure`.\nopenkos ingest: '21-breakwater-gust-incident.md' changed since it was imported; importing it as 'raw/21-breakwater-gust-incident-2.md', a new version. The earlier raw copy is kept.\nopenkos ingest: 'sources/21-breakwater-gust-incident-2' is a new version of 'sources/21-breakwater-gust-incident'; to retire the earlier Source, run: openkos relate sources/21-breakwater-gust-incident-2 supersedes sources/21-breakwater-gust-incident\nopenkos daemon: watch: completed -- calls=3 done=1 deferred=0\nopenkos daemon: what changed -- 1 automatic commit\n  f331373 ingest 21-breakwater-gust-incident-2.md (+5 concepts) [concepts/dashboard-annotations-and-data-correction, concepts/data-quality-review-and-correction-process, decisions/replace-anemometer-cups-with-hx-7745-sets, procedures/anemometer-repair-and-maintenance, +2 more] -- undo: git revert f331373\n  undo newest first: every commit appends to log.md, so a revert is safe only while that commit is the latest one.\nopenkos daemon: 50 relation suggestion(s) waiting -- review them with `openkos curate --structure`.\nopenkos daemon: stopped.\n"
+      },
+      "stale_check": {
+        "before": {
+          "probe-part-number": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 11.457,
+            "citations": [
+              "decisions/anemometer-repair-and-spare-parts-order",
+              "procedures/anemometer-repair-and-maintenance",
+              "sources/21-breakwater-gust-incident",
+              "sources/21-breakwater-gust-incident-2"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/21-breakwater-gust-incident",
+              "sources/21-breakwater-gust-incident-2"
+            ]
+          },
+          "probe-v2-corrected-gust": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 10.749,
+            "citations": [
+              "concepts/data-quality-review-and-correction-process",
+              "sources/21-breakwater-gust-incident-2"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/21-breakwater-gust-incident-2"
+            ]
+          },
+          "mqtt-qos": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 8.308,
+            "citations": [
+              "procedures/quality-of-service",
+              "sources/04-mqtt-topics"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/04-mqtt-topics"
+            ]
+          },
+          "raw-retention": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 11.685,
+            "citations": [
+              "concepts/data-retention-policy",
+              "concepts/data-buckets",
+              "sources/05-data-storage"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/05-data-storage"
+            ]
+          },
+          "pole-height": {
+            "code": 0,
+            "timed_out": false,
+            "elapsed_s": 8.511,
+            "citations": [
+              "decisions/approval-of-weather-station-on-pole-14",
+              "sources/13-city-council-permit"
+            ],
+            "cites_expected": true,
+            "refused": false,
+            "stale_warning": false,
+            "answer_has_token": true,
+            "expected_sources": [
+              "sources/13-city-council-permit"
+            ]
+          }
+        },
+        "after_reindex": {},
+        "false_refusals": [],
+        "stale_misses": []
+      },
+      "documents": 188,
+      "sources_in_bundle": 22,
+      "suffix_duplicates": {
+        "counted": [],
+        "excluded": [
+          {
+            "type": "Person",
+            "key": "ana ruiz",
+            "base": "people/ana-ruiz",
+            "members": [
+              "people/ana-ruiz",
+              "people/ana-ruiz-2"
+            ],
+            "duplicates": 1,
+            "deprecated": []
+          },
+          {
+            "type": "Person",
+            "key": "tomas weber",
+            "base": "people/tomas-weber",
+            "members": [
+              "people/tomas-weber",
+              "people/tomas-weber-2"
+            ],
+            "duplicates": 1,
+            "deprecated": []
+          }
+        ],
+        "count": 0,
+        "excluded_count": 2
+      },
+      "automatic_actions": [
+        {
+          "sha": "ee0eccafb7da746e4a474c259206a68ea444a026",
+          "subject": "openkos: ingest 21-breakwater-gust-incident.md (+4 concepts)",
+          "touched": [
+            "concepts/anemometer-calibration-and-sensor-health",
+            "decisions/anemometer-repair-and-spare-parts-order",
+            "events/anemometer-health-check-alert",
+            "procedures/anemometer-maintenance-and-repair-procedure",
+            "sources/21-breakwater-gust-incident"
+          ],
+          "listed_with_undo": true
+        },
+        {
+          "sha": "f3313735a9ca5aa3bceb0eb49c90c8a44193bf48",
+          "subject": "openkos: ingest 21-breakwater-gust-incident-2.md (+5 concepts)",
+          "touched": [
+            "concepts/dashboard-annotations-and-data-correction",
+            "concepts/data-quality-review-and-correction-process",
+            "decisions/replace-anemometer-cups-with-hx-7745-sets",
+            "procedures/anemometer-repair-and-maintenance",
+            "procedures/ordering-and-managing-workshop-spares",
+            "sources/21-breakwater-gust-incident-2"
+          ],
+          "listed_with_undo": true
+        }
+      ],
+      "pending_final": {
+        "present": true,
+        "open": 106,
+        "by_kind": {
+          "identity": 49,
+          "relation_type": 51,
+          "revision": 1,
+          "volatility": 5
+        }
+      },
+      "pending_text": "stinct)\n    or: openkos duplicates --keep-distinct events/calibration-of-the-sailing-school-station --keep-distinct procedures/recalibration\n  - people/ana-ruiz, people/ana-ruiz-2 [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct people/ana-ruiz --keep-distinct people/ana-ruiz-2\n  - people/tomas-weber, people/tomas-weber-2 [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct people/tomas-weber --keep-distinct people/tomas-weber-2\n  - procedures/recalibration, procedures/sensor-calibration [pending]\n    resolve: openkos adjudicate --apply (y merges, s skips, d records keep-distinct)\n    or: openkos duplicates --keep-distinct procedures/recalibration --keep-distinct procedures/sensor-calibration\n\nrelation_type (51)\n  note: 50 is the per-run candidate cap, so more may exist; `openkos suggest-relations` reports the total.\n  - concepts/alert-thresholds, concepts/storm-warning-system [pending]\n    resolve: openkos curate --structure\n  - concepts/calibrating-a-replacement-sensor-in-the-field, concepts/calibration-procedure-for-replacement-sensors [pending]\n    resolve: openkos curate --structure\n  - concepts/calibrating-a-replacement-sensor-in-the-field, concepts/sensor-calibration-and-troubleshooting [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-and-data-accuracy, concepts/calibration-and-published-data [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-and-data-accuracy, concepts/sensor-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-example, events/calibration-of-the-sailing-school-station [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-frequency-and-maintenance, concepts/sensor-maintenance-and-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-frequency-and-maintenance, procedures/recalibration [pending]\n    resolve: openkos curate --structure\n  - concepts/calibration-procedure-for-replacement-sensors, concepts/sensor-calibration-and-troubleshooting [pending]\n    resolve: openkos curate --structure\n  - concepts/common-calibration-mistakes, concepts/sensor-calibration-and-troubleshooting [pending]\n    resolve: openkos curate --structure\n  - concepts/common-calibration-mistakes, procedures/sensor-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/community-and-collaboration, concepts/community-and-institutional-support [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard, concepts/harbor-weather-network [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard-access, concepts/data-accessibility [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard-annotation, concepts/data-annotation [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard-panel-conventions, concepts/data-visualization-conventions [pending]\n    resolve: openkos curate --structure\n  - concepts/dashboard-performance, concepts/data-performance-optimization [pending]\n    resolve: openkos curate --structure\n  - concepts/data-buckets, concepts/data-retention-policy [pending]\n    resolve: openkos curate --structure\n  - concepts/documentation-and-knowledge-sharing, decisions/documentation-practices [pending]\n    resolve: openkos curate --structure\n  - concepts/firmware-update-server, concepts/over-the-air-updates [pending]\n    resolve: openkos curate --structure\n  - concepts/grafana-dashboard, concepts/weather-data-visualization [pending]\n    resolve: openkos curate --structure\n  - concepts/harbor-weather-network, concepts/harbor-weather-network-station [pending]\n    resolve: openkos curate --structure\n  - concepts/harbor-weather-network-station, concepts/hardware-components-of-a-weather-station [pending]\n    resolve: openkos curate --structure\n  - concepts/harbor-weather-network-station, procedures/building-a-harbor-weather-network-station [pending]\n    resolve: openkos curate --structure\n  - concepts/lora-communication, concepts/lora-connectivity [pending]\n    resolve: openkos curate --structure\n  - concepts/lora-stations, procedures/updating-a-lora-station [pending]\n    resolve: openkos curate --structure\n  - concepts/mqtt-topic-layout, procedures/topic-structure [pending]\n    resolve: openkos curate --structure\n  - concepts/published-archive, events/the-published-archive-is-exported [pending]\n    resolve: openkos curate --structure\n  - concepts/sensor-calibration, concepts/sensor-maintenance-and-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/sensor-calibration-and-troubleshooting, procedures/sensor-calibration [pending]\n    resolve: openkos curate --structure\n  - concepts/sensor-maintenance-and-calibration, procedures/recalibration [pending]\n    resolve: openkos curate --structure\n  - concepts/student-volunteer-program, people/lena-okafor [pending]\n    resolve: openkos curate --structure\n  - concepts/student-volunteer-program, projects/harbor-weather-network [pending]\n    resolve: openkos curate --structure\n  - concepts/versioning-of-firmware-images, concepts/versioning-system [pending]\n    resolve: openkos curate --structure\n  - concepts/waterfront-stations, procedures/mounting-points-selection-process [pending]\n    resolve: openkos curate --structure\n  - concepts/waterfront-stations, projects/waterfront-stations-installation [pending]\n    resolve: openkos curate --structure\n  - concepts/waterfront-stations, projects/waterfront-stations-setup [pending]\n    resolve: openkos curate --structure\n  - concepts/weather-station-on-pole-14, decisions/approval-of-weather-station-on-pole-14 [pending]\n    resolve: openkos curate --structure\n  - concepts/weather-station-on-pole-14, projects/solar-powered-weather-station-on-pole-14 [pending]\n    resolve: openkos curate --structure\n  - decisions/approval-of-weather-station-on-pole-14, projects/solar-powered-weather-station-on-pole-14 [pending]\n    resolve: openkos curate --structure\n  - decisions/firmware-updates-are-staged, procedures/staged-firmware-update-mechanism [pending]\n    resolve: openkos curate --structure\n  - decisions/staged-rollout-of-new-firmware-images, decisions/staged-rollout-strategy [pending]\n    resolve: openkos curate --structure\n  - people/ana-ruiz, people/tomas-weber [pending]\n    resolve: openkos curate --structure\n  - people/lena-okafor, projects/harbor-weather-network [pending]\n    resolve: openkos curate --structure\n  - people/lena-okafor, projects/school-outreach-initiative [pending]\n    resolve: openkos curate --structure\n  - procedures/first-evening-onboarding, procedures/second-evening-onboarding [pending]\n    resolve: openkos curate --structure\n  - procedures/mounting-points-selection-process, projects/waterfront-stations-setup [pending]\n    resolve: openkos curate --structure\n  - procedures/volunteer-onboarding, projects/harbor-weather-network [pending]\n    resolve: openkos curate --structure\n  - projects/harbor-weather-network, projects/school-outreach-initiative [pending]\n    resolve: openkos curate --structure\n  - projects/waterfront-stations-installation, projects/waterfront-stations-setup [pending]\n    resolve: openkos curate --structure\n  - sources/21-breakwater-gust-incident-2, sources/21-breakwater-gust-incident [pending]\n    resolve: openkos relate sources/21-breakwater-gust-incident-2 supersedes sources/21-breakwater-gust-incident\n\nvolatility (5)\n  - type Decision [pending]\n    resolve: openkos curate\n  - type Event [pending]\n    resolve: openkos curate\n  - type Place [pending]\n    resolve: openkos curate\n  - type Project [pending]\n    resolve: openkos curate\n  - type Source [pending]\n    resolve: openkos curate\n\nrevision (1)\n  - decisions/approval-for-permanent-mount-on-pole-14, decisions/approval-of-weather-station-on-pole-14 [pending]\n    resolve: openkos revisions\n",
+      "curate": {
+        "item_prompts": 20,
+        "item_prompts_by_stage": {
+          "Identity": 12,
+          "Metadata": 8
+        },
+        "manual_merge_commands": [
+          "procedures/sensor-calibration concepts/sensor-calibration",
+          "concepts/calibration-errors-and-their-impact procedures/recalibration",
+          "concepts/calibration-frequency-and-maintenance procedures/recalibration",
+          "procedures/sensor-calibration concepts/sensor-calibration-and-troubleshooting",
+          "procedures/sensor-calibration concepts/sensor-maintenance-and-calibration",
+          "projects/harbor-weather-network concepts/harbor-weather-network",
+          "projects/waterfront-stations-installation concepts/waterfront-stations",
+          "concepts/waterfront-stations projects/waterfront-stations-setup",
+          "concepts/weather-station-on-pole-14 projects/solar-powered-weather-station-on-pole-14",
+          "decisions/firmware-updates-are-staged procedures/staged-firmware-update-mechanism"
+        ],
+        "gate_prompts": 0,
+        "unrecognized_prompts": [],
+        "hidden_by_caps": 7,
+        "decisions": 30,
+        "fed_files": 22,
+        "decisions_per_source": 1.3636,
+        "elapsed_s": 160.808,
+        "exit": 0,
+        "timed_out": false
+      },
+      "wall_clock_s": 2497.1
+    }
+  ]
+}
