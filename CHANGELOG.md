@@ -16,13 +16,49 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-05
+
+The Quiet Engine. Ingest revises an existing concept instead of forking a `-N` duplicate, the contradiction and identity judges move to `gemma4:26b-a4b`, a review prompt can be skipped without recording a ruling, `curate` stops presenting relation suggestions by default, and every unattended pass ends with a digest of what it changed and how to undo it.
+
+### Upgrading from 0.4.0
+
+Most of this release needs nothing from you. These are the points that do, or that you will notice:
+
+- **`ingest` now revises an existing concept instead of writing `<slug>-N`.** When an extracted candidate has the same OKF type and the same normalized title as an existing, non-deprecated concept, ingest rewrites that concept (provenance unioned, the new evidence appended, `version` bumped by 1) rather than forking a duplicate. This is on by default, including for the daemon's inbox watch. Set `attach_at_ingest: false` in `openkos.yaml` to restore the previous fork behaviour. `Event` and `Person` always keep forking, because their titles are homonym-prone.
+- **The contradiction and identity judges default to `gemma4:26b-a4b` on the Ollama backend.** Run `ollama pull gemma4:26b-a4b` (about 21.5 GB in memory next to `bge-m3`; on a 32 GB machine Ollama runs one chat model at a time and swaps by stage). A missing judge fails only its own stage and names the pull command. To keep following `model:` instead, opt out with `models: {contradiction: null, adjudication: null}`. An explicit `models:` entry still wins on any backend; the packaged judge applies only when `backend: ollama`.
+- **Identity review prompts changed: `y` / `s` / `d`.** In `adjudicate --apply` and `curate`, Enter and `n` now skip the pair (nothing is written, no ruling is recorded, the pending row stays open). Only `d` records a permanent keep-distinct ruling. Before, `n` recorded one. The other review prompts (Structure, Metadata, `suggest-relations --apply`) take `[y/N/s]`, and `a` accepts the rest of a stage on Structure and Metadata.
+- **`openkos curate` no longer presents relation suggestions by default.** The Structure stage is skipped (no graph walk, no model call, no prompt); the suggestions stay queued, and `curate`, `openkos pending` and the daemon digest show how many wait. Run `openkos curate --structure` (or `--accept structure`) to review them. Skipping it leaves edges untyped, so the Contradictions stage judges fewer pairs until you do.
+- **Cross-type merges are refused unless you opt in.** `merge`, `adjudicate --apply` and `curate`'s Identity stage no longer merge two concepts of different OKF types; pass `--include-cross-type` (now accepted by `adjudicate --apply` as well as `--apply-same`) to allow it.
+- **A merge now bumps the survivor's `version`** by 1 (a missing or non-integer value counts as 1), and `unmerge` restores it byte for byte. A cross-type merge also records the absorbed type as the survivor's `type_alternative` when it has none.
+- **`forget` can retire a superseded Source without `--force`.** `forget <old-source> --scope source` no longer refuses a Source that something supersedes: in the same confirmed forget it removes the superseding Source's `supersedes` edge and detaches the old Source from surviving concepts. A concept whose entire provenance is a superseded Source is now treated as deprecated when read (`list`, `answer`, retrieval), with nothing written to its file.
+
 ### Added
 
 - `openkos daemon` ends a pass that committed on its own with a "what changed" digest on stdout: one line per automatic commit, newest first, each with its short sha, the concepts it touched and its `git revert` undo (#1268).
+- `ingest` attaches an extracted candidate to an existing same-type, same-key concept instead of forking it, controlled by the `attach_at_ingest` key; the preview, summary and `log.md` say so ([ADR-0045](docs/adr/0045-ingest-attaches-to-an-existing-same-type-same-key-concept-instead-of-forking-it.md), #1268, #1283).
+- `lint` reports unreferenced files under `raw/` as an advisory finding, and `forget` discloses a Source's orphaned `raw/` copy and the sequence that erases it (#1262).
+- Review prompts accept a skip answer (`s`), and Structure and Metadata accept `a` to accept the rest of the stage (#1264, #1274).
 
 ### Changed
 
-- `openkos curate` no longer presents its Structure stage by default (#1268). Relation suggestions are still computed by the unattended engine and `suggest-relations` and kept in the pending-work queue; `curate` skips the stage (no graph walk, no model call, no prompt) and its summary, `openkos pending` and the daemon's digest say how many wait and that `openkos curate --structure` reviews them. `--accept structure` also runs it; `review: false` does not. Skipping it leaves edges untyped, so the Contradictions stage, which derives its candidate pairs from typed edges, judges fewer pairs until you do.
+- `openkos curate` no longer presents its Structure stage by default (#1268). Relation suggestions are still computed by the unattended engine and `suggest-relations` and kept in the pending-work queue; `curate` skips the stage (no graph walk, no model call, no prompt) and its summary, `openkos pending` and the daemon's digest say how many wait and that `openkos curate --structure` reviews them. `--accept structure` also runs it; `review: false` does not.
+- The contradiction and identity judges default to `gemma4:26b-a4b` on the Ollama backend ([ADR-0047](docs/adr/0047-the-contradiction-and-identity-judges-default-to-gemma4-26b-a4b-and-the-engine-runs-one-chat-model-at-a-time.md), #1269, #1287).
+- Deprecation follows the provenance of a superseded Source ([ADR-0046](docs/adr/0046-effective-deprecation-follows-the-provenance-of-a-superseded-source.md), #1259, #1263, #1284).
+- Cross-type identity merges are refused unless `--include-cross-type` is passed (#1271), and a merge bumps the survivor's `version` (#1290).
+- The production LLM prompts moved out of Python constants into files under `src/openkos/prompts/`, behind one loader; no prompt wording changed ([ADR-0043](docs/adr/0043-llm-prompts-are-files-versioned-by-content-hash.md), #1277, #1279).
+- Polish from the 0.4.0 end-to-end run: the merge preview no longer shows a contradictory "appended, not reconciled" line or a no-op sensitivity change, `--help` text no longer cites issue numbers, `daemon --help` names the inbox import as its one write, and a refusal that found matches says so (#1267, #1290).
+- `pending` points identity rows at `adjudicate --apply` and notes when a kind has reached the per-run candidate cap (#1265, #1280).
+- The roadmap records The Quiet Engine arc before MVP 5 ([ADR-0044](docs/adr/0044-the-quiet-engine-arc-precedes-interoperability.md), #1281).
+
+### Fixed
+
+- `suggest-relations` and `suggest-volatility` name the resolved task model, and its `ollama pull` command, when that model is not installed, instead of naming `model:` (#1294, #1297).
+- A cross-type merge no longer discards the absorbed type silently: it is recorded as `type_alternative` on the survivor, or the merge preview says it is discarded because the survivor already has one (#1293, #1297).
+- The inbox watch applies the same text-source extension allowlist as `ingest <dir>`: a `.docx`, a binary or a `Makefile` in the inbox is no longer imported (#1261).
+- A daemon inbox import refreshes the derived indexes, so a freshly imported file is retrievable and `ask` no longer gives a false sufficiency refusal (#1260).
+- An unchanged inbox file no longer spends the per-pass source budget or call-budget estimate, and each watch line names its file and what happened to it (#1265, #1276, #1295).
+- A maintenance stage's candidate cap is disclosed when it binds (#1265, #1276).
+- `merge` retires every open pending row that names the absorbed concept, and `purge` says it drops the whole pending-work queue (#1266, #1280).
 
 ## [0.4.0] - 2026-10-02
 
@@ -3533,7 +3569,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jasonssdev/openkos/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jasonssdev/openkos/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jasonssdev/openkos/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jasonssdev/openkos/compare/v0.2.14...v0.3.0

@@ -45,11 +45,10 @@ DEFAULT_JUDGE_MODEL = "gemma4:26b-a4b"
 `adjudication` (issue #1269, ADR-0047). It met every pre-registered bar on
 those two roles and no other; Label and Generate had no winner, so every
 other task stays on `DEFAULT_MODEL`. It is a 26B-parameter mixture-of-
-experts model (about 20 GB resident with `bge-m3`), so it does not
-co-reside with `qwen3:8b` inside the 24 GB budget of the 32 GB hardware
+experts model (about 21.5 GB resident with `bge-m3` at `num_ctx` 12288), so
+it does not co-reside with `qwen3:8b` inside the 24 GB budget of the 32 GB hardware
 floor: the engine runs one chat model at a time and Ollama swaps them by
 stage."""
-
 DEFAULT_TASK_MODELS: dict[str, str | None] = {
     "edge_typing": None,
     "adjudication": DEFAULT_JUDGE_MODEL,

@@ -13,6 +13,20 @@ OpenKOS turns your scattered text into a living, portable knowledge base your AI
 
 ---
 
+## System requirements
+
+OpenKOS runs local models through Ollama. Ollama keeps one chat model resident at a time plus the `bge-m3` embedder, so peak memory is set by the largest model in use. Figures are measured at the production context window (`num_ctx` 12288) on a Mac with unified memory.
+
+| Setup | Memory used by Ollama | Recommended machine |
+|---|---|---|
+| Default (`qwen3:8b` + the `gemma4:26b-a4b` judge for contradictions and identity) | peak about 21.5 GB while the judge runs; about 7.2 GB otherwise | 32 GB unified memory or RAM (24 GB for Ollama, the rest for the OS) |
+| Judges opted out (`models: {contradiction: null, adjudication: null}`) | about 7.2 GB (about 9.1 GB with `concurrent_extraction: true`) | 16 GB |
+| Below 16 GB | a 3-4B chat model; weaker extraction | 8 GB is the floor, not a comfortable target |
+
+- **Disk:** about 25 GB for the three default models (`qwen3:8b` 5.2 GB, `bge-m3` 1.2 GB, `gemma4:26b-a4b` 18 GB).
+- **Discrete GPUs (NVIDIA and similar):** an estimate, not measured. Each model must fit in VRAM to run at full speed (Ollama offloads the rest to the CPU, much slower): about 24 GB of VRAM for the judge, about 8-12 GB for `qwen3:8b`.
+- `openkos doctor` reports whether each task's model is installed.
+
 ## Quickstart
 
 Five steps from a fresh machine to your first cited answer. Everything runs on your computer: no accounts, no API keys, nothing leaves your machine.
@@ -27,7 +41,7 @@ ollama pull bge-m3          # embedding model — semantic search (~1.2 GB)
 ollama pull gemma4:26b-a4b  # judge model — contradictions and identity (large; ~21.5 GB in memory)
 ```
 
-> The first two cover ingest, query and everything else. The third is the default for the two judging jobs, `contradictions` and `adjudicate` (and `curate`'s Identity and Contradictions stages); without it only those fail, with the exact pull command. It is large, so the engine runs one chat model at a time (it swaps between `qwen3:8b` and the judge as stages change), and you want a machine with 32 GB or more. On a smaller one, opt out per task with `models: {contradiction: null, adjudication: null}` in `openkos.yaml` and the judges follow `model:`.
+> The first two cover ingest, query and everything else. The third is the default for the two judging jobs, `contradictions` and `adjudicate` (and `curate`'s Identity and Contradictions stages); without it only those fail, with the exact pull command. It is large, so the engine runs one chat model at a time and swaps between `qwen3:8b` and the judge as stages change; see [System requirements](#system-requirements) for memory and disk. On a smaller machine, opt out per task with `models: {contradiction: null, adjudication: null}` in `openkos.yaml` and the judges follow `model:`.
 >
 > For naming relations during curation there is also an **optional measured upgrade** (`ollama pull gemma2:27b`, **15.6 GB**) that nearly doubles relation-type accuracy — opt in later with `models: {edge_typing: gemma2:27b}` in `openkos.yaml`; `openkos doctor` and `curate` both point at it.
 
@@ -48,6 +62,8 @@ openkos --version
 That command is also how you track unreleased `main` at any time.
 
 > **Upgrading a workspace created before 0.2.11?** Run `openkos reindex` once afterwards. From 0.2.11 the embedding store keeps chunk-backed vectors, so the rest of every long source is visible to semantic search; a store written before that has the old schema, which cannot be migrated in place. It is detected on open, dropped, and recreated, so that first `reindex` re-embeds the workspace and reports `no embedding-model tag stored (fresh or dropped store)` rather than a model change. Nothing in `bundle/` is touched: the derived indexes rebuild from it, which is the point of keeping them derived.
+
+> **Upgrading from 0.4.0?** `ingest` now revises an existing same-type, same-key concept instead of writing a `-N` duplicate (`attach_at_ingest: false` restores the old behaviour). The contradiction and identity judges default to `gemma4:26b-a4b` on Ollama: run `ollama pull gemma4:26b-a4b`, or opt out with `models: {contradiction: null, adjudication: null}`. On identity review prompts Enter and `n` now skip and only `d` records a keep-distinct ruling. `curate` no longer presents relation suggestions unless you pass `--structure`, and cross-type merges need `--include-cross-type`. The [changelog](https://github.com/jasonssdev/openkos/blob/main/CHANGELOG.md) lists the rest.
 
 > **Upgrading from 0.3.1?** A repeated key in `openkos.yaml` is now refused (`openkos doctor` names it). Do not run 0.3.0 or older at the same time as this version on one workspace: the transitional temp-directory lock is no longer taken. A watched file edited after import now imports as a new version and queues its supersession instead of being refused. Human-readable stderr text changed (it is not a parsing interface). The [changelog](https://github.com/jasonssdev/openkos/blob/main/CHANGELOG.md) lists the rest.
 
