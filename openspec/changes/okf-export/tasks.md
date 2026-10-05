@@ -76,7 +76,7 @@ advisory only), stacked in order.
 
 ## Phase 2 — Exported frontmatter (`model/okf.py`)
 
-- [ ] 2.1 [TEST] `tests/unit/model/test_okf_export_frontmatter.py`:
+- [x] 2.1 [TEST] `tests/unit/model/test_okf_export_frontmatter.py`:
   `export_frontmatter(metadata, allowed)` drops `relations:` entries whose
   target is not allowed and removes the key when empty; drops non-allowed
   `provenance:` ids and removes the key when empty; recomputes `sources:`
@@ -86,19 +86,21 @@ advisory only), stacked in order.
   keeps every other key's value unchanged (`source_frontmatter`,
   `status_derived_from`, `freshness`, `generated`, `version`, unknown keys).
   RED: function missing.
-- [ ] 2.2 [IMPL] Add `export_frontmatter` and an `export_document(text,
-  allowed, superseded)` wrapper that also applies `apply_deprecation_export`
-  and returns the SAME text object when nothing changes. GREEN 2.1.
-- [ ] 2.3 [TEST] Identity: a document with no pointer into a withheld id and
+- [x] 2.2 [IMPL] Add `export_frontmatter` and an `export_document(text, *,
+  allowed, superseded, walk_complete)` wrapper that also applies
+  `project_deprecation_export` (never withdrawing on an incomplete walk) and
+  returns the SAME text object when nothing changes. GREEN 2.1.
+- [x] 2.3 [TEST] Identity: a document with no pointer into a withheld id and
   no stripped key round-trips byte-for-byte (`is` the input); a superseded
   exported concept gets `status: deprecated` + marker while the input text
-  is not mutated; an incomplete superseded set never withdraws. RED until
-  2.2's identity path exists.
-- [ ] 2.4 [TEST] Seam guard: extend the existing seam test so
-  `export_frontmatter`'s key names (`origin_key`, `merged_from`) are
-  referenced through `okf` constants only, and `sources:` is never read
-  back outside `okf` (the `test_sources_key_guard.py` AST guard stays green
-  with the new code). [MUT] read `metadata["sources"]` in the new function,
+  is not mutated; an incomplete superseded set never withdraws. (Written in
+  the same file as 2.1 and observed RED with it: the module attribute did
+  not exist.)
+- [x] 2.4 [TEST] Seam guard: `sources:` is never read back (the function
+  only calls `refresh_sources`), the stripped keys are named through `okf`
+  constants (`EXPORT_STRIPPED_KEYS`), and `export_frontmatter` joins
+  `test_sources_key_guard.py`'s pinned provenance-writer allow-list (it
+  failed that guard until added). [MUT] remove the allow-list entry,
   observe RED, revert.
 
 ## Phase 3 — Pointers in bodies and reserved files (`bundle/`)
