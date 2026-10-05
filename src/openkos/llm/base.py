@@ -94,10 +94,18 @@ class InstalledModel:
 
     `family` is `None` when the backend omits family information entirely
     -- always still returned, never dropped. Moved here from `ollama.py`
-    (issue #995, PR 6) -- see the module docstring."""
+    (issue #995, PR 6) -- see the module docstring.
+
+    `digest` is the backend's content digest for the model as listed (Ollama:
+    64 hex characters, no `sha256:` prefix), or `None` when the backend does
+    not report one (an `openai-compatible` backend never does) or reported
+    something unusable. It exists only in memory: never written to a file.
+    It is the LAST field, with a default, so every two-field construction
+    stays valid."""
 
     tag: str
     family: str | None
+    digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

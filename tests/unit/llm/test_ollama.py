@@ -917,6 +917,63 @@ def test_list_models_missing_family_key_yields_none_family() -> None:
     assert result == [InstalledModel(tag="qwen3:8b", family=None)]
 
 
+_FULL_DIGEST = "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+
+
+def test_list_models_surfaces_the_listed_digest() -> None:
+    """An entry's `digest` string is carried unchanged onto the returned
+    `InstalledModel` (spec: "The digest is surfaced"). Two entries with
+    different digests prove the value is read per entry, not constant."""
+    other = "ab" * 32
+    body = _tags_body(
+        [
+            {"model": "gemma4:26b-a4b", "digest": _FULL_DIGEST},
+            {"model": "qwen3:8b", "digest": other},
+        ]
+    )
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, []))
+
+    result = client.list_models()
+
+    assert [m.digest for m in result] == [_FULL_DIGEST, other]
+
+
+@pytest.mark.parametrize(
+    "entry_extra",
+    [
+        pytest.param({}, id="missing"),
+        pytest.param({"digest": None}, id="null"),
+        pytest.param({"digest": ""}, id="empty-string"),
+        pytest.param({"digest": 12345}, id="non-string"),
+    ],
+)
+def test_list_models_unusable_digest_is_none_and_entry_kept(
+    entry_extra: dict[str, Any],
+) -> None:
+    """A missing, null, empty or non-string `digest` yields `None` and the
+    entry (and its neighbours) still list (spec: "An entry without a digest
+    is still returned")."""
+    body = _tags_body(
+        [
+            {"model": "bad:1", "details": {"family": "qwen"}, **entry_extra},
+            {"model": "good:1", "digest": _FULL_DIGEST},
+        ]
+    )
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, []))
+
+    result = client.list_models()
+
+    assert result == [
+        InstalledModel(tag="bad:1", family="qwen", digest=None),
+        InstalledModel(tag="good:1", family=None, digest=_FULL_DIGEST),
+    ]
+
+
+def test_installed_model_digest_defaults_to_none() -> None:
+    """The pre-existing two-field construction stays valid."""
+    assert InstalledModel(tag="a", family="b").digest is None
+
+
 def test_list_models_falls_back_to_name_field() -> None:
     """An entry with `name` but no `model` key still yields its tag (D2 field
     variance: Installed entry exposes its tag only under name); family is
