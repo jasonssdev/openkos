@@ -705,6 +705,21 @@ def try_load_frontmatter(text: str) -> tuple[dict[str, object], str] | None:
         return None
 
 
+def concept_metadata(text: str) -> dict[str, object] | None:
+    """A concept document's frontmatter mapping, or `None` when `text` has
+    no parseable frontmatter block -- the same two failures `_iter_docs`
+    reports as `parse_error` (an unparseable block, or none at all), for a
+    caller that already holds the text (okf-export, #1301: it keeps the
+    bytes it judged, for its drift check)."""
+    try:
+        post = _parse_post(text)
+    except FrontmatterError:
+        return None
+    if post.handler is None:
+        return None
+    return dict(post.metadata)
+
+
 def parse_frontmatter_fragment(text: str) -> object:
     """Parse a fragment of a frontmatter block (for example one `key: value`
     line) with the same safe loader the codec uses.

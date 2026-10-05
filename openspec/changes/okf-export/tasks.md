@@ -140,33 +140,46 @@ advisory only), stacked in order.
 
 ## Phase 4 — The service (`application/export_service.py`)
 
-- [ ] 4.1 [TEST] `tests/unit/application/test_export_service.py`:
-  `plan_export(workspace, include_private)` walks once and returns the
-  planned files (sorted), withheld counts by reason, and the status-drift
-  count; `.state/`, other dot-directories, non-`.md` files and `raw/` are
-  never in the plan. RED: module missing.
-- [ ] 4.2 [IMPL] `plan_export`, composing Phases 1–3 and
-  `lifecycle.superseded_from_metadata` over the whole bundle. GREEN 4.1.
-- [ ] 4.3 [TEST] `publish_export(plan, target)`: writes to a dot-prefixed
-  staging sibling, renames to `target` on success; a forced conformance
-  violation (monkeypatched transform dropping `type`) exits with a refusal,
-  leaves no target and no staging; a withheld id planted in a fenced code
-  block refuses via the leak check naming the file; an input rewritten
-  between plan and publish refuses with the drift outcome (CLI exit 3) and
-  leaves no target. RED: missing.
-- [ ] 4.4 [IMPL] `publish_export` with `check_conformance`, the leak check
-  (every withheld id's `/<id>.md`, relative `<id>.md` and bare-id forms over
-  every staged byte), the input re-read, and stale-staging cleanup for a
-  dead pid. GREEN 4.3.
-- [ ] 4.5 [TEST] Canary guard (ADR-0028 parity): a fixture with a
-  confidential canary (id, title, body marker) linked from a public and a
-  private concept, related to and cited by them; under both
-  `include_private` values no staged or published byte contains any canary
-  marker. [MUT] disable the relations filter, observe the leak check refuse
-  (not publish); disable the leak check too, observe the canary test RED.
-  Revert both, purge `__pycache__`.
-- [ ] 4.6 [TEST] Determinism: two `plan_export`+`publish_export` runs over an
-  unchanged workspace with a fixed date produce byte-identical trees.
+- [x] 4.1 [TEST] `tests/unit/application/test_export_service.py`:
+  `plan_export(bundle, include_private, allow_below_source, today)` walks
+  once and returns the planned files (sorted), the boundary with reasons,
+  `withheld_ids`, the status-projection list and `skipped`; `.state/`,
+  other dot-directories, non-`.md` files, symlinks and `raw/` are never in
+  the plan; every pointer channel into a withheld concept is gone from the
+  planned text; a below-source concept is withheld without the flag. RED:
+  module missing.
+- [x] 4.2 [IMPL] `plan_export`, composing Phases 1–3,
+  `okf.concept_metadata` (new: the parse `_iter_docs` does, for text the
+  caller already holds) and `lifecycle.superseded_from_metadata` over the
+  whole bundle. GREEN 4.1.
+- [x] 4.3 [TEST] `publish_export(plan, target)`: stages in a dot-prefixed
+  sibling and renames on success (also into an existing empty directory); a
+  planted non-conformant document refuses as `conformance`, naming the file
+  relative to the bundle and never the staging path; a withheld id in a
+  fenced code block refuses as `leak`; an input changed, or a document
+  created, after planning refuses as `drift`; every refusal leaves no
+  target and no staging directory. `check_target` refuses the workspace and
+  anything inside it, a non-empty directory, a file, and a missing parent.
+  `leak_findings` finds every pointer form and no lookalike. RED: missing.
+- [x] 4.4 [IMPL] `publish_export`, `leak_findings`, `check_target`. GREEN
+  4.3. (Spec updated in the same commit: symlinks are skipped, not judged;
+  the token rule is stated exactly.)
+- [x] 4.5 [TEST] Canary guard (ADR-0028 parity): a confidential canary
+  linked inline, relatively and by reference, related to, cited in
+  `provenance`/`sources`, listed in `index.md` and `log.md`, with an
+  `origin_key`; under both `include_private` values no published byte holds
+  its id, title, body marker or `origin_key`. [MUT] relations filter
+  disabled: the leak check refuses (canary test RED, nothing published);
+  relations filter AND leak check disabled: the canary leaks (RED).
+- [x] 4.6 [TEST] Determinism: two exports of an unchanged workspace with a
+  fixed date are byte-identical.
+- [x] 4.7 [MUT] Staging not cleaned, rename before the checks, conformance
+  check off, leak check off, relative resolution off, empty withheld set,
+  drift on bytes off, drift on new documents off, inside-workspace accepted,
+  non-empty target accepted, body links not withheld, superseded set from
+  exported docs only: each RED. Bare words treated as ids SURVIVED until a
+  root-level-id test was added; re-run RED. Inverse edits, `__pycache__`
+  purged.
 
 ## Phase 5 — The verb (`cli/main.py`)
 

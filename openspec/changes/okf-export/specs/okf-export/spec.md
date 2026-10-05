@@ -31,7 +31,8 @@ and parses, carries a non-empty `type`, carries no `ingest_pending` marker,
 and its own `sensitivity` is `public`, or is `private` and the run was given
 `--include-private`. A `confidential`, absent, blank, non-string or
 unrecognized `sensitivity` MUST be withheld under every flag. A symlinked
-document MUST be withheld as unreadable. The predicate MUST live in
+document MUST NOT be read or exported (the bundle walk already refuses to
+read through symlinks) and MUST be reported as skipped. The predicate MUST live in
 `sensitivity.py` beside the other boundary predicates, MUST take only the
 documents' metadata, `include_private` and `allow_below_source`, and MUST
 NOT accept any parameter that admits `confidential`.
@@ -247,9 +248,12 @@ The export MUST build the whole output in a staging directory beside the
 target and run two checks over the staged tree before publishing it: OKF
 §11 conformance via `okf.check_conformance`, and a leak check that no
 staged file's bytes contain any withheld concept id as a token: a
-whitespace- or punctuation-delimited token that, after removing a leading
-`/` and a trailing `.md` or `#anchor`, equals a withheld id, or that
-resolves to one relative to the referring file. Here "withheld" means
+whitespace-, bracket-, quote- or punctuation-delimited token that contains
+`/` or ends in `.md` and that, after removing a leading `/` and a trailing
+`.md` or `#anchor`, equals a withheld id, or that ends in `.md` and
+resolves to one relative to the referring file. A bare word with neither
+is never treated as an id, so prose naming a root-level concept does not
+refuse the export. Here "withheld" means
 every concept document in the bundle that is not exported. If either
 check fails, the export MUST remove the staging directory, write nothing at
 the target, name the failing file and rule, and exit 1. Only when both pass
