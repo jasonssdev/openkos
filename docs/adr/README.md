@@ -87,3 +87,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0046](0046-effective-deprecation-follows-the-provenance-of-a-superseded-source.md) | Effective deprecation follows the provenance of a superseded Source; its export stays edge-only | Accepted | 2026-10-02 |
 | [0047](0047-the-contradiction-and-identity-judges-default-to-gemma4-26b-a4b-and-the-engine-runs-one-chat-model-at-a-time.md) | The contradiction and identity judges default to gemma4:26b-a4b, and the engine runs one chat model at a time | Accepted | 2026-10-04 |
 | [0048](0048-export-withholds-links-and-below-source-objects-at-the-boundary.md) | OKF export withholds link labels into withheld objects and objects labelled below their sources | Accepted | 2026-10-05 |
+| [0049](0049-structural-identity-class-merges-under-measured-constants.md) | The structural base/-N Identity class merges without prior consent under measured constants, one commit per run | Proposed | 2026-10-05 |
