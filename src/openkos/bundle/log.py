@@ -25,6 +25,22 @@ def render_log(today: date) -> str:
     )
 
 
+def render_export_log(today: date) -> str:
+    """Render the `log.md` an `openkos export` writes (okf-export, #1301,
+    decision 3): one dated `**Export**` entry that names no object.
+
+    The workspace's own `log.md` never leaves: its prose records `raw/` file
+    names, sensitivity transitions and forgotten objects, none of which can
+    be filtered fail-closed. Shaped like `render_log`, per OKF §9."""
+    return (
+        "# Directory Update Log\n"
+        "\n"
+        f"## {today.isoformat()}\n"
+        "\n"
+        "* **Export**: Exported this bundle from an OpenKOS workspace.\n"
+    )
+
+
 _SECTION_SPLIT_RE = re.compile(r"\n(?=## )")
 _SECTION_HEADER_RE = re.compile(r"\A## (.+)\n\n")
 

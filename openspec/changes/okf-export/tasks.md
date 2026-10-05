@@ -105,31 +105,38 @@ advisory only), stacked in order.
 
 ## Phase 3 — Pointers in bodies and reserved files (`bundle/`)
 
-- [ ] 3.1 [TEST] `tests/unit/bundle/test_links_withhold.py`:
-  `withhold_links(body, file, allowed)` rewrites inline bundle-relative,
-  inline relative (`./`, `../`, resolved against `file`) and reference-style
-  links to non-allowed ids per Q1's answer (recommended: label replaced by
-  `[withheld]`, target removed); keeps links to allowed ids, external URLs
-  and anchors; leaves fenced code untouched; the e2e Related-line example
-  from the spec reads `- [withheld] — contrasted with …`. RED: missing.
-- [ ] 3.2 [IMPL] Add `withhold_links` beside the existing scanner without
+- [x] 3.1 [TEST] `tests/unit/bundle/test_export_pointers.py`:
+  `withhold_links(body, file_id=..., exported=...)` replaces inline
+  bundle-relative, relative (`./`, `../`, bare, resolved against the file),
+  angle-bracketed, titled, anchored and percent-encoded links and images
+  into a withheld concept with `[withheld]`; removes a reference definition
+  into one and turns every use of its label (full, collapsed, shortcut,
+  case-insensitive) into `[withheld]`; keeps links to exported ids, the
+  root `index.md`, external URLs, anchors, non-`.md` paths and paths that
+  escape the bundle; leaves footnotes, fenced code and plain prose alone
+  (returning the same object). RED: function missing.
+- [x] 3.2 [IMPL] Add `withhold_links` beside the existing scanner without
   changing `_LINK_RE` or what `merge`/`forget` match. GREEN 3.1.
-- [ ] 3.3 [TEST] Regression: `find_inbound_link_rewrites` output is
-  unchanged over `examples/good-life-demo/bundle` before/after 3.2.
-- [ ] 3.4 [TEST] `tests/unit/bundle/test_index_export.py`:
-  `filter_index(text, allowed)` drops every bullet whose link resolves to a
-  non-allowed id, drops a heading left with no entries, keeps root
-  `okf_version` frontmatter, and the result passes `_check_reserved_structure`.
-  RED: missing.
-- [ ] 3.5 [IMPL] `filter_index`, reusing `_link_identity`. GREEN 3.4.
-- [ ] 3.6 [TEST] `tests/unit/bundle/test_log_export.py`: per Q3's answer
-  (recommended: `render_export_log(date)` yields a §9-shaped log with one
-  `**Export**` entry naming no object, and passes the reserved-structure
-  check). RED: missing.
-- [ ] 3.7 [IMPL] `render_export_log` (or the filter Q3 selects). GREEN 3.6.
-- [ ] 3.8 [MUT] Make `withhold_links` skip relative links, and make
-  `filter_index` keep headings; named tests must go RED. Revert, purge
-  `__pycache__`.
+- [x] 3.3 [TEST] Regression: `find_inbound_link_rewrites` over a synthetic
+  pair and over `examples/good-life-demo/bundle` still matches the same
+  files (green before and after 3.2, as a regression guard should be).
+- [x] 3.4 [TEST] `filter_index_for_export(text, exported)` drops every
+  bullet with ANY link to a withheld concept, drops a heading left with no
+  entries, keeps the root `okf_version` frontmatter, withholds prose links,
+  and the result passes `okf.check_conformance`. RED: missing.
+- [x] 3.5 [IMPL] `filter_index_for_export`, reusing `_LINK_RE` /
+  `_link_identity` and `withhold_links`. GREEN 3.4.
+- [x] 3.6 [TEST] `render_export_log(date)` yields a §9-shaped log with one
+  `**Export**` entry naming no object, conformant under
+  `okf.check_conformance`. RED: missing.
+- [x] 3.7 [IMPL] `render_export_log`. GREEN 3.6.
+- [x] 3.8 [MUT] Relative links unresolved, withheld check inverted, label
+  kept (unlink only), reference definitions kept, fenced lines edited,
+  index keeps empty headings, index checks only the first link, index prose
+  not withheld: each turned a named test RED. Percent-decoding removed
+  SURVIVED at first (the fail-closed direction hid it); a keep-direction
+  test for an encoded link to an exported concept was added and the
+  mutation re-run RED. Reverted by inverse edit, `__pycache__` purged.
 
 ## Phase 4 — The service (`application/export_service.py`)
 
