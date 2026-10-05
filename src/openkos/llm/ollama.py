@@ -680,9 +680,17 @@ class OllamaClient:
                     family = (
                         details.get("family") if isinstance(details, dict) else None
                     )
+                    raw_digest = entry.get("digest")
+                    digest = (
+                        raw_digest
+                        if isinstance(raw_digest, str) and raw_digest
+                        else None
+                    )
                     models.append(
                         InstalledModel(
-                            tag=tag, family=family if isinstance(family, str) else None
+                            tag=tag,
+                            family=family if isinstance(family, str) else None,
+                            digest=digest,
                         )
                     )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:

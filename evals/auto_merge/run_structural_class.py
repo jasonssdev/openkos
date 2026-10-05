@@ -5,10 +5,11 @@ pre-registered decision rules -- model-free.
 encodes the parts of it that need no model, so they are checked before any
 live run:
 
-- `in_structural_class(group)` -- the class, built only from existing
-  production code: `Tier.HIGH` (same normalized key), two members, one OKF
-  type outside `application.ingest.ATTACH_EXCLUDED_TYPES`, and a base/`-N`
-  family by `resolution.normalize.is_suffix_family`.
+- `in_structural_class(group)` -- the class, imported from production
+  (`application.auto_merge`: one predicate, no copy here), built only from
+  existing production code: `Tier.HIGH` (same normalized key), two members,
+  one OKF type outside `application.ingest.ATTACH_EXCLUDED_TYPES`, and a
+  base/`-N` family by `resolution.normalize.is_suffix_family`.
 - exposure, as `n of TOTAL` labelled pairs per fixture: the #1054 fixture and
   `evals/adjudication`'s fixture hold none of the class, which is why
   `structural_fixtures.py` exists.
@@ -62,7 +63,7 @@ from structural_fixtures import (  # noqa: E402
     STRUCTURAL_POSITIVE_PROBES,
 )
 
-from openkos.application.ingest import ATTACH_EXCLUDED_TYPES  # noqa: E402
+from openkos.application.auto_merge import in_structural_class  # noqa: E402
 from openkos.resolution import candidates as candidates_mod  # noqa: E402
 from openkos.resolution.candidates import CandidateGroup, Tier  # noqa: E402
 from openkos.resolution.normalize import is_suffix_family  # noqa: E402
@@ -80,20 +81,6 @@ RECOMMENDED_RECALL_MIN: Final[float] = 0.90
 # --------------------------------------------------------------------------- #
 # the class
 # --------------------------------------------------------------------------- #
-
-
-def in_structural_class(group: CandidateGroup) -> bool:
-    """Whether `group` is in the #1298 class. Structural only: no verdict, no
-    confidence, no file read. `cross_type_concern` and the stacked-body
-    guardrail stay separate production checks (ADR-0034's eligibility), which
-    the fixture self-test asserts for every labelled pair."""
-    if group.tier is not Tier.HIGH or len(group.member_ids) != 2:
-        return False
-    types = set(group.member_types)
-    if len(types) != 1 or types & ATTACH_EXCLUDED_TYPES:
-        return False
-    first, second = group.member_ids
-    return is_suffix_family(first, second) or is_suffix_family(second, first)
 
 
 @dataclass(frozen=True)
