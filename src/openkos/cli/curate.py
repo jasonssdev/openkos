@@ -1254,6 +1254,95 @@ def _run_auto_merge_pass(
     )
 
 
+def _identity_write_one(
+    ctx: CurateContext, prepared: application_lifecycle.PreparedMerge
+) -> bool:
+    """Write one consented Identity merge: the post-consent block the per-item
+    walk and the accept-recommended pre-pass both run, so the two paths cannot
+    drift (#1298).
+
+    Reconciliation per the context flags, then the commit phase that
+    re-validates everything the merge rests on, then `commit_merge`, then the
+    per-item commit disclosure. Returns `False` when a member vanished while
+    the prompt waited (nothing is written; the caller counts a skip). A drift
+    refusal raises `typer.Exit(code=3)` and a write failure
+    `typer.Exit(code=1)`, exactly as the walk always did."""
+    from openkos.cli import main as cli_main
+
+    layout = ctx.layout
+    # #688: the reconciliation runs AFTER this item's consent (the
+    # preview disclosed it) and BEFORE the drift re-check, so the model
+    # call sits inside the window the guard re-validates -- the exact
+    # ordering `merge` uses, via the exact same helper.
+    prepared = cli_main._apply_reconciliation(
+        ctx.root,
+        prepared,
+        no_reconcile=ctx.no_reconcile,
+        reconcile=ctx.reconcile,
+        verb="curate",
+    )
+
+    absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+    survivor_path = layout.bundle_dir / f"{prepared.survivor_canonical}.md"
+    # The commit phase (#1137): the prompt and the reconciliation call above
+    # held no workspace lock, so everything the merge rests on is
+    # re-validated under it.
+    with cli_main._commit_section_for(ctx.root)():
+        if not (survivor_path.exists() and absorbed_path.exists()):
+            # A member forgotten while the prompt waited: nothing is left
+            # to merge, and refusing the whole run would cost the stages
+            # still to come. Drop the item.
+            typer.echo(
+                "openkos curate: Identity: skipped "
+                f"{prepared.absorbed_canonical} -> "
+                f"{prepared.survivor_canonical} -- a member no longer exists.",
+                err=True,
+            )
+            return False
+        # `index.md`/`log.md` are re-composed over their current bytes
+        # below, not guarded: every verb appends to them, so a concurrent
+        # entry is kept beside this merge's own.
+        cli_main._reject_drifted_targets(
+            layout,
+            application_lifecycle.merge_drift_targets(
+                layout, prepared, include_catalog=False
+            ),
+            "curate",
+            deletes=frozenset({absorbed_path}),
+        )
+        prepared = cli_main._recomposed_catalog(
+            application_lifecycle.recompose_merge_catalog,
+            layout,
+            prepared,
+            verb="curate",
+        )
+        # The documents the plan only READ (the whole-bundle scan behind
+        # the reference rewrites and the survivor's sensitivity) are
+        # re-validated beside the write targets: the whole-verb lock no
+        # longer keeps their writers out.
+        cli_main._reject_read_drift(layout, prepared.read_dependencies, "curate")
+
+        try:
+            merge_sha = merge_service.commit_merge(
+                ctx.root, layout, prepared, autocommit=cli_main._autocommit
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos curate: Identity: failed while merging "
+                f"{prepared.absorbed_canonical} into "
+                f"{prepared.survivor_canonical} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+    # #800: Identity commits per accepted pair, before the next pair is
+    # even previewed, so the way back is per-item too. Indented under its
+    # item's lines. Silent when `_autocommit` degraded -- no sha, no commit
+    # to revert.
+    if merge_sha is not None:
+        cli_main._echo_commit_disclosure(merge_sha, prefix="  ")
+    return True
+
+
 def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     """The store partition + `adjudicate_candidates` over the fresh
     remainder + persist (#867, the verb's own serve contract via the same
@@ -1561,78 +1650,10 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                     )
             continue
 
-        # #688: the reconciliation runs AFTER this item's consent (the
-        # preview disclosed it) and BEFORE the drift re-check, so the model
-        # call sits inside the window the guard re-validates -- the exact
-        # ordering `merge` uses, via the exact same helper.
-        prepared = cli_main._apply_reconciliation(
-            ctx.root,
-            prepared,
-            no_reconcile=ctx.no_reconcile,
-            reconcile=ctx.reconcile,
-            verb="curate",
-        )
-
-        absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
-        survivor_path = layout.bundle_dir / f"{prepared.survivor_canonical}.md"
-        # The commit phase (#1137): the prompt and the reconciliation call above
-        # held no workspace lock, so everything the merge rests on is
-        # re-validated under it.
-        with cli_main._commit_section_for(ctx.root)():
-            if not (survivor_path.exists() and absorbed_path.exists()):
-                # A member forgotten while the prompt waited: nothing is left
-                # to merge, and refusing the whole run would cost the stages
-                # still to come. Drop the item.
-                typer.echo(
-                    "openkos curate: Identity: skipped "
-                    f"{prepared.absorbed_canonical} -> "
-                    f"{prepared.survivor_canonical} -- a member no longer exists.",
-                    err=True,
-                )
-                skipped += 1
-                continue
-            # `index.md`/`log.md` are re-composed over their current bytes
-            # below, not guarded: every verb appends to them, so a concurrent
-            # entry is kept beside this merge's own.
-            cli_main._reject_drifted_targets(
-                layout,
-                application_lifecycle.merge_drift_targets(
-                    layout, prepared, include_catalog=False
-                ),
-                "curate",
-                deletes=frozenset({absorbed_path}),
-            )
-            prepared = cli_main._recomposed_catalog(
-                application_lifecycle.recompose_merge_catalog,
-                layout,
-                prepared,
-                verb="curate",
-            )
-            # The documents the plan only READ (the whole-bundle scan behind
-            # the reference rewrites and the survivor's sensitivity) are
-            # re-validated beside the write targets: the whole-verb lock no
-            # longer keeps their writers out.
-            cli_main._reject_read_drift(layout, prepared.read_dependencies, "curate")
-
-            try:
-                merge_sha = merge_service.commit_merge(
-                    ctx.root, layout, prepared, autocommit=cli_main._autocommit
-                )
-            except (OSError, ValueError) as exc:
-                typer.echo(
-                    "openkos curate: Identity: failed while merging "
-                    f"{prepared.absorbed_canonical} into "
-                    f"{prepared.survivor_canonical} -- {exc}.",
-                    err=True,
-                )
-                raise typer.Exit(code=1) from exc
-        # #800: Identity commits per accepted pair, before the next pair is
-        # even previewed, so the way back is per-item too. Indented like the
-        # `  survivor:` line above, since it belongs to this item. Silent
-        # when `_autocommit` degraded -- no sha, no commit to revert.
-        if merge_sha is not None:
-            cli_main._echo_commit_disclosure(merge_sha, prefix="  ")
-        applied += 1
+        if _identity_write_one(ctx, prepared):
+            applied += 1
+        else:
+            skipped += 1
 
     if isinstance(batch.failure, BackendUnavailable | BackendModelNotFound):
         # Availability failures stay raise-shaped so the sequencer's handler
