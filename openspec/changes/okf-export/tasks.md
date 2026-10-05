@@ -219,14 +219,21 @@ advisory only), stacked in order.
 
 ## Phase 6 — Docs
 
-- [ ] 6.1 `docs/cli.md`: add the `openkos export` command entry (target
-  rules, `--include-private`, `--auto`, what is withheld and why, the two
-  self-checks, exit codes 0/1/3, no workspace write, prose not redacted),
-  and update the "not part of the CLI" orientation paragraph so it no longer
-  lists export as unbuilt. State behavior timelessly; no counts, no issue
-  numbers.
-- [ ] 6.2 `docs/roadmap.md`: MVP 5 status line moves from "not started" to
-  in progress only when the verb merges (shape change), nothing else.
-- [ ] 6.3 Run `openkos export` over every shipped example under
-  `examples/` with `--include-private --auto` and confirm conformance and a
-  clean leak check; record the result in the PR.
+- [x] 6.1 `docs/cli.md`: add the `openkos export` command entry (target
+  rules, `--include-private`, `--allow-below-source`, `--auto`, what is
+  withheld and why, what happens to pointers, the three checks, exit codes
+  0/1/3, no workspace write, prose not redacted), and update the "not part
+  of the CLI" orientation paragraph so it no longer lists export as unbuilt.
+  Stated timelessly; no counts, no issue numbers.
+- [x] 6.2 `docs/roadmap.md`: MVP 5 status moves from "not started" to "in
+  progress" (export ships, import next); `docs/knowledge-object-model.md`'s
+  sentence calling export/import "the remaining boundary" now says the
+  export boundary is live and import is still to come. Shape changes only.
+- [x] 6.3 Ran `openkos export ../out --include-private --auto` on a copy of
+  every shipped example that is a workspace: `examples/good-life-demo`
+  exported `concepts/epicureanism.md` and
+  `sources/notes-on-the-enchiridion-2026-07-05.md` (4 confidential
+  withheld), passed conformance and the leak check, and the exported
+  Epicureanism frontmatter is byte-identical to the workspace copy.
+  `examples/extraction-corpus` is an evaluation corpus, not a workspace
+  (no `openkos.yaml`), so there is nothing to export.

@@ -197,7 +197,7 @@ Where the community can contribute: fixtures with hard negatives for the structu
 
 *Goal: exchange knowledge with any OKF-speaking tool.*
 
-**Status: not started.**
+**Status: in progress.** OKF export, with sensitivity enforced at its boundary, ships as `openkos export`; import is next.
 
 Deliverables:
 
