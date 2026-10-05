@@ -568,3 +568,49 @@ def test_a_relation_type_kind_at_its_cap_names_the_verb_that_reports_the_total(
     result = runner.invoke(app, ["pending"])
 
     assert "`openkos suggest-relations` reports the total." in result.output
+
+
+def test_pending_says_how_many_relation_suggestions_wait_and_how_to_review_them(
+    workspace: WorkspaceLayout,
+) -> None:
+    """`curate` no longer presents Structure by default (#1268), so the queue
+    is where a person learns suggestions wait. A supersession is not one: it
+    has its own command and is not counted."""
+    conn = _queue(workspace)
+    _enqueue(
+        conn,
+        workspace,
+        "relation_type",
+        ("concepts/a", "concepts/b"),
+        payload='{"suggested_type": "references"}',
+    )
+    _enqueue(
+        conn,
+        workspace,
+        "relation_type",
+        ("concepts/c", "concepts/d"),
+        payload='{"suggested_type": "supersedes",'
+        ' "effective_source_id": "concepts/c", "effective_target_id": "concepts/d"}',
+    )
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert result.output.splitlines()[:2] == [
+        "Pending work: 2 open row(s).",
+        "1 relation suggestion(s) waiting -- review them with "
+        "`openkos curate --structure`.",
+    ]
+    assert "    resolve: openkos curate --structure" in result.output
+
+
+def test_pending_prints_no_waiting_line_when_no_suggestion_waits(
+    workspace: WorkspaceLayout,
+) -> None:
+    conn = _queue(workspace)
+    _enqueue(conn, workspace, "contradiction", ("concepts/a", "concepts/b"))
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert "relation suggestion" not in result.output

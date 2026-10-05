@@ -932,7 +932,7 @@ def vacuous_coverage_notice(plan: CandidatePlan) -> str | None:
         f"{plan.merged_judged} merged-body candidate(s) will be judged. "
         "A clean result here is NOT an all-clear. Apply relations first: "
         "`openkos suggest-relations` then `openkos relate`, or "
-        "`openkos curate`."
+        "`openkos curate --structure`."
     )
 
 

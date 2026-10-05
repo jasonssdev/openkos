@@ -20,6 +20,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 - `openkos daemon` ends a pass that committed on its own with a "what changed" digest on stdout: one line per automatic commit, newest first, each with its short sha, the concepts it touched and its `git revert` undo (#1268).
 
+### Changed
+
+- `openkos curate` no longer presents its Structure stage by default (#1268). Relation suggestions are still computed by the unattended engine and `suggest-relations` and kept in the pending-work queue; `curate` skips the stage (no graph walk, no model call, no prompt) and its summary, `openkos pending` and the daemon's digest say how many wait and that `openkos curate --structure` reviews them. `--accept structure` also runs it; `review: false` does not. Skipping it leaves edges untyped, so the Contradictions stage, which derives its candidate pairs from typed edges, judges fewer pairs until you do.
+
 ## [0.4.0] - 2026-10-02
 
 The Unattended Engine, hardened. The daemon can now wake on an OS file event (optional `openkos[watch]`), a watched file edited after import lands as a new version with its supersession queued for you to confirm, `openkos unrelate` removes a typed relation, and every verb's human-readable output follows one terminal-gated convention. A repeated key in `openkos.yaml` is now refused, and the transitional temp-directory workspace lock is gone.

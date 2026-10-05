@@ -1438,7 +1438,7 @@ def test_structure_applied_edge_names_the_commit_and_the_way_back(
     monkeypatch.setattr("openkos.cli.curate.suggest_edge_types", _fake_suggest)
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["curate"], input="y\ny\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\ny\n")
 
     assert result.exit_code == 0
     sha = _head_short_sha(tmp_path)
@@ -1932,7 +1932,7 @@ def test_identity_partial_batch_model_not_found_still_walks_then_skips_later_sta
     _partial_identity_batch(tmp_path, monkeypatch, OllamaModelNotFound("model missing"))
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["curate"], input="y\ny\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\ny\n")
 
     assert result.exit_code == 0
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
@@ -2759,7 +2759,7 @@ def test_structure_accepted_suggestion_writes_via_extracted_relate_core(
 
     # Identity's queue is empty (no prompt). Structure's cost gate consumes
     # one "y"; the per-suggestion [y/N/skip] prompt consumes a second "y".
-    result = runner.invoke(app, ["curate"], input="y\ny\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\ny\n")
 
     assert result.exit_code == 0
     source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
@@ -2807,7 +2807,7 @@ def test_structure_declined_suggestion_writes_nothing(
     # No Identity candidates: Identity finds an empty queue and does not
     # prompt. Structure's cost gate consumes "y"; the per-suggestion
     # [y/N/skip] prompt is declined with "n".
-    result = runner.invoke(app, ["curate"], input="y\nn\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\nn\n")
 
     assert result.exit_code == 0
     assert "Structure: applied 0, skipped 1." in _lines(result.stdout)
@@ -2876,7 +2876,7 @@ def test_structure_sees_post_merge_identity_state(
 
     # Identity's cost gate + per-pair prompt consume "y\ny"; Structure's
     # cost gate is never reached (its probe reports an empty queue).
-    result = runner.invoke(app, ["curate"], input="y\ny\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\ny\n")
 
     assert result.exit_code == 0
     assert seen_survivors == [True, False]
@@ -2944,7 +2944,7 @@ def test_structure_partial_batch_applies_completed_then_reports_failed_with_coun
 
     # Two stdin answers: Structure's cost gate `typer.confirm` consumes the
     # first "y", the per-suggestion `[y/N/skip]` prompt the second.
-    result = runner.invoke(app, ["curate"], input="y\ny\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\ny\n")
 
     assert result.exit_code == 0
     source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
@@ -2981,7 +2981,7 @@ def test_structure_partial_batch_unavailable_still_walks_then_skips_later_stages
     _partial_structure_batch(monkeypatch, OllamaUnavailable("connection refused"))
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["curate"], input="y\ny\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\ny\n")
 
     assert result.exit_code == 0
     source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
@@ -4618,7 +4618,7 @@ def test_structure_declined_edge_identity_listed_in_summary(
     _simulate_tty(monkeypatch)
 
     # Structure's cost gate consumes "y"; the per-suggestion prompt "n".
-    result = runner.invoke(app, ["curate"], input="y\nn\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\nn\n")
 
     assert result.exit_code == 0
     assert "Relate concepts/a -> concepts/b [references]? [y/N/s/a]" in result.stdout
@@ -4788,7 +4788,9 @@ def test_review_false_accepts_the_non_destructive_stages(
 ) -> None:
     """`review: false` in `openkos.yaml` finally reaches `curate` (#385):
     with no `--accept` flag it accepts every auto-acceptable stage, so
-    Structure applies both suggestions with no per-item prompt."""
+    Structure -- when asked for with `--structure` (#1268; `review: false`
+    alone does not run it) -- applies both suggestions with no per-item
+    prompt."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
@@ -4798,7 +4800,7 @@ def test_review_false_accepts_the_non_destructive_stages(
     _two_edge_structure_queue(monkeypatch)
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["curate"], input="y\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\n")
 
     assert result.exit_code == 0
     assert "Structure: applied 2, skipped 0." in _lines(result.stdout)
@@ -5237,7 +5239,7 @@ def test_accept_the_rest_is_not_offered_without_accept_structure(
     _abcd_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _typed_asymmetric_queue(monkeypatch, ["part_of"])
 
-    result = runner.invoke(app, ["curate"], input="y\nn\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\nn\n")
 
     assert "[y/N/s/a/r]" not in result.stdout
     assert "(direction model-suggested, unverified)? [y/N/s]" in result.stdout
@@ -5261,7 +5263,7 @@ def test_per_item_walk_marks_direction_unverified_only_on_asymmetric_types(
     _simulate_tty(monkeypatch)
 
     # The cost gate's "y", then a decline per suggestion.
-    result = runner.invoke(app, ["curate"], input="y\nn\nn\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\nn\nn\n")
 
     assert result.exit_code == 0
     assert "Relate concepts/a -> concepts/b [references]? [y/N/s/a]" in result.stdout
@@ -6160,7 +6162,7 @@ def test_structure_serves_what_suggest_relations_already_paid_for(
     )
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["curate"], input="y\nn\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\nn\n")
 
     assert result.exit_code == 0, result.stderr
     assert handed == [1, 0], "curate must hand the model zero already-typed edges"
@@ -6237,7 +6239,7 @@ def test_structure_reports_no_split_for_a_store_it_could_not_read(
     )
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["curate"], input="y\nn\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\nn\n")
 
     assert result.exit_code == 0, result.stderr
     # The read failure is still REPORTED -- silence would be a different
@@ -6318,7 +6320,7 @@ def test_structure_reports_a_store_it_read_even_when_nothing_served(
     )
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["curate"], input="y\nn\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\nn\n")
 
     assert result.exit_code == 0, result.stderr
     assert (
@@ -7078,7 +7080,7 @@ def test_structure_a_answer_accepts_the_rest_but_still_asks_asymmetric(
 
     # Cost gate "y"; `a` on the first symmetric prompt; the second symmetric
     # is NOT asked; the asymmetric part_of is asked and skipped.
-    result = runner.invoke(app, ["curate"], input="y\na\ns\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\na\ns\n")
 
     assert result.exit_code == 0
     assert "Relate concepts/a -> concepts/b [references]? [y/N/s/a]" in result.stdout
@@ -7099,7 +7101,7 @@ def test_structure_asymmetric_prompt_does_not_offer_the_stage_wide_a(
     _abcd_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _typed_asymmetric_queue(monkeypatch, ["part_of"])
 
-    result = runner.invoke(app, ["curate"], input="y\ns\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\ns\n")
 
     assert "(direction model-suggested, unverified)? [y/N/s]" in result.stdout
     assert "Structure: applied 0, skipped 1." in _lines(result.stdout)

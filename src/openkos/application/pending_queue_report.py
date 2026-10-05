@@ -8,15 +8,17 @@ nothing pending when nothing has looked would be a false all-clear.
 
 Only a row's kind, status, target ids and the resolving command are rendered.
 A row's payload is never put in the report, because proposal text can carry a
-person's words. Three payload fields are read for the listing only, because each
+person's words. Four payload fields are read for the listing only, because each
 is a name or a verdict rather than prose: a volatility row's concept type (its
 subject, as it has no target), a watch refusal's inbox path (the file to ingest)
-and an identity row's adjudication verdict (which verb can close it).
+an identity row's adjudication verdict (which verb can close it) and a relation
+row's suggested type (whether it is a supersession, which has its own command).
 """
 
 import json
 import shlex
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -47,7 +49,7 @@ ABSENT_QUEUE_NOTICE = (
 
 _RESOLVING_COMMAND = {
     "identity": "openkos duplicates --keep-distinct",
-    "relation_type": "openkos curate",
+    "relation_type": "openkos curate --structure",
     "volatility": "openkos curate",
     "contradiction": "openkos contradictions",
     "revision": "openkos revisions",
@@ -63,6 +65,36 @@ _CAPPED_KINDS = {
 uncapped total). The advisors keep at most that many candidates per run and
 the queue records no truncation, so a kind listed at the cap is the only trace
 of one that bound."""
+
+
+STRUCTURE_COMMAND = "openkos curate --structure"
+"""The one command that reviews the waiting relation suggestions: `curate`
+presents its Structure stage only on request."""
+
+
+def relation_suggestions_waiting(items: Iterable[pq.PendingItem]) -> int:
+    """How many OPEN `relation_type` rows of `items` are suggestions awaiting
+    review. A `supersedes` row is not one: it is a decision with its own
+    command (`openkos relate <newer> supersedes <older>`), listed by `pending`
+    under it, and `curate`'s Structure stage never offered it."""
+    return sum(
+        1
+        for item in items
+        if item.kind == "relation_type"
+        and item.status in pq.OPEN_STATUSES
+        and _payload(item).get("suggested_type") != "supersedes"
+    )
+
+
+def waiting_line(count: int) -> str | None:
+    """The sentence every surface uses to say suggestions wait, or `None` when
+    none do (nothing to say is nothing printed)."""
+    if count <= 0:
+        return None
+    return (
+        f"{count} relation suggestion(s) waiting -- review them with "
+        f"`{STRUCTURE_COMMAND}`."
+    )
 
 
 def resolving_command(kind: str) -> str:
@@ -238,6 +270,9 @@ def _listing_lines(report: PendingReport, *, include_all: bool) -> list[str]:
     if not visible and not include_all:
         return ["No open pending-work rows."]
     lines = [f"Pending work: {report.open_count} open row(s)."]
+    waiting = waiting_line(relation_suggestions_waiting(report.items))
+    if waiting is not None:
+        lines.append(waiting)
     for kind in pq.KINDS:
         rows = [i for i in visible if i.kind == kind]
         if not rows:

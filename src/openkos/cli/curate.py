@@ -57,7 +57,7 @@ import typer
 
 from openkos import config, lint, lock, sensitivity
 from openkos.application import backends as application_backends
-from openkos.application import curate_queue, merge_service
+from openkos.application import curate_queue, merge_service, pending_queue_report
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
@@ -210,6 +210,19 @@ class Stage:
     the second should have to think about it here rather than inherit a
     silence that happens to be wrong."""
 
+    opt_in_flag: str | None = None
+    """The flag that asks for this stage, or `None` for a stage that always
+    runs (#1268).
+
+    A stage that sets it is NOT presented, probed or computed by a plain
+    `curate`; the sequencer skips it and its summary line says how many
+    suggestions wait and which flag reviews them. Structure's suggestions come
+    from edge typing, measured at 0.36 type accuracy on the packaged model
+    (#1269), so presenting its cap's worth of prompts by default buried the
+    decisions a person can actually make. The suggestions are still computed
+    and kept as `relation_type` pending rows by the unattended engine; this
+    only decides whether `curate` puts them in front of the person."""
+
     task: str | None = None
     """Which measured task this stage's LLM calls belong to (issue #515), or
     `None` for a stage that makes none.
@@ -268,6 +281,14 @@ class CurateContext:
     -- the pre-#385 behavior. Membership is only ever populated from
     `auto_acceptable` stages, which is why no code downstream re-checks
     whether Identity slipped in: it structurally cannot."""
+    opted_in: frozenset[str] = frozenset()
+    """Names of the opt-in stages (`Stage.opt_in_flag`) this run asked for
+    (#1268), resolved ONCE by `resolve_opted_in_stages` from `--structure` and
+    `--accept`.
+
+    Empty by default, so a context built without it runs no opt-in stage --
+    the fail-closed direction: a forgotten thread-through hides a stage and
+    says so in the summary, it never spends model calls nobody asked for."""
     no_reconcile: bool = False
     """Whether Identity's merges skip the #645 merged-body reconciliation
     pass (issue #688) -- `curate --no-reconcile`, the same opt-out lever
@@ -575,6 +596,50 @@ def resolve_accepted_stages(
     if review:
         return frozenset()
     return frozenset(stage.name for stage in _STAGES if stage.auto_acceptable)
+
+
+def resolve_opted_in_stages(
+    *, structure: bool, explicit_accept: frozenset[str] | None
+) -> frozenset[str]:
+    """The opt-in stages this run asked for (#1268).
+
+    `--structure` asks for Structure. So does `--accept structure`: naming a
+    stage to accept in bulk is a request to run it, and refusing to would make
+    the flag a silent no-op. `review: false` does NOT ask for anything: it is
+    standing consent to save without confirming, written for the verbs that
+    always ran, and it must not turn on a stage the person never requested.
+    `explicit_accept` is `parse_accepted_stages`' result, never the
+    config-derived set."""
+    asked: set[str] = set()
+    if structure:
+        asked.add("Structure")
+    if explicit_accept:
+        asked.update(
+            stage.name
+            for stage in _STAGES
+            if stage.opt_in_flag is not None and stage.name in explicit_accept
+        )
+    return frozenset(asked)
+
+
+def not_reviewed_notice(ctx: CurateContext, stage: Stage) -> str:
+    """The summary remainder for an opt-in stage this run did not present: how
+    many suggestions wait (the same count `pending` and the daemon digest
+    state) and the flag that reviews them. Reads the queue only; no model."""
+    rows = curate_queue.read_open_rows(ctx.layout, "relation_type")
+    waiting = pending_queue_report.relation_suggestions_waiting(
+        row.item for row in rows
+    )
+    command = f"{pending_queue_report.STRUCTURE_COMMAND}"
+    if waiting:
+        return (
+            f"not reviewed this run -- {waiting} relation suggestion(s) "
+            f"waiting; review them with `{command}`."
+        )
+    return (
+        "not reviewed this run -- no relation suggestions are waiting; "
+        f"`{command}` computes and reviews them."
+    )
 
 
 def _accepts(ctx: CurateContext, stage_name: str) -> bool:
@@ -2413,6 +2478,7 @@ _STAGES: tuple[Stage, ...] = (
             "asymmetric types are still asked per item, since their "
             "direction is model-suggested and unverified"
         ),
+        opt_in_flag="--structure",
         task="edge_typing",
     ),
     Stage(
@@ -2476,6 +2542,15 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
                     status="empty",
                     notice="not attempted -- Preconditions halted this run.",
                 )
+            )
+            continue
+
+        if stage.opt_in_flag is not None and stage.name not in ctx.opted_in:
+            # #1268: not probed, not computed, not presented. The probe walks
+            # the graph and the run spends model calls; neither happens for a
+            # stage nobody asked for.
+            outcomes.append(
+                StageOutcome(status="empty", notice=not_reviewed_notice(ctx, stage))
             )
             continue
 

@@ -807,7 +807,7 @@ def test_status_state2_edges_present_reports_counts(
 
     assert result.exit_code == 0
     assert (
-        "1 of 1 concept-to-concept edge(s) untyped — run `openkos curate` "
+        "1 of 1 concept-to-concept edge(s) untyped — run `openkos curate --structure` "
         "to type them." in result.stdout
     )
     assert "Nothing needs attention." not in result.stdout

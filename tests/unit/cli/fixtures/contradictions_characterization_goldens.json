@@ -4,7 +4,7 @@
     "findings_rows": null,
     "state_files": {},
     "stderr": "",
-    "stdout": "openkos contradictions: workspace at <ROOT>\n\n50 of 60 candidate edge(s) checked for contradictions (cap reached)\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n"
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n50 of 60 candidate edge(s) checked for contradictions (cap reached)\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate --structure`.\n"
   },
   "corrupt_findings_db": {
     "exit_code": 0,
@@ -502,7 +502,7 @@
     "findings_rows": null,
     "state_files": {},
     "stderr": "",
-    "stdout": "openkos contradictions: workspace at <ROOT>\n\n1 candidate edge(s) withheld among objects of unjudged source(s) sources/s: their extraction was stored without judge selection (#772); re-ingest the source so a judge selects, then reindex to reconsider them\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n"
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\n1 candidate edge(s) withheld among objects of unjudged source(s) sources/s: their extraction was stored without judge selection (#772); re-ingest the source so a judge selects, then reindex to reconsider them\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate --structure`.\n"
   },
   "raise_generic": {
     "exit_code": 1,
@@ -808,7 +808,7 @@
     "exit_code": 0,
     "findings_rows": null,
     "state_files": {},
-    "stderr": "openkos contradictions: warning -- the graph has no applied relations, so typed-edge contradiction coverage is empty; only 2 merged-body candidate(s) will be judged. A clean result here is NOT an all-clear. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n",
+    "stderr": "openkos contradictions: warning -- the graph has no applied relations, so typed-edge contradiction coverage is empty; only 2 merged-body candidate(s) will be judged. A clean result here is NOT an all-clear. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate --structure`.\n",
     "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 2 candidate(s) served from persisted findings; 0 judged fresh.\n\nCandidate relations unavailable \u2014 run `openkos reindex` (vectors.db missing).\n"
   },
   "vacuous_plan_with_merged_verdict": {
@@ -839,7 +839,7 @@
       }
     ],
     "state_files": {},
-    "stderr": "openkos contradictions: warning -- the graph has no applied relations, so typed-edge contradiction coverage is empty; only 1 merged-body candidate(s) will be judged. A clean result here is NOT an all-clear. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n",
+    "stderr": "openkos contradictions: warning -- the graph has no applied relations, so typed-edge contradiction coverage is empty; only 1 merged-body candidate(s) will be judged. A clean result here is NOT an all-clear. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate --structure`.\n",
     "stdout": "openkos contradictions: workspace at <ROOT>\n\n0 of 1 candidate(s) served from persisted findings; 1 judged fresh.\n\n[CONTRADICTS] concepts/survivor0 (merged content, absorbed concepts/absorbed0) (confidence: 0.91)\n  next: read both bodies first -- the judge can flag compatible statements; only if they truly conflict, run openkos unmerge concepts/survivor0 concepts/absorbed0 (LIFO-enforced: refuses unless this is the survivor's most recent unreversed merge)\n  - claim m1\n  rationale: merged body disagrees\n\n"
   },
   "zero_state_embeddings_missing": {
@@ -854,7 +854,7 @@
     "findings_rows": null,
     "state_files": {},
     "stderr": "",
-    "stdout": "openkos contradictions: workspace at <ROOT>\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate`.\n"
+    "stdout": "openkos contradictions: workspace at <ROOT>\n\nThe graph has no typed edges yet. Apply relations first: `openkos suggest-relations` then `openkos relate`, or `openkos curate --structure`.\n"
   },
   "zero_state_typed_edges_none": {
     "exit_code": 0,

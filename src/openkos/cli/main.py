@@ -10337,7 +10337,7 @@ def status() -> None:
         )
     # #387: an UNTYPED concept-to-concept edge is pending curation work, so
     # it earns a needs-attention line that says how many and names the verb
-    # that types them (`openkos curate`). A fully-typed edge count is a
+    # that types them (`openkos curate --structure`). A fully-typed edge count is a
     # graph-density metric with no action, which is exactly what this
     # section must not carry -- and `status` has no informational section
     # for derived-graph metrics ("Bundle contents" is pinned to the disk
@@ -10350,7 +10350,7 @@ def status() -> None:
         if untyped:
             needs_attention.append(
                 f"{untyped} of {total} concept-to-concept edge(s) untyped — "
-                "run `openkos curate` to type them."
+                "run `openkos curate --structure` to type them."
             )
     # The pending-work queue and the last unattended job: rows and a job that
     # needs a human are actionable; an absent or unreadable store is reported
@@ -11860,7 +11860,7 @@ def _zero_edge_state_message(
             return (
                 "The graph has no typed edges yet. Apply relations first: "
                 "`openkos suggest-relations` then `openkos relate`, or "
-                "`openkos curate`."
+                "`openkos curate --structure`."
             )
         return "No concept relationships in the graph yet."
     untyped = total - typed
@@ -14965,14 +14965,23 @@ def curate(
         "--include-deprecated",
         help="Include deprecated and superseded concepts (excluded by default).",
     ),
+    structure: bool = typer.Option(
+        False,
+        "--structure",
+        help=(
+            "Also run the Structure stage: review the suggested relation "
+            "types one by one. Off by default; the suggestions are kept and "
+            "counted in the summary, `pending` and the daemon's digest."
+        ),
+    ),
     accept: str | None = typer.Option(
         None,
         "--accept",
         metavar="STAGES",
         help=(
             "Comma-separated stages whose per-item prompts are accepted in "
-            "bulk (structure, metadata). Identity is never accepted in "
-            "bulk: its merges delete a concept."
+            "bulk (structure, metadata); naming structure also runs it. "
+            "Identity is never accepted in bulk: its merges delete a concept."
         ),
     ),
     no_reconcile: bool = typer.Option(
@@ -15115,6 +15124,9 @@ def curate(
         include_deprecated=include_deprecated,
         local_exemption=local_exemption,
         accepted_stages=accepted_stages,
+        opted_in=curate_module.resolve_opted_in_stages(
+            structure=structure, explicit_accept=explicit_accept
+        ),
         no_reconcile=no_reconcile,
         reconcile=reconcile,
         backend_factories=_backend_factories(),

@@ -52,6 +52,7 @@ from openkos.application import (
     contradictions_service,
     digest,
     duplicates_service,
+    pending_queue_report,
     reindex_service,
     revisions,
     watch_notify,
@@ -504,7 +505,7 @@ def _report(result: JobResult) -> None:
     )
 
 
-def _report_digest(results: Sequence[JobResult]) -> None:
+def _report_digest(root: Path, results: Sequence[JobResult]) -> None:
     """End a pass that committed on its own with the 'what changed' digest: each
     commit's short sha, the concepts it touched and its undo on ONE line, newest
     first (#1268). Stdout, beside the job reports; silent when the pass made no
@@ -519,6 +520,13 @@ def _report_digest(results: Sequence[JobResult]) -> None:
     for item in items:
         output.echo_wrapped(f"  {item}", hanging="    ")
     output.echo_wrapped(f"  {note}", hanging="  ")
+    waiting = pending_queue_report.waiting_line(
+        pending_queue_report.relation_suggestions_waiting(
+            pending_queue_report.read_snapshot(config.WorkspaceLayout(root)).open_items
+        )
+    )
+    if waiting is not None:
+        typer.echo(f"openkos daemon: {waiting}")
 
 
 def _idle_seconds(
@@ -640,7 +648,7 @@ def serve(
             )
             for result in results:
                 _report(result)
-            _report_digest(results)
+            _report_digest(root, results)
             if results:
                 announcer.reset()
             if once or token.is_set():

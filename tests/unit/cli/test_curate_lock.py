@@ -420,7 +420,7 @@ def test_structure_types_and_asks_without_the_lock_then_relates_with_it(
         before=lambda: at_write.append(lock_is_free(tmp_path)),
     )
 
-    result = runner.invoke(app, ["curate", "--auto"])
+    result = runner.invoke(app, ["curate", "--structure", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     assert "Structure: applied 1, skipped 0." in result.stdout.splitlines()
@@ -440,7 +440,7 @@ def test_structure_refuses_with_exit_3_when_the_lock_is_busy_at_the_write(
     with contextlib.ExitStack() as stack:
         _answer(monkeypatch, on_prompt=hold_the_lock_from(stack, tmp_path, acquired))
 
-        result = runner.invoke(app, ["curate", "--auto"])
+        result = runner.invoke(app, ["curate", "--structure", "--auto"])
 
     assert acquired == [True]
     assert result.exit_code == 3, result.stderr
@@ -470,7 +470,7 @@ def test_an_edge_suggestion_is_persisted_only_for_the_content_it_typed(
         before=lambda: at_persist.append(lock_is_free(tmp_path)),
     )
 
-    result = runner.invoke(app, ["curate", "--auto"])
+    result = runner.invoke(app, ["curate", "--structure", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     stored = _stored_edge_suggestions(tmp_path)
@@ -497,7 +497,7 @@ def test_an_endpoint_forgotten_during_the_prompt_drops_the_relation(
     _answer(monkeypatch, on_prompt=_forget_target)
     source_before = source.read_bytes()
 
-    result = runner.invoke(app, ["curate", "--auto"])
+    result = runner.invoke(app, ["curate", "--structure", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     assert "Structure: applied 0, skipped 1." in result.stdout.splitlines()
