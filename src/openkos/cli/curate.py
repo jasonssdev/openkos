@@ -56,6 +56,7 @@ from typing import Literal
 import typer
 
 from openkos import config, lint, lock, sensitivity
+from openkos.application import auto_merge as application_auto_merge
 from openkos.application import backends as application_backends
 from openkos.application import curate_queue, merge_service, pending_queue_report
 from openkos.application import lifecycle as application_lifecycle
@@ -69,6 +70,7 @@ from openkos.llm.base import (
     BackendError,
     BackendModelNotFound,
     BackendUnavailable,
+    InstalledModel,
     LLMBackend,
 )
 from openkos.model import okf
@@ -96,6 +98,7 @@ from openkos.resolution.edge_typing import (
     quarantined_candidate_notice,
     suggest_edge_types,
 )
+from openkos.resolution.normalize import is_suffix_family
 from openkos.resolution.volatility_typing import TierSuggestion, suggest_volatility
 from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
@@ -311,6 +314,14 @@ class CurateContext:
     Setting BOTH is refused at the command's front door, so a context
     carrying both holds a bug; `_reconcile_planned` reads `no_reconcile`
     first regardless."""
+    auto_merge: bool = False
+    """Whether this run may merge the measured structural Identity class
+    without a per-item answer -- `curate --auto-merge` (#1298, ADR-0049).
+
+    Per-run and never persisted: no config key reads into it. Defaults to
+    `False` so a context built without it fails closed -- Identity asks about
+    every merge, exactly as before the flag existed. It is NOT consent to
+    model spend (`auto` is), and it is not an `--accept` stage."""
     backend_factories: application_backends.BackendFactories | None = None
     """The concrete client classes for both backend families, filled by
     `cli/main.py` from its own `_backend_factories()` when it builds this
@@ -355,6 +366,18 @@ class CurateContext:
     instead of one per run. Those failures are fast (a refused connection,
     not a timeout), and the alternative is silently skipping stages that had
     nothing to do with the failure."""
+    auto_merged: list[application_auto_merge.AutoMergeRecord] = field(
+        default_factory=list, init=False
+    )
+    """Every merge the automatic Identity pass wrote this run, in order. Read
+    by `curate` after the run to tell which survivors a later stage edited."""
+    auto_merge_failure: application_auto_merge.AutoMergeFailure | None = field(
+        default=None, init=False
+    )
+    """The merge the automatic pass failed on mid-write, if any. The stage
+    returns `failed` and later stages still run; `curate` reads this at the end
+    to exit 1, which a stage status alone cannot say (a capped judging batch is
+    also `failed` and has always exited 0)."""
     partial_progress: StageOutcome | None = field(default=None, init=False)
     """What a WRITING stage had already applied when an availability failure
     forced it to re-raise instead of return (issue #468 item 4).
@@ -648,6 +671,27 @@ def _accepts(ctx: CurateContext, stage_name: str) -> bool:
     The one read of `ctx.accepted_stages`, so the three walks never grow
     their own membership logic."""
     return stage_name in ctx.accepted_stages
+
+
+_IDENTITY_UNATTENDED_HINT = "openkos adjudicate --apply-same --confirm-count <n>"
+"""The standalone verb a non-interactive Identity run points at: the one batch
+route that carries its own per-count consent."""
+
+
+def _non_interactive_notice(unattended_hint: str | None) -> str:
+    return (
+        f"non-interactive write consent unavailable -- run `{unattended_hint}` instead."
+    )
+
+
+def _unattended_identity(ctx: CurateContext, stage: Stage) -> bool:
+    """Whether `stage` is Identity under `--auto-merge`, the one write stage
+    that may run on a non-TTY: its automatic pass is not a per-item walk, and
+    `_identity_run` never enters the walk (or a prompt) without a terminal.
+
+    Deliberately not `_accepts`: `accepted_stages` stays free of Identity, so
+    `--accept` and `review: false` keep their reach exactly where it was."""
+    return stage.name == "Identity" and ctx.auto_merge
 
 
 def _all_present(layout: config.WorkspaceLayout, concept_ids: Sequence[str]) -> bool:
@@ -1045,12 +1089,168 @@ def _identity_probe(ctx: CurateContext) -> StageProbe:
         warn_on_failure=False,
     )
     served, to_judge = _serve_identity_rows(ctx, served, to_judge)
+    # #1298: under `--auto-merge` the in-class groups are judged fresh, so the
+    # cost line prices them. Only the static facts are known here (the probe
+    # does no I/O); a run that then fails the digest check pays LESS than this.
+    served, to_judge = application_auto_merge.judging_partition(
+        groups,
+        served,
+        to_judge,
+        auto_merge=ctx.auto_merge,
+        interactive=sys.stdin.isatty(),
+        statically_eligible=not application_auto_merge.static_ineligibility(ctx.cfg),
+    )
     return StageProbe(
         items=groups,
         llm_calls=len(to_judge),
         served=len(served),
         empty_message="No candidate groups found." if not groups else None,
         notice=candidate_group_truncation_notice(report),
+    )
+
+
+def _installed_models_lister(
+    ctx: CurateContext,
+) -> Callable[[], list[InstalledModel]]:
+    """The backend's installed-model listing, built only when called so a run
+    whose static checks already failed constructs no client and reads nothing.
+
+    The same diagnostics client `doctor` and the init preflight use: one read,
+    no model call, resolved from the same endpoint as the chat client."""
+    from openkos.cli import main as cli_main
+
+    def _list() -> list[InstalledModel]:
+        if ctx.backend_factories is None:  # pragma: no cover -- command invariant
+            raise RuntimeError("CurateContext.backend_factories was never set")
+        return application_backends.diagnostics_client(
+            ctx.cfg,
+            model=config.resolve_task_model(ctx.cfg, "adjudication"),
+            timeout=cli_main._PREFLIGHT_TIMEOUT,
+            factories=ctx.backend_factories,
+        ).list_models()
+
+    return _list
+
+
+@dataclass(frozen=True)
+class _AutoPass:
+    """What the automatic pass left behind for `_identity_run`: how many merges
+    landed, which groups they were (the walk must not offer them again), how
+    many in-class `same` groups are left for a person, and the failure if the
+    pass stopped mid-write."""
+
+    applied: int
+    merged: frozenset[frozenset[str]]
+    left: int
+    failure: application_auto_merge.AutoMergeFailure | None
+
+
+def _family_pair(member_ids: tuple[str, ...]) -> tuple[str, str]:
+    """`(absorbed, survivor)` of an in-class group: the base id survives."""
+    first, second = member_ids
+    return (second, first) if is_suffix_family(first, second) else (first, second)
+
+
+def _echo_auto_merge_report(
+    plan: application_auto_merge.AutoMergePlan,
+    outcome: application_auto_merge.AutoMergeOutcome,
+) -> None:
+    """The disclosure block: every merge with the command that undoes it, then
+    the shared commit sentence (only when a commit exists), and one stderr line
+    for each in-class `same` group the pass did not merge. Each merge line
+    carries both concept ids and its own undo, so the way back never depends on
+    the commit alone."""
+    from openkos.cli import main as cli_main
+
+    if outcome.applied:
+        typer.echo(
+            f"openkos curate: Identity: merged {len(outcome.applied)} pair(s) "
+            f"automatically (measured class, {application_auto_merge.MEASURED_MODEL}, "
+            f"confidence >= {application_auto_merge.T_STAR:.2f}):"
+        )
+        for record in outcome.applied:
+            typer.echo(
+                f"  {record.absorbed} -> {record.survivor} "
+                f"(confidence {record.confidence:.2f}) -- undo: "
+                f"openkos unmerge {record.survivor}"
+            )
+        if outcome.sha is not None:
+            cli_main._echo_commit_disclosure(outcome.sha, prefix="  ")
+    for skip in (*plan.skipped, *outcome.skipped):
+        absorbed, survivor = _family_pair(skip.member_ids)
+        typer.echo(
+            "openkos curate: Identity: not merged automatically: "
+            f"{absorbed} -> {survivor} -- {skip.reason}.",
+            err=True,
+        )
+    failure = outcome.failure
+    if failure is not None:
+        typer.echo(
+            "openkos curate: Identity: failed while merging "
+            f"{failure.absorbed} into {failure.survivor} -- {failure.error}.",
+            err=True,
+        )
+        if not failure.restored:
+            typer.echo(
+                "openkos curate: Identity: the failed merge could not be fully "
+                f"undone; still modified: {', '.join(failure.unrestored_paths)}. "
+                "The merges that landed are NOT committed.",
+                err=True,
+            )
+
+
+def _run_auto_merge_pass(
+    ctx: CurateContext,
+    results: Sequence[AdjudicatedCandidate],
+    fresh: Sequence[AdjudicatedCandidate],
+    judged_digests: dict[str, str | None],
+    digest_of: Callable[[str], str | None],
+) -> _AutoPass:
+    """Plan (pure gates), then write every planned merge under one commit phase
+    and one commit (`application.auto_merge`), then report. The records go to
+    `ctx.auto_merged` so `curate` can warn about a survivor a later stage edits.
+
+    `fresh` is this run's judging batch: only those verdicts may be acted on,
+    never a served one."""
+    from openkos.cli import main as cli_main
+
+    bundle_dir = ctx.layout.bundle_dir
+    plan = application_auto_merge.plan_auto_merges(
+        results,
+        fresh_keys=frozenset(
+            adjudications_store.group_key_for(r.candidate.member_ids) for r in fresh
+        ),
+        blocked=application_auto_merge.strict_blocked_members(bundle_dir),
+        cross_type_concern=lambda pair: application_lifecycle.cross_type_concern(
+            bundle_dir, pair
+        ),
+        ordered_pair=lambda ids: application_lifecycle.ordered_merge_pair(
+            bundle_dir, ids
+        ),
+    )
+    outcome = application_auto_merge.apply_auto_merges(
+        ctx.root,
+        ctx.layout,
+        plan,
+        commit_section=cli_main._commit_section_for(ctx.root),
+        autocommit=cli_main._autocommit,
+        judged_digests=judged_digests,
+        digest_of=digest_of,
+    )
+    ctx.auto_merged.extend(outcome.applied)
+    ctx.auto_merge_failure = outcome.failure
+    _echo_auto_merge_report(plan, outcome)
+    in_class_same = sum(
+        1
+        for result in results
+        if application_auto_merge.in_structural_class(result.candidate)
+        and result.verdict is Verdict.SAME
+    )
+    return _AutoPass(
+        applied=len(outcome.applied),
+        merged=frozenset(frozenset((r.survivor, r.absorbed)) for r in outcome.applied),
+        left=in_class_same - len(outcome.applied),
+        failure=outcome.failure,
     )
 
 
@@ -1128,6 +1328,37 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     # A fresh open identity row already holds its verdict: serve it (no model
     # call) rather than judging the group again.
     served_by_key, to_judge = _serve_identity_rows(ctx, served_by_key, to_judge)
+    # #1298: read once. The pass and the walk below both branch on it, and a
+    # non-TTY run never reaches a prompt.
+    interactive = sys.stdin.isatty()
+    eligible = False
+    if ctx.auto_merge:
+        eligibility = application_auto_merge.run_eligibility(
+            ctx.cfg, _installed_models_lister(ctx)
+        )
+        eligible = eligibility.eligible
+        if not eligible:
+            typer.echo(
+                "openkos curate: Identity: --auto-merge is not available this "
+                f"run -- {'; '.join(eligibility.reasons)}; every group keeps "
+                "its per-item prompt.",
+                err=True,
+            )
+            if not interactive:
+                # Nothing was judged and nothing may be asked: the same
+                # refusal a plain `--auto` run on a pipe makes.
+                return StageOutcome(
+                    status="declined",
+                    notice=_non_interactive_notice(_IDENTITY_UNATTENDED_HINT),
+                )
+    served_by_key, to_judge = application_auto_merge.judging_partition(
+        groups,
+        served_by_key,
+        to_judge,
+        auto_merge=ctx.auto_merge,
+        interactive=interactive,
+        statically_eligible=eligible,
+    )
     # Gated on whether the store was READ, the same fact the verb and the
     # Structure stage gate on (#809): a store that was read and served
     # nothing is drift worth saying out loud, while an absent or
@@ -1195,8 +1426,26 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     applied = 0
     skipped = 0
     declined: list[str] = []
-    for result in results:
+    # #1298: the automatic pass runs before the walk, over this run's FRESH
+    # verdicts only. Without a terminal it is the whole stage: the walk (and
+    # so every prompt) is never entered, and a pass that failed mid-write also
+    # skips it.
+    pass_only = ctx.auto_merge and eligible and not interactive
+    auto_pass = _AutoPass(0, frozenset(), 0, None)
+    if ctx.auto_merge and eligible:
+        auto_pass = _run_auto_merge_pass(
+            ctx, results, batch.results, judged_digests, digest_of
+        )
+        applied = auto_pass.applied
+        if pass_only:
+            skipped = auto_pass.left
+    walk_results: Sequence[AdjudicatedCandidate] = (
+        [] if pass_only or auto_pass.failure is not None else results
+    )
+    for result in walk_results:
         group = result.candidate
+        if frozenset(group.member_ids) in auto_pass.merged:
+            continue
         if result.verdict is not Verdict.SAME:
             continue
         if len(group.member_ids) != 2:
@@ -1417,6 +1666,28 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         )
 
     status: Literal["applied", "empty"] = "applied" if applied or skipped else "empty"
+    if auto_pass.failure is not None:
+        return StageOutcome(
+            status="failed",
+            applied=applied,
+            skipped=skipped,
+            notice=(
+                f"failed -- could not merge {auto_pass.failure.absorbed} into "
+                f"{auto_pass.failure.survivor} automatically "
+                f"({auto_pass.failure.error}); applied {applied}, skipped {skipped}."
+            ),
+            skipped_items=tuple(declined),
+        )
+    if pass_only:
+        return StageOutcome(
+            status=status,
+            applied=applied,
+            skipped=skipped,
+            notice=(
+                f"applied {applied} automatically; {skipped} in-class group(s) "
+                "left for review -- run `openkos curate` on a terminal."
+            ),
+        )
     return StageOutcome(
         status=status,
         applied=applied,
@@ -2460,7 +2731,7 @@ _STAGES: tuple[Stage, ...] = (
         run=_identity_run,
         needs_llm=True,
         writes=True,
-        unattended_hint="openkos adjudicate --apply-same --confirm-count <n>",
+        unattended_hint=_IDENTITY_UNATTENDED_HINT,
         live=True,
         task="adjudication",
     ),
@@ -2607,7 +2878,12 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             )
             continue
 
-        if stage.writes and not sys.stdin.isatty() and not _accepts(ctx, stage.name):
+        if (
+            stage.writes
+            and not sys.stdin.isatty()
+            and not _accepts(ctx, stage.name)
+            and not _unattended_identity(ctx, stage)
+        ):
             # D3 rule 2: `--auto` consents to model spend, never to a
             # per-item write -- reached only when `gate` accepted via
             # `ctx.auto` on a non-TTY, since a TTY decline/non-TTY-no-auto
@@ -2618,15 +2894,14 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             # which is exactly what this refusal says is absent. That makes
             # `curate --auto --accept structure` parity with
             # `suggest-relations --auto`, which has always written
-            # unattended. Identity can never reach this branch, since only
-            # `auto_acceptable` stages ever enter `accepted_stages`.
+            # unattended. Identity can never reach this branch THROUGH
+            # `--accept`, since only `auto_acceptable` stages ever enter
+            # `accepted_stages`; its one exemption is the automatic pass
+            # (`_unattended_identity`).
             outcomes.append(
                 StageOutcome(
                     status="declined",
-                    notice=(
-                        "non-interactive write consent unavailable -- run "
-                        f"`{stage.unattended_hint}` instead."
-                    ),
+                    notice=_non_interactive_notice(stage.unattended_hint),
                 )
             )
             continue
