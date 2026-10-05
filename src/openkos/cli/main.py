@@ -52,6 +52,7 @@ from openkos.application import (
 )
 from openkos.application import doctor as application_doctor
 from openkos.application import drift as application_drift
+from openkos.application import export_service as application_export
 from openkos.application import ingest as application_ingest
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import lint as application_lint
@@ -147,6 +148,7 @@ from openkos.resolution.volatility_typing import (
     suggest_volatility,
 )
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause
+from openkos.sensitivity import ExportReason
 from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
 from openkos.state import edge_suggestions as edge_suggestions_store
@@ -357,6 +359,7 @@ _READ_ONLY_COMMANDS = frozenset(
         "doctor",
         "mcp",
         "pending",
+        "export",
     }
 )
 """The commands that never write to the workspace, and so take no lock (#925).
@@ -10494,6 +10497,179 @@ def pending_cmd(
         raise typer.Exit(code=1) from exc
     for line in pending_report.render_lines(report, include_all=all_rows, stats=stats):
         typer.echo(line)
+
+
+_EXPORT_REASON_TEXT: dict[ExportReason, str] = {
+    ExportReason.CONFIDENTIAL: "confidential (never exported)",
+    ExportReason.PRIVATE: "private (pass --include-private to export them)",
+    ExportReason.UNLABELLED: "with a missing or unrecognized sensitivity label",
+    ExportReason.UNREADABLE: "unreadable, or without a type",
+    ExportReason.INCOMPLETE: "from an ingest that did not finish",
+    ExportReason.BELOW_SOURCE: (
+        "below their sources (pass --allow-below-source to export them)"
+    ),
+}
+"""One preview line per withheld reason, in `ExportReason`'s order."""
+
+
+@app.command(
+    "export",
+    help=(
+        "Write a standalone OKF bundle for sharing into an empty directory "
+        "outside the workspace: public concepts only, private ones on "
+        "--include-private, confidential ones never. Read-only: no lock, no "
+        "model call, no commit."
+    ),
+    rich_help_panel="Explore",
+)
+def export_cmd(
+    target: Path = typer.Argument(
+        ...,
+        help="Directory to create (or an empty one), outside the workspace.",
+    ),
+    include_private: bool = typer.Option(
+        False,
+        "--include-private",
+        help="Also export concepts labelled private.",
+    ),
+    allow_below_source: bool = typer.Option(
+        False,
+        "--allow-below-source",
+        help=(
+            "Also export concepts labelled below the sensitivity of what they "
+            "were compiled from (a deliberate downgrade)."
+        ),
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and export immediately.",
+    ),
+) -> None:
+    """Export the bundle across the sensitivity boundary (okf-export, #1301;
+    ADR-0048): the use case is `application/export_service`; this command
+    only checks the target, prints the preview, asks, and maps outcomes to
+    exit codes.
+
+    Refuses (exit 1) outside a workspace, and -- before reading the bundle --
+    when the target is inside the workspace, not an empty directory, or has
+    no parent. Refuses (exit 1) when nothing is exportable, naming
+    `--include-private` when private concepts were withheld. The confirm
+    gate mirrors `set-sensitivity`'s: `--auto` or `review: false` skips it, a
+    TTY prompts, and a non-interactive stdin refuses. A publish refused by
+    the conformance or leak check exits 1; one refused because the bundle
+    changed while the export ran exits 3, the retry-safe refusal. The
+    workspace is never written."""
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos export: refusing to export -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+    layout = config.WorkspaceLayout(root)
+    target_reason = application_export.check_target(target, workspace_root=root)
+    if target_reason is not None:
+        typer.echo(f"openkos export: refusing to export -- {target_reason}.", err=True)
+        raise typer.Exit(code=1)
+    cfg = config.read_config(root)
+
+    try:
+        plan = application_export.plan_export(
+            layout.bundle_dir,
+            include_private=include_private,
+            allow_below_source=allow_below_source,
+            today=datetime.now(UTC).astimezone().date(),
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos export: failed while reading the bundle -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    boundary = plan.boundary
+    counts = {
+        reason_kind: sum(1 for r in boundary.withheld.values() if r is reason_kind)
+        for reason_kind in ExportReason
+    }
+    exported = len(boundary.allowed)
+    if exported == 0:
+        hint = ""
+        if counts[ExportReason.PRIVATE]:
+            hint = "; pass --include-private to export private concepts"
+        elif counts[ExportReason.BELOW_SOURCE]:
+            hint = "; pass --allow-below-source to export concepts below their sources"
+        typer.echo(
+            "openkos export: refusing to export -- no concept is exportable "
+            f"({len(boundary.withheld)} withheld){hint}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    output.section_break()
+    typer.echo(
+        f"openkos export: will export {exported} concept(s) to {target}; "
+        f"{len(boundary.withheld)} withheld."
+    )
+    for reason_kind, text in _EXPORT_REASON_TEXT.items():
+        if counts[reason_kind]:
+            typer.echo(f"  - {counts[reason_kind]} {text}")
+    if boundary.below_source:
+        verb = "exported" if allow_below_source else "withheld"
+        typer.echo(f"  below their sources ({verb}):")
+        for concept_id in boundary.below_source:
+            typer.echo(f"    {concept_id}")
+    output.notice(
+        "openkos export: note -- prose outside links is not redacted; links "
+        "into withheld concepts become [withheld].",
+        verb="export",
+    )
+    if plan.status_projected:
+        output.notice(
+            f"openkos export: note -- {len(plan.status_projected)} exported "
+            "concept(s) are exported with their deprecated status recomputed; "
+            "`openkos repair` brings the workspace in line.",
+            verb="export",
+        )
+    if plan.skipped:
+        output.notice(
+            f"openkos export: note -- {len(plan.skipped)} file(s) in bundle/ "
+            "are not concept documents and are not exported.",
+            verb="export",
+        )
+
+    confirm_enabled = not auto and cfg.review
+    if confirm_enabled:
+        if sys.stdin.isatty():
+            typer.confirm("Export these concepts?", abort=True)
+        else:
+            typer.echo(
+                "openkos export: refusing to export without confirmation -- "
+                "stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        application_export.publish_export(plan, target)
+    except application_export.ExportRefusal as refusal:
+        what = {
+            "conformance": "the output failed the OKF conformance check",
+            "leak": "the output still pointed at a withheld concept",
+            "drift": "the bundle changed while the export ran; a re-run is safe",
+        }[refusal.kind]
+        typer.echo(
+            f"openkos export: refusing to publish -- {what}; nothing was "
+            f"published: {'; '.join(refusal.details)}.",
+            err=True,
+        )
+        raise typer.Exit(code=3 if refusal.kind == "drift" else 1) from refusal
+    except OSError as exc:
+        typer.echo(
+            f"openkos export: failed while writing -- {exc}; nothing was published.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"openkos export: exported {exported} concept(s) to {target}.")
 
 
 @app.command(

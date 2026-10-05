@@ -183,30 +183,39 @@ advisory only), stacked in order.
 
 ## Phase 5 — The verb (`cli/main.py`)
 
-- [ ] 5.1 [TEST] `tests/unit/cli/test_export_cmd.py`: target refusals
-  (non-empty dir, path inside the workspace) exit 1 before any read
-  (assert the walk is not called); a stock all-`private` workspace exits 1
-  naming `--include-private` and creates nothing; the preview prints counts
-  by reason and the "prose outside links is not redacted" line; a declined
-  confirm exits 1 with nothing written; `--auto` and `review: false` skip
-  the gate; drift exits 3. RED: command missing.
-- [ ] 5.2 [IMPL] Register `export`, add it to `_READ_ONLY_COMMANDS`, wire
-  preview/confirm/exit codes through `cli/output.py` (ADR-0042). GREEN 5.1;
-  `tests/unit/cli/test_workspace_lock_wiring.py::test_every_command_is_classified`
-  stays green.
-- [ ] 5.3 [TEST] Lock: with the workspace lock held by another process,
-  `openkos export out/ --auto` is not refused for contention (spec
-  workspace-lock "Export does not wait on a writer").
-- [ ] 5.4 [TEST] e2e `tests/unit/e2e/test_export_good_life_demo.py`: over a
+- [x] 5.1 [TEST] `tests/unit/cli/test_export_cmd.py`: `--auto` exports
+  the public concepts, conformant, with the workspace's git status and HEAD
+  unchanged; the preview counts every reason and lists below-source ids;
+  `--allow-below-source` exports the lowered concept with no pointer to its
+  source; target refusals (inside the workspace, non-empty) exit 1 before
+  any read (`plan_export` stubbed to fail if called); a stock all-`private`
+  workspace exits 1 naming `--include-private` and creates nothing; a
+  non-TTY run without `--auto` refuses; a declined prompt writes nothing; a
+  confirmed prompt and `review: false` export; `drift` exits 3 and
+  `leak`/`conformance` exit 1, each saying nothing was published; outside a
+  workspace exits 1. RED: command missing (exit 2).
+- [x] 5.2 [IMPL] Register `export`, add it to `_READ_ONLY_COMMANDS`, wire
+  preview/confirm/exit codes (`output.notice` for notes, ADR-0042). GREEN
+  5.1; `test_every_command_is_classified` stays green.
+- [x] 5.3 [TEST] Lock: with the workspace lock held by another process,
+  `openkos export out/ --auto` exits 0
+  (`test_workspace_lock_wiring.py::test_export_runs_while_the_lock_is_held`).
+- [x] 5.4 [TEST] e2e `tests/unit/e2e/test_export_good_life_demo.py`: over a
   copy of `examples/good-life-demo`, `export out/ --include-private --auto`
-  yields exactly `concepts/epicureanism.md`,
-  `sources/notes-on-the-enchiridion-2026-07-05.md`, `index.md`, `log.md`;
-  `okf.check_conformance(out)` is empty; no output byte names
-  `concepts/stoicism`, `people/maria-salazar`,
-  `decisions/frame-the-essay-on-the-dichotomy-of-control` or
-  `sources/call-with-maria-2026-07-14` as a link, relation, provenance or
-  `sources` entry; the workspace's `git status --porcelain` is unchanged and
-  no commit was made; without `--include-private` it exits 1.
+  yields exactly the four expected files, `okf.check_conformance(out)` is
+  empty, no output byte names any of the four confidential ids, the Related
+  line reads `- [withheld] — contrasted with`, and the workspace tree is
+  byte-identical afterwards; without `--include-private` it exits 1 and
+  creates nothing. (Written after 5.2 and green on first run, so it was
+  mutation-checked: body links not withheld, and a non-ISO log heading
+  reaching publish, each turned it RED.)
+- [x] 5.5 [MUT] Export unclassified, target check skipped, include-private
+  forced on, allow-below-source ignored, non-TTY writing without
+  confirmation, drift mapped to exit 1, empty export not refused: each RED.
+  An `origin_key` assertion in the e2e SURVIVED its mutation because the
+  canonical example carries no `origin_key`; it was vacuous there and was
+  removed (the model and service tests own that guard). Inverse edits,
+  `__pycache__` purged.
 
 ## Phase 6 — Docs
 
