@@ -70,10 +70,22 @@ import argparse
 import importlib.util
 import json
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from harness_prompts import extraction_prompts
+from harness_stamp import (
+    build_stamp,
+    load_stamp,
+    prompt_hash,
+    prompt_map,
+    write_stamp_sidecar,
+)
 
 from openkos.extraction import concept as concept_mod
 from openkos.extraction.concept import _PARTICIPANT_TYPES, extract_concept_union
@@ -896,13 +908,29 @@ def load_results(path: Path) -> list[RunRecord]:
     return records
 
 
-def write_results(records: list[RunRecord], stamp: str, model: str) -> Path:
+def arm_prompts(arms: list[Arm]) -> dict[str, str]:
+    """The system prompts the `arms` that ran sent (#1277). The ids follow the
+    TEXT: `treatment` is the shipped prompt (`extraction/system`), and
+    `baseline` is that prompt with the clause removed, so it is stamped
+    `extraction/system+baseline`. Read from the arms, not from `concept_mod`,
+    which `run_fixture` restores before results are written."""
+    prompts: dict[str, str] = {}
+    for arm in arms:
+        prompts.update(extraction_prompts(system=arm.system_prompt, arm=arm.name))
+    return prompts
+
+
+def write_results(
+    records: list[RunRecord], stamp: str, model: str, arms: list[Arm]
+) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     slug = model.replace(":", "-").replace("/", "-")
     path = RESULTS_DIR / f"stage-attrition-{stamp}-{slug}.jsonl"
     with path.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+    # One record per line, so the identity stamp is a sidecar.
+    write_stamp_sidecar(path, build_stamp(model=model, prompts=arm_prompts(arms)))
     return path
 
 
@@ -979,6 +1007,32 @@ def _record(
         final_objects=final,
         error=error,
     )
+
+
+def _stamp_self_test() -> list[str]:
+    """#1277: a stored ledger names the text each arm sent, under ids that
+    follow the TEXT (the ablated `baseline` is the treated one here)."""
+    global RESULTS_DIR
+    arms = build_arms()
+    real_dir = RESULTS_DIR
+    with tempfile.TemporaryDirectory() as scratch:
+        RESULTS_DIR = Path(scratch)
+        try:
+            stamped = load_stamp(
+                write_results([], "20000101T000000Z", "fake", list(arms.values()))
+            )
+        finally:
+            RESULTS_DIR = real_dir
+    got = prompt_map(stamped) if stamped else {}
+    want = {
+        "extraction/system": prompt_hash(arms["treatment"].system_prompt),
+        "extraction/system+baseline": prompt_hash(arms["baseline"].system_prompt),
+    }
+    return [
+        f"the ledger stamp lacks {key!r} with the sent text's hash"
+        for key, value in want.items()
+        if got.get(key) != value
+    ]
 
 
 def _arm_and_gate_self_test() -> list[str]:
@@ -1171,6 +1225,7 @@ def _self_test() -> int:
     ]
     failures = [why for ok, why in expectations if not ok]
     failures.extend(_arm_and_gate_self_test())
+    failures.extend(_stamp_self_test())
     print(report)
     if failures:
         for why in failures:
@@ -1242,7 +1297,8 @@ def main(argv: list[str] | None = None) -> int:
         gate_report, _ = render_gate(records)
         print(gate_report)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    print(f"stored {write_results(records, stamp, args.model)}")
+    ran = [arms[name] for name in wanted_arms]
+    print(f"stored {write_results(records, stamp, args.model, ran)}")
     return 0
 
 

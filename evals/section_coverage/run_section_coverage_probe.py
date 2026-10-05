@@ -154,6 +154,7 @@ import argparse
 import json
 import pathlib
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Final
@@ -164,7 +165,18 @@ if str(_REPO_ROOT / "src") not in sys.path:
 if str(pathlib.Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+if str(pathlib.Path(__file__).resolve().parents[1]) not in sys.path:
+    sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+
 import section_coverage as coverage  # noqa: E402
+from harness_prompts import extraction_prompts  # noqa: E402
+from harness_stamp import (  # noqa: E402
+    build_stamp,
+    load_stamp,
+    prompt_hash,
+    prompt_map,
+    write_stamp_sidecar,
+)
 from section_fixtures import Fixture, build_fixtures  # noqa: E402
 
 from openkos.extraction import concept as concept_mod  # noqa: E402
@@ -335,6 +347,19 @@ def run_share(record: dict[str, Any]) -> float | None:
 def render_shares(shares: list[float | None]) -> str:
     """Per-run shares for the report, naming the unrecorded ones."""
     return ", ".join("not recorded" if v is None else f"{v:.1%}" for v in shares)
+
+
+def store_sweep(
+    stored: list[dict[str, Any]], stamp: str, model: str, results_dir: pathlib.Path
+) -> pathlib.Path:
+    """Write a sweep's raw records to `results_dir`. The file is a bare list
+    that `--rescore` reads back as records, so the identity stamp (#1277:
+    harness, model, the extraction prompts) is a sidecar beside it."""
+    results_dir.mkdir(parents=True, exist_ok=True)
+    path = results_dir / f"runs-{stamp}-{model.replace(':', '-')}.json"
+    path.write_text(json.dumps(stored, indent=2, ensure_ascii=False))
+    write_stamp_sidecar(path, build_stamp(model=model, prompts=extraction_prompts()))
+    return path
 
 
 def stores_results(source: pathlib.Path | None) -> bool:
@@ -2461,6 +2486,17 @@ def _self_test() -> int:
         f"total_removal={sparse_scan.total_removal} rows={len(sparse_scan.rows)})",
     )
 
+    with tempfile.TemporaryDirectory() as scratch:
+        stamped = load_stamp(
+            store_sweep([], "20000101T000000Z", "fake", pathlib.Path(scratch))
+        )
+    check(
+        stamped is not None
+        and prompt_map(stamped)
+        == {k: prompt_hash(v) for k, v in extraction_prompts().items()},
+        "a stored sweep must stamp the extraction prompts it ran under",
+    )
+
     if failures:
         for why in failures:
             print(f"SELF-TEST FAILED: {why}")
@@ -2683,10 +2719,8 @@ def main(argv: list[str] | None = None) -> int:
             "belong to a corpus this repo does not hold."
         )
     else:
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-        path = RESULTS_DIR / f"runs-{stamp}-{args.model.replace(':', '-')}.json"
-        path.write_text(json.dumps(stored, indent=2, ensure_ascii=False))
+        path = store_sweep(stored, stamp, args.model, RESULTS_DIR)
         print(f"\nstored {path}")
     print(summarize(stored, fixtures, predicates))
     if args.leave_one_out:

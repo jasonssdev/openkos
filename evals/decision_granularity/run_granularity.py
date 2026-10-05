@@ -64,6 +64,7 @@ import argparse
 import json
 import math
 import sys
+import tempfile
 import time
 import unicodedata
 from dataclasses import asdict, dataclass, field
@@ -78,7 +79,9 @@ sys.path.insert(0, str(HERE))
 sys.path.append(str(REPO_ROOT / "evals"))
 
 from granularity_fixtures import FIXTURES, Fixture  # noqa: E402
+from harness_prompts import extraction_prompts  # noqa: E402
 from harness_report import arm_identity_line  # noqa: E402
+from harness_stamp import build_stamp, prompt_hash  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
@@ -378,6 +381,17 @@ def run_combo(
     return records
 
 
+def arm_prompts(arm: str) -> dict[str, str]:
+    """The system prompts `arm` sends, the treated one under `<id>+<arm>`.
+
+    Computed from `treated_prompt` rather than read off `concept_mod`, which
+    `run_combo` has already restored by the time results are written."""
+    return extraction_prompts(
+        system=treated_prompt(arm, concept_mod._SYSTEM_PROMPT),
+        arm=None if arm == "baseline" else arm,
+    )
+
+
 def write_results(records: list[RunRecord], arm: str, model: str) -> Path:
     RESULTS_DIR.mkdir(exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -390,6 +404,9 @@ def write_results(records: list[RunRecord], arm: str, model: str) -> Path:
                 "max_generation_tokens": DEFAULT_MAX_GENERATION_TOKENS,
                 "context_window": DEFAULT_CONTEXT_WINDOW,
                 "generated_at": stamp,
+                # #1277: the exact prompt text this arm sent, with the model
+                # and harness identity.
+                "stamp": build_stamp(model=model, prompts=arm_prompts(arm)),
                 "records": [asdict(r) for r in records],
             },
             indent=2,
@@ -571,6 +588,36 @@ def _self_test() -> int:
         pass
     else:
         failures.append("a missing anchor must refuse")
+
+    # #1277: a stored result names the text each arm sent. The write goes to a
+    # scratch dir; the Ollama digest lookup fails fast under the sweep's
+    # poisoned host and is recorded, never raised.
+    global RESULTS_DIR
+    real_dir = RESULTS_DIR
+    with tempfile.TemporaryDirectory() as scratch:
+        RESULTS_DIR = Path(scratch)
+        try:
+            by_arm = {
+                arm: json.loads(write_results([], arm, "fake").read_text())["stamp"]
+                for arm in ("baseline", *TREATMENTS)
+            }
+        finally:
+            RESULTS_DIR = real_dir
+    base_ids = {p["id"]: p["sha256_16"] for p in by_arm["baseline"]["prompts"]}
+    check("baseline stamps the registered id", "extraction/system" in base_ids, True)
+    check(
+        "baseline hash is the shipped text",
+        base_ids["extraction/system"],
+        prompt_hash(shipped),
+    )
+    for arm in TREATMENTS:
+        got = {p["id"]: p["sha256_16"] for p in by_arm[arm]["prompts"]}
+        check(
+            f"{arm} stamps the spliced text under its own id",
+            got.get(f"extraction/system+{arm}"),
+            prompt_hash(treated_prompt(arm, shipped)),
+        )
+        check(f"{arm} does not stamp the shipped id", "extraction/system" in got, False)
 
     llm = _FakeLLM()
     recs = run_combo(newhire, "decisions", llm, 1, "fake")

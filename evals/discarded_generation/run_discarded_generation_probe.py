@@ -47,6 +47,7 @@ import importlib.util
 import json
 import statistics
 import sys
+import tempfile
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
@@ -55,6 +56,17 @@ from pathlib import Path
 from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.append(str(_REPO_ROOT / "evals"))
+sys.path.append(str(_REPO_ROOT / "src"))
+
+from harness_prompts import extraction_prompts  # noqa: E402
+from harness_stamp import (  # noqa: E402
+    build_stamp,
+    load_stamp,
+    prompt_hash,
+    prompt_map,
+)
+
 _ATTRITION_PROBE = (
     _REPO_ROOT / "evals" / "stage_attrition" / "run_stage_attrition_probe.py"
 )
@@ -547,7 +559,14 @@ def write_results(records: Sequence[RunRecord], model: str) -> Path:
     path = _RESULTS / f"runs-{stamp}-{model.replace(':', '-')}.json"
     path.write_text(
         json.dumps(
-            {"model": model, "stamp": stamp, "runs": [asdict(r) for r in records]},
+            {
+                "model": model,
+                "generated_at": stamp,
+                # #1277: harness, model and prompt identity. Earlier files
+                # called the timestamp `stamp`; nothing reads it back.
+                "stamp": build_stamp(model=model, prompts=extraction_prompts()),
+                "runs": [asdict(r) for r in records],
+            },
             ensure_ascii=False,
             indent=2,
         ),
@@ -813,6 +832,21 @@ def _self_test() -> int:
     sample = attrition._snapshot([])
     if sample != []:
         failures.append("snapshot of nothing is not empty")
+
+    # #1277: the stored ledger names the prompts it ran under.
+    global _RESULTS
+    real_results = _RESULTS
+    with tempfile.TemporaryDirectory() as scratch:
+        _RESULTS = Path(scratch)
+        try:
+            stored = load_stamp(write_results([], "fake"))
+        finally:
+            _RESULTS = real_results
+    check(
+        "ledger stamps the extraction prompts",
+        stored is not None and prompt_map(stored),
+        {k: prompt_hash(v) for k, v in extraction_prompts().items()},
+    )
 
     if failures:
         print("SELF-TEST FAILED:")

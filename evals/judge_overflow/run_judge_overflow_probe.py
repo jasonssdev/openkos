@@ -43,6 +43,7 @@ import argparse
 import hashlib
 import json
 import sys
+import tempfile
 import time
 import urllib.request
 from collections.abc import Callable
@@ -52,6 +53,16 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.append(str(REPO_ROOT / "evals"))
+
+from harness_prompts import extraction_prompts  # noqa: E402
+from harness_stamp import (  # noqa: E402
+    build_stamp,
+    load_stamp,
+    prompt_hash,
+    prompt_map,
+    write_stamp_sidecar,
+)
 
 from openkos import config  # noqa: E402
 from openkos.extraction import concept as concept_mod  # noqa: E402
@@ -424,6 +435,17 @@ def self_test() -> None:
     _, cause = judge_mod.classify_reply("Aqui tienes una estructura", ())
     check(cause == "unparseable: no-json", "prose classifies as no-json")
 
+    # #1277: a stored sweep names the prompts it ran under.
+    with tempfile.TemporaryDirectory() as scratch:
+        written = write_records([], "20000101T000000Z", Path(scratch))
+        stored = load_stamp(written)
+    check(
+        stored is not None
+        and prompt_map(stored)
+        == {k: prompt_hash(v) for k, v in extraction_prompts().items()},
+        "the stored sweep stamps the extraction and judge prompts",
+    )
+
     if failures:
         raise SystemExit(f"self-test FAILED: {failures}")
     print("self-test passed")
@@ -432,6 +454,20 @@ def self_test() -> None:
 # --------------------------------------------------------------------------- #
 # Entry point.                                                                 #
 # --------------------------------------------------------------------------- #
+
+
+def write_records(records: list[Any], stamp: str, results_dir: Path) -> Path:
+    """Store the sweep. The file is a bare list of per-source records, so its
+    identity stamp (#1277: harness, model, and the extraction and judge
+    prompts) is a sidecar rather than a field every reader would meet as a
+    record. Hashes and ids only: nothing from the private corpus."""
+    results_dir.mkdir(exist_ok=True)
+    out = results_dir / f"runs-{stamp}-{config.DEFAULT_MODEL.replace(':', '-')}.json"
+    out.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+    write_stamp_sidecar(
+        out, build_stamp(model=config.DEFAULT_MODEL, prompts=extraction_prompts())
+    )
+    return out
 
 
 def main() -> None:
@@ -464,10 +500,8 @@ def main() -> None:
     if violations:
         raise SystemExit(f"REFUSING to write results, scrub violations: {violations}")
 
-    RESULTS_DIR.mkdir(exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    out = RESULTS_DIR / f"runs-{stamp}-{config.DEFAULT_MODEL.replace(':', '-')}.json"
-    out.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+    out = write_records(records, stamp, RESULTS_DIR)
     print(f"\nwrote {out.relative_to(REPO_ROOT)}")
 
 

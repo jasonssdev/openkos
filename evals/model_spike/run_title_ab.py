@@ -95,6 +95,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from harness_prompts import extraction_prompts
+from harness_stamp import build_stamp, identity_section
+
 # Sibling spike module. Importable because running this file as a script puts
 # `evals/model_spike/` on `sys.path[0]`; both live in the same directory and
 # neither is part of the shipped package.
@@ -1006,6 +1011,10 @@ def _self_test() -> int:
     if "not testable here" not in one_sided:
         failures.append("probe must decline when only one side of the line is present")
 
+    identity = title_ab_identity("m1")
+    if "`extraction/system`" not in identity or "`m1`" not in identity:
+        failures.append(f"identity section lacks model or prompt: {identity!r}")
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}", file=sys.stderr)
@@ -1078,6 +1087,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def title_ab_identity(model: str) -> str:
+    """The report's `## Identity` section (#1277). One stamp: the arms vary
+    only the source title, never the prompt."""
+    return identity_section([build_stamp(model=model, prompts=extraction_prompts())])
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the A/B and write the report. Returns a process exit code."""
     args = parse_args(argv)
@@ -1141,6 +1156,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     generated_at = datetime.now(UTC)
     report = build_report(reports, fixtures, args.model, args.runs, generated_at)
+    # #1277: harness, model digest and the (arm-invariant) prompt text.
+    report += title_ab_identity(args.model)
     out = Path(args.output)
     out.write_text(report, encoding="utf-8")
     stamped = (

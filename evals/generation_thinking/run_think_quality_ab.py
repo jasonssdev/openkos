@@ -80,6 +80,10 @@ _FIXTURES: Final = _REPO / "evals" / "section_coverage" / "section_fixtures.py"
 RESULTS_DIR: Final = _HERE / "results"
 
 sys.path.insert(0, str(_REPO / "src"))
+sys.path.append(str(_REPO / "evals"))
+
+from harness_prompts import extraction_prompts  # noqa: E402
+from harness_stamp import build_stamp, write_stamp_sidecar  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
@@ -242,6 +246,14 @@ class ThinkInjectingUrlopen:
 
     def __call__(self, request: Any, timeout: float | None = None) -> Any:
         return self._urlopen(self.rewrite(request), timeout=timeout)
+
+
+def stamp_sweep(path: pathlib.Path, model: str) -> pathlib.Path:
+    """The sweep's identity stamp (#1277), as a sidecar of `path`: the full
+    shipped extraction pipeline runs, so all four of its system prompts."""
+    return write_stamp_sidecar(
+        path, build_stamp(model=model, prompts=extraction_prompts())
+    )
 
 
 def run_once(
@@ -523,6 +535,22 @@ def _self_test() -> int:
     check("VERDICT:" in render(ship), "render must print the verdict")
     check("NO DATA" in render([]), "an empty render must say NO DATA, not raise")
 
+    # #1277: the sweep's sidecar stamps the pipeline's prompts.
+    import tempfile
+
+    from harness_stamp import load_stamp, prompt_hash, prompt_map
+
+    with tempfile.TemporaryDirectory() as scratch:
+        sweep_path = pathlib.Path(scratch) / "quality-ab-x.json"
+        stamp_sweep(sweep_path, "fake")
+        sweep_stamp = load_stamp(sweep_path)
+    check(
+        sweep_stamp is not None
+        and prompt_map(sweep_stamp)
+        == {k: prompt_hash(v) for k, v in extraction_prompts().items()},
+        "the sweep must stamp the extraction pipeline's prompts",
+    )
+
     if failures:
         for why in failures:
             print(f"SELF-TEST FAILED: {why}")
@@ -555,6 +583,9 @@ def main(argv: list[str] | None = None) -> int:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     path = RESULTS_DIR / f"quality-ab-{stamp}-{args.model.replace(':', '-')}.json"
+    # #1277: the sweep rewrites `path` (a bare list) after every call, so its
+    # identity stamp is a sidecar written first, before any call can fail.
+    stamp_sweep(path, args.model)
     print(
         f"model {args.model}, {args.runs} run(s) per fixture per arm, full "
         f"shipped pipeline at num_predict {DEFAULT_MAX_GENERATION_TOKENS}, "

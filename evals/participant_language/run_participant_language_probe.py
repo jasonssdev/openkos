@@ -66,10 +66,22 @@ import argparse
 import importlib.util
 import json
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from harness_prompts import extraction_prompts, language_anchor_prompt
+from harness_stamp import (
+    build_stamp,
+    load_stamp,
+    prompt_hash,
+    prompt_map,
+    write_stamp_sidecar,
+)
 
 from openkos.extraction import concept as concept_mod
 from openkos.extraction.concept import ExtractionResult, _capture_further_participants
@@ -441,6 +453,20 @@ def load_results(path: Path) -> list[RunRecord]:
     ]
 
 
+def arm_prompts(records: list[RunRecord]) -> dict[str, str]:
+    """The prompts the arms in `records` sent (#1277). Only the participant
+    capture pass runs: its system prompt always, and the language anchor in
+    the user turn for every arm that did not strip it (`anchored`)."""
+    prompts = {
+        k: v
+        for k, v in extraction_prompts().items()
+        if k == "extraction/participant_capture"
+    }
+    if any(r.arm == "anchored" for r in records):
+        prompts.update(language_anchor_prompt())
+    return prompts
+
+
 def write_results(records: list[RunRecord], stamp: str, model: str) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     slug = model.replace(":", "-").replace("/", "-")
@@ -448,6 +474,8 @@ def write_results(records: list[RunRecord], stamp: str, model: str) -> Path:
     with path.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+    # One record per line, so the identity stamp is a sidecar.
+    write_stamp_sidecar(path, build_stamp(model=model, prompts=arm_prompts(records)))
     return path
 
 
@@ -672,6 +700,23 @@ def _self_test() -> int:
     # in this block performs this assignment.
     if concept_mod._build_participant_capture_messages is not original:
         print("FAIL: the arm was left installed after the vocabulary runs")
+        return 1
+
+    # #1277: the stored ledger names the prompts the arms sent.
+    global RESULTS_DIR
+    real_dir = RESULTS_DIR
+    with tempfile.TemporaryDirectory() as scratch:
+        RESULTS_DIR = Path(scratch)
+        try:
+            stamped = load_stamp(write_results([], "20000101T000000Z", "fake"))
+        finally:
+            RESULTS_DIR = real_dir
+    if stamped is None or prompt_map(stamped) != {
+        "extraction/participant_capture": prompt_hash(
+            concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT
+        )
+    }:
+        print("FAIL: the stored ledger must stamp the participant-capture prompt")
         return 1
 
     print(f"self-test OK ({len(build_fixtures())} fixture(s))")

@@ -60,11 +60,24 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from statistics import mean
 from typing import Any, Final
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from harness_prompts import extraction_prompts
+from harness_stamp import (
+    build_stamp,
+    load_stamp,
+    prompt_hash,
+    prompt_map,
+    write_stamp_sidecar,
+)
 
 from openkos.extraction import concept as concept_mod
 from openkos.extraction.concept import _PARTICIPANT_TYPES, extract_concept_union
@@ -612,6 +625,21 @@ def render_combo(metrics: ComboMetrics) -> str:
     )
 
 
+def run_prompts() -> dict[str, str]:
+    """Every prompt either arm sent (#1277): the registered extraction
+    prompts, plus the D2 rewrite of the participant-capture prompt under
+    `extraction/participant_capture+treatment`. Built from the arms' own
+    texts, not read off `concept_mod`, which `run_combo` has restored."""
+    prompts = extraction_prompts()
+    prompts.update(
+        extraction_prompts(
+            participant_capture=_TREATMENT_CAPTURE_SYSTEM_PROMPT,
+            participant_arm="treatment",
+        )
+    )
+    return prompts
+
+
 def write_results(records: list[RunRecord], stamp: str, model: str) -> Path:
     """Persist every run as JSONL so `--rescore` never needs the model."""
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -620,6 +648,8 @@ def write_results(records: list[RunRecord], stamp: str, model: str) -> Path:
     with path.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+    # #1277: one record per line, so the identity stamp is a sidecar.
+    write_stamp_sidecar(path, build_stamp(model=model, prompts=run_prompts()))
     return path
 
 
@@ -996,6 +1026,27 @@ def _self_test() -> int:
     check(
         _check_fabrication(fabrication_records, non_name_bearing) == (),
         "a non-name-bearing fixture must never run the fabrication check",
+    )
+
+    # #1277: the stored ledger names the text each arm sent.
+    global RESULTS_DIR
+    real_dir = RESULTS_DIR
+    with tempfile.TemporaryDirectory() as scratch:
+        RESULTS_DIR = Path(scratch)
+        try:
+            stamped = load_stamp(write_results([], "20000101T000000Z", "fake"))
+        finally:
+            RESULTS_DIR = real_dir
+    got = prompt_map(stamped) if stamped else {}
+    check(
+        got.get("extraction/participant_capture")
+        == prompt_hash(concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT),
+        "the baseline arm's registered participant prompt must be stamped",
+    )
+    check(
+        got.get("extraction/participant_capture+treatment")
+        == prompt_hash(_TREATMENT_CAPTURE_SYSTEM_PROMPT),
+        "the D2 rewrite must be stamped under its own id and hash",
     )
 
     if failures:

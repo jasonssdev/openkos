@@ -75,11 +75,23 @@ import importlib.util
 import json
 import statistics
 import sys
+import tempfile
 import time
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from harness_prompts import extraction_prompts
+from harness_stamp import (
+    build_stamp,
+    load_stamp,
+    prompt_hash,
+    prompt_map,
+    write_stamp_sidecar,
+)
 
 from openkos.config import (
     DEFAULT_CONTEXT_WINDOW,
@@ -877,6 +889,8 @@ def write_results(
         for record in records:
             handle.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
     _result_path(stamp, model, ".md").write_text(report, encoding="utf-8")
+    # #1277: the ledger is one record per line; its identity stamp is a sidecar.
+    write_stamp_sidecar(path, build_stamp(model=model, prompts=extraction_prompts()))
     return path
 
 
@@ -1221,6 +1235,20 @@ def _self_test() -> int:
     for sample in ([synthetic], [judge_cut], [extract_cut]):
         if not render(sample):
             failures.append("render produced nothing for a stored sweep")
+
+    # #1277: the stored ledger names the prompts it ran under.
+    global RESULTS_DIR
+    real_dir = RESULTS_DIR
+    with tempfile.TemporaryDirectory() as scratch:
+        RESULTS_DIR = Path(scratch)
+        try:
+            stored = load_stamp(write_results([], "r", "20000101T000000Z", "fake"))
+        finally:
+            RESULTS_DIR = real_dir
+    if stored is None or prompt_map(stored) != {
+        k: prompt_hash(v) for k, v in extraction_prompts().items()
+    }:
+        failures.append("the stored ledger does not stamp the extraction prompts")
 
     if failures:
         print(f"self-test FAILED ({len(failures)} failure(s)):")

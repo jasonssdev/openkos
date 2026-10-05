@@ -55,6 +55,10 @@ from datetime import UTC, datetime
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.append(str(REPO_ROOT / "evals"))
+
+from harness_prompts import extraction_prompts, language_anchor_prompt  # noqa: E402
+from harness_stamp import build_stamp, prompt_hash  # noqa: E402
 
 from openkos.extraction import concept as concept_mod  # noqa: E402
 from openkos.llm.ollama import OllamaClient, OllamaError  # noqa: E402
@@ -496,6 +500,17 @@ def analyze_stored(paths: list[str]) -> None:
         print(f"    FP [{classify_title(title)}]: {title}")
 
 
+def arm_prompts(arm: str) -> dict[str, str]:
+    """The prompts `arm` sent (#1277). This probe runs the per-window
+    extraction only, so the main system prompt plus the language anchor the
+    `treatment` arm rewrites; read live, after that swap."""
+    prompts = {
+        k: v for k, v in extraction_prompts().items() if k == "extraction/system"
+    }
+    prompts.update(language_anchor_prompt(None if arm == "baseline" else arm))
+    return prompts
+
+
 def _self_test() -> int:
     """Prove the classifier, the two adjacency exemptions, the #622
     extension and the #618 gate replica against synthetic titles -- no
@@ -590,6 +605,27 @@ def _self_test() -> int:
     )
     check("dominant-language title kept", "Reunión de proyecto" in kept2, True)
     check("wrong-language title dropped", "The Project Team" in dropped2, True)
+
+    # #1277: the stamp names the text each arm sent, anchor included.
+    base = arm_prompts("baseline")
+    check(
+        "baseline stamps the registered system and anchor ids",
+        sorted(base),
+        ["extraction/language_anchor", "extraction/system"],
+    )
+    shipped_anchor = concept_mod._LANGUAGE_ANCHOR
+    concept_mod._LANGUAGE_ANCHOR = shipped_anchor + " Reply in Spanish."  # type: ignore[misc]
+    try:
+        treated = arm_prompts("treatment")
+    finally:
+        concept_mod._LANGUAGE_ANCHOR = shipped_anchor  # type: ignore[misc]
+    check(
+        "a rewritten anchor is stamped under its own id and hash",
+        {k: prompt_hash(v) for k, v in treated.items()}[
+            "extraction/language_anchor+treatment"
+        ],
+        prompt_hash(shipped_anchor + " Reply in Spanish."),
+    )
 
     for line in failures:
         print(f"FAIL {line}")
@@ -795,6 +831,8 @@ def main() -> int:
                 "generated_at": stamp,
                 "fixture_chars": len(text),
                 "fixture_windows": len(windows),
+                # #1277: harness, model, and the prompt text this arm sent.
+                "stamp": build_stamp(model=args.model, prompts=arm_prompts(args.arm)),
                 "rows": run_rows,
             },
             indent=2,

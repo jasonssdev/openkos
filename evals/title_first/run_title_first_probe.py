@@ -87,8 +87,11 @@ _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parents[1]
 _CAP = _REPO_ROOT / "evals" / "extraction_cap"
 sys.path.insert(0, str(_CAP))
+sys.path.append(str(_REPO_ROOT / "evals"))
 
 import run_cap_eval as cap  # noqa: E402
+from harness_prompts import extraction_prompts  # noqa: E402
+from harness_stamp import build_stamp, prompt_hash, prompt_map  # noqa: E402
 
 from openkos.extraction import concept  # noqa: E402
 from openkos.llm import parsing  # noqa: E402
@@ -628,6 +631,18 @@ def render(records: Sequence[RunRecord], *, fixture: str, model: str) -> str:
     return "\n".join(lines)
 
 
+def run_prompts() -> dict[str, str]:
+    """Every system prompt the two arms send (#1277): the baseline arm runs
+    the shipped extraction prompts; the treatment arm's survey phase sends
+    production's prompt with its reply-shape clause replaced, and its
+    hydration phase a probe-local prompt. Each is stamped by the text that was
+    sent, the derived one under a `+title_first_survey` id of its own."""
+    prompts = extraction_prompts()
+    prompts["extraction/system+title_first_survey"] = _survey_system_prompt()
+    prompts["probe/title_first_hydrate"] = _HYDRATE_SYSTEM_PROMPT
+    return prompts
+
+
 def write_results(records: Sequence[RunRecord], *, model: str, fixture: str) -> Path:
     """Persist every observation. A sweep costs GPU minutes; never lose it."""
     results = _HERE / "results"
@@ -640,6 +655,8 @@ def write_results(records: Sequence[RunRecord], *, model: str, fixture: str) -> 
                 "model": model,
                 "fixture": fixture,
                 "generated_at": stamp,
+                # #1277: harness, model and the prompt text each arm sent.
+                "stamp": build_stamp(model=model, prompts=run_prompts()),
                 "runs": [asdict(r) for r in records],
             },
             ensure_ascii=False,
@@ -867,6 +884,25 @@ def _self_test() -> int:
     check("but has no precision denominator", empty.scored, False)
     check("and its recall is a real zero", empty.recall, 0.0)
     check("an errored run is not ok", drifted.ok, False)
+
+    # #1277: the stamp carries the derived survey prompt under its own id and
+    # the registered baseline prompt under the registered one.
+    stamped = prompt_map(build_stamp(model="m", prompts=run_prompts()))
+    check(
+        "the survey prompt is stamped by the text sent",
+        stamped.get("extraction/system+title_first_survey"),
+        prompt_hash(_survey_system_prompt()),
+    )
+    check(
+        "the baseline system prompt keeps the registered id",
+        stamped.get("extraction/system"),
+        prompt_hash(concept._SYSTEM_PROMPT),
+    )
+    check(
+        "the survey and baseline prompts differ",
+        stamped["extraction/system+title_first_survey"] == stamped["extraction/system"],
+        False,
+    )
 
     if failures:
         print("SELF-TEST FAILED:")

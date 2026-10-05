@@ -104,7 +104,9 @@ sys.path.append(str(REPO_ROOT / "evals"))
 # No ignore: CI runs `mypy .` over the whole repository, which has
 # `run_cap_eval` in its checked set and resolves this. Checking this file
 # ALONE reports it unresolved -- follow CI, which is the contract.
+from harness_prompts import extraction_prompts  # noqa: E402
 from harness_report import arm_identity_line  # noqa: E402
+from harness_stamp import build_stamp, prompt_hash  # noqa: E402
 from run_cap_eval import (  # noqa: E402
     UNJUDGED,
     GroundTruth,
@@ -118,6 +120,7 @@ from openkos.config import (  # noqa: E402
 )
 from openkos.extraction.concept import (  # noqa: E402
     ExtractionResult,
+    _build_messages,
     _chunk_lines,
     _dedup_merged,
     _extract_once,
@@ -248,6 +251,13 @@ def _spread(values: list[float]) -> str:
     return f"{mean:.2f} ±{sd:.2f} [{min(values):.2f}-{max(values):.2f}] n={len(values)}"
 
 
+def _stamped_prompts() -> dict[str, str]:
+    """The system prompts this probe sends (#1277): it stops at the per-window
+    fan-out (`_extract_once`), so only the main extraction prompt, not the
+    re-ask, participant or judge ones."""
+    return {k: v for k, v in extraction_prompts().items() if k == "extraction/system"}
+
+
 def _self_test() -> int:
     """Every invariant this probe's conclusions rest on, without a model."""
     source = _SOURCE_PATH.read_text(encoding="utf-8")
@@ -271,6 +281,14 @@ def _self_test() -> int:
         order = list(pool.map(lambda n: n, range(8)))
     if order != list(range(8)):
         failures.append("ThreadPoolExecutor.map did not preserve input order")
+
+    stamped = _stamped_prompts()
+    if list(stamped) != ["extraction/system"]:
+        failures.append(f"stamps {list(stamped)}, not just extraction/system")
+    elif prompt_hash(stamped["extraction/system"]) != prompt_hash(
+        _build_messages("x", "t")[0]["content"]
+    ):
+        failures.append("the stamped prompt is not the one `_extract_once` sends")
 
     for line in failures:
         print(f"FAIL {line}")
@@ -368,6 +386,8 @@ def main() -> None:
         "server_num_parallel": args.server_num_parallel,
         "max_generation_tokens": DEFAULT_MAX_GENERATION_TOKENS,
         "context_window": DEFAULT_CONTEXT_WINDOW,
+        # #1277: harness, model and prompt identity.
+        "stamp": build_stamp(model=args.model, prompts=_stamped_prompts()),
         "arms": {
             str(c): {
                 "wall": arms[c].wall,
