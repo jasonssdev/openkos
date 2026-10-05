@@ -1323,6 +1323,33 @@ def _fmt(xs: Sequence[Any]) -> str:
     return f"{', '.join(shown)}" + (f" (median {med:.2f})" if med is not None else "")
 
 
+def merge_arm_files(arms: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One entry per arm, holding every run from every file of that arm.
+
+    Decision 6 adds runs to an arm in a later invocation, which writes a
+    second runs file for the same arm. Keying the report by arm label would
+    let the later file shadow the earlier one, so the files are merged here:
+    runs are concatenated in file order, and the first file's metadata
+    stands. Runs of one arm from a different checkout or corpus are not the
+    same measurement and are refused rather than pooled.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    for arm in arms:
+        label = arm["arm"]
+        if label not in merged:
+            merged[label] = {**arm, "runs": list(arm["runs"])}
+            continue
+        held = merged[label]
+        for key in ("checkout_commit", "corpus_digest"):
+            if held.get(key) != arm.get(key):
+                raise ValueError(
+                    f"arm {label!r}: runs files disagree on {key} "
+                    f"({held.get(key)!r} vs {arm.get(key)!r}); refusing to pool them"
+                )
+        held["runs"].extend(arm["runs"])
+    return list(merged.values())
+
+
 def render_report(arms: Sequence[Mapping[str, Any]], baseline_label: str | None) -> str:
     summaries = {a["arm"]: summarize_arm(a["runs"]) for a in arms}
     lines = [
@@ -2107,6 +2134,27 @@ def _self_test_pure(failures: list[str]) -> None:
         ),
         "censored run fails B5",
     )
+    # Runs added to an arm by a later invocation (decision 6) are read
+    # together: two files of one arm become one arm with every run, never
+    # one file shadowing the other.
+    first = {"arm": "main", "checkout_commit": "c", "corpus_digest": "d"}
+    batch_a = {**first, "runs": [{"n": 1}, {"n": 2}, {"n": 3}]}
+    batch_b = {**first, "runs": [{"n": 4}, {"n": 5}, {"n": 6}]}
+    other = {**first, "arm": "v0.4.0", "runs": [{"n": 0}]}
+    merged = merge_arm_files([other, batch_a, batch_b])
+    check(
+        [a["arm"] for a in merged] == ["v0.4.0", "main"],
+        "merge keeps one entry per arm, in first-seen order",
+    )
+    check(
+        [r["n"] for r in merged[1]["runs"]] == [1, 2, 3, 4, 5, 6],
+        "merge concatenates every run of an arm",
+    )
+    try:
+        merge_arm_files([batch_a, {**batch_b, "checkout_commit": "other"}])
+        check(False, "merge refuses runs of one arm from different commits")
+    except ValueError:
+        pass
     # The committed corpus is the one the pre-registration describes.
     real = load_manifest()
     for problem in corpus_problems(real):
@@ -2234,7 +2282,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"all arms: ~{total / 60:.1f} h")
         return 0
     if args.report:
-        arms = [json.loads(p.read_text(encoding="utf-8")) for p in args.report]
+        arms = merge_arm_files(
+            [json.loads(p.read_text(encoding="utf-8")) for p in args.report]
+        )
         text = render_report(arms, args.baseline)
         args.results_dir.mkdir(parents=True, exist_ok=True)
         out = (

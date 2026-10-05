@@ -53,3 +53,9 @@ Workspaces go under a fresh temporary directory, or `--work-root`. That director
 2. **The whole protocol** against a deterministic fake CLI (`--fake-cli`), in two modes. `old` forks to `-N`, leaves the daemon's index stale, and lists nothing. `new` attaches, refreshes, and lists every import with `git revert`. Every metric must come out at its hand-computed value.
 
 It takes about 12 s and makes no model call.
+
+## Binding result
+
+The binding run measured `main` at `b87f95cd` against the `v0.4.0` tag on the pre-registered protocol (`main` ran 6 times: 3 plus 3 added under decision 6). B1 through B5 pass in every `main` run, so the arc's exit criteria are met. The guard G1 (final open pending rows against the `v0.4.0` median) missed by 1–2 rows. The owner decided that miss on 2026-10-05: it sits inside the baseline's own run-to-run spread, and in both arms the two decision-bearing kinds were already at their per-kind caps, so G1 had almost no exposure to what it guards. It is recorded as a within-spread miss of a guard without exposure, and a later measurement should compare the decision-bearing kinds before their caps bind. The full record is on [#1268](https://github.com/jasonssdev/openkos/issues/1268).
+
+Committed in [`results/`](results/): one `runs-<arm>-<timestamp>-<model>.json` per arm invocation and the combined report `report-20261005T135041Z.md`. Machine-local paths in them are replaced by `<checkout>` and `<work-root>`. Raw console logs, the pilot, and the intermediate report renders are not committed.

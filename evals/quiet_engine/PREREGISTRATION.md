@@ -1,6 +1,6 @@
 # Pre-registration: The Quiet Engine product metrics
 
-**Status: Approved, not yet run.** Written before any live run. The owner decided the open questions on 2026-10-04 (see "Decisions" below), and the bars are binding as written. Its record is [#1268](https://github.com/jasonssdev/openkos/issues/1268). The harness is [`run_quiet_engine_eval.py`](run_quiet_engine_eval.py). It encodes these definitions and bars and has a model-free `--self-test`.
+**Status: Run; exit criteria met (see [#1268](https://github.com/jasonssdev/openkos/issues/1268) and [`results/`](results/)).** Written before any live run. The owner decided the open questions on 2026-10-04 (see "Decisions" below), and the bars are binding as written. Its record is [#1268](https://github.com/jasonssdev/openkos/issues/1268). The harness is [`run_quiet_engine_eval.py`](run_quiet_engine_eval.py). It encodes these definitions and bars and has a model-free `--self-test`.
 
 ## Question
 

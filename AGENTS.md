@@ -2,7 +2,7 @@
 
 Operating manual for AI coding agents (and humans) working **on the OpenKOS codebase**. This is the canon: read it first and keep every change consistent with it. (It is distinct from the `AGENTS.md` *inside* a knowledge bundle, which tells an agent how to operate that bundle.)
 
-OpenKOS is an open-source, **local-first engine** that compiles a person's text into a living, portable knowledge base, built on the **Open Knowledge Format (OKF)**. It is alpha; **MVP 1 (The Compiler)**, **MVP 2 (The Graph and Memory)**, **MVP 3 (The Ask Surface)** and **MVP 4 (The Unattended Engine)** are complete, and **The Quiet Engine** (a named arc before MVP 5, [ADR-0044](docs/adr/0044-the-quiet-engine-arc-precedes-interoperability.md)) is next, then **MVP 5 (Interoperability)**.
+OpenKOS is an open-source, **local-first engine** that compiles a person's text into a living, portable knowledge base, built on the **Open Knowledge Format (OKF)**. It is alpha; **MVP 1 (The Compiler)**, **MVP 2 (The Graph and Memory)**, **MVP 3 (The Ask Surface)** and **MVP 4 (The Unattended Engine)** are complete, and **The Quiet Engine** (a named arc before MVP 5, [ADR-0044](docs/adr/0044-the-quiet-engine-arc-precedes-interoperability.md)) are complete, and **MVP 5 (Interoperability)** is next.
 
 ## Read these first
 
@@ -63,9 +63,9 @@ Write it while the forces are still fresh — when the change's design settles t
 
 ## Where the work is now
 
-MVP 1 through MVP 4 have shipped, so this is no longer a greenfield build order. The vertical slice MVP 1 was scoped as — `openkos init` → create the workspace (`raw/`, `bundle/`, `openkos.yaml`, `AGENTS.md`) → `openkos ingest <path>` → copy the source into `raw/` → compile it with the local model into one or more OKF concept documents (with provenance + freshness) → update `index.md` and `log.md` — exists, along with hybrid retrieval, the typed graph, entity resolution and merge, contradiction detection, the forget/purge lifecycle, the MCP server with its sensitivity disclosure gate, and the unattended engine (`daemon`, the pending-work queue read by `pending`, inbox watch, and a workspace lock held only for short commit phases). `examples/good-life-demo/` is still the reference shape for what `ingest` produces, and the conformance fixture.
+MVP 1 through MVP 4 and The Quiet Engine arc have shipped, so this is no longer a greenfield build order. The vertical slice MVP 1 was scoped as — `openkos init` → create the workspace (`raw/`, `bundle/`, `openkos.yaml`, `AGENTS.md`) → `openkos ingest <path>` → copy the source into `raw/` → compile it with the local model into one or more OKF concept documents (with provenance + freshness) → update `index.md` and `log.md` — exists, along with hybrid retrieval, the typed graph, entity resolution and merge, contradiction detection, the forget/purge lifecycle, the MCP server with its sensitivity disclosure gate, and the unattended engine (`daemon`, the pending-work queue read by `pending`, inbox watch, and a workspace lock held only for short commit phases). `examples/good-life-demo/` is still the reference shape for what `ingest` produces, and the conformance fixture.
 
-New work therefore starts from the shipped surface, not from a scaffold: read `docs/cli.md` for what each verb already does, `docs/roadmap.md` for what the next arcs owe (The Quiet Engine's attach-at-ingest and review digest; MVP 5's OKF export and import; MVP 6's desktop app and the stable Python API it is the first client of), and the open issues for what is actually queued. A change that re-describes existing behavior as new is the failure mode to avoid.
+New work therefore starts from the shipped surface, not from a scaffold: read `docs/cli.md` for what each verb already does, `docs/roadmap.md` for what the next arcs owe (what The Quiet Engine left undelivered; MVP 5's OKF export and import; MVP 6's desktop app and the stable Python API it is the first client of), and the open issues for what is actually queued. A change that re-describes existing behavior as new is the failure mode to avoid.
 
 ## Do not
 
