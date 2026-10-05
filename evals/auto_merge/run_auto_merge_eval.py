@@ -171,7 +171,9 @@ def _fixture_digest(bundle_dir: pathlib.Path) -> str:
     return f"sha256:{hasher.hexdigest()}"
 
 
-def _materialize_workspace(root: pathlib.Path) -> config_mod.WorkspaceLayout:
+def _materialize_workspace(
+    root: pathlib.Path, docs: tuple[FixtureDoc, ...] | None = None
+) -> config_mod.WorkspaceLayout:
     """A full, minimal OKF workspace at `root` -- `bundle/index.md` and
     `bundle/log.md` (`bundle.create`), `openkos.yaml` (`config.write_config`,
     packaged defaults), then every fixture document. Needed only for the
@@ -186,7 +188,7 @@ def _materialize_workspace(root: pathlib.Path) -> config_mod.WorkspaceLayout:
     layout = config_mod.WorkspaceLayout(root)
     bundle_mod.create(layout.bundle_dir, datetime.now(UTC).date())
     config_mod.write_config(root)
-    _materialize_bundle(layout.bundle_dir, documents())
+    _materialize_bundle(layout.bundle_dir, documents() if docs is None else docs)
     return layout
 
 
@@ -583,7 +585,11 @@ def _assert_digest_stable_and_d3(failures: list[str], stack: ExitStack) -> None:
     _assert_d3_structural_eligibility(failures, first_root)
 
 
-def _assert_d3_structural_eligibility(failures: list[str], root: pathlib.Path) -> None:
+def _assert_d3_structural_eligibility(
+    failures: list[str],
+    root: pathlib.Path,
+    pairs: tuple[LabelledPair, ...] = PAIRS,
+) -> None:
     """Design D3: every labelled pair, on the materialized bundle, forms
     exactly one 2-member `find_candidates` group, both members declare one
     OKF type, `cross_type_concern` is `None`, and the pinned
@@ -593,11 +599,11 @@ def _assert_d3_structural_eligibility(failures: list[str], root: pathlib.Path) -
     layout = config_mod.WorkspaceLayout(root)
     groups = candidates_mod.find_candidates(layout.bundle_dir)
     found = {frozenset(g.member_ids): g for g in groups}
-    wanted = {_pair_key(pair) for pair in PAIRS}
+    wanted = {_pair_key(pair) for pair in pairs}
 
     missing = sorted(
         f"{pair.probe}:{_pair_id(pair)}"
-        for pair in PAIRS
+        for pair in pairs
         if _pair_key(pair) not in found
     )
     extra = sorted(
@@ -610,12 +616,12 @@ def _assert_d3_structural_eligibility(failures: list[str], root: pathlib.Path) -
     )
     _check_list(failures, "find_candidates produces no unlabelled group", extra, [])
     _check_list(
-        failures, "one group per labelled pair, none duplicated", len(found), len(PAIRS)
+        failures, "one group per labelled pair, none duplicated", len(found), len(pairs)
     )
 
     index_path = layout.bundle_dir / "index.md"
     log_path = layout.bundle_dir / "log.md"
-    for pair in PAIRS:
+    for pair in pairs:
         group = found.get(_pair_key(pair))
         if group is None:
             continue

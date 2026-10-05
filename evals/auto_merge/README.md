@@ -16,6 +16,17 @@ The canonical verdict file is
 [`results/auto-merge-verdict-20260930T071242Z-qwen3-8b.md`](results/auto-merge-verdict-20260930T071242Z-qwen3-8b.md);
 the other two verdict files there are near-identical duplicates of it.
 
+## The structural class (#1298)
+
+A second, separately pre-registered measurement reuses this harness's rule
+on a different population: same-type, same-key base/`-N` families outside
+Event and Person. Neither this fixture nor `evals/adjudication`'s has any
+pair in that class, so it brings its own synthetic fixture. See
+[`PREREGISTRATION-1298.md`](PREREGISTRATION-1298.md) (draft until the owner
+approves it), [`structural_fixtures.py`](structural_fixtures.py), and the
+model-free [`run_structural_class.py`](run_structural_class.py)
+(`--self-test`).
+
 ## Why this harness exists
 
 `curate` never applies an Identity merge unattended today (#702):
