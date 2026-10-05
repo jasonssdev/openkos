@@ -94,7 +94,7 @@ Owns: `src/openkos/application/auto_merge.py` (new),
 `tests/unit/llm/test_ollama.py`, `tests/unit/llm/test_openai_compatible*.py`.
 Branch `feat/1298-curate-auto-merge` (or one branch per slice per auto-chain).
 
-- [ ] 1.1 [TEST] In `tests/unit/application/test_auto_merge.py`, port the 13
+- [x] 1.1 [TEST] In `tests/unit/application/test_auto_merge.py`, port the 13
   `_self_test_predicate()` cases from `evals/auto_merge/run_structural_class.py`
   (lines ~676-712) plus one boundary per clause to
   `auto_merge.in_structural_class`: LOW tier, ACRONYM tier, 3 members, mixed
@@ -102,7 +102,7 @@ Branch `feat/1298-curate-auto-merge` (or one branch per slice per auto-chain).
   each exclude on their own; both member orders of base/`-N` admit; a group
   whose member files do not exist still returns in class without raising (spec
   "reads no verdict and no file"). RED: `ImportError`, module missing.
-- [ ] 1.2 [IMPL] Create `src/openkos/application/auto_merge.py` with
+- [x] 1.2 [IMPL] Create `src/openkos/application/auto_merge.py` with
   `in_structural_class(group)` moved verbatim from
   `evals/auto_merge/run_structural_class.py:85-96` (imports limited to
   `resolution.candidates`, `resolution.normalize`,
@@ -112,18 +112,18 @@ Branch `feat/1298-curate-auto-merge` (or one branch per slice per auto-chain).
   delete its own definition (name stays in its namespace so `exposure()` and
   `_self_test_predicate()` are unchanged). GREEN 1.1; run
   `OLLAMA_HOST=http://127.0.0.1:9 uv run python evals/auto_merge/run_structural_class.py --self-test`.
-- [ ] 1.3 [TEST] Spec "The eval harness uses the production predicate": assert
+- [x] 1.3 [TEST] Spec "The eval harness uses the production predicate": assert
   `run_structural_class.in_structural_class is auto_merge.in_structural_class`
   and that the eval source defines no `def in_structural_class`. RED before
   1.2's edit is applied to the eval (write and observe RED against the old
   eval, then 1.2 turns it GREEN; if 1.2 already landed, [MUT] 1.4 proves it).
-- [ ] 1.4 [MUT] One mutation per clause of the predicate, each on its exact
+- [x] 1.4 [MUT] One mutation per clause of the predicate, each on its exact
   line: drop the HIGH-tier check; `== 2` to `>= 2`; drop the same-type check;
   drop the `ATTACH_EXCLUDED_TYPES` membership check; replace `is_suffix_family`
   with a looser relation. Each must turn a named 1.1 test RED. Also re-define
   the predicate in the eval and observe 1.3 RED. Revert by inverse edit, purge
   `__pycache__`.
-- [ ] 1.5 [TEST] `test_constants_match_the_committed_stamp` in
+- [x] 1.5 [TEST] `test_constants_match_the_committed_stamp` in
   `tests/unit/application/test_auto_merge.py`: load the committed
   `evals/auto_merge/results/runs-structural-calibration-20261005T164453Z-gemma4-26b-a4b.json`
   (read-only) and
@@ -138,7 +138,7 @@ Branch `feat/1298-curate-auto-merge` (or one branch per slice per auto-chain).
   rubric_digest()` and `MEASURED_PROMPT_SHA256_16 == prompt_hash(_SYSTEM_PROMPT)`
   with a failure message telling the editor that a rubric change invalidates the
   measurement. RED: constants missing.
-- [ ] 1.6 [IMPL] Add the `typing.Final` constants to `auto_merge.py`, each with
+- [x] 1.6 [IMPL] Add the `typing.Final` constants to `auto_merge.py`, each with
   a docstring citing its evidence (D3 table): `MEASURED_MODEL =
   "gemma4:26b-a4b"`, `MEASURED_MODEL_DIGEST =
   "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"`,
@@ -149,24 +149,24 @@ Branch `feat/1298-curate-auto-merge` (or one branch per slice per auto-chain).
   (verified fact above; no scratch-tree computation needed), 
   `MEASURED_CONTEXT_WINDOW = 12288`, `MEASURED_MAX_GENERATION_TOKENS = 8192`.
   GREEN 1.5.
-- [ ] 1.7 [MUT] Change each constant by one character (and `T_STAR` to 0.9001);
+- [x] 1.7 [MUT] Change each constant by one character (and `T_STAR` to 0.9001);
   each must turn 1.5 RED (stamp tie or rubric/prompt pin). Revert, purge.
-- [ ] 1.8 [TEST] `tests/unit/llm/test_ollama.py`: `list_models` returns
+- [x] 1.8 [TEST] `tests/unit/llm/test_ollama.py`: `list_models` returns
   `InstalledModel.digest` as the listed 64-hex string; a missing, `null`,
   empty-string or non-string `digest` yields `None` and does not abort the
   listing; an existing `InstalledModel(tag=..., family=...)` construction stays
   valid (default `None`). RED: `AttributeError`/`TypeError`, field missing.
-- [ ] 1.9 [IMPL] `src/openkos/llm/base.py`: add `digest: str | None = None` as
+- [x] 1.9 [IMPL] `src/openkos/llm/base.py`: add `digest: str | None = None` as
   the LAST field of `InstalledModel` (`llm/base.py:91-100`).
   `src/openkos/llm/ollama.py` (`list_models`, ~641-690): read `entry.get("digest")`,
   keep it only when a non-empty `str`, inside the existing parse `try`. GREEN 1.8.
-- [ ] 1.10 [TEST] `tests/unit/llm/test_openai_compatible*.py`: `list_models`
+- [x] 1.10 [TEST] `tests/unit/llm/test_openai_compatible*.py`: `list_models`
   yields entries whose `digest is None` (pin the no-change contract; spec
   "unknown digest"). Written GREEN on first run, so it is mutation-checked next.
-- [ ] 1.11 [MUT] (a) Make ollama keep a non-string digest as-is; (b) make it keep
+- [x] 1.11 [MUT] (a) Make ollama keep a non-string digest as-is; (b) make it keep
   an empty string; (c) make openai-compatible stamp a fake digest in a scratch
   edit. Each must turn 1.8 or 1.10 RED. Revert, purge.
-- [ ] 1.12 [TEST] `static_ineligibility(cfg) -> tuple[str, ...]` in
+- [x] 1.12 [TEST] `static_ineligibility(cfg) -> tuple[str, ...]` in
   `tests/unit/application/test_auto_merge.py`, from an all-valid baseline `Config`
   (measured model, `context_window=12288`, `max_generation_tokens=8192`,
   sampling unpinned) that returns `()`; then ONE test per deviation, each the
@@ -181,10 +181,10 @@ Branch `feat/1298-curate-auto-merge` (or one branch per slice per auto-chain).
   (spec: "names every failed check"); a combined test with two deviations returns
   both reasons. Confirm the real config field names that feed
   `chat_client`'s `temperature`/`seed` at apply time. RED: function missing.
-- [ ] 1.13 [IMPL] `static_ineligibility(cfg)`: pure, no I/O, collects every
+- [x] 1.13 [IMPL] `static_ineligibility(cfg)`: pure, no I/O, collects every
   failing static reason in order (model tag, `context_window`,
   `max_generation_tokens`, sampling pins, rubric digest). GREEN 1.12.
-- [ ] 1.14 [TEST] `model_digest_ineligibility(list_models, tag)` and
+- [x] 1.14 [TEST] `model_digest_ineligibility(list_models, tag)` and
   `run_eligibility(cfg, list_models) -> RunEligibility`: baseline eligible;
   ONE test per reason from the baseline: `list_models` raises `BackendError`
   ("could not list installed models"); tag not listed; tag listed with
@@ -193,16 +193,16 @@ Branch `feat/1298-curate-auto-merge` (or one branch per slice per auto-chain).
   asserts it is NEVER called when any static reason exists, and called exactly
   once otherwise; reasons from static checks and digest combine when static
   passes. `RunEligibility.eligible` is `not reasons`. RED: functions missing.
-- [ ] 1.15 [IMPL] `model_digest_ineligibility`, `RunEligibility`,
+- [x] 1.15 [IMPL] `model_digest_ineligibility`, `RunEligibility`,
   `run_eligibility` (static first, digest last, one `list_models` call). GREEN
   1.14.
-- [ ] 1.16 [MUT] One mutation per guard, each on its exact line: drop the model
+- [x] 1.16 [MUT] One mutation per guard, each on its exact line: drop the model
   tag compare; drop `context_window`; drop `max_generation_tokens`; drop
   `temperature`; drop `seed`; drop the rubric compare; swallow `BackendError`
   as eligible; treat unlisted as eligible; treat `digest None` as eligible;
   compare digests with `startswith`; call `list_models` before the static
   checks. Each must turn exactly its named 1.12/1.14 test RED. Revert, purge.
-- [ ] 1.17 Write `docs/adr/0049-structural-identity-class-merges-under-measured-constants.md`
+- [x] 1.17 Write `docs/adr/0049-structural-identity-class-merges-under-measured-constants.md`
   from `docs/adr/template.md`, status `Proposed` in frontmatter AND the
   `**Status:**` body line, with `description`, date and timestamp. Content per
   design D12 (admitted class and per-group requirements; the D3 constants table
@@ -212,11 +212,11 @@ Branch `feat/1298-curate-auto-merge` (or one branch per slice per auto-chain).
   of ADR-0036 Decision One; accept-recommended on its own bars with
   confidential members excluded; never unattended; rejected alternatives).
   Add its row to `docs/adr/README.md`.
-- [ ] 1.18 [TEST] Run `uv run pytest tests/unit/test_adr_index.py -q` (ADR
+- [x] 1.18 [TEST] Run `uv run pytest tests/unit/test_adr_index.py -q` (ADR
   status is checked in more than one place) and
   `uv run pytest tests/unit/application/test_layering.py -q` (the new module
   imports no cli, concrete llm client, or yaml).
-- [ ] 1.19 Run the five-command slice gate (header). All green; record
+- [x] 1.19 Run the five-command slice gate (header). All green; record
   observed results.
 - [ ] 1.20 Commit as separate work units (`feat(llm): add model digest to
   InstalledModel`, `feat(ingest): add structural class seam and run
