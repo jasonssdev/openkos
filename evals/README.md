@@ -66,6 +66,7 @@ of a harness's own scoring code.
 - [`query_identity`](query_identity/README.md) — whether any signal detects two filed insights being the same object.
 - [`query_sufficiency`](query_sufficiency/README.md) — whether a pre-synthesis sufficiency check can refuse what attribution misses.
 - [`query_title`](query_title/README.md) — subject-named versus question-named titles for saved insights.
+- [`quiet_engine`](quiet_engine/README.md) — The Quiet Engine arc's product metrics: decisions per source and time to a cited answer, v0.4.0 against main.
 - [`retrieval_stability`](retrieval_stability/README.md) — citation stability across near-identical questions.
 - [`section_coverage`](section_coverage/README.md) — whether a per-section coverage signal can see a lost section.
 - [`stage_attrition`](stage_attrition/README.md) — which pipeline stage removes the subjects.
