@@ -375,42 +375,42 @@ Owns: `src/openkos/cli/curate.py`, `src/openkos/cli/main.py`,
 `tests/unit/cli/test_curate_auto_merge.py` (new),
 `tests/unit/cli/test_daemon.py`. Depends on: slice 2 merged.
 
-- [ ] 3.1 [TEST] `tests/unit/cli/test_curate_auto_merge.py`: `curate --reconcile
+- [x] 3.1 [TEST] `tests/unit/cli/test_curate_auto_merge.py`: `curate --reconcile
   --auto-merge` exits 2 with
   `openkos curate: --auto-merge merges mechanically and cannot be combined with --reconcile.`
   BEFORE any workspace read (a workspace-gate stub fails if called);
   `--no-reconcile --auto-merge` is accepted; `curate --help` names the class,
   the per-run opt-in, the one commit and the undo. RED: no such option (exit 2
   for the wrong reason: assert the exact message, not just the code).
-- [ ] 3.2 [IMPL] `src/openkos/cli/main.py::curate`: add `--auto-merge` (default
+- [x] 3.2 [IMPL] `src/openkos/cli/main.py::curate`: add `--auto-merge` (default
   `False`), the module-constant message beside `_RECONCILE_CONFLICT_MESSAGE`, the
   refusal next to the #803 refusal; `src/openkos/cli/curate.py`: add
   `CurateContext.auto_merge: bool = False` and
   `auto_merged: list[...] = field(default_factory=list, init=False)`. GREEN 3.1.
-- [ ] 3.3 [MUT] Drop the refusal; make the refusal run after the workspace read;
+- [x] 3.3 [MUT] Drop the refusal; make the refusal run after the workspace read;
   exit 1 instead of 2; default the flag `True`. Each RED. Revert, purge.
-- [ ] 3.4 [TEST] Spend consent stays separate: `--auto-merge` alone on a non-TTY
+- [x] 3.4 [TEST] Spend consent stays separate: `--auto-merge` alone on a non-TTY
   is declined with zero chat calls and nothing judged (stage declined, existing
   unattended hint); `--auto-merge` alone on a TTY still shows the cost prompt;
   `--auto --auto-merge` on a non-TTY passes the cost gate; without the flag,
   `--auto` alone on a non-TTY keeps today's Identity refusal (spec "Without the
   flag nothing is merged automatically"); `review: false` and `--accept identity`
   do not enable it. Chat-call counter stub proves "zero". RED: flag inert.
-- [ ] 3.5 [IMPL] Non-TTY exemption at `cli/curate.py:2610`: the condition gains
+- [x] 3.5 [IMPL] Non-TTY exemption at `cli/curate.py:2610`: the condition gains
   `and not _unattended_identity(ctx, stage)` where `_unattended_identity` is
   `stage.name == "Identity" and ctx.auto_merge`; `accepted_stages` untouched.
   GREEN 3.4. [MUT] make the exemption unconditional (no `ctx.auto_merge`); make
   it apply to every stage; each RED.
-- [ ] 3.6 [TEST] Probe parity: the `_identity_probe` `llm_calls` equals the stub's
+- [x] 3.6 [TEST] Probe parity: the `_identity_probe` `llm_calls` equals the stub's
   actual chat-call count for each case: no flag; flag + eligible (in-class cached
   groups now counted fresh); flag + statically ineligible (counts as today);
   flag + eligible probe but digest mismatch at run time (run pays LESS than
   priced, never more). RED: probe ignores the flag.
-- [ ] 3.7 [IMPL] `_identity_probe` (`cli/curate.py:1005-1054`) calls
+- [x] 3.7 [IMPL] `_identity_probe` (`cli/curate.py:1005-1054`) calls
   `auto_merge.judging_partition(..., statically_eligible=static_ineligibility(cfg) == ())`
   so the cost line prices the run. GREEN 3.6. [MUT] ignore
   `statically_eligible`; pass `True` always; each RED.
-- [ ] 3.8 [TEST] Ineligible-run reporting: for each reason (model tag,
+- [x] 3.8 [TEST] Ineligible-run reporting: for each reason (model tag,
   `context_window`, `max_generation_tokens`, `temperature`/`seed`, digest
   mismatch, digest unknown on `openai-compatible`, listing failure) the stderr
   line is exactly
@@ -418,14 +418,14 @@ Owns: `src/openkos/cli/curate.py`, `src/openkos/cli/main.py`,
   naming every failed check; a TTY then proceeds into today's walk; a non-TTY is
   `declined` with the existing unattended hint, nothing judged (zero chat
   calls); an eligible run prints no ineligibility line. RED: no line.
-- [ ] 3.9 [IMPL] `_identity_run`: read `interactive = sys.stdin.isatty()` once;
+- [x] 3.9 [IMPL] `_identity_run`: read `interactive = sys.stdin.isatty()` once;
   build the `list_models` callable from
   `application_backends.diagnostics_client(cfg, model=tag, timeout=..., factories=ctx.backend_factories).list_models`;
   call `auto_merge.run_eligibility`; print the line; apply
   `judging_partition` with the full eligibility. GREEN 3.8. [MUT] swallow the
   reason; print only the first reason; run the pass anyway when ineligible; each
   RED.
-- [ ] 3.10 [TEST] The e2e (`CliRunner`, tmp workspace, real git repo with pinned
+- [x] 3.10 [TEST] The e2e (`CliRunner`, tmp workspace, real git repo with pinned
   `GIT_CONFIG_COUNT` identity, stub judge): `curate --auto --auto-merge` on a
   non-TTY with an in-class pair judged `same` at 0.95, an in-class pair at 0.85,
   an in-class homonym `different`, a confidential in-class pair, and a
@@ -445,7 +445,7 @@ Owns: `src/openkos/cli/curate.py`, `src/openkos/cli/main.py`,
   `same` row is not acted on; groups judged within a cap-truncated batch (#441)
   still merge their completed verdicts and the stage reports its failure.
   RED: nothing merges.
-- [ ] 3.11 [IMPL] `_identity_run` pass wiring: `fresh_keys` from `batch.results`;
+- [x] 3.11 [IMPL] `_identity_run` pass wiring: `fresh_keys` from `batch.results`;
   persist fresh in-class verdicts through `cli_main._persist_adjudications(...)`
   with the #1137 `judged_digests` pins; `blocked = strict_blocked_members(...)`;
   `plan_auto_merges(...)` with `lifecycle.cross_type_concern` and
@@ -455,33 +455,33 @@ Owns: `src/openkos/cli/curate.py`, `src/openkos/cli/main.py`,
   after the pass (never enter the walk). GREEN 3.10. [MUT] act on a served
   verdict; skip the persisted write-back; enter the walk on a non-TTY; commit
   per merge; print no undo; each RED.
-- [ ] 3.12 [TEST] Failure semantics (Q4): an injected `apply_auto_merges`
+- [x] 3.12 [TEST] Failure semantics (Q4): an injected `apply_auto_merges`
   failure on merge 2 returns a `failed` `StageOutcome` and skips the walk, later
   stages (Structure, Metadata) still run, the summary and the derived refresh
   still print for what landed, and `curate` exits 1 at the end; a
   `WorkspaceBusyError` exits 3 before anything is written; the pass never exits 3
   on a changed member (it skips). RED: exit 0.
-- [ ] 3.13 [IMPL] `_identity_run` returns `failed`; `cli/main.py::curate` exits 1
+- [x] 3.13 [IMPL] `_identity_run` returns `failed`; `cli/main.py::curate` exits 1
   at the end when the auto pass failed mid-write. GREEN 3.12. [MUT] exit 0;
   stop the whole run at the failure; each RED.
-- [ ] 3.14 [TEST] Survivor-edit caveat: with Metadata/Structure editing an
+- [x] 3.14 [TEST] Survivor-edit caveat: with Metadata/Structure editing an
   auto-merged survivor in the same run, the output includes
   `  note: <survivor> changed after its automatic merge; \`openkos unmerge <survivor>\` will refuse unless run with --discard-survivor-edits, which discards that later edit.`
   and is absent for an untouched survivor. RED: absent.
-- [ ] 3.15 [IMPL] `cli/main.py::curate` calls `auto_merge.survivors_edited_since`
+- [x] 3.15 [IMPL] `cli/main.py::curate` calls `auto_merge.survivors_edited_since`
   after `run_curate` returns. GREEN 3.14. [MUT] print for every survivor;
   never print; each RED.
-- [ ] 3.16 [TEST] Daemon pin in `tests/unit/cli/test_daemon.py`: (behavioural)
+- [x] 3.16 [TEST] Daemon pin in `tests/unit/cli/test_daemon.py`: (behavioural)
   the maintenance identity stage on an in-class fixture with a stub judge that
   answers `same` at 1.0 deletes no file, makes no merge commit and enqueues only
   identity rows; (structural) `cli/daemon.py` and `application/runner.py` do not
   import `openkos.application.auto_merge` (AST import check). Written GREEN on
   first run; mutate next.
-- [ ] 3.17 [MUT] Add `from openkos.application import auto_merge` to
+- [x] 3.17 [MUT] Add `from openkos.application import auto_merge` to
   `cli/daemon.py` in a scratch edit and observe the structural pin RED; make the
   stub stage call `apply_auto_merges` and observe the behavioural pin RED.
   Revert, purge.
-- [ ] 3.18 Run the five-command slice gate. All green; record observed results.
+- [x] 3.18 Run the five-command slice gate. All green; record observed results.
   Also run `uv run pytest tests/unit/cli -q` for the full CLI suite (Typer help
   and command-classification guards).
 - [ ] 3.19 Commit work units (`feat(cli): add curate --auto-merge`,
