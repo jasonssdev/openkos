@@ -87,7 +87,8 @@ fresh in-class judgments, and MUST print on a visible stream a line naming
 every failed check (model tag, digest, rubric identity, `context_window`,
 `max_generation_tokens`) with the expected and observed values where known.
 It MUST NOT be a silent no-op. Identity MUST then proceed exactly as it does
-without the flag. The same eligibility applies to offering accept-recommended.
+without the flag. The same eligibility applies to offering accept-recommended,
+which reports nothing when the flag was not passed (see `curate-command`).
 
 #### Scenario: A different adjudication model makes the run ineligible
 

@@ -496,7 +496,7 @@ Owns: `src/openkos/application/auto_merge.py` (selector only),
 `tests/unit/application/test_auto_merge.py` (selector cases).
 Depends on: slice 3 merged.
 
-- [ ] 4.1 [TEST] `auto_merge.recommended(results, *, fresh_keys, blocked,
+- [x] 4.1 [TEST] `auto_merge.recommended(results, *, fresh_keys, blocked,
   cross_type_concern, ordered_pair, excluded_survivors)` each gate the only
   failing fact from an all-pass baseline: an in-class SAME at 0.60 IS
   recommended (gate 3 removed; kills a stray `T_STAR` check); a stale (not in
@@ -505,21 +505,21 @@ Depends on: slice 3 merged.
   merged by the auto pass (`excluded_survivors`) is not; two groups sharing a
   survivor recommend only the first; a three-member or Person pair is not; an
   ineligible run yields an empty set (spec). RED: function missing.
-- [ ] 4.2 [IMPL] `recommended(...)`. GREEN 4.1.
-- [ ] 4.3 [MUT] Re-add the confidence gate; drop `fresh_keys`; drop `blocked`
+- [x] 4.2 [IMPL] `recommended(...)`. GREEN 4.1.
+- [x] 4.3 [MUT] Re-add the confidence gate; drop `fresh_keys`; drop `blocked`
   (the Q2 revision point: also assert that passing `blocked=frozenset()` admits
   the group, proving the one-argument change); drop `excluded_survivors`; drop
   the one-per-survivor set. Each RED. Revert, purge.
-- [ ] 4.4 [TEST] Extraction guard: the existing per-item walk tests stay green
+- [x] 4.4 [TEST] Extraction guard: the existing per-item walk tests stay green
   (run them first as the characterization baseline), and a new test asserts the
   walk and the pre-pass both call `_identity_write_one` (spy at the exact call
   site, assert hit): reconciliation per the context flags, the commit-phase
   re-validation, `commit_merge`, and the per-item `_echo_commit_disclosure`;
   a drift refusal still exits 3.
-- [ ] 4.5 [IMPL] Extract `curate.py:1315-1386` into
+- [x] 4.5 [IMPL] Extract `curate.py:1315-1386` into
   `_identity_write_one(ctx, prepared) -> bool`; the walk calls it. GREEN 4.4
   with no behavior change (existing walk tests unchanged).
-- [ ] 4.6 [TEST] `tests/unit/cli/test_curate_accept_recommended.py`
+- [x] 4.6 [TEST] `tests/unit/cli/test_curate_accept_recommended.py`
   (`CliRunner`, scripted input, TTY simulated, real git repo): the list shows
   only fresh in-class SAME groups at any confidence, one line each with
   absorbed, survivor, confidence and `undo: openkos unmerge <survivor>`, then
@@ -535,14 +535,14 @@ Depends on: slice 3 merged.
   only when at least one fresh in-class SAME exists (spy asserts the read does
   not happen with zero candidates); an ineligible run offers nothing. RED:
   pre-pass absent.
-- [ ] 4.7 [IMPL] Wire the TTY pre-pass in `_identity_run` after the auto pass and
+- [x] 4.7 [IMPL] Wire the TTY pre-pass in `_identity_run` after the auto pass and
   before the walk; each accepted item goes through `_identity_write_one`. GREEN
   4.6.
-- [ ] 4.8 [MUT] Offer on a non-TTY; commit once for all items; accept on Enter;
+- [x] 4.8 [MUT] Offer on a non-TTY; commit once for all items; accept on Enter;
   skip the guardrail at preparation; list a stale verdict; compute eligibility
   even with zero candidates; each RED. Revert, purge.
-- [ ] 4.9 Run the five-command slice gate. All green; record observed results.
-- [ ] 4.10 Commit work units (`refactor(cli): extract identity write helper`,
+- [x] 4.9 Run the five-command slice gate. All green; record observed results.
+- [x] 4.10 Commit work units (`refactor(cli): extract identity write helper`,
   `feat(cli): add accept-recommended to curate identity`). Open PR 4
   (`Refs #1298`), CI green on a rebased branch.
 
