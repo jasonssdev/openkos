@@ -3002,6 +3002,14 @@ def _text_or_none(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def stacked_body_refused(prepared: PreparedMerge) -> bool:
+    """Whether `prepared`'s stacked body crosses the #559 guardrail, so a bulk
+    consent (`adjudicate --apply-same`'s typed count, `curate`'s auto-merge
+    pass) must not cover it. The single predicate both callers share: a
+    prepared merge with no stacked body never crosses it."""
+    return prepared.stacked_body is not None and prepared.stacked_body.exceeds_guardrail
+
+
 def prepare_one_merge(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -3369,13 +3377,11 @@ def preview_apply_same(
             raise PreviewMergeFailure(exc, survivor_id, absorbed_id, partial) from exc
         if prepared is None:
             continue
-        if (
-            prepared.stacked_body is not None
-            and prepared.stacked_body.exceeds_guardrail
-        ):
+        stacked = prepared.stacked_body
+        if stacked is not None and stacked_body_refused(prepared):
             items.append(
                 StackedRefusal(
-                    prepared.stacked_body,
+                    stacked,
                     prepared.survivor_canonical,
                     prepared.absorbed_canonical,
                 )

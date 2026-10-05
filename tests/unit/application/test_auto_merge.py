@@ -19,11 +19,13 @@ from typing import Any
 import pytest
 
 from openkos import config
-from openkos.application import auto_merge
+from openkos.application import auto_merge, lifecycle
 from openkos.llm.base import BackendError, InstalledModel
 from openkos.llm.prompts import prompt_hash
 from openkos.resolution import adjudication
+from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup, Tier
+from tests.unit.application.curation_support import make_workspace, write_concept
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _RESULTS = _REPO_ROOT / "evals" / "auto_merge" / "results"
@@ -462,3 +464,99 @@ def test_run_eligibility_checks_the_resolved_adjudication_tag(
     cfg = _baseline_cfg(tmp_path, model="global:1b")
     assert auto_merge.run_eligibility(cfg, listing).eligible is True
     assert seen == ["listed"]
+
+
+# --------------------------------------------------------------------------- #
+# the stacked-body guardrail predicate (extracted for the pass, task 2.9)
+# --------------------------------------------------------------------------- #
+
+
+def _family(base: str = "concepts/foo") -> CandidateGroup:
+    """A base/-2 HIGH group, ids already in the candidate generator's order."""
+    return _group((base, f"{base}-2"))
+
+
+def _verdict(
+    group: CandidateGroup,
+    verdict: Verdict = Verdict.SAME,
+    confidence: float = 0.95,
+) -> AdjudicatedCandidate:
+    return AdjudicatedCandidate(
+        candidate=group, verdict=verdict, confidence=confidence, rationale="r"
+    )
+
+
+def _prepare(root: Path, group: CandidateGroup) -> lifecycle.PreparedMerge:
+    layout = config.WorkspaceLayout(root)
+    survivor, absorbed, _ = lifecycle.ordered_merge_pair(
+        layout.bundle_dir, group.member_ids
+    )
+    prepared = lifecycle.prepare_one_merge(
+        root,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        group,
+        ordered_pair=(survivor, absorbed),
+    )
+    assert prepared is not None
+    return prepared
+
+
+@pytest.fixture
+def family_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = make_workspace(tmp_path, monkeypatch)
+    write_concept(root, "concepts/foo", title="Foo", body="Foo body.")
+    write_concept(root, "concepts/foo-2", title="Foo", body="Foo copy body.")
+    return root
+
+
+@pytest.mark.parametrize(
+    ("absorbed_chars", "refused"),
+    [(80, True), (79, False)],
+    ids=["at the 0.8 guardrail", "just under it"],
+)
+def test_stacked_body_refused_follows_the_guardrail_threshold(
+    family_workspace: Path, absorbed_chars: int, refused: bool
+) -> None:
+    prepared = dataclasses.replace(
+        _prepare(family_workspace, _family()),
+        stacked_body=lifecycle.StackedBodyReport(
+            absorbed_chars=absorbed_chars, merged_chars=100
+        ),
+    )
+    assert lifecycle.stacked_body_refused(prepared) is refused
+
+
+def test_stacked_body_refused_is_false_without_a_stacked_body(
+    family_workspace: Path,
+) -> None:
+    prepared = dataclasses.replace(
+        _prepare(family_workspace, _family()), stacked_body=None
+    )
+    assert lifecycle.stacked_body_refused(prepared) is False
+
+
+def test_apply_same_preview_uses_the_shared_guardrail_predicate(
+    family_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One guardrail predicate, not two: the batch preview calls the very
+    function the auto-merge pass calls (spy at the exact call site)."""
+    seen: list[lifecycle.PreparedMerge] = []
+    real = lifecycle.stacked_body_refused
+
+    def spy(prepared: lifecycle.PreparedMerge) -> bool:
+        seen.append(prepared)
+        return real(prepared)
+
+    monkeypatch.setattr(lifecycle, "stacked_body_refused", spy)
+    layout = config.WorkspaceLayout(family_workspace)
+    preview = lifecycle.preview_apply_same(
+        family_workspace,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        [_verdict(_family())],
+    )
+    assert len(seen) == 1
+    assert len(preview.previewed) == 1
