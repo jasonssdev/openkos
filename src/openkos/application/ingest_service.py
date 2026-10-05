@@ -482,6 +482,8 @@ def ingest_source(
     prepared = _prepare(root, src, policy, ports, obs)
     if isinstance(prepared, IngestUnchanged):
         return prepared
+    if prepared is None:  # pragma: no cover -- only a `probe_only` call answers None
+        raise RuntimeError("Phase A returned no plan for a run that is not a probe")
 
     obs.preview(prepared.preview)
 
@@ -696,15 +698,36 @@ def _catalog_texts(update: application_ingest.CatalogUpdate) -> tuple[str, str]:
     return update.new_index_text, update.new_log_text
 
 
+def is_unchanged(
+    root: Path, src: Path, policy: IngestPolicy, *, ports: IngestPorts
+) -> bool:
+    """Whether `ingest_source` would take #773's short-circuit for `src`: it runs
+    Phase A, which writes nothing and contacts no model, and asks whether it ended
+    in `IngestUnchanged`. The same code decides, so a caller that must price a run
+    before starting it (the unattended watch's admission) cannot disagree with the
+    run. Any failure answers `False`: the run itself raises the refusal."""
+    try:
+        return isinstance(
+            _prepare(root, src, policy, ports, IngestObserver(), probe_only=True),
+            IngestUnchanged,
+        )
+    except Exception:  # noqa: BLE001 -- a probe never decides a refusal; the run raises it
+        return False
+
+
 def _prepare(
     root: Path,
     src: Path,
     policy: IngestPolicy,
     ports: IngestPorts,
     obs: IngestObserver,
-) -> _Prepared | IngestUnchanged:
+    *,
+    probe_only: bool = False,
+) -> _Prepared | IngestUnchanged | None:
     """Phase A: no writes. Returns the complete plan, or `IngestUnchanged`
-    when #773's convergence short-circuit applies."""
+    when #773's convergence short-circuit applies. With `probe_only` it stops
+    where the short-circuit is decided -- before any model contact -- and
+    returns `None` when the run would go on."""
     layout = config.WorkspaceLayout(root)
     index_path = layout.bundle_dir / "index.md"
     log_path = layout.bundle_dir / "log.md"
@@ -946,6 +969,9 @@ def _prepare(
                 # performed the one read this needs.
                 extraction_notice=converged.carried_notices,
             )
+
+        if probe_only:
+            return None
 
         # Extraction runs AFTER the Source concept is built, BEFORE the
         # preview -- always attempted, even under `skip_confirmation`; only

@@ -157,6 +157,10 @@ def _log_notice(message: str) -> None:
     log.warning("%s", message)
 
 
+_POLICY = svc.IngestPolicy(skip_confirmation=True, version_changed=True)
+"""How the watch ingests a file, and how it asks whether that ingest would be a
+no-op: one policy, so the probe and the run cannot disagree."""
+
 _PREFIX = "openkos daemon: watch: "
 _INGEST_PREFIX = "openkos ingest: "
 
@@ -518,7 +522,7 @@ def _import_one(
     return svc.ingest_source(
         root,
         cand.path,
-        svc.IngestPolicy(skip_confirmation=True, version_changed=True),
+        _POLICY,
         ports=dataclasses.replace(
             ingest_ports, autocommit=ledger.wrap(ingest_ports.autocommit)
         ),
@@ -554,11 +558,19 @@ def _run_candidates(
             tally.deferred += rest
             return
         digest = cand.digest
-        try:
-            estimate = watch.estimate_calls(cand.path)
-        except OSError:
-            continue  # vanished or unreadable: the next poll decides
-        verdict = run_budget.admit(estimate)
+        # A file the ingest would find unchanged costs no model call and no
+        # write, so it meets neither the call budget nor the source budget
+        # (#1265). Decided by the ingest's own Phase A, not a second detector.
+        unchanged = svc.is_unchanged(
+            root, cand.path, _POLICY, ports=watch.ingest_ports(base_section, run_budget)
+        )
+        verdict = budget_module.Admission(admitted=True)
+        if not unchanged:
+            try:
+                estimate = watch.estimate_calls(cand.path)
+            except OSError:
+                continue  # vanished or unreadable: the next poll decides
+            verdict = run_budget.admit(estimate)
         if not verdict.admitted:
             if verdict.never_fits:
                 if not _file_refusal(
@@ -576,7 +588,8 @@ def _run_candidates(
             tally.budget_limit = verdict.limit or budget_module.PASS_LIMIT_KEY
             tally.deferred += rest
             return
-        admitted += 1
+        if not unchanged:
+            admitted += 1
         refusal: svc.RawImmutabilityRefused | None = None
         outcome: svc.IngestOutcome | None = None
         try:
@@ -622,7 +635,8 @@ def _run_candidates(
                 # Nothing was written and no model was contacted (#773's
                 # convergence short-circuit): it is not an import, so it must
                 # not use up the pass's source budget (#1265).
-                admitted -= 1
+                if not unchanged:  # the probe missed it (a race): give the slot back
+                    admitted -= 1
                 tally.imported -= 1
         if refusal is not None and not _file_refusal(
             conn,

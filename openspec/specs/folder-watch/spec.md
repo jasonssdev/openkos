@@ -217,6 +217,15 @@ reasons MUST remain a candidate for the next job.
   `max_sources_per_pass`, the new file is imported in this job, and nothing is
   deferred
 
+#### Scenario: An unchanged file is never priced against the call budget
+
+- GIVEN a settled inbox file the ingest would find already imported and
+  extracted, whose extraction estimate exceeds `max_calls_per_pass`
+- WHEN a watch job runs
+- THEN it is not queued as `exceeds_budget` and not deferred: it is decided by the
+  ingest's own convergence check, before admission, and costs nothing; a changed
+  file over the same budget is still refused
+
 ### Requirement: Each Watch Line Names Its File And Carries The Daemon Prefix
 
 For every file the watch job handles, it MUST print one line that names the file

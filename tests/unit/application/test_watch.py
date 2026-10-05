@@ -734,3 +734,40 @@ def test_every_watch_line_carries_the_daemon_prefix_and_no_ingest_hint(
     assert env.notices
     assert all(n.startswith(_PREFIX) for n in env.notices)
     assert not any("--re-extract" in n or "openkos ingest:" in n for n in env.notices)
+
+
+# --- an unchanged file never meets the admission gate (#1265) ---------------------
+
+
+def test_an_unchanged_file_larger_than_the_call_budget_is_not_refused(
+    env: _Env,
+) -> None:
+    """Admission priced the file as if it would be extracted; the ingest then
+    found it unchanged and spent nothing. A file that costs nothing must not be
+    queued as `exceeds_budget` because of what it would cost if it did not."""
+    _settled_drop(env, "a.md")
+    assert env.job() is not None  # imported with a normal budget
+    _forget_observations(env)
+    env.job(max_calls_per_pass=1)  # observes it again
+    env.settle()
+    calls = env.model.calls
+
+    result = env.job(max_calls_per_pass=1)
+
+    assert result is not None
+    assert (result.outcome, result.units_deferred) == ("completed", 0)
+    assert env.observation("a.md").outcome == watch.IMPORTED
+    assert env.model.calls == calls
+
+
+def test_a_changed_file_over_the_call_budget_is_still_refused(env: _Env) -> None:
+    _settled_drop(env, "a.md")
+    assert env.job() is not None
+    path = env.inbox / "a.md"
+    path.write_text("A different save.\n", encoding="utf-8")
+    env.job(max_calls_per_pass=1)
+    env.settle()
+
+    env.job(max_calls_per_pass=1)
+
+    assert env.observation("a.md").outcome == watch.EXCEEDS_BUDGET
