@@ -96,6 +96,21 @@ is ineligible, or on a non-TTY. Groups outside the set MUST keep their
 per-item prompt whatever the operator answers. It MUST NOT be added to
 `adjudicate --apply` or `adjudicate --apply-same`.
 
+The offer MUST NOT depend on `--auto-merge`, but its set only holds verdicts
+judged in this run, so without the flag a verdict served from the store or a
+queue row is not offered and the cost line is unchanged. When the flag was not
+passed, run eligibility MUST be established only after judging and only when
+at least one fresh in-class `same` verdict exists; an ineligible run then
+offers nothing and prints no ineligibility line, because no automatic pass was
+requested.
+
+Each listed group MUST be prepared immediately before its own write, because
+every earlier merge changes what the next one reads. A bulk answer MUST NOT
+cover a group whose stacked body crosses the stacked-body guardrail when it is
+prepared (the rule `adjudicate --apply-same` applies): such a group MUST be
+left unmerged, MUST be named on stderr as keeping its per-item prompt, and
+MUST then be prompted individually in the per-item walk.
+
 #### Scenario: The offer lists survivor, absorbed and undo per item
 
 - GIVEN a TTY and two in-class groups judged `same`, at confidences 0.95 and
@@ -135,6 +150,32 @@ per-item prompt whatever the operator answers. It MUST NOT be added to
 - GIVEN stdin is not a TTY and a group in the recommended set
 - WHEN `curate --auto` runs without `--auto-merge`
 - THEN no accept-recommended question is printed and no group is merged
+
+#### Scenario: A guardrail-crossing group is listed but keeps its prompt
+
+- GIVEN an offer for two in-class groups, one of which merges to a stacked
+  body crossing the guardrail, and the operator accepts
+- WHEN Identity applies the set
+- THEN the other group is merged with its own commit
+- AND the crossing group is not merged, is named on stderr as keeping its
+  per-item prompt, and is prompted individually in the walk
+
+#### Scenario: A served verdict is not offered without `--auto-merge`
+
+- GIVEN a TTY, an in-class group whose `same` verdict is served from the
+  store, and a second in-class group judged `same` in this run
+- WHEN `curate --auto` runs without `--auto-merge`
+- THEN only the group judged in this run is offered
+- AND the cost line prices exactly the groups it priced before this change
+
+#### Scenario: An ineligible run offers nothing and is silent without the flag
+
+- GIVEN a TTY, a fresh in-class `same` group, and a run whose model digest
+  differs from the measured digest
+- WHEN `curate --auto` runs without `--auto-merge`
+- THEN no accept-recommended question is printed
+- AND no ineligibility line is printed
+- AND the group is prompted individually in the walk
 
 #### Scenario: Groups already merged by the pass are not offered again
 
