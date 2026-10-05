@@ -238,6 +238,54 @@ def stamp_report_line(stamp: Mapping[str, Any]) -> str:
     )
 
 
+def sidecar_path(results_path: pathlib.Path) -> pathlib.Path:
+    """`<results file>.stamp`: where the stamp of a result file that cannot
+    carry one in-band lives (a JSONL ledger or a bare JSON list, whose
+    loaders read every row as a record).
+
+    The `.stamp` suffix, not `.json`, keeps the sidecar out of every
+    `runs-*.json` glob a harness or a reader uses to find its results."""
+    return results_path.with_name(results_path.name + ".stamp")
+
+
+def write_stamp_sidecar(
+    results_path: pathlib.Path, stamp: Mapping[str, Any]
+) -> pathlib.Path:
+    """Write `stamp` beside `results_path` and return the sidecar's path."""
+    path = sidecar_path(results_path)
+    path.write_text(json.dumps(stamp, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def load_stamp(results_path: pathlib.Path) -> Mapping[str, Any] | None:
+    """The stamp a stored result carries: in-band (`"stamp"` of a JSON
+    object) or its `.stamp` sidecar. `None` when it carries none."""
+    side = sidecar_path(results_path)
+    if side.is_file():
+        loaded = json.loads(side.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else None
+    try:
+        payload = json.loads(results_path.read_text(encoding="utf-8"))
+    except ValueError:
+        return None
+    stamp = payload.get("stamp") if isinstance(payload, dict) else None
+    return stamp if isinstance(stamp, dict) else None
+
+
+def prompt_map(stamp: Mapping[str, Any]) -> dict[str, str]:
+    """`{prompt id: sha256_16}` of a stamp, for a self-test to compare."""
+    return {str(p["id"]): str(p["sha256_16"]) for p in stamp.get("prompts") or []}
+
+
+def identity_section(stamps: Iterable[Mapping[str, Any]]) -> str:
+    """A markdown `## Identity` section, one `stamp_report_line` per stamp,
+    for a harness whose stored result is a REPORT (no `runs-*.json` to carry
+    the stamp in-band)."""
+    lines = ["", "## Identity", ""]
+    lines += [f"- {stamp_report_line(stamp)}" for stamp in stamps]
+    return "\n".join(lines) + "\n"
+
+
 def summarize_latencies(values: Iterable[float]) -> dict[str, Any]:
     """`{"n", "median_s", "mean_s", "total_s"}`; `None`s when empty."""
     seq = [float(v) for v in values]
@@ -438,6 +486,39 @@ def _self_test() -> int:
         check("empty prompts refused", True, False)
     except ValueError:
         check("empty prompts refused", True, True)
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        ledger = pathlib.Path(scratch) / "runs-x.jsonl"
+        ledger.write_text("{}\n", encoding="utf-8")
+        side = write_stamp_sidecar(ledger, stamp)
+        check("sidecar sits beside its ledger", side.name, "runs-x.jsonl.stamp")
+        check("sidecar round-trips the stamp", json.loads(side.read_text()), stamp)
+        check(
+            "sidecar is invisible to a runs-*.json glob",
+            list(pathlib.Path(scratch).glob("runs-*.json")),
+            [],
+        )
+
+    with tempfile.TemporaryDirectory() as scratch:
+        inband = pathlib.Path(scratch) / "a.json"
+        inband.write_text(json.dumps({"stamp": stamp}), encoding="utf-8")
+        check("in-band stamp is found", load_stamp(inband), stamp)
+        bare = pathlib.Path(scratch) / "b.json"
+        bare.write_text("[]", encoding="utf-8")
+        check("a result without a stamp yields None", load_stamp(bare), None)
+    check(
+        "prompt_map pairs id and hash",
+        prompt_map(stamp),
+        {"contradiction/system": "ba7816bf8f01cfea"},
+    )
+
+    check(
+        "identity section lists every stamp's line",
+        identity_section([stamp, stamp]).count("- Harness commit `deadbeef`"),
+        2,
+    )
 
     ticks = iter([0.0, 2.5, 10.0, 10.75])
 
