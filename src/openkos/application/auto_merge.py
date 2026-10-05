@@ -483,7 +483,7 @@ def apply_auto_merges(
                 continue
             if lifecycle.stacked_body_refused(prepared):
                 skipped.append(
-                    AutoMergeSkip(group.member_ids, _guardrail_reason(prepared))
+                    AutoMergeSkip(group.member_ids, guardrail_reason(prepared))
                 )
                 continue
             snapshot = _snapshot(layout, prepared)
@@ -521,7 +521,9 @@ def apply_auto_merges(
 _CHANGED: Final = "changed since it was judged"
 
 
-def _guardrail_reason(prepared: lifecycle.PreparedMerge) -> str:
+def guardrail_reason(prepared: lifecycle.PreparedMerge) -> str:
+    """Why a bulk consent (the pass, accept-recommended) must not cover
+    `prepared`: its stacked body is mostly the absorbed document."""
     share = prepared.stacked_body.share if prepared.stacked_body is not None else 0.0
     return (
         f"stacked-body guardrail: the absorbed body would be {share:.0%} of the "

@@ -904,8 +904,8 @@ def _confirm_identity(prompt_text: str) -> Literal["yes", "skip", "distinct"]:
     written and nothing is recorded, so the pair is offered again next run.
     `d`/`distinct` is the ONLY answer that persists anything -- the
     permanent keep-distinct ruling (#797). Identity deliberately has no
-    accept-all answer: an accept-recommended path needs a measured signal
-    first (ADR-0034)."""
+    accept-all answer here: accept-recommended is its own question, asked once
+    before the walk (`_confirm_recommended`), never an answer on this prompt."""
     return _ask(
         prompt_text,
         {
@@ -1254,6 +1254,131 @@ def _run_auto_merge_pass(
     )
 
 
+def _confirm_recommended(prompt_text: str) -> bool:
+    """The accept-recommended question (#1298): `y`/`yes` accepts every listed
+    merge; `n`/`no`, Enter and anything else that is not `y` send them all to
+    the per-item walk. The default is NO: a bulk answer is never a default."""
+    return _ask(
+        prompt_text,
+        {"y": True, "yes": True, "n": False, "no": False},
+        default="n",
+        expected="y or n (Enter = n)",
+    )
+
+
+def _offer_accept_recommended(
+    ctx: CurateContext,
+    results: Sequence[AdjudicatedCandidate],
+    fresh: Sequence[AdjudicatedCandidate],
+    *,
+    eligible: bool | None,
+) -> tuple[int, frozenset[frozenset[str]]]:
+    """Identity's accept-recommended pre-pass (#1298): on a terminal, before the
+    per-item walk, offer every fresh in-class `same` group for ONE answer.
+
+    `eligible` is the verdict `--auto-merge` already reached this run, or
+    `None` when the flag is off: then eligibility is computed here, and only
+    when a fresh in-class `same` exists, so a run with nothing to recommend
+    never reads the backend's model listing. An ineligible run offers nothing.
+
+    Each accepted item goes through `_identity_write_one`, the walk's own
+    write block, so it commits on its own (#800) and discloses its own
+    commit. A merge is prepared right before its write (every earlier merge
+    changes what the next one reads), and one whose stacked body crosses the
+    guardrail is not covered by the bulk answer: it keeps its per-item prompt.
+
+    Returns how many merges were written and which groups they were, so the
+    walk does not offer them again."""
+    candidates = [
+        r
+        for r in fresh
+        if application_auto_merge.in_structural_class(r.candidate)
+        and r.verdict is Verdict.SAME
+    ]
+    if not candidates:
+        return 0, frozenset()
+    if eligible is None:
+        eligible = application_auto_merge.run_eligibility(
+            ctx.cfg, _installed_models_lister(ctx)
+        ).eligible
+    if not eligible:
+        return 0, frozenset()
+    bundle_dir = ctx.layout.bundle_dir
+    plan = application_auto_merge.recommended(
+        results,
+        fresh_keys=frozenset(
+            adjudications_store.group_key_for(r.candidate.member_ids) for r in fresh
+        ),
+        blocked=application_auto_merge.strict_blocked_members(bundle_dir),
+        cross_type_concern=lambda pair: application_lifecycle.cross_type_concern(
+            bundle_dir, pair
+        ),
+        ordered_pair=lambda ids: application_lifecycle.ordered_merge_pair(
+            bundle_dir, ids
+        ),
+        excluded_survivors=frozenset(r.survivor for r in ctx.auto_merged),
+    )
+    if not plan.planned:
+        return 0, frozenset()
+    output.section_break()
+    typer.echo(
+        f"openkos curate: Identity: {len(plan.planned)} group(s) judged the same "
+        f"this run by {application_auto_merge.MEASURED_MODEL}, offered for one "
+        "answer (any confidence):"
+    )
+    for item in plan.planned:
+        typer.echo(
+            f"  {item.absorbed} -> {item.survivor} "
+            f"(confidence {item.result.confidence:.2f}) -- undo: "
+            f"openkos unmerge {item.survivor}"
+        )
+    if not _confirm_recommended(
+        f"Accept all {len(plan.planned)} recommended merge(s)? [y/N]"
+    ):
+        return 0, frozenset()
+
+    index_path = ctx.layout.bundle_dir / "index.md"
+    log_path = ctx.layout.bundle_dir / "log.md"
+    applied = 0
+    merged: set[frozenset[str]] = set()
+    for item in plan.planned:
+        group = item.result.candidate
+        try:
+            prepared = application_lifecycle.prepare_one_merge(
+                ctx.root,
+                ctx.layout,
+                index_path,
+                log_path,
+                group,
+                ordered_pair=(item.survivor, item.absorbed),
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos curate: Identity: failed while merging "
+                f"{item.absorbed} into {item.survivor} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        if prepared is None:
+            continue  # the walk counts it as skipped when it prepares it too
+        if application_lifecycle.stacked_body_refused(prepared):
+            typer.echo(
+                f"openkos curate: Identity: {item.absorbed} -> {item.survivor} "
+                "keeps its per-item prompt -- "
+                f"{application_auto_merge.guardrail_reason(prepared)}.",
+                err=True,
+            )
+            continue
+        typer.echo(
+            f"  accepting {item.absorbed} -> {item.survivor} -- undo: "
+            f"openkos unmerge {item.survivor}"
+        )
+        if _identity_write_one(ctx, prepared):
+            applied += 1
+            merged.add(frozenset(group.member_ids))
+    return applied, frozenset(merged)
+
+
 def _identity_write_one(
     ctx: CurateContext, prepared: application_lifecycle.PreparedMerge
 ) -> bool:
@@ -1528,12 +1653,23 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         applied = auto_pass.applied
         if pass_only:
             skipped = auto_pass.left
+    # #1298: on a terminal, one question first for the groups a person can
+    # accept together. Never on a pipe, and never after a failed pass.
+    accepted: frozenset[frozenset[str]] = frozenset()
+    if interactive and auto_pass.failure is None:
+        accepted_count, accepted = _offer_accept_recommended(
+            ctx,
+            results,
+            batch.results,
+            eligible=eligible if ctx.auto_merge else None,
+        )
+        applied += accepted_count
     walk_results: Sequence[AdjudicatedCandidate] = (
         [] if pass_only or auto_pass.failure is not None else results
     )
     for result in walk_results:
         group = result.candidate
-        if frozenset(group.member_ids) in auto_pass.merged:
+        if frozenset(group.member_ids) in auto_pass.merged | accepted:
             continue
         if result.verdict is not Verdict.SAME:
             continue

@@ -871,7 +871,9 @@ def test_the_prompt_patch_is_the_one_a_terminal_run_reaches(
 
     def _answer(prompt_text: str, **kwargs: object) -> str:
         asked.append(prompt_text)
-        return "s"
+        # bar-2 (below t*) is offered for one answer; declining it sends it
+        # to its per-item prompt like the groups the offer never covers.
+        return "n" if prompt_text.startswith("Accept all") else "s"
 
     monkeypatch.setattr("typer.prompt", _answer)
     _simulate_tty(monkeypatch)
@@ -882,6 +884,7 @@ def test_the_prompt_patch_is_the_one_a_terminal_run_reaches(
     # bar-2 (below t*), conf-2 (confidential) and the non-class qux pair keep
     # their per-item prompt; foo-2 was merged without one and is not re-offered.
     assert [p.split("?")[0] for p in asked] == [
+        "Accept all 1 recommended merge(s)",
         "Merge concepts/bar-2 into concepts/bar",
         "Merge concepts/conf-2 into concepts/conf",
         "Merge concepts/qux into concepts/qux-b",
