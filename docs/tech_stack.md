@@ -117,9 +117,7 @@ Two kinds of model are used: a **generative model** (to compile, extract, and an
 
 **Recommended generative models, by hardware:**
 
-- **~8 GB RAM** — 3–4B: summarization and light extraction with tight prompts. This is the honest floor, not a comfortable target.
-- **~16 GB / Apple Silicon** — 7–8B: the sweet spot for extraction quality and speed, and what a normal MacBook should aim at.
-- **32 GB+ / GPU** — 14B–24B: stronger reasoning and JSON / function-calling.
+The measured memory and disk figures, and the recommended machine for each setup, live in the README's [System requirements](../README.md#system-requirements) rather than being restated here. In short: a 7-8B chat model is the sweet spot for extraction quality and speed, a 3-4B model is the honest floor on 8 GB, and the judge roles need a 32 GB machine or an opt-out.
 
 **The contradiction and identity judges are a second chat model.** They default to `gemma4:26b-a4b`, a 26B mixture-of-experts model (about 21.5 GB in memory with `bge-m3` at production context) that won both roles on a pre-registered sweep ([ADR-0047](adr/0047-the-contradiction-and-identity-judges-default-to-gemma4-26b-a4b-and-the-engine-runs-one-chat-model-at-a-time.md)). It does not co-reside with `qwen3:8b` inside a 24 GB budget, so the 32 GB tier runs **one chat model at a time** and Ollama swaps them by stage. A smaller machine opts the judge roles out and they follow `model:`.
 
