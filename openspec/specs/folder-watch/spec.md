@@ -217,6 +217,36 @@ reasons MUST remain a candidate for the next job.
   `max_sources_per_pass`, the new file is imported in this job, and nothing is
   deferred
 
+#### Scenario: An unchanged file is never priced against the call budget
+
+- GIVEN a settled inbox file the ingest would find already imported and
+  extracted, whose extraction estimate exceeds `max_calls_per_pass`
+- WHEN a watch job runs
+- THEN it is not queued as `exceeds_budget` and not deferred: it is decided by the
+  ingest's own convergence check, before admission, and costs nothing; a changed
+  file over the same budget is still refused
+
+### Requirement: Each Watch Line Names Its File And Carries The Daemon Prefix
+
+For every file the watch job handles, it MUST print one line that names the file
+and says what happened (`imported`, `imported as a new version`, or `unchanged`),
+and every advisory the ingest raises for that file MUST be printed under the
+`openkos daemon: watch:` prefix with the file's name, never under
+`openkos ingest:`. No watch line MAY carry a hint that applies only to an
+attended `ingest` (such as `--re-extract`).
+
+#### Scenario: An unchanged file is named
+
+- GIVEN an inbox file the ingest finds already imported and extracted
+- WHEN a watch job handles it
+- THEN it prints `openkos daemon: watch: '<name>' unchanged -- already imported; nothing to do.` and no `openkos ingest:` line
+
+#### Scenario: An import is named
+
+- GIVEN a new settled inbox file
+- WHEN a watch job imports it
+- THEN it prints `openkos daemon: watch: '<name>' imported -- <what it produced>.`
+
 ### Requirement: A Native Notification Backend Only Wakes The Poll
 
 `unattended.watch_backend` MUST be `poll` (the default) or `native`; any
