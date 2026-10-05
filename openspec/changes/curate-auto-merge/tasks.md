@@ -230,7 +230,7 @@ Owns: `src/openkos/application/auto_merge.py`,
 `tests/unit/application/test_auto_merge.py`. No `cli/` file.
 Depends on: slice 1 merged.
 
-- [ ] 2.1 [TEST] `judging_partition(groups, served_by_key, to_judge, *,
+- [x] 2.1 [TEST] `judging_partition(groups, served_by_key, to_judge, *,
   auto_merge, interactive, statically_eligible)` in
   `tests/unit/application/test_auto_merge.py`, each case the only deviation
   from an eligible-interactive baseline: `auto_merge=False` returns inputs
@@ -240,21 +240,21 @@ Depends on: slice 1 merged.
   makes `to_judge` exactly the in-class groups (served or not) and leaves
   non-class groups neither judged nor served; a non-class served group is
   untouched in the interactive case. RED: function missing.
-- [ ] 2.2 [IMPL] `judging_partition`. GREEN 2.1.
-- [ ] 2.3 [MUT] Make `auto_merge` ignored; make `statically_eligible` ignored;
+- [x] 2.2 [IMPL] `judging_partition`. GREEN 2.1.
+- [x] 2.3 [MUT] Make `auto_merge` ignored; make `statically_eligible` ignored;
   stop removing from `served_by_key`; judge non-class groups too; drop the
   non-interactive branch. Each turns a named 2.1 test RED. Revert, purge.
-- [ ] 2.4 [TEST] `strict_blocked_members(bundle_dir)` with a tmp bundle:
+- [x] 2.4 [TEST] `strict_blocked_members(bundle_dir)` with a tmp bundle:
   a confidential member, an unreadable file, an unparseable frontmatter, an
   absent sensitivity and a blank one are all blocked; a `private` and `public`
   member are not; assert it ignores `include_confidential` and
   `local_exemption` by calling `sensitivity.sensitive_concept_ids` with both
   off (spy on the exact call and assert the arguments). RED: missing.
-- [ ] 2.5 [IMPL] `strict_blocked_members` via
+- [x] 2.5 [IMPL] `strict_blocked_members` via
   `sensitivity.sensitive_concept_ids(bundle_dir)` with both escape hatches off
   (D7a). GREEN 2.4. [MUT] flip an escape hatch on; each of the blocked classes
   must be killed by its own assertion.
-- [ ] 2.6 [TEST] `plan_auto_merges(results, *, fresh_keys, blocked,
+- [x] 2.6 [TEST] `plan_auto_merges(results, *, fresh_keys, blocked,
   cross_type_concern, ordered_pair)` on hand-built `AdjudicatedCandidate`s, each
   gate the ONLY failing fact from an all-pass baseline (which plans exactly one
   merge with survivor = base id): gate 1 a SAME verdict at 1.0 whose key is not
@@ -271,24 +271,24 @@ Depends on: slice 1 merged.
   survivor); a three-member group and a non-class group never appear in
   `planned` or `skipped`; the first failing gate is the reported reason when two
   fail. RED: function missing.
-- [ ] 2.7 [IMPL] `AutoMergePlan`, `PlannedAutoMerge`, `AutoMergeSkip` and
+- [x] 2.7 [IMPL] `AutoMergePlan`, `PlannedAutoMerge`, `AutoMergeSkip` and
   `plan_auto_merges` with gates 1-6 in the design's order. GREEN 2.6.
-- [ ] 2.8 [MUT] One mutation per gate on its exact line: skip the
+- [x] 2.8 [MUT] One mutation per gate on its exact line: skip the
   `fresh_keys` check; drop the SAME check; `>=` to `>`; make the threshold
   `0.8`; ignore `blocked` for the absorbed member only; ignore
   `cross_type_concern`; drop the survivor-already-planned set; admit non-class
   groups. Each must turn exactly its named 2.6 test RED. Revert, purge.
-- [ ] 2.9 [TEST] Extract the guardrail:
+- [x] 2.9 [TEST] Extract the guardrail:
   `lifecycle.stacked_body_refused(prepared) -> bool` has direct tests (a plan
   that crosses the `lifecycle.py:3372-3375` threshold returns True, one just
   under returns False), and the existing `preview_apply_same` tests stay green
   AND a new test asserts `preview_apply_same` calls the shared predicate (spy
   at the exact call site, assert it was hit). RED: function missing.
-- [ ] 2.10 [IMPL] Extract the one-line predicate from `lifecycle.py:3372-3375`;
+- [x] 2.10 [IMPL] Extract the one-line predicate from `lifecycle.py:3372-3375`;
   `preview_apply_same` calls it. GREEN 2.9. [MUT] flip the comparison inside the
   predicate and observe both the new tests and the existing `apply-same`
   guardrail test RED; revert, purge.
-- [ ] 2.11 [TEST] `apply_auto_merges(root, layout, plan, *, commit_section,
+- [x] 2.11 [TEST] `apply_auto_merges(root, layout, plan, *, commit_section,
   autocommit, judged_digests, digest_of)` happy path on a tmp bundle in a real
   git repo (pinned `GIT_CONFIG_COUNT` identity): three planned merges with
   distinct survivors; `commit_section` is a spy entered EXACTLY once; exactly
@@ -302,13 +302,13 @@ Depends on: slice 1 merged.
   `## Merged content (...)` and a chat stub that raises if called is never
   called (no reconcile). `AutoMergeRecord.survivor_after_sha256` equals
   `bundle_ledger.survivor_sha256` of the written survivor. RED: missing.
-- [ ] 2.12 [TEST] Threat-matrix commit-state RED tests (design): (a) a file the
+- [x] 2.12 [TEST] Threat-matrix commit-state RED tests (design): (a) a file the
   user staged before the run is NOT in the auto-merge commit and stays staged;
   (b) the absorbed files' deletions ARE in the commit; (c) duplicate paths
   appear once in the `autocommit` argument; (d) zero eligible merges create no
   commit; (e) a degraded `autocommit` (returns `None`: no repo or no identity)
   leaves the merges standing and `AutoMergeOutcome.sha is None`.
-- [ ] 2.13 [TEST] Gates 7-9 under the lock, each the only failing fact, with
+- [x] 2.13 [TEST] Gates 7-9 under the lock, each the only failing fact, with
   the real `prepare_one_merge`: (gate 7) a member edited after judging (its
   `digest_of` differs from `judged_digests`) is skipped with `changed since it
   was judged` and nothing is written for it; (gate 8) a member that no longer
@@ -317,7 +317,7 @@ Depends on: slice 1 merged.
   names the guardrail; a skipped merge does not stop the later ones; the second
   merge is re-planned against the bundle the first left (assert it succeeds
   where a pre-computed plan would read-drift: two merges whose links cross).
-- [ ] 2.14 [IMPL] `apply_auto_merges`, `AutoMergeRecord`, `AutoMergeOutcome`:
+- [x] 2.14 [IMPL] `apply_auto_merges`, `AutoMergeRecord`, `AutoMergeOutcome`:
   one `with commit_section():`, per merge steps 7-12 (judged-content check,
   `prepare_one_merge` re-plan, `stacked_body_refused`, snapshot via
   `merge_drift_targets(layout, prepared, include_catalog=True)` plus the ledger
@@ -325,14 +325,14 @@ Depends on: slice 1 merged.
   one `autocommit(root, union_paths, message)`. Match
   `judged_digests`/`digest_of` types to `application_pending.current_finding_digest`.
   GREEN 2.11-2.13.
-- [ ] 2.15 [MUT] Enter `commit_section` per merge instead of once; skip the
+- [x] 2.15 [MUT] Enter `commit_section` per merge instead of once; skip the
   gate-7 digest compare; skip the `None` check; skip the guardrail check;
   re-plan outside the lock (use a precomputed plan); call `autocommit` on zero
   merges; pass non-de-duplicated paths; omit the absorbed deletion from the
   union; call a reconcile in `merge_core`'s place. Each must turn its named test
   RED (assert every monkeypatch target was hit; an unread patch fails silently).
   Revert, purge.
-- [ ] 2.16 [TEST] Mid-run failure: with three planned merges, `merge_core`
+- [x] 2.16 [TEST] Mid-run failure: with three planned merges, `merge_core`
   raising `OSError` (then `ValueError`) on merge 2 after a partial write
   (monkeypatch at the exact call target the pass imports, and assert the patch
   was hit): the tree equals the post-merge-1 state byte-for-byte (absorbed file
@@ -343,27 +343,27 @@ Depends on: slice 1 merged.
   `unrestored_paths` lists every path left modified, with the landed merges
   reported uncommitted. A `WorkspaceBusyError` from `commit_section` propagates
   before anything is written.
-- [ ] 2.17 [IMPL] Snapshot restore and the failure branch of `apply_auto_merges`
+- [x] 2.17 [IMPL] Snapshot restore and the failure branch of `apply_auto_merges`
   (D7 mid-run failure). GREEN 2.16. [MUT] skip the restore; commit anyway when
   restore fails; keep attempting merge 3; swallow the failure. Each RED.
-- [ ] 2.18 [TEST] Unmerge parity with the real `unmerge` core: after a run that
+- [x] 2.18 [TEST] Unmerge parity with the real `unmerge` core: after a run that
   auto-merged `foo` and `bar` in one commit, `unmerge foo` restores `foo` and its
   absorbed file byte-for-byte, removes only the `foo` merge's `log.md` bullet by
   exact text, and leaves the `bar` merge and its bullet untouched; repeat for
   `bar`. Written GREEN on first run, so mutate next.
-- [ ] 2.19 [MUT] Replace the per-merge `log.md` bullets with one run bullet;
+- [x] 2.19 [MUT] Replace the per-merge `log.md` bullets with one run bullet;
   stack a reconciled body in place of the stacked body. Each must turn 2.11 or
   2.18 RED. Revert, purge.
-- [ ] 2.20 [TEST] `survivors_edited_since(layout, records)`: returns exactly the
+- [x] 2.20 [TEST] `survivors_edited_since(layout, records)`: returns exactly the
   survivors whose current `survivor_sha256` differs from the recorded one, in
   record order; an unchanged survivor, a missing survivor file and an empty
   record list return nothing. RED: missing. [IMPL] implement it. GREEN.
   [MUT] compare against the wrong field; return all survivors; each RED.
-- [ ] 2.21 Confirm the adjudication store write replaces the row for a group key
+- [x] 2.21 Confirm the adjudication store write replaces the row for a group key
   rather than adding one beside it (D8 write-back): add a test beside the
   existing adjudication-store tests if none states it, observed RED/GREEN as
   appropriate. Files: the existing adjudication-store test module.
-- [ ] 2.22 Run the five-command slice gate. All green; record observed results.
+- [x] 2.22 Run the five-command slice gate. All green; record observed results.
 - [ ] 2.23 Commit work units (`refactor(graph): extract stacked-body guardrail
   predicate`, `feat(ingest): add auto-merge pass core`; scopes must come from
   the project list in AGENTS.md). Open PR 2
