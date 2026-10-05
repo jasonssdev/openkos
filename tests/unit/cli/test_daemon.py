@@ -1287,3 +1287,115 @@ def test_the_relations_and_revisions_stages_wire_their_observers_to_notify(
             stage(_stage_ctx(root, seen))
 
     assert seen == ["suggest-relations: relations cap", "revisions: revisions cap"]
+
+
+# --- the daemon never auto-merges (#1298, ADR-0049) -----------------------------
+
+
+def _git_log(root: Path) -> list[str]:
+    import subprocess
+
+    return subprocess.run(
+        ["git", "log", "--format=%H %s"],  # noqa: S607
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+
+
+def test_the_maintenance_identity_stage_never_merges_an_in_class_pair(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An in-class base/-2 pair a judge would call `same` at 1.0 is exactly what
+    `curate --auto-merge` merges. The daemon is the unattended engine (ADR-0037):
+    it may only enqueue. Nothing is deleted, no merge commit is made, and the
+    only rows it leaves are identity rows. Every judging entry point is patched
+    to answer `same` at 1.0 and to fail the test if the daemon reaches it for a
+    write, so a stage that started acting on a verdict could not pass quietly."""
+    from openkos.application import auto_merge
+
+    write_doc(root, "concepts/foo", {"type": "Concept", "title": "Foo"})
+    write_doc(root, "concepts/foo-2", {"type": "Concept", "title": "Foo"})
+    group = cand.CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/foo", "concepts/foo-2"),
+        tier=cand.Tier.HIGH,
+        trigger="key",
+        member_types=("Concept", "Concept"),
+    )
+    assert auto_merge.in_structural_class(group)
+    monkeypatch.setattr(
+        "openkos.resolution.find_candidates_report",
+        lambda bundle_dir, **kw: cand.CandidateGroupReport(
+            groups=(group,), produced=1, retained=1
+        ),
+    )
+
+    def _same_at_one(candidates: Sequence[cand.CandidateGroup], **kw: object) -> Any:
+        return adjudication.AdjudicationBatch(
+            results=[
+                adjudication.AdjudicatedCandidate(
+                    candidate=g,
+                    verdict=adjudication.Verdict.SAME,
+                    confidence=1.0,
+                    rationale="stub",
+                )
+                for g in candidates
+            ]
+        )
+
+    monkeypatch.setattr(adjudication, "adjudicate_candidates", _same_at_one)
+    wrote: list[str] = []
+    for name in ("plan_auto_merges", "apply_auto_merges"):
+        monkeypatch.setattr(
+            auto_merge,
+            name,
+            lambda *a, _n=name, **k: wrote.append(_n),
+        )
+    before = _bundle_bytes(root)
+    log_before = _git_log(root)
+
+    result = cli.invoke(app, ["daemon", "--once"])
+
+    assert result.exit_code == 0, result.output
+    assert wrote == []
+    assert _bundle_bytes(root) == before
+    assert (root / "bundle" / "concepts" / "foo-2.md").exists()
+    assert _git_log(root) == log_before
+    conn = sqlite3.connect(config.WorkspaceLayout(root).findings_db_path)
+    try:
+        items = pq.open_items(conn)
+        assert {i.kind for i in items} == {"identity"}
+        assert len(items) == 1  # the in-class pair, enqueued and nothing else
+    finally:
+        conn.close()
+
+
+def _imported_modules(path: Path) -> set[str]:
+    import ast
+
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = "." * node.level + (node.module or "")
+            names.add(base)
+            names.update(f"{base}.{alias.name}" for alias in node.names)
+    return names
+
+
+@pytest.mark.parametrize(
+    "module", ["openkos/cli/daemon.py", "openkos/application/runner.py"]
+)
+def test_the_unattended_engine_does_not_import_the_auto_merge_pass(
+    module: str,
+) -> None:
+    source = Path(__file__).resolve().parents[3] / "src" / module
+    imported = _imported_modules(source)
+
+    assert imported  # the parse saw this module's imports
+    assert not {name for name in imported if name.endswith("auto_merge")}, (
+        f"{module} imports the auto-merge pass"
+    )
