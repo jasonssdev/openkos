@@ -1,6 +1,6 @@
 # Pre-registration: the structural auto-merge class (#1298)
 
-**Status: Draft, not binding.** Nothing below has been run. It becomes binding when the owner approves it on [#1298](https://github.com/jasonssdev/openkos/issues/1298), after the open questions at the end are decided. From then on the rule is frozen: a later change that wants a different rule pre-registers it separately and re-runs every arm. Values marked **measured** cite a committed file; values marked **estimate** are not measurements.
+**Status: Approved, not yet run.** The owner decided the open questions on 2026-10-05 on [#1298](https://github.com/jasonssdev/openkos/issues/1298) (see "Decisions" below), and the bars are binding as written. From now on the rule is frozen: a later change that wants a different rule pre-registers it separately and re-runs every arm. Values marked **measured** cite a committed file; values marked **estimate** are not measurements.
 
 Model-free parts are already encoded and self-tested: the class predicate, the fixture, its exposure counts, and both decision rules live in [`run_structural_class.py`](run_structural_class.py) and [`structural_fixtures.py`](structural_fixtures.py) (`--self-test`, discovered by `evals/run_self_tests.py`; 15 of 15 targeted mutations are killed). The live arms are not built yet (see "What must be built before the run").
 
@@ -63,7 +63,7 @@ Labels are constructed, not adjudicated. A wrong verdict is a rubric-consistency
 |---|---|---|---|
 | calibration | `gemma4:26b-a4b` | 15 | Step 1: fits `t*` |
 | confirmation | `gemma4:26b-a4b` | 15 | Step 2: judges the bars with `t*` fixed |
-| reference calibration + confirmation | `qwen3:8b` | 15 + 15 | latency baseline for L1, and the same rule computed for disclosure. No adoption follows from it (see Q4) |
+| reference calibration + confirmation | `qwen3:8b` | 15 + 15 | latency baseline for L1, and the same rule computed for disclosure. No adoption follows from it (decision 4) |
 
 `gemma4:26b-a4b` is the shipped judge (ADR-0047). It runs through the production path, `find_candidates` then `adjudicate_candidates`, with no `findings.db`, production client settings (`num_ctx` 12288, generation ceiling 8192, thinking off), and no pinned seed. Calibration and confirmation are separate invocations. Each run file carries the harness stamp: commit, model digest and prompt hashes (`evals/harness_stamp.py`). The two models run in separate sessions, one resident at a time (ADR-0047 layout (a)). The model-load time is recorded separately and is not part of any per-run latency.
 
@@ -89,17 +89,17 @@ R3 (`week-apart`) has no exposure in this population, so it would pass vacuously
 
 **Verdict.** **PASS** if and only if Step 1 yields `t*` and R0, R1, R2, R4, R5, S2 and L1 all hold. **INVALID** if R0 fails. Otherwise **FAIL**, naming every failed bar. Precision on the negatives is the zero-tolerance R2/S2. Recall is R4 at the frozen 0.50. Neither is re-tuned to this fixture.
 
-**Reported, never deciding:** the same rule on the cross-source-excluded in-class population (as #1054 did); the per-probe verdict distribution; the `qwen3:8b` verdict; and the #1054 fixture's own verdict, if the owner chooses that secondary run (Q1).
+**Reported, never deciding:** the same rule on the cross-source-excluded in-class population (as #1054 did); the per-probe verdict distribution; the `qwen3:8b` verdict; and the #1054 fixture's secondary run under gemma4 (decision 1).
 
 ## Ship rule (if PASS)
 
 Each item follows ADR-0034, with ADR-0044 and #1054's owner conditions:
 
-1. **Opt-in per run and off by default.** No configuration key turns it on standing (ADR-0034 decision 2; see Q3). Default-on would need an ADR that supersedes ADR-0034, backed by evidence from use (ADR-0044).
+1. **Opt-in per run and off by default.** No configuration key turns it on standing (ADR-0034 decision 2; decision 3 below: `curate --auto-merge`). Default-on would need an ADR that supersedes ADR-0034, backed by evidence from use (ADR-0044).
 2. **Measured constants.** `t*` and the measured model tag and digest are code constants, not settings. A verdict from any other model (for example a workspace that opted out with `models: {adjudication: null}`) makes the class ineligible for that run. Any change to the adjudication prompt, rubric, withdrawal markers or default model invalidates the measurement until the harness is re-run (ADR-0034).
 3. **Mechanical merges.** No LLM rewrite of the merged body (`--no-reconcile` semantics), so `unmerge` restores byte parity. The survivor is the base id.
 4. **At most one automatic merge per survivor per run** (`unmerge` is LIFO per survivor).
-5. **Committed, logged and listed with its undo.** ADR-0034 decision 4 fixes one git commit per run, one `log.md` run entry, and a disclosure that names every merge and its undo command. The shipped "what changed" digest (`application/digest.py`) lists one line per commit, with its sha, at most 4 concept ids, and `git revert <sha>` as the undo. It cannot name each merge's `openkos unmerge`. How the listing meets ADR-0034 is Q2. Whichever way, the line must carry the concept ids or the commit sha, so the Quiet Engine's B4 matching rule ("sha or every touched document on a line with an undo command") still measures it.
+5. **Committed, logged and listed with its undo.** ADR-0034 decision 4 fixes one git commit per run, one `log.md` run entry, and a disclosure that names every merge and its undo command. The shipped "what changed" digest (`application/digest.py`) lists one line per commit, with its sha, at most 4 concept ids, and `git revert <sha>` as the undo. It cannot name each merge's `openkos unmerge`, so the run's disclosure adds one line per merge (decision 2). The line must carry the concept ids or the commit sha, so the Quiet Engine's B4 matching rule ("sha or every touched document on a line with an undo command") still measures it.
 
 If the verdict is FAIL or INVALID, nothing ships for the class. The verdict file, run files and fixture are committed, and #702's per-item consent stands.
 
@@ -142,7 +142,8 @@ These need a model, so they are tasks, not code in this change:
 - **Reference** (qwen3:8b, two arms): about **35 min**.
 - Model loads: a few minutes per switch (**estimate**; ADR-0047 records swap time separately).
 - Pilot: about 5 min.
-- **Total: about 1.5 h.** Add about 40 to 50 min if the #1054 fixture is re-run under gemma4 as a secondary (Q1).
+- Q1 secondary (the #1054 fixture under gemma4, two arms): about 40 to 50 min.
+- **Total: about 2.3 h.**
 
 The README's "about 1.7 hours per arm" predates the stored runs and overstates `qwen3:8b` by about 6x. A default Ollama serializes requests, so there is no parallel speed-up.
 
@@ -161,24 +162,11 @@ This is a proposal for the **next** Quiet Engine measurement. It does not edit `
 
 Both counts are model-free reads on the run's bundle. They are already computed on every scan, and only need to be recorded. The alternative, a corpus small enough to stay under the caps, is not recommended. `v0.4.0` hid 476 to 568 candidates behind caps on this corpus, so staying under them would need a corpus several times smaller, and that would likely break B1's validity floor (`v0.4.0` `D / 22 >= 2.0`).
 
-## Open questions for the owner
+## Decisions
 
-**Q1. Should the Event/Person base/`-N` families be measured alongside the class?** They are excluded from the class (ADR-0044), but they are now almost the only `-N` families a fresh ingest creates (`main`: 0 non-excluded against 0 to 3 Event/Person per run).
-- (a) Exclude them and do not run them. Cheapest.
-- (b) **Recommended:** exclude them from the decision, and re-run the #1054 fixture (10 Event base/`-N` pairs: `recurrence`, `asym-recurrence`, `event-same`, `asym-same`; its Person pairs are not suffix families) in its own bundle under gemma4 as a report-only secondary. It costs about 45 min and gives the evidence a later Event/Person admission would need, under its own pre-registration.
-- (c) Include them in the class now. This contradicts ADR-0044 without a measurement and is not recommended.
+Each of these was an open question in the draft.
 
-**Q2. How is each automatic merge listed with its undo?**
-- (a) **Recommended:** one commit per run, as ADR-0034 fixes. The run's disclosure prints one line per merge with survivor, absorbed, confidence and `openkos unmerge <survivor>`, beside the commit's `git revert` line. This extends the shipped digest's format, so B4's rule keeps matching because the sha and concept ids stay on the line.
-- (b) One commit per merge. The digest stays as it is, and each line's `git revert` undoes exactly one merge. But this contradicts ADR-0034 decision 4 and needs a superseding ADR.
-- (c) One commit per run with the digest unchanged. `git revert <sha>` undoes every merge of the run at once, and the 4-id limit hides the absorbed ids of a third merge onward. Not recommended.
-
-**Q3. Where does the mode run?**
-- (a) **Recommended:** `curate --auto-merge`, a per-run flag. This is exactly ADR-0034 decision 2, and it works on a non-TTY `curate --auto`. Its output reuses the digest's line format from Q2.
-- (b) The daemon, behind a configuration key. It would appear in the daemon's "what changed" digest, but a standing key is the "standing authorization to delete concepts" that ADR-0034 rejected, so it needs a superseding ADR.
-- (c) Both, with the daemon half deferred to such an ADR.
-
-**Q4. What happens if `qwen3:8b` also passes the same rule?**
-- (a) **Recommended:** it is disclosed only. The class ships for `gemma4:26b-a4b`, and a `qwen3:8b` admission needs its own adoption decision. Its #1054 result already shows a constant 0.95 confidence, so a pass here would be surprising and worth a second look before anyone relies on it.
-- (b) Admit both models as measured constants when both pass.
-- (c) Do not compute the `qwen3:8b` verdict. Run it for L1 latency only, which halves the reference cost but loses the comparison.
+1. **Q1. Should the Event/Person base/`-N` families be measured alongside the class?** They are excluded from the class (ADR-0044), but they are now almost the only `-N` families a fresh ingest creates (`main`: 0 non-excluded against 0 to 3 Event/Person per run). **Decided by the owner, 2026-10-05:** they are excluded from the decision. The #1054 fixture is re-run under `gemma4:26b-a4b`, in its own bundle, as a **report-only secondary**: a calibration and a confirmation arm of 15 runs each. It reports the frozen #1054 rule's verdict on that fixture, and the per-probe `same` rates and confidences of its 10 Event base/`-N` pairs (`recurrence`, `asym-recurrence`, `event-same`, `asym-same`; its Person pairs are not suffix families). No bar reads it. It is evidence for a later Event/Person admission, which would need its own pre-registration.
+2. **Q2. How is each automatic merge listed with its undo?** **Decided by the owner, 2026-10-05:** one commit per run, as ADR-0034 fixes. The run's disclosure prints one line per merge with survivor, absorbed, confidence and `openkos unmerge <survivor>`, beside the commit's `git revert` line. The sha and concept ids stay on the line, so the Quiet Engine's B4 rule keeps matching.
+3. **Q3. Where does the mode run?** **Decided by the owner, 2026-10-05:** `curate --auto-merge`, a per-run flag (ADR-0034 decision 2). It works on a non-TTY `curate --auto`, and its output uses the line format of decision 2. The daemon does not run it.
+4. **Q4. What happens if `qwen3:8b` also passes the same rule?** **Decided by the owner, 2026-10-05:** it is disclosed only. The class ships for `gemma4:26b-a4b` alone, and any `qwen3:8b` admission needs its own adoption decision.
