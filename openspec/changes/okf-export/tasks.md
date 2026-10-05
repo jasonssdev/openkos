@@ -46,29 +46,29 @@ advisory only), stacked in order.
 
 ## Phase 1 — The export boundary (`sensitivity.py`)
 
-- [ ] 1.1 [TEST] `tests/unit/test_sensitivity_export.py`:
+- [x] 1.1 [TEST] `tests/unit/test_sensitivity_export.py`:
   `export_boundary(docs, include_private=False, allow_below_source=False)`
   admits `public` only; with `include_private=True` admits `public` +
   `private`; withholds `confidential`, absent, blank, whitespace, non-string
   and unknown labels under every flag; an unreadable document (`None`) and
   one without `type` are withheld; a Source with `ingest_pending: true` is
   withheld. Each withheld id carries its reason. RED: function missing.
-- [ ] 1.2 [IMPL] Add `export_boundary` (pure over an id -> metadata map,
+- [x] 1.2 [IMPL] Add `export_boundary` (pure over an id -> metadata map,
   reasons per withheld id), reusing `blocks_llm_send`'s fail-closed rank.
   GREEN 1.1.
-- [ ] 1.3 [TEST] Below-source rule (ADR-0048): a `private` object citing a
+- [x] 1.3 [TEST] Below-source rule (ADR-0048): a `private` object citing a
   `confidential` Source is withheld as below-source unless
   `allow_below_source`; the walk is transitive (through an intermediate
   concept); an unreadable or unlabelled ancestor ranks `confidential`; a
   `raw/` entry and a dangling id contribute nothing; a malformed
   `provenance` counts as below-source; `below_source` lists every id the
   rule withheld or admitted. RED: rule missing.
-- [ ] 1.4 [IMPL] The ancestor walk and the rule. GREEN 1.3.
-- [ ] 1.5 [TEST] Signature guard: the function exposes no parameter beyond
+- [x] 1.4 [IMPL] The ancestor walk and the rule. GREEN 1.3.
+- [x] 1.5 [TEST] Signature guard: the function exposes no parameter beyond
   `docs`, `include_private` and `allow_below_source`, so no caller can admit
   `confidential`. [MUT] add an `expose_confidential` keyword, observe RED,
   revert.
-- [ ] 1.6 [MUT] (a) Flip the absent-label branch to rank `private`
+- [x] 1.6 [MUT] (a) Flip the absent-label branch to rank `private`
   (ADR-0003's combine default); (b) drop the `confidential` withhold; (c)
   make the below-source comparison `<=`-inverted / skip the transitive step;
   (d) admit `private` without the flag. Each must turn a named test RED.
