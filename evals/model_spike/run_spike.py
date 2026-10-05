@@ -33,8 +33,22 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from openkos.extraction.concept import ExtractionResult, extract_concept
-from openkos.llm.ollama import OllamaClient, OllamaError, model_tag_matches
+_EVALS_ROOT = str(Path(__file__).resolve().parents[1])
+if _EVALS_ROOT not in sys.path:
+    sys.path.append(_EVALS_ROOT)
+
+from harness_prompts import extraction_prompts  # noqa: E402
+from harness_stamp import build_stamp, identity_section  # noqa: E402
+
+from openkos.extraction.concept import (  # noqa: E402
+    ExtractionResult,
+    extract_concept,
+)
+from openkos.llm.ollama import (  # noqa: E402
+    OllamaClient,
+    OllamaError,
+    model_tag_matches,
+)
 
 # --------------------------------------------------------------------------- #
 # Fixtures: ground-truth derived objects for two `good-life-demo` raw sources. #
@@ -704,6 +718,12 @@ def self_test() -> int:
         if needle not in text:
             failures.append(f"report missing section: {needle!r}")
 
+    identity = identity_for(["m1", "m2"])
+    if identity.count("`extraction/system`") != 2 or "`m2`" not in identity:
+        failures.append(
+            f"identity section does not name model and prompt: {identity!r}"
+        )
+
     if failures:
         print("SELF-TEST FAILED:")
         for f in failures:
@@ -771,6 +791,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def identity_for(models: Sequence[str]) -> str:
+    """The report's `## Identity` section for `models` (#1277)."""
+    return identity_section(
+        build_stamp(model=m, prompts=extraction_prompts()) for m in models
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point: self-test, or drive the real spike and write the report."""
     args = parse_args(argv)
@@ -808,6 +835,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     generated_at = datetime.now(UTC)
     text = build_report(reports, FIXTURES, args.runs, generated_at)
+    # #1277: the report names the harness, each model (and its digest) and
+    # the prompt text every number in it was measured under.
+    text += identity_for([r.model for r in reports if r.installed])
 
     args.output.write_text(text, encoding="utf-8")
     results_dir = args.output.parent / "results"

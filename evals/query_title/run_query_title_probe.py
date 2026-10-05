@@ -70,6 +70,7 @@ Requires a local Ollama serving `bge-m3` (embeddings) and the chat model.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import pathlib
 import sys
@@ -82,7 +83,9 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from harness_prompts import answer_prompts  # noqa: E402
 from harness_report import arm_identity_line  # noqa: E402
+from harness_stamp import build_stamp, prompt_hash, prompt_map  # noqa: E402
 
 from openkos import fsio  # noqa: E402
 from openkos.application import query as application_query  # noqa: E402
@@ -663,6 +666,14 @@ def _write_corpus(root: pathlib.Path) -> pathlib.Path:
     return bundle
 
 
+@functools.cache
+def _stamp(model: str) -> dict[str, Any]:
+    """The identity stamp (#1277): this probe runs the production `answer()`
+    with its sufficiency check off. Built once -- `write_runs` checkpoints
+    after every run and must not re-query git and Ollama each time."""
+    return build_stamp(model=model, prompts=answer_prompts(sufficiency=False))
+
+
 def write_runs(
     path: pathlib.Path,
     rows: list[dict[str, Any]],
@@ -691,6 +702,7 @@ def write_runs(
                 "generated_at": stamp,
                 "max_generation_tokens": DEFAULT_MAX_GENERATION_TOKENS,
                 "context_window": DEFAULT_CONTEXT_WINDOW,
+                "stamp": _stamp(model),
                 "failures": failures,
                 "rows": rows,
             },
@@ -1077,6 +1089,13 @@ def _self_test() -> int:
                 f"{unparseable or 'file count mismatch'}"
             )
             return 1
+
+    stamped = prompt_map(_stamp("m"))
+    if stamped != {
+        k: prompt_hash(v) for k, v in answer_prompts(sufficiency=False).items()
+    }:
+        print(f"self-test FAILED: a stored run must stamp the answer prompt: {stamped}")
+        return 1
 
     print(
         f"self-test OK: `clause` titles the open question {invented!r}; "

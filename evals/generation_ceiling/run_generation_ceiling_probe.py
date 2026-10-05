@@ -73,11 +73,23 @@ import importlib.util
 import json
 import statistics
 import sys
+import tempfile
 import time
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from harness_prompts import extraction_prompts
+from harness_stamp import (
+    build_stamp,
+    load_stamp,
+    prompt_hash,
+    prompt_map,
+    write_stamp_sidecar,
+)
 
 from openkos.extraction import concept as concept_mod
 from openkos.extraction import judge as judge_mod
@@ -642,13 +654,28 @@ def load_results(path: Path) -> list[RunRecord]:
     return records
 
 
-def write_results(records: list[RunRecord], stamp: str, model: str) -> Path:
+def arm_prompts(arms: list[Arm]) -> dict[str, str]:
+    """The system prompts the `arms` that ran sent, each treated arm's under
+    `<id>+<arm>`. Read from the arms, not from `concept_mod`, which
+    `run_fixture` has restored by the time results are written."""
+    prompts: dict[str, str] = {}
+    for arm in arms:
+        prompts.update(extraction_prompts(system=arm.system_prompt, arm=arm.name))
+    return prompts
+
+
+def write_results(
+    records: list[RunRecord], stamp: str, model: str, arms: list[Arm]
+) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     slug = model.replace(":", "-").replace("/", "-")
     path = RESULTS_DIR / f"generation-ceiling-{stamp}-{slug}.jsonl"
     with path.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+    # #1277: the ledger is one record per line, so its identity stamp lives in
+    # a sidecar rather than in a row every loader would read as a record.
+    write_stamp_sidecar(path, build_stamp(model=model, prompts=arm_prompts(arms)))
     return path
 
 
@@ -839,6 +866,39 @@ def _self_test() -> int:
         print("FAIL: an arm's threshold patch was not restored")
         return 1
 
+    # #1277: the ledger's sidecar names the text each arm sent.
+    arms = build_arms()
+    with tempfile.TemporaryDirectory() as scratch:
+        global RESULTS_DIR
+        real_dir = RESULTS_DIR
+        RESULTS_DIR = Path(scratch)
+        try:
+            stored = load_stamp(
+                write_results([], "20000101T000000Z", "fake", list(arms.values()))
+            )
+        finally:
+            RESULTS_DIR = real_dir
+    got = prompt_map(stored) if stored else {}
+    # `evals/stage_attrition` builds its pair by ABLATION: `treatment` is the
+    # shipped prompt and `baseline` is the shipped prompt minus the clause. The
+    # ids follow the TEXT, so the arm named `baseline` is the one that carries
+    # `+baseline`, and the registered id belongs to the shipped text.
+    shipped = concept_mod._SYSTEM_PROMPT
+    for name, arm in arms.items():
+        want_id = (
+            "extraction/system"
+            if arm.system_prompt == shipped
+            else f"extraction/system+{name}"
+        )
+        if got.get(want_id) != prompt_hash(arm.system_prompt):
+            print(f"FAIL: the stamp does not carry arm {name!r} as {want_id}")
+            return 1
+    if prompt_hash(arms["baseline"].system_prompt) == prompt_hash(
+        arms["treatment"].system_prompt
+    ):
+        print("FAIL: the two prompt arms sent the same text (inert splice)")
+        return 1
+
     fixtures, notices = build_fixtures()
     print(f"self-test OK ({len(fixtures)} fixture(s) available)")
     for notice in notices:
@@ -904,10 +964,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ! {notice}")
 
     records: list[RunRecord] = []
+    ran: dict[str, Arm] = {}
     for fixture in fixtures:
         wanted_arms = [a for a in fixture.arms if not args.arm or a in set(args.arm)]
         for arm_name in wanted_arms:
             arm = arms[arm_name]
+            ran[arm_name] = arm
             print(
                 f"  [{arm_name}] {fixture.name} ({len(fixture.text)} chars, "
                 f"threshold {arm.chunk_threshold})"
@@ -921,7 +983,7 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print(render_verdict(records))
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    print(f"stored {write_results(records, stamp, args.model)}")
+    print(f"stored {write_results(records, stamp, args.model, list(ran.values()))}")
     return 0
 
 

@@ -68,6 +68,7 @@ then looks hung.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import pathlib
 import statistics
@@ -85,6 +86,8 @@ sys.path.append(str(_EVALS))
 sys.path.append(str(_EVALS / "query_grounding"))
 
 from grounding_corpus import ADJACENT, DOCS, GROUNDED, QUESTIONS  # noqa: E402
+from harness_prompts import answer_prompts  # noqa: E402
+from harness_stamp import build_stamp, prompt_hash, prompt_map  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
@@ -286,6 +289,14 @@ def generate(
     return rows, failures
 
 
+@functools.cache
+def _stamp(model: str) -> dict[str, Any]:
+    """The identity stamp (#1277): this probe runs the production `answer()`
+    with its sufficiency check off. Built once -- `_write_runs` checkpoints
+    after every run and must not re-query git and Ollama each time."""
+    return build_stamp(model=model, prompts=answer_prompts(sufficiency=False))
+
+
 def _write_runs(
     rows: Sequence[Row],
     failures: Sequence[dict[str, Any]],
@@ -306,6 +317,7 @@ def _write_runs(
                 "generated_at": stamp,
                 "limit": LIMIT,
                 "corpus_docs": len(DOCS),
+                "stamp": _stamp(model),
                 "rows": [row.__dict__ for row in rows],
                 "failures": list(failures),
             },
@@ -552,6 +564,12 @@ def _self_test() -> int:
             f"index{f' -- unparseable: {unparseable}' if unparseable else ''}",
             not unparseable,
         )
+
+    check(
+        "a stored run stamps the answer prompt it sent",
+        prompt_map(_stamp("m"))
+        == {k: prompt_hash(v) for k, v in answer_prompts(sufficiency=False).items()},
+    )
 
     for name in failures:
         print(f"FAIL: {name}")

@@ -78,6 +78,7 @@ then looks hung.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import pathlib
 import re
@@ -104,6 +105,8 @@ from fabrication_corpus import (  # noqa: E402
     FABRICATION_QUESTIONS,
 )
 from grounding_corpus import ADJACENT, DOCS, GROUNDED, QUESTIONS  # noqa: E402
+from harness_prompts import answer_prompts  # noqa: E402
+from harness_stamp import build_stamp, prompt_hash  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_CONTEXT_WINDOW,
@@ -419,6 +422,28 @@ def generate(
     return rows, failures
 
 
+@functools.cache
+def _cached_stamp(kind: str, model: str) -> dict[str, Any]:
+    """Built once per run: the writers checkpoint after every call and must not
+    re-query git and Ollama each time."""
+    return stamp_for(kind, model)
+
+
+def stamp_for(kind: str, model: str) -> dict[str, Any]:
+    """The identity stamp (#1277) of a stored result: `generate` runs the
+    production answer pipeline with its sufficiency check ON (both prompts);
+    `arms` runs the two probe-local judge prompts over stored answers."""
+    prompts = (
+        answer_prompts(sufficiency=True)
+        if kind == "generate"
+        else {
+            "probe/entailment-unsupported": _UNSUPPORTED_PROMPT,
+            "probe/entailment-binary": _BINARY_PROMPT,
+        }
+    )
+    return build_stamp(model=model, prompts=prompts)
+
+
 def _write_runs(
     rows: Sequence[Row],
     failures: Sequence[dict[str, Any]],
@@ -437,6 +462,7 @@ def _write_runs(
                 "generated_at": stamp,
                 "limit": LIMIT,
                 "corpus_docs": len(ALL_DOCS),
+                "stamp": _cached_stamp("generate", model),
                 "rows": [asdict(row) for row in rows],
                 "failures": list(failures),
             },
@@ -551,6 +577,7 @@ def score_arms(
                         "model": model,
                         "runs_file": runs_path.name,
                         "generated_at": stamp,
+                        "stamp": _cached_stamp("arms", model),
                         "rows": [asdict(r) for r in arm_rows],
                         "failures": failures,
                     },
@@ -794,6 +821,22 @@ def self_test() -> int:
             not unparseable,
         )
 
+    # #1277: each stored result names the prompts it measured.
+    generated = {p["id"]: p["sha256_16"] for p in stamp_for("generate", "m")["prompts"]}
+    check(
+        "generate stamps the answer and sufficiency prompts",
+        sorted(generated) == ["answer/sufficiency", "answer/system"],
+    )
+    scored = {p["id"]: p["sha256_16"] for p in stamp_for("arms", "m")["prompts"]}
+    check(
+        "arms stamp both judge prompts by hash",
+        scored
+        == {
+            "probe/entailment-unsupported": prompt_hash(_UNSUPPORTED_PROMPT),
+            "probe/entailment-binary": prompt_hash(_BINARY_PROMPT),
+        },
+    )
+
     print(f"\nself-test: {'PASS' if not failures else f'{len(failures)} FAILURE(S)'}")
     return 1 if failures else 0
 
@@ -925,6 +968,7 @@ def generate_field(
                                     "model": model,
                                     "workspace": str(workspace),
                                     "generated_at": stamp,
+                                    "stamp": _cached_stamp("generate", model),
                                     "limit": LIMIT,
                                     "rows": [asdict(r) for r in rows],
                                     "failures": failures,

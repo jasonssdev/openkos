@@ -57,6 +57,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -71,6 +72,7 @@ from typing import Any, Final
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from harness_report import arm_identity_line
+from harness_stamp import build_stamp, load_stamp, prompt_hash, prompt_map
 
 from openkos.extraction import concept as concept_mod
 from openkos.extraction import judge as judge_mod
@@ -566,12 +568,24 @@ def render(records: Sequence[RunRecord], *, host: str, parallel: str) -> str:
     return "\n".join(lines)
 
 
-def write_results(records: Sequence[RunRecord], *, stamp: str) -> Path:
+def write_results(
+    records: Sequence[RunRecord], *, stamp: str, model: str = _MODEL
+) -> Path:
     RESULTS_DIR.mkdir(exist_ok=True)
-    out = RESULTS_DIR / f"runs-{stamp}-{_MODEL.replace(':', '-')}.json"
+    out = RESULTS_DIR / f"runs-{stamp}-{model.replace(':', '-')}.json"
     out.write_text(
         json.dumps(
-            {"stamp": stamp, "model": _MODEL, "rows": [asdict(r) for r in records]},
+            {
+                "generated_at": stamp,
+                "model": model,
+                # #1277: harness, model and the judge prompt this replay sent.
+                # Earlier files called the timestamp `stamp`; nothing reads it.
+                "stamp": build_stamp(
+                    model=model,
+                    prompts={"extraction/judge": judge_mod._JUDGE_SYSTEM_PROMPT},
+                ),
+                "rows": [asdict(r) for r in records],
+            },
             indent=2,
             ensure_ascii=False,
         ),
@@ -750,6 +764,21 @@ def _self_test() -> int:
     check("the report names its ceiling", "Generation ceiling `8192`" in report, True)
     check("the report names its window", "context window `12288`" in report, True)
 
+    # #1277: the stored run names the judge prompt it replayed.
+    global RESULTS_DIR
+    real_dir = RESULTS_DIR
+    with tempfile.TemporaryDirectory() as scratch:
+        RESULTS_DIR = Path(scratch)
+        try:
+            stored = load_stamp(write_results([], stamp="20000101T000000Z"))
+        finally:
+            RESULTS_DIR = real_dir
+    check(
+        "the stored run stamps the judge prompt it sent",
+        stored is not None and prompt_map(stored),
+        {"extraction/judge": prompt_hash(judge_mod._JUDGE_SYSTEM_PROMPT)},
+    )
+
     if failures:
         print("SELF-TEST FAILED:")
         for failure in failures:
@@ -906,7 +935,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
     report = render(records, host=args.host, parallel=args.parallel)
-    saved = write_results(records, stamp=stamp)
+    saved = write_results(records, stamp=stamp, model=args.model)
     saved.with_suffix(".md").write_text(report, encoding="utf-8")
     print()
     print(report)

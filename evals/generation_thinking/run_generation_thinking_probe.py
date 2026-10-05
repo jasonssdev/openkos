@@ -37,8 +37,11 @@ RESULTS_DIR: Final = _HERE / "results"
 
 sys.path.insert(0, str(_REPO / "src"))
 sys.path.insert(0, str(_HERE))
+sys.path.append(str(_REPO / "evals"))
 
 from detector import DEFAULT_WINDOW, repetition_share  # noqa: E402
+from harness_prompts import extraction_prompts  # noqa: E402
+from harness_stamp import build_stamp, write_stamp_sidecar  # noqa: E402
 
 from openkos.extraction import concept as concept_mod  # noqa: E402
 
@@ -218,6 +221,21 @@ def _done_reason(data: dict[str, Any]) -> str:
     if not isinstance(reason, str) or not reason:
         return "(absent)"
     return reason
+
+
+def stamp_sweep(path: pathlib.Path, fixture: Any, model: str) -> pathlib.Path:
+    """Write the sweep's identity stamp beside `path` (#1277), BEFORE the
+    first call: `path` is rewritten after every call and holds a bare list
+    every loader reads as records, so the stamp is a sidecar, and an aborted
+    sweep still has one. Only the system prompt is sent, read from the very
+    messages `run_once` builds."""
+    system = concept_mod._build_messages(fixture.text, fixture.title)[0]["content"]
+    prompts = {
+        k: v
+        for k, v in extraction_prompts(system=system).items()
+        if k == "extraction/system"
+    }
+    return write_stamp_sidecar(path, build_stamp(model=model, prompts=prompts))
 
 
 def run_once(fixture: Any, *, arm: str, run: int, model: str, host: str) -> ReplyRecord:
@@ -714,6 +732,22 @@ def _self_test() -> int:
         f"(exit={rescore_exit!r})",
     )
 
+    # #1277: the sweep's sidecar stamps the system prompt it sends.
+    import tempfile
+
+    from harness_stamp import load_stamp, prompt_hash, prompt_map
+
+    with tempfile.TemporaryDirectory() as scratch:
+        probe_path = pathlib.Path(scratch) / "runs-x.json"
+        stamp_sweep(probe_path, _fixtures.KICKOFF, "fake")
+        stamped = load_stamp(probe_path)
+    check(
+        stamped is not None
+        and prompt_map(stamped)
+        == {"extraction/system": prompt_hash(concept_mod._SYSTEM_PROMPT)},
+        "the sweep must stamp exactly the extraction system prompt it sends",
+    )
+
     if failures:
         for why in failures:
             print(f"SELF-TEST FAILED: {why}")
@@ -751,6 +785,7 @@ def main(argv: list[str] | None = None) -> int:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     path = RESULTS_DIR / f"runs-{stamp}-{args.model.replace(':', '-')}.json"
+    stamp_sweep(path, fixtures[0], args.model)
     print(
         f"model {args.model}, {args.runs} run(s) per fixture per arm, "
         f"num_predict {CEILING}, num_ctx {CONTEXT_WINDOW}\n",

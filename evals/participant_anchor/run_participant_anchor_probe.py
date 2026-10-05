@@ -75,11 +75,24 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from harness_prompts import extraction_prompts
+from harness_stamp import (
+    build_stamp,
+    load_stamp,
+    prompt_hash,
+    prompt_map,
+    write_stamp_sidecar,
+)
 
 from openkos.extraction import concept as concept_mod
 from openkos.extraction.concept import (
@@ -666,6 +679,9 @@ def write_results(records: list[RunRecord], stamp: str, model: str) -> Path:
     with path.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+    # #1277: the arms vary the SOURCE, never a prompt, so every arm ran the
+    # shipped extraction prompts. One record per line: the stamp is a sidecar.
+    write_stamp_sidecar(path, build_stamp(model=model, prompts=extraction_prompts()))
     return path
 
 
@@ -796,6 +812,22 @@ def _self_test() -> int:
             "the number is honest, the verdict is what must not borrow it",
         ),
     ]
+    global RESULTS_DIR
+    real_dir = RESULTS_DIR
+    with tempfile.TemporaryDirectory() as scratch:
+        RESULTS_DIR = Path(scratch)
+        try:
+            stamped = load_stamp(write_results([], "20000101T000000Z", "fake"))
+        finally:
+            RESULTS_DIR = real_dir
+    expectations.append(
+        (
+            stamped is not None
+            and prompt_map(stamped)
+            == {k: prompt_hash(v) for k, v in extraction_prompts().items()},
+            "the stored ledger must stamp the shipped extraction prompts",
+        )
+    )
     failures = [why for ok, why in expectations if not ok]
     print(render(records))
     print(report)
