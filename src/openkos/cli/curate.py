@@ -1200,7 +1200,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         if application_lifecycle.cross_source_same_pair(
             layout.bundle_dir, group.member_ids
         ):
-            typer.echo(cli_main._CROSS_SOURCE_WALK_NOTE)
+            typer.echo(cli_main._cross_source_walk_note(group.member_ids))
         # #904: the second risky class, rendered in the same slot from the
         # same shared helper -- one guard landing on `adjudicate --apply`
         # and forgotten here is exactly the drift #796 reported.

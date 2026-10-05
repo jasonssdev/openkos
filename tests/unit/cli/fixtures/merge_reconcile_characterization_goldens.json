@@ -1,48 +1,44 @@
 {
   "merge_auto": {
-    "commits": [
-      "openkos: merge concepts/absorbed into concepts/survivor",
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 0,
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n",
+    "stderr": "",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    "commits": [
+      "openkos: merge concepts/absorbed into concepts/survivor",
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "merge_confidential_commit_notice": {
+    "exit_code": 0,
+    "stdout": "openkos merge: proposed changes:\n  + stack absorbed body: 17 unreconciled char(s) (22% of merged body -- bodies were appended, not reconciled)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n",
+    "stderr": "openkos: NOTICE -- this commit includes content marked 'sensitivity: confidential'. openkos commits to LOCAL git only and never pushes to a remote.\n",
+    "files": {
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: confidential\n  sensitivity_before: confidential\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    sensitivity: confidential\n\n    ---\n\n\n    # Survivor\n\n\n    Body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: confidential\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nBody.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nBody.\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
     "commits": [
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 0,
-    "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: confidential\n  sensitivity_before: confidential\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    sensitivity: confidential\n\n    ---\n\n\n    # Survivor\n\n\n    Body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: confidential\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nBody.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nBody.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "openkos: NOTICE -- this commit includes content marked 'sensitivity: confidential'. openkos commits to LOCAL git only and never pushes to a remote.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: confidential -> confidential\n  + stack absorbed body: 17 unreconciled char(s) (22% of merged body -- bodies were appended, not reconciled)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    ]
   },
   "merge_conflicting_reconcile_flags": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 2,
+    "stdout": "",
+    "stderr": "openkos merge: --reconcile and --no-reconcile are mutually exclusive.\n",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -50,17 +46,17 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: --reconcile and --no-reconcile are mutually exclusive.\n",
-    "stdout": ""
-  },
-  "merge_drift_after_prompt": {
     "commits": [
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "merge_drift_after_prompt": {
     "exit_code": 3,
+    "stdout": "\nopenkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\n",
+    "stderr": "openkos merge: refusing to write -- 1 delete target(s) changed on disk after this run computed its plan: bundle/concepts/absorbed.md. Nothing was written, nothing was deleted. Re-run to recompute over the current bundle.\n",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n\nedit\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -68,17 +64,17 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: refusing to write -- 1 delete target(s) changed on disk after this run computed its plan: bundle/concepts/absorbed.md. Nothing was written, nothing was deleted. Re-run to recompute over the current bundle.\n",
-    "stdout": "\nopenkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\n"
-  },
-  "merge_drift_unprompted": {
     "commits": [
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "merge_drift_unprompted": {
     "exit_code": 3,
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\n",
+    "stderr": "openkos merge: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/linker.md. Nothing was written, nothing was deleted. Re-run to recompute over the current bundle.\n",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n\nedit\n",
@@ -86,16 +82,17 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/linker.md. Nothing was written, nothing was deleted. Re-run to recompute over the current bundle.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\n"
+    "commits": [
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "merge_flagged_ledger_no_reset_point": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos merge: refusing to merge -- 'concepts/survivor''s ledger is flagged by the merge-ledger-integrity check (post-merge mutation). If the ledger is merely unmigrated (still embedded in the survivor's own frontmatter, not corrupted), run `openkos repair`; if corrupted, no git reset point is available in this workspace (no repository, no configured git identity, or no commit history) -- there is no remedy that restores reversibility for the affected merge(s) -- reversibility of merges made before this fix is not guaranteed. Re-run with --force to bypass this refusal.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nmerged_from:\n- absorbed_id: concepts/absorbed-0\n  absorbed_snapshot: absorbed text\n  carried_content_ids: []\n  index_before: index text\n  link_rewrites: []\n  log_before: log text\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v3\n  sensitivity_after: private\n  sensitivity_before: private\n  survivor_after_sha256: ''\n  survivor_before: survivor text\n- absorbed_id: concepts/absorbed-1\n  absorbed_snapshot: absorbed text\n  carried_content_ids: []\n  index_before: index text\n  link_rewrites: []\n  log_before: log text\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v3\n  sensitivity_after: private\n  sensitivity_before: private\n  survivor_after_sha256: ''\n  survivor_before: \"---\\nmerged_from:\\n- absorbed_id: concepts/absorbed-0\\n  absorbed_snapshot:\n    TAMPERED\\n  carried_content_ids: []\\n  index_before: index text\\n  link_rewrites:\n    []\\n  log_before: log text\\n  merged_at: '<TS>'\\n  provenance_rewrites:\n    []\\n  relation_rewrites: []\\n  schema: openkos.merge_ledger/v3\\n  sensitivity_after:\n    private\\n  sensitivity_before: private\\n  survivor_after_sha256: ''\\n  survivor_before:\n    survivor text\\ntitle: Survivor\\ntype: Concept\\n---\\n\"\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
@@ -103,16 +100,16 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: refusing to merge -- 'concepts/survivor''s ledger is flagged by the merge-ledger-integrity check (post-merge mutation). If the ledger is merely unmigrated (still embedded in the survivor's own frontmatter, not corrupted), run `openkos repair`; if corrupted, no git reset point is available in this workspace (no repository, no configured git identity, or no commit history) -- there is no remedy that restores reversibility for the affected merge(s) -- reversibility of merges made before this fix is not guaranteed. Re-run with --force to bypass this refusal.\n",
-    "stdout": ""
+    "commits": [
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "merge_flagged_ledger_reset_point": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos merge: refusing to merge -- 'concepts/survivor''s ledger is flagged by the merge-ledger-integrity check (post-merge mutation). If the ledger is merely unmigrated (still embedded in the survivor's own frontmatter, not corrupted), run `openkos repair`; if corrupted, run `git reset --hard <first-merge>~1` then `openkos reindex` -- reversibility of merges made before this fix is not guaranteed. Re-run with --force to bypass this refusal.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nmerged_from:\n- absorbed_id: concepts/absorbed-0\n  absorbed_snapshot: absorbed text\n  carried_content_ids: []\n  index_before: index text\n  link_rewrites: []\n  log_before: log text\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v3\n  sensitivity_after: private\n  sensitivity_before: private\n  survivor_after_sha256: ''\n  survivor_before: survivor text\n- absorbed_id: concepts/absorbed-1\n  absorbed_snapshot: absorbed text\n  carried_content_ids: []\n  index_before: index text\n  link_rewrites: []\n  log_before: log text\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v3\n  sensitivity_after: private\n  sensitivity_before: private\n  survivor_after_sha256: ''\n  survivor_before: \"---\\nmerged_from:\\n- absorbed_id: concepts/absorbed-0\\n  absorbed_snapshot:\n    TAMPERED\\n  carried_content_ids: []\\n  index_before: index text\\n  link_rewrites:\n    []\\n  log_before: log text\\n  merged_at: '<TS>'\\n  provenance_rewrites:\n    []\\n  relation_rewrites: []\\n  schema: openkos.merge_ledger/v3\\n  sensitivity_after:\n    private\\n  sensitivity_before: private\\n  survivor_after_sha256: ''\\n  survivor_before:\n    survivor text\\ntitle: Survivor\\ntype: Concept\\n---\\n\"\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
@@ -120,34 +117,33 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: refusing to merge -- 'concepts/survivor''s ledger is flagged by the merge-ledger-integrity check (post-merge mutation). If the ledger is merely unmigrated (still embedded in the survivor's own frontmatter, not corrupted), run `openkos repair`; if corrupted, run `git reset --hard <first-merge>~1` then `openkos reindex` -- reversibility of merges made before this fix is not guaranteed. Re-run with --force to bypass this refusal.\n",
-    "stdout": ""
+    "commits": [
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "merge_forced_reconcile": {
+    "exit_code": 0,
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n",
+    "stderr": "",
+    "files": {
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\nOne coherent document now covers the shared subject in a single voice, folding both sides' claims together without repeating them.\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
     "commits": [
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 0,
-    "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\nOne coherent document now covers the shared subject in a single voice, folding both sides' claims together without repeating them.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    ]
   },
   "merge_non_tty_refusal": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\n",
+    "stderr": "openkos merge: refusing to write without confirmation -- stdin is not a TTY; re-run with --auto.\n",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -155,40 +151,40 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: refusing to write without confirmation -- stdin is not a TTY; re-run with --auto.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\n"
-  },
-  "merge_not_a_repository": {
     "commits": [
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "merge_not_a_repository": {
     "exit_code": 0,
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\n",
+    "stderr": "openkos: WARNING -- not a git repository; skipped auto-commit (writes are on disk).\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos: WARNING -- not a git repository; skipped auto-commit (writes are on disk).\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\n"
-  },
-  "merge_not_a_workspace": {
-    "exit_code": 1,
-    "stderr": "openkos merge: refusing to merge -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
-    "stdout": ""
-  },
-  "merge_preparation_failure": {
     "commits": [
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "merge_not_a_workspace": {
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos merge: refusing to merge -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n"
+  },
+  "merge_preparation_failure": {
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos merge: failed while preparing the merge -- while parsing a flow sequence\n  in \"<unicode string>\", line 2, column 7\ndid not find expected ',' or ']'\n  in \"<unicode string>\", line 3, column 1.\n",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: [unclosed\n---\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -196,68 +192,68 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: failed while preparing the merge -- while parsing a flow sequence\n  in \"<unicode string>\", line 2, column 7\ndid not find expected ',' or ']'\n  in \"<unicode string>\", line 3, column 1.\n",
-    "stdout": ""
+    "commits": [
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "merge_reconciled": {
+    "exit_code": 0,
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n",
+    "stderr": "",
+    "files": {
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    This side says a great deal about the shared subject, repeating the same claims\n    in its own voice across several sentences so the stacked share of the merged body\n    is well above the reconciliation threshold.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    This side says a great deal about the shared subject, repeating the same claims\n    in its own voice across several sentences so the stacked share of the merged body\n    is well above the reconciliation threshold.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\nOne coherent document now covers the shared subject in a single voice, folding both sides' claims together without repeating them.\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
     "commits": [
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 0,
-    "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    This side says a great deal about the shared subject, repeating the same claims\n    in its own voice across several sentences so the stacked share of the merged body\n    is well above the reconciliation threshold.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    This side says a great deal about the shared subject, repeating the same claims\n    in its own voice across several sentences so the stacked share of the merged body\n    is well above the reconciliation threshold.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\nOne coherent document now covers the shared subject in a single voice, folding both sides' claims together without repeating them.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 217 unreconciled char(s) (45% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    ]
   },
   "merge_reconciliation_confidential_skip": {
-    "commits": [
-      "openkos: merge concepts/absorbed into concepts/survivor",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 0,
+    "stdout": "openkos merge: proposed changes:\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n",
+    "stderr": "openkos merge: skipped body reconciliation -- concepts/survivor is confidential and the backend is not local; the stacked body was kept.\nopenkos: NOTICE -- this commit includes content marked 'sensitivity: confidential'. openkos commits to LOCAL git only and never pushes to a remote.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    sensitivity: private\n\n    ---\n\n\n    # Absorbed\n\n\n    The confidential figure is 41,337 units. This side says a great deal about the\n    shared subject, repeating the same claims in its own voice across several sentences\n    so the stacked share of the merged body is well above the reconciliation threshold.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: confidential\n  sensitivity_before: confidential\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    sensitivity: confidential\n\n    ---\n\n\n    # Survivor\n\n\n    This side says a great deal about the shared subject, repeating the same claims\n    in its own voice across several sentences so the stacked share of the merged body\n    is well above the reconciliation threshold.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: confidential\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nThis side says a great deal about the shared subject, repeating the same claims in its own voice across several sentences so the stacked share of the merged body is well above the reconciliation threshold.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nThe confidential figure is 41,337 units. This side says a great deal about the shared subject, repeating the same claims in its own voice across several sentences so the stacked share of the merged body is well above the reconciliation threshold.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: confidential\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nThis side says a great deal about the shared subject, repeating the same claims in its own voice across several sentences so the stacked share of the merged body is well above the reconciliation threshold.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nThe confidential figure is 41,337 units. This side says a great deal about the shared subject, repeating the same claims in its own voice across several sentences so the stacked share of the merged body is well above the reconciliation threshold.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: skipped body reconciliation -- concepts/survivor is confidential and the backend is not local; the stacked body was kept.\nopenkos: NOTICE -- this commit includes content marked 'sensitivity: confidential'. openkos commits to LOCAL git only and never pushes to a remote.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: confidential -> confidential\n  + stack absorbed body: 258 unreconciled char(s) (50% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
-  },
-  "merge_reconciliation_failed": {
     "commits": [
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "merge_reconciliation_failed": {
     "exit_code": 0,
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n",
+    "stderr": "openkos merge: notice -- reconciliation failed (the model reply failed validation); kept the stacked body.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    This side says a great deal about the shared subject, repeating the same claims\n    in its own voice across several sentences so the stacked share of the merged body\n    is well above the reconciliation threshold.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    This side says a great deal about the shared subject, repeating the same claims\n    in its own voice across several sentences so the stacked share of the merged body\n    is well above the reconciliation threshold.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nThis side says a great deal about the shared subject, repeating the same claims in its own voice across several sentences so the stacked share of the merged body is well above the reconciliation threshold.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nThis side says a great deal about the shared subject, repeating the same claims in its own voice across several sentences so the stacked share of the merged body is well above the reconciliation threshold.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nThis side says a great deal about the shared subject, repeating the same claims in its own voice across several sentences so the stacked share of the merged body is well above the reconciliation threshold.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nThis side says a great deal about the shared subject, repeating the same claims in its own voice across several sentences so the stacked share of the merged body is well above the reconciliation threshold.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: notice -- reconciliation failed (the model reply failed validation); kept the stacked body.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 217 unreconciled char(s) (45% of merged body -- bodies were appended, not reconciled)\n  ~ reconcile merged body: one model call rewrites it as a single coherent document (falls back to the stacked form on failure; pass --no-reconcile to skip)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
-  },
-  "merge_same_id": {
     "commits": [
-      "seed fixture documents",
+      "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "merge_same_id": {
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos merge: refusing to merge -- survivor and absorbed concept-ids must be distinct, both resolved to 'concepts/survivor'.\n",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -265,17 +261,17 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: refusing to merge -- survivor and absorbed concept-ids must be distinct, both resolved to 'concepts/survivor'.\n",
-    "stdout": ""
-  },
-  "merge_torn_ledger": {
     "commits": [
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "merge_torn_ledger": {
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos merge: refusing to merge -- 'concepts/survivor''s ledger has a torn write pending (a prior merge crashed mid-commit). Run `openkos doctor` to inspect it; this refusal has no --force override because the marker is trivially repairable and forcing past it would commit a known-inconsistent ledger.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf.pending": "stale pending marker",
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
@@ -284,36 +280,36 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: refusing to merge -- 'concepts/survivor''s ledger has a torn write pending (a prior merge crashed mid-commit). Run `openkos doctor` to inspect it; this refusal has no --force override because the marker is trivially repairable and forcing past it would commit a known-inconsistent ledger.\n",
-    "stdout": ""
+    "commits": [
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "merge_tty_accepted": {
+    "exit_code": 0,
+    "stdout": "\nopenkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nProceed with these changes? [y/N]: y\n\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n",
+    "stderr": "\ropenkos merge: embedding doc 1/2 - <N>s...\ropenkos merge: embedding doc 2/2 - <N>s...\n",
+    "files": {
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
     "commits": [
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 0,
-    "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "\ropenkos merge: embedding doc 1/2 - <N>s...\ropenkos merge: embedding doc 2/2 - <N>s...\n",
-    "stdout": "\nopenkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nProceed with these changes? [y/N]: y\n\nopenkos merge: merged 'concepts/absorbed' into 'concepts/survivor' (index.md, log.md updated).\nopenkos merge: committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+    ]
   },
   "merge_tty_declined": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "\nopenkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nProceed with these changes? [y/N]: n\n",
+    "stderr": "\u001b[31mAborted.\u001b[0m\n",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -321,17 +317,17 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "\u001b[31mAborted.\u001b[0m\n",
-    "stdout": "\nopenkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\nProceed with these changes? [y/N]: n\n"
+    "commits": [
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "merge_unknown_absorbed": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos merge: refusing to merge -- concept 'concepts/ghost' does not exist.\n",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -339,17 +335,17 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: refusing to merge -- concept 'concepts/ghost' does not exist.\n",
-    "stdout": ""
-  },
-  "merge_write_failure": {
     "commits": [
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "merge_write_failure": {
     "exit_code": 1,
+    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\n",
+    "stderr": "openkos merge: failed while writing the merge -- simulated failure writing log.md.\n",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -357,51 +353,49 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos merge: failed while writing the merge -- simulated failure writing log.md.\n",
-    "stdout": "openkos merge: proposed changes:\n  ~ sensitivity: (none) -> private\n  + stack absorbed body: 26 unreconciled char(s) (27% of merged body -- bodies were appended, not reconciled)\n  ~ bundle/concepts/linker.md (rewrite inbound link(s) to survivor)\n  ~ index.md (remove entry)\n  ~ log.md (new dated entry)\n  ~ bundle/concepts/survivor.md (merged content)\n  - bundle/concepts/absorbed.md\n"
-  },
-  "reconcile_drift_after_prompt": {
     "commits": [
       "seed fixture documents",
       "seed fixture documents",
+      "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_drift_after_prompt": {
     "exit_code": 3,
+    "stdout": "\nopenkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n",
+    "stderr": "openkos reconcile: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/beta.md. Nothing was written. Re-run to recompute over the current bundle.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n\nedit\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/beta.md. Nothing was written. Re-run to recompute over the current bundle.\n",
-    "stdout": "\nopenkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n"
-  },
-  "reconcile_drift_unprompted": {
     "commits": [
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_drift_unprompted": {
     "exit_code": 3,
+    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n",
+    "stderr": "openkos reconcile: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/alpha.md. Nothing was written. Re-run to recompute over the current bundle.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n\nedit\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/alpha.md. Nothing was written. Re-run to recompute over the current bundle.\n",
-    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n"
-  },
-  "reconcile_from_findings": {
     "commits": [
-      "openkos: reconcile concepts/alpha <-> concepts/beta",
-      "seed fixture documents",
-      "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_from_findings": {
     "exit_code": 0,
+    "stdout": "openkos reconcile --from-findings: workspace at <ROOT>\n\nconcepts/alpha <-> concepts/beta\n  verdict: contradicts (confidence: 0.90)\n  rationale: they disagree\nReconcile concepts/alpha <-> concepts/beta as symmetric 'reconciled_with'? [y/N]: y\n\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n\nconcepts/gamma <-> concepts/delta\n  verdict: contradicts (confidence: 0.90)\n  rationale: they disagree\nReconcile concepts/gamma <-> concepts/delta as symmetric 'reconciled_with'? [y/N]: n\nNo open revision findings to apply. Findings are recorded by `openkos revisions`.\n\nopenkos reconcile --from-findings: applied 1, skipped 0, declined 1.\n  declined: concepts/gamma <-> concepts/delta\n",
+    "stderr": "\ropenkos reconcile: embedding doc 1/4 - <N>s...\ropenkos reconcile: embedding doc 2/4 - <N>s...\ropenkos reconcile: embedding doc 3/4 - <N>s...\ropenkos reconcile: embedding doc 4/4 - <N>s...\n",
     "files": {
       "bundle/concepts/alpha.md": "---\nrelations:\n- target: concepts/beta\n  type: reconciled_with\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n\nAlpha claims X.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/beta role=reconciled -->\nReconciled with [concepts/beta](/concepts/beta.md) on <DATE> (both coexist).\n",
       "bundle/concepts/beta.md": "---\nrelations:\n- target: concepts/alpha\n  type: reconciled_with\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n\nBeta claims Y.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/alpha role=reconciled -->\nReconciled with [concepts/alpha](/concepts/alpha.md) on <DATE> (both coexist).\n",
@@ -410,270 +404,272 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n* [Gamma](/concepts/gamma.md) - Gamma.\n* [Delta](/concepts/delta.md) - Delta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: Recorded a symmetric 'reconciled_with' between [concepts/alpha](/concepts/alpha.md) and [concepts/beta](/concepts/beta.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "\ropenkos reconcile: embedding doc 1/4 - <N>s...\ropenkos reconcile: embedding doc 2/4 - <N>s...\ropenkos reconcile: embedding doc 3/4 - <N>s...\ropenkos reconcile: embedding doc 4/4 - <N>s...\n",
-    "stdout": "openkos reconcile --from-findings: workspace at <ROOT>\n\nconcepts/alpha <-> concepts/beta\n  verdict: contradicts (confidence: 0.90)\n  rationale: they disagree\nReconcile concepts/alpha <-> concepts/beta as symmetric 'reconciled_with'? [y/N]: y\n\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n\nconcepts/gamma <-> concepts/delta\n  verdict: contradicts (confidence: 0.90)\n  rationale: they disagree\nReconcile concepts/gamma <-> concepts/delta as symmetric 'reconciled_with'? [y/N]: n\nNo open revision findings to apply. Findings are recorded by `openkos revisions`.\n\nopenkos reconcile --from-findings: applied 1, skipped 0, declined 1.\n  declined: concepts/gamma <-> concepts/delta\n"
-  },
-  "reconcile_from_findings_conflict": {
     "commits": [
-      "openkos: reconcile concepts/alpha supersedes concepts/beta",
+      "openkos: reconcile concepts/alpha <-> concepts/beta",
+      "seed fixture documents",
+      "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_from_findings_conflict": {
     "exit_code": 0,
+    "stdout": "openkos reconcile --from-findings: workspace at <ROOT>\n\nconcepts/alpha <-> concepts/beta\n  verdict: contradicts (confidence: 0.90)\n  rationale: they disagree\nReconcile concepts/alpha <-> concepts/beta as symmetric 'reconciled_with'? [y/N]: y\nNo open revision findings to apply. Findings are recorded by `openkos revisions`.\n\nopenkos reconcile --from-findings: applied 0, skipped 1, declined 0.\n",
+    "stderr": "openkos reconcile: failed while preparing the reconcile -- concepts 'concepts/alpha' and 'concepts/beta' are already reconciled as a directional reconciliation ('concepts/alpha' supersedes its counterpart); reconcile will not overwrite an existing resolution. To change it, edit the concepts manually or revert with git, then re-run.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\nrelations:\n- target: concepts/beta\n  type: supersedes\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n\nAlpha claims X.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/beta role=supersedes -->\nSupersedes [concepts/beta](/concepts/beta.md) as of <DATE> (this concept wins).\n",
       "bundle/concepts/beta.md": "---\nrelations: []\nstatus: deprecated\nstatus_derived_from: supersedes\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n\nBeta claims Y.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/alpha role=superseded -->\nSuperseded by [concepts/alpha](/concepts/alpha.md) as of <DATE> (hidden from retrieval).\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: [concepts/alpha](/concepts/alpha.md) supersedes [concepts/beta](/concepts/beta.md) (recorded 'supersedes').\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: failed while preparing the reconcile -- concepts 'concepts/alpha' and 'concepts/beta' are already reconciled as a directional reconciliation ('concepts/alpha' supersedes its counterpart); reconcile will not overwrite an existing resolution. To change it, edit the concepts manually or revert with git, then re-run.\n",
-    "stdout": "openkos reconcile --from-findings: workspace at <ROOT>\n\nconcepts/alpha <-> concepts/beta\n  verdict: contradicts (confidence: 0.90)\n  rationale: they disagree\nReconcile concepts/alpha <-> concepts/beta as symmetric 'reconciled_with'? [y/N]: y\nNo open revision findings to apply. Findings are recorded by `openkos revisions`.\n\nopenkos reconcile --from-findings: applied 0, skipped 1, declined 0.\n"
-  },
-  "reconcile_idempotent_rerun": {
     "commits": [
-      "openkos: reconcile concepts/alpha <-> concepts/beta",
-      "openkos: reconcile concepts/alpha <-> concepts/beta",
+      "openkos: reconcile concepts/alpha supersedes concepts/beta",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_idempotent_rerun": {
     "exit_code": 0,
+    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation unchanged; note already present)\n  ~ bundle/concepts/beta.md (relation unchanged; note already present)\n  ~ log.md (new dated entry)\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n",
+    "stderr": "",
     "files": {
       "bundle/concepts/alpha.md": "---\nrelations:\n- target: concepts/beta\n  type: reconciled_with\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n\nAlpha claims X.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/beta role=reconciled -->\nReconciled with [concepts/beta](/concepts/beta.md) on <DATE> (both coexist).\n",
       "bundle/concepts/beta.md": "---\nrelations:\n- target: concepts/alpha\n  type: reconciled_with\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n\nBeta claims Y.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/alpha role=reconciled -->\nReconciled with [concepts/alpha](/concepts/alpha.md) on <DATE> (both coexist).\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: [concepts/alpha](/concepts/alpha.md) and [concepts/beta](/concepts/beta.md) are already reconciled; no change.\n* **Reconcile**: Recorded a symmetric 'reconciled_with' between [concepts/alpha](/concepts/alpha.md) and [concepts/beta](/concepts/beta.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "",
-    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation unchanged; note already present)\n  ~ bundle/concepts/beta.md (relation unchanged; note already present)\n  ~ log.md (new dated entry)\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n"
-  },
-  "reconcile_mode_switch_refused": {
     "commits": [
+      "openkos: reconcile concepts/alpha <-> concepts/beta",
       "openkos: reconcile concepts/alpha <-> concepts/beta",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_mode_switch_refused": {
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos reconcile: failed while preparing the reconcile -- concepts 'concepts/alpha' and 'concepts/beta' are already reconciled as a symmetric reconciliation ('reconciled_with'); reconcile will not overwrite an existing resolution. To change it, edit the concepts manually or revert with git, then re-run.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\nrelations:\n- target: concepts/beta\n  type: reconciled_with\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n\nAlpha claims X.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/beta role=reconciled -->\nReconciled with [concepts/beta](/concepts/beta.md) on <DATE> (both coexist).\n",
       "bundle/concepts/beta.md": "---\nrelations:\n- target: concepts/alpha\n  type: reconciled_with\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n\nBeta claims Y.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/alpha role=reconciled -->\nReconciled with [concepts/alpha](/concepts/alpha.md) on <DATE> (both coexist).\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: Recorded a symmetric 'reconciled_with' between [concepts/alpha](/concepts/alpha.md) and [concepts/beta](/concepts/beta.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: failed while preparing the reconcile -- concepts 'concepts/alpha' and 'concepts/beta' are already reconciled as a symmetric reconciliation ('reconciled_with'); reconcile will not overwrite an existing resolution. To change it, edit the concepts manually or revert with git, then re-run.\n",
-    "stdout": ""
-  },
-  "reconcile_non_tty": {
     "commits": [
+      "openkos: reconcile concepts/alpha <-> concepts/beta",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_non_tty": {
     "exit_code": 1,
+    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n",
+    "stderr": "openkos reconcile: refusing to write without confirmation -- stdin is not a TTY; re-run with --auto.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: refusing to write without confirmation -- stdin is not a TTY; re-run with --auto.\n",
-    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n"
+    "commits": [
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "reconcile_not_a_workspace": {
     "exit_code": 1,
-    "stderr": "openkos reconcile: refusing to reconcile -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
-    "stdout": ""
+    "stdout": "",
+    "stderr": "openkos reconcile: refusing to reconcile -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n"
   },
   "reconcile_one_id": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos reconcile: refusing to reconcile -- two concept ids are required (or pass --from-findings to walk the persisted open findings).\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: refusing to reconcile -- two concept ids are required (or pass --from-findings to walk the persisted open findings).\n",
-    "stdout": ""
-  },
-  "reconcile_preparation_failure": {
     "commits": [
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_preparation_failure": {
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos reconcile: failed while preparing the reconcile -- while parsing a flow sequence\n  in \"<unicode string>\", line 2, column 7\ndid not find expected ',' or ']'\n  in \"<unicode string>\", line 3, column 1.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
       "bundle/concepts/beta.md": "---\ntype: [unclosed\n---\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: failed while preparing the reconcile -- while parsing a flow sequence\n  in \"<unicode string>\", line 2, column 7\ndid not find expected ',' or ']'\n  in \"<unicode string>\", line 3, column 1.\n",
-    "stdout": ""
-  },
-  "reconcile_revision": {
     "commits": [
-      "openkos: reconcile concepts/beta revises concepts/alpha",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_revision": {
     "exit_code": 0,
+    "stdout": "openkos reconcile: proposed changes:\n  = 'concepts/beta' revises 'concepts/alpha'\n  ~ bundle/concepts/alpha.md (relation unchanged; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nopenkos reconcile: recorded 'concepts/beta' as revising 'concepts/alpha'; both remain current (log.md updated).\n",
+    "stderr": "",
     "files": {
       "bundle/concepts/alpha.md": "---\nrelations: []\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n\nAlpha claims X.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/beta role=revised -->\nRevised by [concepts/beta](/concepts/beta.md) as of <DATE> (refinement; both remain current).\n",
       "bundle/concepts/beta.md": "---\nrelations:\n- target: concepts/alpha\n  type: revises\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n\nBeta claims Y.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/alpha role=revises -->\nRevises [concepts/alpha](/concepts/alpha.md) as of <DATE> (refinement; both remain current).\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: [concepts/beta](/concepts/beta.md) revises [concepts/alpha](/concepts/alpha.md) (recorded 'revises'; both remain current).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "",
-    "stdout": "openkos reconcile: proposed changes:\n  = 'concepts/beta' revises 'concepts/alpha'\n  ~ bundle/concepts/alpha.md (relation unchanged; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nopenkos reconcile: recorded 'concepts/beta' as revising 'concepts/alpha'; both remain current (log.md updated).\n"
+    "commits": [
+      "openkos: reconcile concepts/beta revises concepts/alpha",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "reconcile_same_id": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos reconcile: refusing to reconcile -- id_a and id_b must be distinct, both resolved to 'concepts/alpha'.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: refusing to reconcile -- id_a and id_b must be distinct, both resolved to 'concepts/alpha'.\n",
-    "stdout": ""
+    "commits": [
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "reconcile_symmetric": {
-    "commits": [
-      "openkos: reconcile concepts/alpha <-> concepts/beta",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 0,
+    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n",
+    "stderr": "",
     "files": {
       "bundle/concepts/alpha.md": "---\nrelations:\n- target: concepts/beta\n  type: reconciled_with\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n\nAlpha claims X.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/beta role=reconciled -->\nReconciled with [concepts/beta](/concepts/beta.md) on <DATE> (both coexist).\n",
       "bundle/concepts/beta.md": "---\nrelations:\n- target: concepts/alpha\n  type: reconciled_with\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n\nBeta claims Y.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/alpha role=reconciled -->\nReconciled with [concepts/alpha](/concepts/alpha.md) on <DATE> (both coexist).\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: Recorded a symmetric 'reconciled_with' between [concepts/alpha](/concepts/alpha.md) and [concepts/beta](/concepts/beta.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "",
-    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n"
+    "commits": [
+      "openkos: reconcile concepts/alpha <-> concepts/beta",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "reconcile_tty_accepted": {
-    "commits": [
-      "openkos: reconcile concepts/alpha <-> concepts/beta",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 0,
+    "stdout": "\nopenkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nProceed with these changes? [y/N]: y\n\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n",
+    "stderr": "\ropenkos reconcile: embedding doc 1/2 - <N>s...\ropenkos reconcile: embedding doc 2/2 - <N>s...\n",
     "files": {
       "bundle/concepts/alpha.md": "---\nrelations:\n- target: concepts/beta\n  type: reconciled_with\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n\nAlpha claims X.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/beta role=reconciled -->\nReconciled with [concepts/beta](/concepts/beta.md) on <DATE> (both coexist).\n",
       "bundle/concepts/beta.md": "---\nrelations:\n- target: concepts/alpha\n  type: reconciled_with\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n\nBeta claims Y.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/alpha role=reconciled -->\nReconciled with [concepts/alpha](/concepts/alpha.md) on <DATE> (both coexist).\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: Recorded a symmetric 'reconciled_with' between [concepts/alpha](/concepts/alpha.md) and [concepts/beta](/concepts/beta.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "\ropenkos reconcile: embedding doc 1/2 - <N>s...\ropenkos reconcile: embedding doc 2/2 - <N>s...\n",
-    "stdout": "\nopenkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nProceed with these changes? [y/N]: y\n\nopenkos reconcile: recorded a symmetric reconciliation between 'bundle/concepts/alpha.md' and 'bundle/concepts/beta.md' (log.md updated).\n"
+    "commits": [
+      "openkos: reconcile concepts/alpha <-> concepts/beta",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "reconcile_tty_declined": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "\nopenkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nProceed with these changes? [y/N]: n\n",
+    "stderr": "\u001b[31mAborted.\u001b[0m\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "\u001b[31mAborted.\u001b[0m\n",
-    "stdout": "\nopenkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nProceed with these changes? [y/N]: n\n"
+    "commits": [
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "reconcile_unknown_id": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos reconcile: refusing to reconcile -- concept 'concepts/ghost' does not exist.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: refusing to reconcile -- concept 'concepts/ghost' does not exist.\n",
-    "stdout": ""
+    "commits": [
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "reconcile_unreadable_config": {
-    "commits": [
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos reconcile: failed while preparing the reconcile -- openkos.yaml: invalid YAML -- while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 9:\n    review: [unterminated\n            ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: failed while preparing the reconcile -- openkos.yaml: invalid YAML -- while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 9:\n    review: [unterminated\n            ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^.\n",
-    "stdout": ""
-  },
-  "reconcile_winner": {
     "commits": [
-      "openkos: reconcile concepts/alpha supersedes concepts/beta",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_winner": {
     "exit_code": 0,
+    "stdout": "openkos reconcile: proposed changes:\n  = 'concepts/alpha' supersedes 'concepts/beta'\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation unchanged; note appended; status → deprecated)\n  ~ log.md (new dated entry)\nopenkos reconcile: recorded 'concepts/alpha' as superseding 'concepts/beta'; 'concepts/beta' now lists as deprecated (log.md updated).\n",
+    "stderr": "",
     "files": {
       "bundle/concepts/alpha.md": "---\nrelations:\n- target: concepts/beta\n  type: supersedes\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n\nAlpha claims X.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/beta role=supersedes -->\nSupersedes [concepts/beta](/concepts/beta.md) as of <DATE> (this concept wins).\n",
       "bundle/concepts/beta.md": "---\nrelations: []\nstatus: deprecated\nstatus_derived_from: supersedes\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n\nBeta claims Y.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/alpha role=superseded -->\nSuperseded by [concepts/alpha](/concepts/alpha.md) as of <DATE> (hidden from retrieval).\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: [concepts/alpha](/concepts/alpha.md) supersedes [concepts/beta](/concepts/beta.md) (recorded 'supersedes').\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "",
-    "stdout": "openkos reconcile: proposed changes:\n  = 'concepts/alpha' supersedes 'concepts/beta'\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation unchanged; note appended; status → deprecated)\n  ~ log.md (new dated entry)\nopenkos reconcile: recorded 'concepts/alpha' as superseding 'concepts/beta'; 'concepts/beta' now lists as deprecated (log.md updated).\n"
-  },
-  "reconcile_winner_and_revision": {
     "commits": [
+      "openkos: reconcile concepts/alpha supersedes concepts/beta",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_winner_and_revision": {
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos reconcile: refusing to reconcile -- --winner and --revision are mutually exclusive: a reconciliation is either a reversal (--winner) or a refinement (--revision), never both.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: refusing to reconcile -- --winner and --revision are mutually exclusive: a reconciliation is either a reversal (--winner) or a refinement (--revision), never both.\n",
-    "stdout": ""
-  },
-  "reconcile_winner_outside_pair": {
     "commits": [
       "seed fixture documents",
       "seed fixture documents",
-      "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_winner_outside_pair": {
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos reconcile: refusing to reconcile -- --winner 'concepts/gamma' must resolve to one of the pair ('concepts/alpha', 'concepts/beta'), got 'concepts/gamma'.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\ntype: Concept\ntitle: Alpha\n---\n\n# Alpha\n\nAlpha claims X.\n",
       "bundle/concepts/beta.md": "---\ntype: Concept\ntitle: Beta\n---\n\n# Beta\n\nBeta claims Y.\n",
@@ -681,91 +677,89 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n* [Gamma](/concepts/gamma.md) - Gamma.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: refusing to reconcile -- --winner 'concepts/gamma' must resolve to one of the pair ('concepts/alpha', 'concepts/beta'), got 'concepts/gamma'.\n",
-    "stdout": ""
-  },
-  "reconcile_winner_second": {
     "commits": [
-      "openkos: reconcile concepts/beta supersedes concepts/alpha",
+      "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_winner_second": {
     "exit_code": 0,
+    "stdout": "openkos reconcile: proposed changes:\n  = 'concepts/beta' supersedes 'concepts/alpha'\n  ~ bundle/concepts/alpha.md (relation unchanged; note appended; status → deprecated)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nopenkos reconcile: recorded 'concepts/beta' as superseding 'concepts/alpha'; 'concepts/alpha' now lists as deprecated (log.md updated).\n",
+    "stderr": "",
     "files": {
       "bundle/concepts/alpha.md": "---\nrelations: []\nstatus: deprecated\nstatus_derived_from: supersedes\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n\nAlpha claims X.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/beta role=superseded -->\nSuperseded by [concepts/beta](/concepts/beta.md) as of <DATE> (hidden from retrieval).\n",
       "bundle/concepts/beta.md": "---\nrelations:\n- target: concepts/alpha\n  type: supersedes\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n\nBeta claims Y.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/alpha role=supersedes -->\nSupersedes [concepts/alpha](/concepts/alpha.md) as of <DATE> (this concept wins).\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Reconcile**: [concepts/beta](/concepts/beta.md) supersedes [concepts/alpha](/concepts/alpha.md) (recorded 'supersedes').\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "",
-    "stdout": "openkos reconcile: proposed changes:\n  = 'concepts/beta' supersedes 'concepts/alpha'\n  ~ bundle/concepts/alpha.md (relation unchanged; note appended; status → deprecated)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\nopenkos reconcile: recorded 'concepts/beta' as superseding 'concepts/alpha'; 'concepts/alpha' now lists as deprecated (log.md updated).\n"
-  },
-  "reconcile_write_failure": {
     "commits": [
+      "openkos: reconcile concepts/beta supersedes concepts/alpha",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "reconcile_write_failure": {
     "exit_code": 1,
+    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n",
+    "stderr": "openkos reconcile: failed while writing the reconcile -- simulated failure writing log.md.\n",
     "files": {
       "bundle/concepts/alpha.md": "---\nrelations:\n- target: concepts/beta\n  type: reconciled_with\ntitle: Alpha\ntype: Concept\n---\n\n# Alpha\n\nAlpha claims X.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/beta role=reconciled -->\nReconciled with [concepts/beta](/concepts/beta.md) on <DATE> (both coexist).\n",
       "bundle/concepts/beta.md": "---\nrelations:\n- target: concepts/alpha\n  type: reconciled_with\ntitle: Beta\ntype: Concept\n---\n\n# Beta\n\nBeta claims Y.\n\n## Reconciliation\n<!-- okos:reconcile target=concepts/alpha role=reconciled -->\nReconciled with [concepts/alpha](/concepts/alpha.md) on <DATE> (both coexist).\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Alpha](/concepts/alpha.md) - Alpha.\n* [Beta](/concepts/beta.md) - Beta.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos reconcile: failed while writing the reconcile -- simulated failure writing log.md.\n",
-    "stdout": "openkos reconcile: proposed changes:\n  ~ bundle/concepts/alpha.md (relation added; note appended)\n  ~ bundle/concepts/beta.md (relation added; note appended)\n  ~ log.md (new dated entry)\n"
-  },
-  "unmerge_absorbed_collision": {
     "commits": [
-      "openkos: merge concepts/absorbed into concepts/survivor",
-      "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_absorbed_collision": {
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos unmerge: failed while preparing the unmerge -- cannot restore 'bundle/concepts/absorbed.md' -- a file already exists at that path.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/absorbed.md": "squatter\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos unmerge: failed while preparing the unmerge -- cannot restore 'bundle/concepts/absorbed.md' -- a file already exists at that path.\n",
-    "stdout": ""
-  },
-  "unmerge_absorbed_survivor": {
     "commits": [
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_absorbed_survivor": {
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos unmerge: refusing to unmerge -- concept 'concepts/absorbed' does not exist. It was absorbed into 'concepts/survivor'; run `openkos unmerge concepts/survivor concepts/absorbed` first to restore it.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos unmerge: refusing to unmerge -- concept 'concepts/absorbed' does not exist. It was absorbed into 'concepts/survivor'; run `openkos unmerge concepts/survivor concepts/absorbed` first to restore it.\n",
-    "stdout": ""
-  },
-  "unmerge_auto": {
     "commits": [
-      "openkos: unmerge concepts/absorbed",
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_auto": {
     "exit_code": 0,
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n",
+    "stderr": "",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -773,29 +767,6 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
-  },
-  "unmerge_both_forms": {
-    "commits": [
-      "openkos: merge concepts/absorbed into concepts/survivor",
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 1,
-    "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "openkos unmerge: refusing to unmerge -- supply either an <absorbed-id> argument or --to <absorbed-id>, not both.\n",
-    "stdout": ""
-  },
-  "unmerge_catalog_log_drifted": {
     "commits": [
       "openkos: unmerge concepts/absorbed",
       "openkos: merge concepts/absorbed into concepts/survivor",
@@ -803,8 +774,31 @@
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_both_forms": {
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos unmerge: refusing to unmerge -- supply either an <absorbed-id> argument or --to <absorbed-id>, not both.\n",
+    "files": {
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
+    "commits": [
+      "openkos: merge concepts/absorbed into concepts/survivor",
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
+  },
+  "unmerge_catalog_log_drifted": {
     "exit_code": 0,
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n",
+    "stderr": "",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -812,10 +806,6 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n\nlater log line\n"
     },
-    "stderr": "",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
-  },
-  "unmerge_discard_survivor_edits": {
     "commits": [
       "openkos: unmerge concepts/absorbed",
       "openkos: merge concepts/absorbed into concepts/survivor",
@@ -823,8 +813,12 @@
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_discard_survivor_edits": {
     "exit_code": 0,
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nWarning: 'concepts/survivor''s post-merge edits are being discarded (--discard-survivor-edits) -- it will be restored to its pre-merge state, and anything changed on it since the merge is gone unless you copied it somewhere safe first.\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n",
+    "stderr": "",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -832,57 +826,57 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nWarning: 'concepts/survivor''s post-merge edits are being discarded (--discard-survivor-edits) -- it will be restored to its pre-merge state, and anything changed on it since the merge is gone unless you copied it somewhere safe first.\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
-  },
-  "unmerge_drift_after_prompt": {
     "commits": [
+      "openkos: unmerge concepts/absorbed",
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_drift_after_prompt": {
     "exit_code": 3,
+    "stdout": "\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n",
+    "stderr": "openkos unmerge: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/linker.md. Nothing was written. Copy your edit somewhere safe before re-running: a re-run restores the pre-merge snapshots over index.md, log.md, and the survivor (overwriting the edit), and keeps refusing on an edited rewrite file until that edit is reverted.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n\nedit\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos unmerge: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/linker.md. Nothing was written. Copy your edit somewhere safe before re-running: a re-run restores the pre-merge snapshots over index.md, log.md, and the survivor (overwriting the edit), and keeps refusing on an edited rewrite file until that edit is reverted.\n",
-    "stdout": "\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
-  },
-  "unmerge_drift_unprompted": {
     "commits": [
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_drift_unprompted": {
     "exit_code": 3,
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n",
+    "stderr": "openkos unmerge: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/survivor.md. Nothing was written. Copy your edit somewhere safe before re-running: a re-run restores the pre-merge snapshots over index.md, log.md, and the survivor (overwriting the edit), and keeps refusing on an edited rewrite file until that edit is reverted.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\nedit\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\nedit\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos unmerge: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/survivor.md. Nothing was written. Copy your edit somewhere safe before re-running: a re-run restores the pre-merge snapshots over index.md, log.md, and the survivor (overwriting the edit), and keeps refusing on an edited rewrite file until that edit is reverted.\n",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
-  },
-  "unmerge_legacy_ledger_entry": {
     "commits": [
-      "openkos: unmerge concepts/absorbed",
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_legacy_ledger_entry": {
     "exit_code": 0,
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nWarning: 'concepts/survivor''s merge ledger entry predates the survivor-edit check; cannot confirm its current bytes still match what the merge wrote, proceeding anyway.\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n",
+    "stderr": "",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -890,96 +884,70 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nWarning: 'concepts/survivor''s merge ledger entry predates the survivor-edit check (#1110); cannot confirm its current bytes still match what the merge wrote, proceeding anyway.\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
+    "commits": [
+      "openkos: unmerge concepts/absorbed",
+      "openkos: merge concepts/absorbed into concepts/survivor",
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "unmerge_no_target": {
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos unmerge: refusing to unmerge -- supply an <absorbed-id> argument, or --to <absorbed-id> to unwind a chain.\n",
+    "files": {
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
     "commits": [
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 1,
-    "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "openkos unmerge: refusing to unmerge -- supply an <absorbed-id> argument, or --to <absorbed-id> to unwind a chain.\n",
-    "stdout": ""
+    ]
   },
   "unmerge_non_tty": {
+    "exit_code": 1,
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n",
+    "stderr": "openkos unmerge: refusing to write without confirmation -- stdin is not a TTY; re-run with --auto.\n",
+    "files": {
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
     "commits": [
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 1,
-    "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "openkos unmerge: refusing to write without confirmation -- stdin is not a TTY; re-run with --auto.\n",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
+    ]
   },
   "unmerge_not_a_workspace": {
     "exit_code": 1,
-    "stderr": "openkos unmerge: refusing to unmerge -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n",
-    "stdout": ""
+    "stdout": "",
+    "stderr": "openkos unmerge: refusing to unmerge -- no OpenKOS workspace found in this directory (run 'openkos init' first).\n"
   },
   "unmerge_not_the_tail": {
-    "commits": [
-      "openkos: merge concepts/third into concepts/survivor",
-      "openkos: merge concepts/absorbed into concepts/survivor",
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos unmerge: failed while preparing the unmerge -- 'concepts/absorbed' is not the LIFO tail of 'concepts/survivor''s merged_from ledger; unwinding to it requires reversing, in order: 'concepts/third', 'concepts/absorbed'. Run `openkos unmerge concepts/survivor --to concepts/absorbed` to do this in one command, or unmerge each pair in that order.\n",
     "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\n- absorbed_id: concepts/third\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Third\n\n    ---\n\n\n    # Third\n\n\n    Third body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Third](/concepts/third.md) - Third.\n\n      '\n    preceded_by: '* [Linker](/concepts/linker.md) - Linker.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: private\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    freshness: null\n\n    sensitivity: private\n\n    title: Survivor\n\n    type: Concept\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n\n    ## Merged content (concepts/absorbed)\n\n\n    ### Absorbed\n\n\n    Absorbed body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\n- absorbed_id: concepts/third\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Third\n\n    ---\n\n\n    # Third\n\n\n    Third body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Third](/concepts/third.md) - Third.\n\n      '\n    preceded_by: '* [Linker](/concepts/linker.md) - Linker.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: private\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    freshness: null\n\n    sensitivity: private\n\n    title: Survivor\n\n    type: Concept\n\n    version: 2\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n\n    ## Merged content (concepts/absorbed)\n\n\n    ### Absorbed\n\n\n    Absorbed body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\n## Merged content (concepts/third)\n\n### Third\n\nThird body.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 3\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\n## Merged content (concepts/third)\n\n### Third\n\nThird body.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/third](/concepts/third.md) into [concepts/survivor](/concepts/survivor.md).\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos unmerge: failed while preparing the unmerge -- 'concepts/absorbed' is not the LIFO tail of 'concepts/survivor''s merged_from ledger; unwinding to it requires reversing, in order: 'concepts/third', 'concepts/absorbed'. Run `openkos unmerge concepts/survivor --to concepts/absorbed` to do this in one command, or unmerge each pair in that order.\n",
-    "stdout": ""
-  },
-  "unmerge_survivor_edited": {
     "commits": [
-      "openkos: merge concepts/absorbed into concepts/survivor",
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 1,
-    "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\nlater edit\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "openkos unmerge: failed while preparing the unmerge -- 'bundle/concepts/survivor.md' does not match the bytes this merge wrote to it -- it was edited (by a human, or by another verb such as `repair` or `sync-tags`) after the merge and before this unmerge. Restoring the pre-merge snapshot would silently discard that edit. Copy it somewhere safe, then re-run with --discard-survivor-edits; you can reapply the edit by hand once the unmerge has completed.\n",
-    "stdout": ""
-  },
-  "unmerge_to_chain": {
-    "commits": [
-      "openkos: unmerge concepts/absorbed",
-      "openkos: unmerge concepts/third",
       "openkos: merge concepts/third into concepts/survivor",
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
@@ -987,8 +955,31 @@
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_survivor_edited": {
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos unmerge: failed while preparing the unmerge -- 'bundle/concepts/survivor.md' does not match the bytes this merge wrote to it -- it was edited (by a human, or by another verb such as `repair` or `sync-tags`) after the merge and before this unmerge. Restoring the pre-merge snapshot would silently discard that edit. Copy it somewhere safe, then re-run with --discard-survivor-edits; you can reapply the edit by hand once the unmerge has completed.\n",
+    "files": {
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\nlater edit\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
+    "commits": [
+      "openkos: merge concepts/absorbed into concepts/survivor",
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
+  },
+  "unmerge_to_chain": {
     "exit_code": 0,
+    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nopenkos unmerge: restored 'concepts/third' from 'concepts/survivor' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n",
+    "stderr": "",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -997,32 +988,8 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n* [Third](/concepts/third.md) - Third.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Unmerge**: Restored [concepts/third](/concepts/third.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "",
-    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nopenkos unmerge: restored 'concepts/third' from 'concepts/survivor' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
-  },
-  "unmerge_to_chain_non_tty": {
     "commits": [
-      "openkos: merge concepts/third into concepts/survivor",
-      "openkos: merge concepts/absorbed into concepts/survivor",
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 1,
-    "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\n- absorbed_id: concepts/third\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Third\n\n    ---\n\n\n    # Third\n\n\n    Third body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Third](/concepts/third.md) - Third.\n\n      '\n    preceded_by: '* [Linker](/concepts/linker.md) - Linker.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: private\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    freshness: null\n\n    sensitivity: private\n\n    title: Survivor\n\n    type: Concept\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n\n    ## Merged content (concepts/absorbed)\n\n\n    ### Absorbed\n\n\n    Absorbed body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\n## Merged content (concepts/third)\n\n### Third\n\nThird body.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/third](/concepts/third.md) into [concepts/survivor](/concepts/survivor.md).\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "openkos unmerge: refusing to write without confirmation -- stdin is not a TTY; re-run with --auto.\n",
-    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
-  },
-  "unmerge_to_chain_step_failure": {
-    "commits": [
+      "openkos: unmerge concepts/absorbed",
       "openkos: unmerge concepts/third",
       "openkos: merge concepts/third into concepts/survivor",
       "openkos: merge concepts/absorbed into concepts/survivor",
@@ -1031,20 +998,64 @@
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_to_chain_non_tty": {
     "exit_code": 1,
+    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n",
+    "stderr": "openkos unmerge: refusing to write without confirmation -- stdin is not a TTY; re-run with --auto.\n",
+    "files": {
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\n- absorbed_id: concepts/third\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Third\n\n    ---\n\n\n    # Third\n\n\n    Third body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Third](/concepts/third.md) - Third.\n\n      '\n    preceded_by: '* [Linker](/concepts/linker.md) - Linker.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: private\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    freshness: null\n\n    sensitivity: private\n\n    title: Survivor\n\n    type: Concept\n\n    version: 2\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n\n    ## Merged content (concepts/absorbed)\n\n\n    ### Absorbed\n\n\n    Absorbed body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 3\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\n## Merged content (concepts/third)\n\n### Third\n\nThird body.\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/third](/concepts/third.md) into [concepts/survivor](/concepts/survivor.md).\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
+    "commits": [
+      "openkos: merge concepts/third into concepts/survivor",
+      "openkos: merge concepts/absorbed into concepts/survivor",
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
+  },
+  "unmerge_to_chain_step_failure": {
+    "exit_code": 1,
+    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nopenkos unmerge: restored 'concepts/third' from 'concepts/survivor' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n",
+    "stderr": "openkos unmerge: failed while writing the unmerge -- simulated failure mid-chain.\nopenkos unmerge: --to unwind stopped at step 2 of 2 (restore 'concepts/absorbed') -- steps 1..1 completed and left a consistent bundle (git-recoverable); completed steps are not rolled back.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/third.md": "---\ntype: Concept\ntitle: Third\n---\n\n# Third\n\nThird body.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n* [Third](/concepts/third.md) - Third.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/third](/concepts/third.md) from [concepts/survivor](/concepts/survivor.md).\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos unmerge: failed while writing the unmerge -- simulated failure mid-chain.\nopenkos unmerge: --to unwind stopped at step 2 of 2 (restore 'concepts/absorbed') -- steps 1..1 completed and left a consistent bundle (git-recoverable); completed steps are not rolled back.\n",
-    "stdout": "openkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nopenkos unmerge: restored 'concepts/third' from 'concepts/survivor' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
+    "commits": [
+      "openkos: unmerge concepts/third",
+      "openkos: merge concepts/third into concepts/survivor",
+      "openkos: merge concepts/absorbed into concepts/survivor",
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   },
   "unmerge_to_chain_tty": {
+    "exit_code": 0,
+    "stdout": "\nopenkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: y\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\n\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\n\nopenkos unmerge: restored 'concepts/third' from 'concepts/survivor' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\n\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n",
+    "stderr": "\ropenkos unmerge: embedding doc 1/4 - <N>s...\ropenkos unmerge: embedding doc 2/4 - <N>s...\ropenkos unmerge: embedding doc 3/4 - <N>s...\ropenkos unmerge: embedding doc 4/4 - <N>s...\n",
+    "files": {
+      "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
+      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
+      "bundle/concepts/survivor.md": "---\ntype: Concept\ntitle: Survivor\n---\n\n# Survivor\n\nSurvivor body.\n",
+      "bundle/concepts/third.md": "---\ntype: Concept\ntitle: Third\n---\n\n# Third\n\nThird body.\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n* [Third](/concepts/third.md) - Third.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Unmerge**: Restored [concepts/third](/concepts/third.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
     "commits": [
       "openkos: unmerge concepts/absorbed",
       "openkos: unmerge concepts/third",
@@ -1055,20 +1066,19 @@
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 0,
-    "files": {
-      "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
-      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\ntype: Concept\ntitle: Survivor\n---\n\n# Survivor\n\nSurvivor body.\n",
-      "bundle/concepts/third.md": "---\ntype: Concept\ntitle: Third\n---\n\n# Third\n\nThird body.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n* [Third](/concepts/third.md) - Third.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Unmerge**: Restored [concepts/third](/concepts/third.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "\ropenkos unmerge: embedding doc 1/4 - <N>s...\ropenkos unmerge: embedding doc 2/4 - <N>s...\ropenkos unmerge: embedding doc 3/4 - <N>s...\ropenkos unmerge: embedding doc 4/4 - <N>s...\n",
-    "stdout": "\nopenkos unmerge: unwind plan for 'concepts/survivor' -- 2 steps, newest merge first:\nstep 1: restore 'concepts/third'\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\nstep 2: restore 'concepts/absorbed'\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: y\nopenkos unmerge: step 1 of 2 -- restoring 'concepts/third'\n\nopenkos unmerge: proposed changes:\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/third.md (restore)\n\nopenkos unmerge: restored 'concepts/third' from 'concepts/survivor' (index.md, log.md updated).\nopenkos unmerge: step 2 of 2 -- restoring 'concepts/absorbed'\n\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
+    ]
   },
   "unmerge_to_unknown": {
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos unmerge: failed while preparing the unmerge -- 'concepts/ghost' was never merged into 'concepts/survivor' -- no matching entry in its merged_from ledger; unmerge refused.\n",
+    "files": {
+      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\n- absorbed_id: concepts/third\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Third\n\n    ---\n\n\n    # Third\n\n\n    Third body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Third](/concepts/third.md) - Third.\n\n      '\n    preceded_by: '* [Linker](/concepts/linker.md) - Linker.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: private\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    freshness: null\n\n    sensitivity: private\n\n    title: Survivor\n\n    type: Concept\n\n    version: 2\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n\n    ## Merged content (concepts/absorbed)\n\n\n    ### Absorbed\n\n\n    Absorbed body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
+      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 3\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\n## Merged content (concepts/third)\n\n### Third\n\nThird body.\n",
+      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
+      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/third](/concepts/third.md) into [concepts/survivor](/concepts/survivor.md).\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
+    },
     "commits": [
       "openkos: merge concepts/third into concepts/survivor",
       "openkos: merge concepts/absorbed into concepts/survivor",
@@ -1077,48 +1087,32 @@
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
-    "exit_code": 1,
-    "files": {
-      "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\n- absorbed_id: concepts/third\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Third\n\n    ---\n\n\n    # Third\n\n\n    Third body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Third](/concepts/third.md) - Third.\n\n      '\n    preceded_by: '* [Linker](/concepts/linker.md) - Linker.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites: []\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: private\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    freshness: null\n\n    sensitivity: private\n\n    title: Survivor\n\n    type: Concept\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n\n    ## Merged content (concepts/absorbed)\n\n\n    ### Absorbed\n\n\n    Absorbed body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
-      "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n\n## Merged content (concepts/third)\n\n### Third\n\nThird body.\n",
-      "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
-      "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/third](/concepts/third.md) into [concepts/survivor](/concepts/survivor.md).\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
-    },
-    "stderr": "openkos unmerge: failed while preparing the unmerge -- 'concepts/ghost' was never merged into 'concepts/survivor' -- no matching entry in its merged_from ledger; unmerge refused.\n",
-    "stdout": ""
+    ]
   },
   "unmerge_torn_ledger": {
-    "commits": [
-      "openkos: merge concepts/absorbed into concepts/survivor",
-      "seed fixture documents",
-      "seed fixture documents",
-      "seed fixture documents",
-      "chore(openkos): initialize workspace"
-    ],
     "exit_code": 1,
+    "stdout": "",
+    "stderr": "openkos unmerge: refusing to unmerge -- 'concepts/survivor''s ledger has a torn write pending (a prior merge crashed mid-commit). Run `openkos doctor` to inspect it; this refusal has no --force override because the marker is trivially repairable and forcing past it would commit a known-inconsistent ledger.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/.state/ledger/concepts/survivor.ledger.okf.pending": "stale pending marker",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos unmerge: refusing to unmerge -- 'concepts/survivor''s ledger has a torn write pending (a prior merge crashed mid-commit). Run `openkos doctor` to inspect it; this refusal has no --force override because the marker is trivially repairable and forcing past it would commit a known-inconsistent ledger.\n",
-    "stdout": ""
-  },
-  "unmerge_tty_accepted": {
     "commits": [
-      "openkos: unmerge concepts/absorbed",
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_tty_accepted": {
     "exit_code": 0,
+    "stdout": "\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: y\n\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n",
+    "stderr": "\ropenkos unmerge: embedding doc 1/3 - <N>s...\ropenkos unmerge: embedding doc 2/3 - <N>s...\ropenkos unmerge: embedding doc 3/3 - <N>s...\n",
     "files": {
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/absorbed.md) for detail.\n",
@@ -1126,37 +1120,38 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Unmerge**: Restored [concepts/absorbed](/concepts/absorbed.md) from [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "\ropenkos unmerge: embedding doc 1/3 - <N>s...\ropenkos unmerge: embedding doc 2/3 - <N>s...\ropenkos unmerge: embedding doc 3/3 - <N>s...\n",
-    "stdout": "\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: y\n\nopenkos unmerge: restored 'concepts/absorbed' from 'concepts/survivor' (index.md, log.md updated).\n"
-  },
-  "unmerge_tty_declined": {
     "commits": [
+      "openkos: unmerge concepts/absorbed",
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_tty_declined": {
     "exit_code": 1,
+    "stdout": "\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: n\n",
+    "stderr": "\u001b[31mAborted.\u001b[0m\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/linker.md": "---\ntype: Concept\ntitle: Linker\n---\n\n# Linker\n\nSee [Absorbed](/concepts/survivor.md) for detail.\n",
-      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
+      "bundle/concepts/survivor.md": "---\nfreshness: null\nsensitivity: private\ntitle: Survivor\ntype: Concept\nversion: 2\n---\n\n# Survivor\n\nSurvivor body.\n\n## Merged content (concepts/absorbed)\n\n### Absorbed\n\nAbsorbed body.\n",
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Merge**: Merged [concepts/absorbed](/concepts/absorbed.md) into [concepts/survivor](/concepts/survivor.md).\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "\u001b[31mAborted.\u001b[0m\n",
-    "stdout": "\nopenkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\nProceed with these changes? [y/N]: n\n"
-  },
-  "unmerge_write_failure": {
     "commits": [
       "openkos: merge concepts/absorbed into concepts/survivor",
       "seed fixture documents",
       "seed fixture documents",
       "seed fixture documents",
       "chore(openkos): initialize workspace"
-    ],
+    ]
+  },
+  "unmerge_write_failure": {
     "exit_code": 1,
+    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n",
+    "stderr": "openkos unmerge: failed while writing the unmerge -- simulated failure on the audit-line write.\n",
     "files": {
       "bundle/.state/ledger/concepts/survivor.ledger.okf": "---\nexpected_survivor_sha256: <SHA256>\nmerged_from:\n- absorbed_id: concepts/absorbed\n  absorbed_snapshot: '---\n\n    type: Concept\n\n    title: Absorbed\n\n    ---\n\n\n    # Absorbed\n\n\n    Absorbed body.\n\n    '\n  carried_content_ids: []\n  index_restores:\n  - blank_gap: 0\n    line: '* [Absorbed](/concepts/absorbed.md) - Absorbed.\n\n      '\n    preceded_by: '* [Survivor](/concepts/survivor.md) - Survivor.\n\n      '\n    preceded_by_occurrence: 0\n  link_rewrites:\n  - file: concepts/linker.md\n    new_link: /concepts/survivor.md\n    offset: 62\n    old_link: /concepts/absorbed.md\n  merged_at: '<TS>'\n  provenance_rewrites: []\n  relation_rewrites: []\n  schema: openkos.merge_ledger/v5\n  sensitivity_after: private\n  sensitivity_before: ''\n  survivor_after_sha256: <SHA256>\n  survivor_before: '---\n\n    type: Concept\n\n    title: Survivor\n\n    ---\n\n\n    # Survivor\n\n\n    Survivor body.\n\n    '\nschema: openkos.merge_ledger_sidecar/v1\nsurvivor_id: concepts/survivor\n---\n",
       "bundle/concepts/absorbed.md": "---\ntype: Concept\ntitle: Absorbed\n---\n\n# Absorbed\n\nAbsorbed body.\n",
@@ -1165,7 +1160,12 @@
       "bundle/index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Survivor](/concepts/survivor.md) - Survivor.\n* [Absorbed](/concepts/absorbed.md) - Absorbed.\n* [Linker](/concepts/linker.md) - Linker.\n",
       "bundle/log.md": "# Directory Update Log\n\n## <DATE>\n\n* **Initialization**: Created the bundle structure and the root [index](/index.md).\n"
     },
-    "stderr": "openkos unmerge: failed while writing the unmerge -- simulated failure on the audit-line write.\n",
-    "stdout": "openkos unmerge: proposed changes:\n  ~ bundle/concepts/linker.md (reverse inbound link rewrite)\n  ~ index.md (restore this merge's catalog entry)\n  ~ log.md (remove this merge's entry, append unmerge)\n  ~ bundle/concepts/survivor.md (restore pre-merge contents)\n  + bundle/concepts/absorbed.md (restore)\n"
+    "commits": [
+      "openkos: merge concepts/absorbed into concepts/survivor",
+      "seed fixture documents",
+      "seed fixture documents",
+      "seed fixture documents",
+      "chore(openkos): initialize workspace"
+    ]
   }
 }

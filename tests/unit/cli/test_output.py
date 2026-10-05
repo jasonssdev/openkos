@@ -123,3 +123,24 @@ def test_wrapped_is_unchanged_off_a_tty_and_wrapped_on_one(
     assert all(len(line) <= 40 for line in lines)
     assert all(line.startswith("    ") for line in lines[1:])
     assert lines[0].startswith("  rationale: ")
+
+
+def test_notice_closes_an_open_counter_line_first_on_a_terminal(
+    streams: Callable[..., tuple[_Stream, _Stream]],
+) -> None:
+    """A notice printed while the in-place counter line is unterminated must
+    start on its own line (#1267); off a terminal nothing is added."""
+    _, err = streams(out_tty=False, err_tty=True)
+    err.write("\rcounter 1/3...")
+    output.mark_in_place_line(True)
+
+    output.notice("openkos ingest: heads up", kind="note", verb="ingest")
+
+    assert err.getvalue().startswith("\rcounter 1/3...\nnote: heads up")
+
+    _, piped = streams(out_tty=False, err_tty=False)
+    output.mark_in_place_line(True)
+
+    output.notice("openkos ingest: heads up", kind="note", verb="ingest")
+
+    assert piped.getvalue() == "openkos ingest: heads up\n"

@@ -75,7 +75,7 @@ sources:     # generated projection of `provenance` (see Provenance)
 OpenKOS then adds a small recommended set for engine features:
 
 ```yaml
-version:     # monotonic revision counter
+version:     # monotonic revision counter (+1 each time the object is revised: an ingest attach or a merge)
 freshness:   # timeless | snapshot | pointer  (see Freshness)
 sensitivity: # public | private | confidential  (see Sensitivity; default private)
 provenance:  # list of source references this object was derived from

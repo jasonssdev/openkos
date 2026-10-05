@@ -2123,3 +2123,22 @@ def test_canonicalize_concept_id_still_accepts_a_plain_posix_id() -> None:
         lifecycle_service.canonicalize_concept_id("concepts/stoicism.md")
         == "concepts/stoicism"
     )
+
+
+@pytest.mark.parametrize(
+    ("members", "expected"),
+    [
+        (("events/afg-eval", "events/afg-eval-2"), True),
+        (("events/afg-eval-2", "events/afg-eval"), True),
+        (("events/afg-eval", "events/afg-eval-12"), True),
+        (("events/afg-eval", "events/afg-review"), False),
+        (("events/afg-eval-2", "events/afg-eval-3"), False),
+        (("events/afg-eval", "events/afg-eval-1"), False),
+        (("events/afg-eval", "events/afg-eval-2a"), False),
+        (("events/afg-eval", "events/afg-eval-2", "events/afg-eval-3"), False),
+    ],
+)
+def test_is_ingest_copy_pair(members: tuple[str, ...], expected: bool) -> None:
+    """Only an original and its ingest `-N` copy (N >= 2) is the pair for
+    which "members share no source" is true by construction (#1267)."""
+    assert lifecycle_service.is_ingest_copy_pair(members) is expected

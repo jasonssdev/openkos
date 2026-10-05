@@ -13,7 +13,7 @@ This spec does not define: `lint`'s two freshness checks, stale-stamp and
 orphan-page detection, which `lint` owns and `status` never reports (the
 `lint` findings `status` does fold in are the ones its own `MUST fold`
 requirements below name — dangling-reference, `unextracted`, `unjudged`,
-`below-source-sensitivity`, `multi-source-uncovered` and
+`unevidenced` (as a count, below), `below-source-sensitivity`, `multi-source-uncovered` and
 `unbacked-provenance` — and those requirements, not this list, are
 authoritative); `--json` or any structured output; non-zero exit on findings
 or CI-gate behavior (findings are informational only).
@@ -323,6 +323,23 @@ walk — and `status` remains read-only, exiting 0 regardless of findings.
 - WHEN `openkos status` runs
 - THEN the retry command for that Source is listed under "needs attention",
   and the command still exits 0
+
+### Requirement: Needs-Attention Summarizes Unevidenced Sources As A Count
+
+`openkos status` MUST fold `lint`'s `unevidenced` findings into its "needs
+attention" section as ONE line carrying the number of affected Sources and
+naming `openkos lint` as the command that lists them. It MUST NOT repeat the
+per-Source finding detail, which `lint` owns. The count MUST come from the
+SAME in-memory `docs` list `status` already reads, and the line MUST NOT
+cause a non-zero exit.
+
+#### Scenario: Many unevidenced Sources are one line
+
+- GIVEN two Sources whose `extraction_notice` carries
+  `objects-without-evidence`
+- WHEN `openkos status` runs
+- THEN "needs attention" holds one line stating `2 Sources` and pointing at
+  `openkos lint`, no per-Source sentence is printed, and the command exits 0
 
 ### Requirement: Needs-Attention Surfaces Below-Source Sensitivity And Uncovered Multi-Source Descendants
 

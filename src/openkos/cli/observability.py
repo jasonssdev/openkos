@@ -78,6 +78,7 @@ from pathlib import Path
 
 import typer
 
+from openkos.cli import output
 from openkos.model import okf
 
 _INCOMPLETE_INPUTS_WARNING = (
@@ -264,6 +265,9 @@ def progress_callback(
         terminator = "\n" if index == total else ""
         sys.stderr.write(f"\r{padded}{terminator}")
         sys.stderr.flush()
+        # Until the final item the line stays open, so anything else printed
+        # to stderr meanwhile must close it first (`output.end_in_place_line`).
+        output.mark_in_place_line(index != total)
 
     return _callback
 
@@ -317,4 +321,5 @@ def stage_notice(verb: str, message: str) -> None:
     """
     if not sys.stderr.isatty():
         return
+    output.end_in_place_line()
     typer.echo(f"openkos {verb}: {message}", err=True)

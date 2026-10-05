@@ -2766,6 +2766,17 @@ def _demote_absorbed_headings(absorbed_body: str) -> str:
     return "\n".join(out)
 
 
+def _next_version(metadata: dict[str, object]) -> int:
+    """The revision counter after one more revision of the document whose
+    frontmatter is `metadata`: its `version` plus one, a missing or
+    non-integer value (a bool included) counting as 1. The one rule `merge`
+    and an ingest attach share, so a merged-then-attached concept counts on
+    from the merged value."""
+    prior = metadata.get("version")
+    base = prior if isinstance(prior, int) and not isinstance(prior, bool) else 1
+    return base + 1
+
+
 def _union_frontmatter(
     survivor_metadata: dict[str, object],
     absorbed_metadata: dict[str, object],
@@ -2930,6 +2941,10 @@ def build_merged_document(
     headings, are otherwise stacked verbatim.
     """
     merged = _union_frontmatter(survivor_metadata, absorbed_metadata)
+    # A merge revises the survivor: one more revision of ITS counter, never
+    # the absorbed side's value. `unmerge` restores the ledger's verbatim
+    # pre-merge bytes, so the previous value comes back with them.
+    merged["version"] = _next_version(survivor_metadata)
 
     merged_relations, _dropped_self_loops, _deduped_collisions = merge_relations(
         decode_relations(survivor_metadata),
@@ -2998,9 +3013,7 @@ def build_attached_document(
     no section, while provenance, the Related bullet and `version` still
     update because the Source did support the concept. No model is called."""
     metadata = _union_frontmatter(existing_metadata, candidate_metadata)
-    prior = existing_metadata.get("version")
-    base = prior if isinstance(prior, int) and not isinstance(prior, bool) else 1
-    metadata["version"] = base + 1
+    metadata["version"] = _next_version(existing_metadata)
 
     body = existing_body.rstrip("\n")
     lines = body.split("\n")

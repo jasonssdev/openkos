@@ -70,7 +70,9 @@ is not an error. The three causes MUST render distinct, actionable
 stdout text: `"zero_hits"` states nothing matched; `"all_unreadable"`
 states matches were found but unreadable and points at possible bundle
 corruption (e.g., suggesting `openkos lint`); `"empty_query"` prompts
-the user to provide a question.
+the user to provide a question. A message that states how many concepts
+were found MUST use the fused count the stderr retrieval summary reports
+for the same run, so the two lines never disagree.
 
 #### Scenario: Zero matching concepts
 - GIVEN `no_match_cause` is `"zero_hits"`

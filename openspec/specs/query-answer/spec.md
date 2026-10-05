@@ -269,7 +269,10 @@ WHEN `sufficiency_check` is enabled, `answer` MUST ask one model call, over
 the SAME assembled context and question string synthesis would receive,
 whether the context contains an answer — and MUST return
 `no_match_cause == "insufficient_context"` with empty `citations` and
-`llm_invoked` `False`, WITHOUT calling synthesis, when it does not.
+`llm_invoked` `False`, WITHOUT calling synthesis, when it does not. The
+returned `answer` text MUST NOT claim that no concepts matched, since
+concepts were retrieved and read; it states that matching concepts were found
+but none answers the question, distinct from the zero-hit no-match text.
 
 The check MUST be evidence-first: it asks for the sentence that answers and
 treats a refusal sentinel as the negative, rather than asking for a verdict.

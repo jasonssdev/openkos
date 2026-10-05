@@ -2079,7 +2079,7 @@ def _render_adjudicate_report(
                 bundle_dir, group.member_ids
             )
         ):
-            typer.echo(_CROSS_SOURCE_REPORT_NOTE)
+            typer.echo(_cross_source_report_note(group.member_ids))
         # #904: the other risky class, named in the same read-only slot and
         # independently of the one above -- a pair can be BOTH (different
         # types AND disjoint provenance), and each note answers a different
@@ -2186,6 +2186,32 @@ _CROSS_SOURCE_WALK_NOTE = (
 """The per-item walks' #776 warning, rendered BEFORE the [y/N] prompt --
 ONE constant shared by `adjudicate --apply` and `curate`'s Identity stage
 so the two surfaces cannot drift apart."""
+
+
+_CROSS_SOURCE_COPY_REPORT_NOTE = (
+    "  note: cross-source -- one is the ingest `-N` copy of the other, made "
+    "from a different source; review before merging"
+)
+_CROSS_SOURCE_COPY_WALK_NOTE = (
+    "  note: cross-source SAME -- one is the ingest `-N` copy made when this "
+    "name was already taken, from a different source; the two may still be "
+    "distinct real-world items"
+)
+"""The same two notes for a pair that is an original and its ingest `-N` copy,
+where "members share no source" is true by construction. Still a warning:
+the name collision does not prove the two are one thing."""
+
+
+def _cross_source_report_note(member_ids: Sequence[str]) -> str:
+    if application_lifecycle.is_ingest_copy_pair(member_ids):
+        return _CROSS_SOURCE_COPY_REPORT_NOTE
+    return _CROSS_SOURCE_REPORT_NOTE
+
+
+def _cross_source_walk_note(member_ids: Sequence[str]) -> str:
+    if application_lifecycle.is_ingest_copy_pair(member_ids):
+        return _CROSS_SOURCE_COPY_WALK_NOTE
+    return _CROSS_SOURCE_WALK_NOTE
 
 
 def _cross_type_report_note(reason: str) -> str:
@@ -2312,11 +2338,17 @@ def _format_merge_preview_line(
     exactly as the thresholds decided, never a pass it was not asked for."""
     stacked_note = ""
     guardrail_note = ""
+    reconcile_planned = application_lifecycle.reconcile_planned(
+        prepared, no_reconcile=no_reconcile, reconcile=reconcile
+    )
     if prepared.stacked_body is not None:
-        stacked_note = (
-            f", stacks {prepared.stacked_body.absorbed_chars} unreconciled "
-            f"body char(s) ({prepared.stacked_body.share:.0%} of merged body)"
-        )
+        # A planned pass is the body's one previewed outcome; the stacked
+        # form is only its fallback, so the clause would contradict the note.
+        if not reconcile_planned:
+            stacked_note = (
+                f", stacks {prepared.stacked_body.absorbed_chars} unreconciled "
+                f"body char(s) ({prepared.stacked_body.share:.0%} of merged body)"
+            )
         # Issue #559: a merge whose result would be dominated by the
         # absorbed side is the measured signature of merging a document
         # ABOUT the survivor rather than a second description of it. The
@@ -2331,9 +2363,7 @@ def _format_merge_preview_line(
                 "object. Verify before accepting."
             )
     reconcile_note = ""
-    if application_lifecycle.reconcile_planned(
-        prepared, no_reconcile=no_reconcile, reconcile=reconcile
-    ):
+    if reconcile_planned:
         reconcile_note = f"\n  ~ {_RECONCILE_PLAN_NOTE}"
     return (
         f"  merge {prepared.absorbed_canonical} into {prepared.survivor_canonical} "
@@ -2504,7 +2534,7 @@ def _run_adjudicate_apply(
             # #776: the interactive walk keeps the pair -- the operator
             # consents per item -- but the risky class is named BEFORE the
             # prompt, not discovered in the wreckage afterwards.
-            typer.echo(_CROSS_SOURCE_WALK_NOTE)
+            typer.echo(_cross_source_walk_note(group.member_ids))
         # #904: same slot, same reasoning, independent class. Ordered from
         # `prepared`, not from raw `member_ids`: the survivor line printed
         # directly above names one direction, and the note must not name
@@ -4317,7 +4347,7 @@ def _echo_type_floor_summary(
         typer.echo(
             "openkos ingest: confidential objects are excluded from query, "
             "contradictions, and suggest-relations against a non-local "
-            "backend (#569).",
+            "backend.",
             err=True,
         )
 
@@ -4872,7 +4902,7 @@ def ingest(
         "--re-extract",
         help=(
             "Run extraction again on an unchanged, already-extracted source "
-            "(a byte-identical re-ingest skips it by default, #773)."
+            "(a byte-identical re-ingest skips it by default)."
         ),
     ),
     event_date: str | None = typer.Option(
@@ -5281,7 +5311,7 @@ def forget(
             "a single-concept forget. 'source' expands the purge set "
             "to <concept_id> plus every concept whose ENTIRE `provenance` "
             "resolves back to it -- the orphan-after-delete closure "
-            "computed by `bundle.provenance.find_provenance_descendants`; "
+            "computed from each concept's `provenance`; "
             "a concept with ANY surviving provenance entry outside the "
             "purge set is preserved untouched."
         ),
@@ -6133,7 +6163,7 @@ def purge(
             "purge set to <concept_id> plus every concept whose ENTIRE "
             "`provenance` resolves back to it -- the SAME orphan-after-delete "
             "closure `forget --scope source` uses "
-            "(`bundle.provenance.find_provenance_descendants`)."
+            "computed from each concept's `provenance`)."
         ),
     ),
     force: bool = typer.Option(
@@ -8793,15 +8823,19 @@ class _CliMergeObserver(merge_service.MergeObserver):
         absorbed_canonical = prepared.absorbed_canonical
         output.section_break()
         typer.echo("openkos merge: proposed changes:")
-        typer.echo(
-            f"  ~ sensitivity: {prepared.sensitivity_before} -> "
-            f"{prepared.sensitivity_after}"
-        )
+        if prepared.sensitivity_before != prepared.sensitivity_after:
+            typer.echo(
+                f"  ~ sensitivity: {prepared.sensitivity_before} -> "
+                f"{prepared.sensitivity_after}"
+            )
         for relation in prepared.dropped_self_loops:
             typer.echo(f"  - drop self-loop: {relation.target} ({relation.type})")
         for relation in prepared.deduped_collisions:
             typer.echo(f"  ~ dedupe collision: {relation.target} ({relation.type})")
-        if prepared.stacked_body is not None:
+        # A planned reconcile pass is the body's one previewed outcome: the
+        # stacked form is only its fallback, which `_RECONCILE_PLAN_NOTE`
+        # already names, so describing both would contradict each other.
+        if prepared.stacked_body is not None and not preview.reconcile_planned:
             typer.echo(
                 f"  + stack absorbed body: {prepared.stacked_body.absorbed_chars} "
                 f"unreconciled char(s) ({prepared.stacked_body.share:.0%} of "
@@ -8831,7 +8865,9 @@ class _CliMergeObserver(merge_service.MergeObserver):
         # the tool recommends stayed open. Printed after the plan and before
         # the gate, so it is the last thing read before consenting.
         if preview.cross_source_same_pair:
-            typer.echo(_CROSS_SOURCE_WALK_NOTE)
+            typer.echo(
+                _cross_source_walk_note((survivor_canonical, absorbed_canonical))
+            )
         # #904 inherits #796's lesson verbatim: `merge` is the command the
         # cross-type skip message itself prints, so guarding only the batch
         # would send the operator through an unguarded door with the exact
@@ -8887,7 +8923,7 @@ def merge(
         False,
         "--no-reconcile",
         help=(
-            "Skip the reconciliation pass (#645): keep the merged body as "
+            "Skip the reconciliation pass: keep the merged body as "
             "the survivor's text with the absorbed text appended under a "
             "'## Merged content' heading, with no model call."
         ),
@@ -8896,7 +8932,7 @@ def merge(
         False,
         "--reconcile",
         help=(
-            "Force the reconciliation pass (#645) even below the share "
+            "Force the reconciliation pass even below the share "
             "and merged-length thresholds that decide it by default. "
             "Refused together with --no-reconcile."
         ),
@@ -8905,7 +8941,7 @@ def merge(
         False,
         "--include-cross-type",
         help=(
-            "Merge two concepts that declare different OKF types (#1258) "
+            "Merge two concepts that declare different OKF types "
             "-- refused by default because it absorbs one kind of thing "
             "into another."
         ),
@@ -9119,7 +9155,7 @@ class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
         if prepared.survivor_drift_unverifiable:
             output.echo_wrapped(
                 f"Warning: {survivor_canonical!r}'s merge ledger entry predates "
-                "the survivor-edit check (#1110); cannot confirm its current "
+                "the survivor-edit check; cannot confirm its current "
                 "bytes still match what the merge wrote, proceeding anyway.",
                 hanging="  ",
             )
@@ -9220,7 +9256,7 @@ def unmerge(
         False,
         "--discard-survivor-edits",
         help=(
-            "Bypass the survivor-edit refusal (#1110): proceed even though "
+            "Bypass the survivor-edit refusal: proceed even though "
             "the survivor's current bytes no longer match what the merge "
             "wrote, discarding that edit. Independent of --auto -- it never "
             "skips the confirmation prompt or any OTHER refusal (the "
@@ -9426,12 +9462,12 @@ def reconcile(
         "--from-findings",
         help="Walk the persisted open contradiction findings with a per-item "
         "[y/N] consent prompt, writing each accepted pair's symmetric "
-        "reconciliation through the same write path -- no ids to transcribe "
-        "(#567). Also walks fresh, actionable revision findings from "
+        "reconciliation through the same write path -- no ids to transcribe. "
+        "Also walks fresh, actionable revision findings from "
         "'openkos revisions': a directed REVERSES/REFINES offers a "
         "supersedes/revises edge held by the later Decision, an undirected "
         "one asks once which Decision is later and which relation type to "
-        "record (#1014).",
+        "record.",
     ),
 ) -> None:
     """Record a human's resolution of a contradiction between two concepts:
@@ -10224,9 +10260,16 @@ def status() -> None:
     needs_attention.extend(
         f"{finding.concept_id}: {finding.detail}" for finding in report.unjudged
     )
-    needs_attention.extend(
-        f"{finding.concept_id}: {finding.detail}" for finding in report.unevidenced
-    )
+    # One count, not one block per Source: `lint` owns the per-Source list, and
+    # repeating its identical sentence for every Source buried the rest of this
+    # section.
+    if report.unevidenced:
+        count = len(report.unevidenced)
+        needs_attention.append(
+            f"{count} Source{_plural(count)} stored derived objects that quote "
+            f"no line from {'it' if count == 1 else 'them'} -- run "
+            f"`openkos lint` to list {'it' if count == 1 else 'them'}."
+        )
     needs_attention.extend(
         f"{finding.concept_id}: {finding.detail}" for finding in report.staging_dropped
     )
@@ -10325,10 +10368,15 @@ def status() -> None:
     # (spec: "or an adjacent informational line") -- never appended to
     # `needs_attention`, so a healthy workspace still prints "Nothing needs
     # attention." above.
+    # A pending `relation_type` row is a candidate relationship awaiting a
+    # type, so the queue lines above would contradict the empty-graph claim.
     if (
         report.edge_summary is not None
         and report.edge_summary[0] == 0
         and not report.asserted_relations
+        and not any(
+            item.kind == "relation_type" for item in report.unattended.open_items
+        )
     ):
         typer.echo("  No concept relationships yet.")
     # #593: the duplicate check above counts identical-title groups ONLY.
@@ -10445,7 +10493,9 @@ def pending_cmd(
     help=(
         "Run unattended maintenance for this workspace in the foreground: it "
         "refreshes the derived indexes and queues proposals for you to review "
-        "(see `pending`). Never changes your knowledge base itself."
+        "(see `pending`). Never approves a proposal; the only thing it writes "
+        "into your knowledge base is a file dropped in the configured "
+        "`unattended.inbox`, imported as `ingest` would."
     ),
     rich_help_panel="Maintain",
 )
@@ -10467,7 +10517,9 @@ def daemon_cmd(
     A maintenance pass refreshes the derived indexes, counts lint findings and
     runs the advisors (duplicates, relation types, volatility, contradictions,
     decision revisions), recording each proposal as a pending-work row. It
-    writes nothing under `bundle/` and approves nothing. Model calls are bounded
+    approves nothing, and a maintenance pass writes nothing under `bundle/`;
+    only the inbox import (when `unattended.inbox` is set) adds Sources and
+    their concepts, as `ingest` of that file would. Model calls are bounded
     by the `unattended:` budget in `openkos.yaml`. Each job's outcome is recorded
     in `.openkos/jobs.db`; the log goes to the per-user log directory.
 
@@ -10586,7 +10638,7 @@ def list_objects_cmd(
     sources_of: str | None = typer.Option(
         None,
         "--sources",
-        help="Reverse-provenance lookup (#628): list every Source whose "
+        help="Reverse-provenance lookup: list every Source whose "
         "provenance chain reaches this concept id -- transitively, with "
         "each Source's current sensitivity -- so 'protect this object' "
         "finds the Sources that need raising. A whole mode: takes no TYPE "
@@ -11061,7 +11113,7 @@ def duplicates(
         "--keep-distinct",
         help=(
             "Record that these concepts are NOT the same entity and stop "
-            "offering to merge them (#797). Repeat the flag once per member, "
+            "offering to merge them. Repeat the flag once per member, "
             "at least twice. Reversible with --reopen; listed by "
             "--kept-distinct."
         ),
@@ -11299,7 +11351,7 @@ def adjudicate(
         False,
         "--no-reconcile",
         help=(
-            "Skip the reconciliation pass (#645) on merges applied by "
+            "Skip the reconciliation pass on merges applied by "
             "--apply/--apply-same: keep the merged body as the survivor's "
             "text with the absorbed text appended under a '## Merged "
             "content' heading, with no model call. The same opt-out `merge` "
@@ -11310,7 +11362,7 @@ def adjudicate(
         False,
         "--reconcile",
         help=(
-            "Force the reconciliation pass (#645) on merges applied by "
+            "Force the reconciliation pass on merges applied by "
             "--apply/--apply-same, even below the share and merged-length "
             "thresholds that decide it by default. The same opt-in `merge` "
             "and `curate` take. Refused together with --no-reconcile."
@@ -11321,7 +11373,7 @@ def adjudicate(
         "--include-cross-source",
         help=(
             "Let --apply-same batch-merge SAME pairs whose members share "
-            "no provenance source (#776) -- excluded by default because "
+            "no provenance source -- excluded by default because "
             "that is the class that fuses distinct real-world items."
         ),
     ),
@@ -11330,7 +11382,7 @@ def adjudicate(
         "--include-cross-type",
         help=(
             "Let --apply-same and --apply merge SAME pairs whose members "
-            "declare different OKF types (#904, #1258) -- excluded by "
+            "declare different OKF types -- excluded by "
             "default because that is the class that absorbs one kind of "
             "thing into another."
         ),
@@ -11340,7 +11392,7 @@ def adjudicate(
         "--fresh",
         help=(
             "Bypass the persisted-adjudications serve and re-judge every "
-            "candidate group with the model (#779), re-persisting the "
+            "candidate group with the model, re-persisting the "
             "fresh verdicts -- the same lever `contradictions --fresh` is."
         ),
     ),
@@ -12027,7 +12079,7 @@ def suggest_relations_cmd(
         "--fresh",
         help=(
             "Bypass the persisted-suggestions serve and re-type every "
-            "candidate edge with the model (#799), re-persisting the fresh "
+            "candidate edge with the model, re-persisting the fresh "
             "suggestions -- the same lever `adjudicate --fresh` is."
         ),
     ),
@@ -12036,8 +12088,8 @@ def suggest_relations_cmd(
         "--edge-offset",
         min=0,
         help="Skip the first N ranked candidate edges, so the batch beyond "
-        "the cap is browsable without first typing the batch before it "
-        "(#567). The capped run names the next batch's exact offset.",
+        "the cap is browsable without first typing the batch before it. "
+        "The capped run names the next batch's exact offset.",
     ),
 ) -> None:
     """LLM-suggest a relation `type` for every existing UNTYPED body-link
@@ -13086,7 +13138,7 @@ def contradictions(
         "--fresh",
         help="Re-judge every candidate pair with the model. By default, a "
         "pair whose persisted finding is digest-fresh is served from "
-        ".openkos/findings.db without a model call (#653).",
+        ".openkos/findings.db without a model call.",
     ),
 ) -> None:
     """LLM-detect contradictions between already-related concepts: read-only,
@@ -13388,7 +13440,7 @@ def revisions(
         raise typer.Exit(code=1) from report.outcome.failure
 
 
-def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
+def _no_match_message(cause: NoMatchCause, found_count: int) -> str:
     """Map `AnswerResult.no_match_cause` to an actionable STDOUT message,
     distinguishing the three causes `query` must not conflate: nothing
     matched, matches existed but were unreadable, or no question was asked.
@@ -13404,7 +13456,7 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
         )
     if cause == "all_unreadable":
         return (
-            f"Found {fts_hit_count} matching concept{_plural(fts_hit_count)}, "
+            f"Found {found_count} matching concept{_plural(found_count)}, "
             "but none could be read from the compiled bundle — it may be "
             "corrupted. Run `openkos lint` to check bundle health."
         )
@@ -13423,7 +13475,7 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
         # answering anyway would be the model's own knowledge under the
         # bundle's citations is explained in the docs, not repeated here.
         return (
-            f"Found {fts_hit_count} matching concept{_plural(fts_hit_count)}, "
+            f"Found {found_count} matching concept{_plural(found_count)}, "
             "but none of them answers this question -- the compiled bundle "
             "does not cover it.\n"
             "Next: ingest a source that covers it, or set "
@@ -13494,7 +13546,7 @@ def query(
         help=(
             "With --save, file an answer whose citation list is the "
             "retrieval fallback (attribution absent or unparsed) without "
-            "the #774 gate -- the citations become provenance without the "
+            "the attribution gate -- the citations become provenance without the "
             "model ever accounting for them."
         ),
     ),
@@ -13867,8 +13919,9 @@ def query(
             typer.echo(f"  {notice}", err=True)
 
     if result.no_match_cause != "none":
+        # The fused count is the one the `retrieval:` summary above reports.
         for line in _no_match_message(
-            result.no_match_cause, result.fts_hit_count
+            result.no_match_cause, result.fused_count
         ).splitlines():
             output.echo_wrapped(line, hanging="  ")
         return
@@ -14244,7 +14297,7 @@ def query(
                 typer.echo(
                     "openkos query: confidential concepts are excluded from "
                     "query, contradictions, and suggest-relations against a "
-                    "non-local backend (#569)."
+                    "non-local backend."
                 )
 
         # #331: `query --save` was the ONE mutating path without the
@@ -14926,7 +14979,7 @@ def curate(
         False,
         "--no-reconcile",
         help=(
-            "Skip the reconciliation pass (#645) on Identity's merges: keep "
+            "Skip the reconciliation pass on Identity's merges: keep "
             "the merged body as the survivor's text with the absorbed text "
             "appended under a '## Merged content' heading, with no model "
             "call. The same opt-out `merge` takes."
@@ -14936,7 +14989,7 @@ def curate(
         False,
         "--reconcile",
         help=(
-            "Force the reconciliation pass (#645) on Identity's merges, "
+            "Force the reconciliation pass on Identity's merges, "
             "even below the share and merged-length thresholds that decide "
             "it by default. The same opt-in `merge` takes. Refused together "
             "with --no-reconcile."

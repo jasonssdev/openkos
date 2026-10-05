@@ -56,11 +56,12 @@ layering invariant, `tests/unit/application/test_layering.py`) -- every
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Final, Literal
 
 from openkos import config, fsio, lifecycle, sensitivity
 from openkos.application import catalog_delta, commit_phase, queue_resolution
@@ -2935,6 +2936,28 @@ def cross_source_same_pair(bundle_dir: Path, member_ids: tuple[str, ...]) -> boo
             return False
         provenance_sets.append({str(entry).removesuffix(".md") for entry in raw})
     return not set.intersection(*provenance_sets)
+
+
+_INGEST_COPY_SUFFIX: Final = re.compile(r"-(?:[2-9]|[1-9]\d+)")
+"""The `-N` (N >= 2) that ingest appends when a derived object's slug is taken."""
+
+
+def is_ingest_copy_pair(member_ids: Sequence[str]) -> bool:
+    """Whether a two-member pair is an original and its ingest `-N` copy: one
+    id is exactly the other id plus `-N`. Such a copy was made because a
+    different source produced the same name, so for it "members share no
+    source" is true by construction and the cross-source note says that
+    instead; it is still a warning, because the name collision does not prove
+    the two are one thing."""
+    if len(member_ids) != 2:
+        return False
+    first, second = member_ids
+    for original, copy in ((first, second), (second, first)):
+        if copy.startswith(original) and _INGEST_COPY_SUFFIX.fullmatch(
+            copy[len(original) :]
+        ):
+            return True
+    return False
 
 
 def cross_type_concern(bundle_dir: Path, member_ids: tuple[str, ...]) -> str | None:

@@ -215,7 +215,9 @@ def test_description_is_honest_no_extraction_claim(
     metadata, _ = okf.load_frontmatter(concept_text)
     description = str(metadata["description"])
     assert "embedded" in description
-    assert "not yet extracted" in description
+    # Extraction state is not the description's to claim: it was written
+    # before extraction and stayed true to nothing once concepts existed (#1267).
+    assert "extracted" not in description
 
 
 def test_undecodable_source_degrades_without_crashing(
@@ -244,7 +246,7 @@ def test_undecodable_source_degrades_without_crashing(
     description = str(metadata["description"])
     assert "binary" in description or "non-text" in description
     assert "could not be embedded" in description
-    assert "not yet extracted" in description
+    assert "extracted" not in description
 
 
 def test_empty_source_renders_distinct_body(
