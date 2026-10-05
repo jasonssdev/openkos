@@ -1679,13 +1679,23 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             skipped_items=tuple(declined),
         )
     if pass_only:
+        # Out-of-class groups are never judged without a terminal, so nothing
+        # else would say they exist; count them rather than hide them.
+        unjudged = sum(
+            1
+            for group in groups
+            if not application_auto_merge.in_structural_class(group)
+        )
+        left = f"{skipped} in-class group(s)"
+        if unjudged:
+            left += f" and {unjudged} other candidate group(s)"
         return StageOutcome(
             status=status,
             applied=applied,
             skipped=skipped,
             notice=(
-                f"applied {applied} automatically; {skipped} in-class group(s) "
-                "left for review -- run `openkos curate` on a terminal."
+                f"applied {applied} automatically; {left} left for review -- "
+                "run `openkos curate` on a terminal."
             ),
         )
     return StageOutcome(

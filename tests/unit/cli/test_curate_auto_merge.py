@@ -845,8 +845,9 @@ def test_a_non_tty_run_merges_exactly_the_eligible_pair_in_one_commit(
     assert _COMMIT_SENTENCE.match(lines[lines.index(merge_line) + 1])
     assert lines[lines.index(merge_line) + 1].split()[2] == sha
     assert (
-        "Identity: applied 1 automatically; 2 in-class group(s) left for review "
-        "-- run `openkos curate` on a terminal." in lines
+        "Identity: applied 1 automatically; 2 in-class group(s) and 1 other "
+        "candidate group(s) left for review -- run `openkos curate` on a "
+        "terminal." in lines
     )
     stderr = result.stderr.splitlines()
     assert (
@@ -1399,3 +1400,21 @@ def test_no_caveat_when_no_later_stage_touched_a_survivor(
     assert result.exit_code == 0, result.stderr
     assert not _present(root, "concepts/foo-2")
     assert "  note:" not in result.stdout
+
+
+def test_the_non_tty_notice_keeps_the_in_class_clause_alone_when_nothing_else_is_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _root, _judge = _build(
+        tmp_path,
+        monkeypatch,
+        [_FOO, _BAR],
+        {_FOO.member_ids: _SAME, _BAR.member_ids: _UNSURE},
+    )
+
+    result = runner.invoke(app, ["curate", "--auto", "--auto-merge"])
+
+    assert (
+        "Identity: applied 1 automatically; 1 in-class group(s) left for review "
+        "-- run `openkos curate` on a terminal." in result.stdout.splitlines()
+    )
