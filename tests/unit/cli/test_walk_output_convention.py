@@ -146,7 +146,7 @@ def test_curate_structure_item_is_a_block_with_a_wrapped_rationale(
     )
     curate_tests._simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["curate"], input="y\nn\n")
+    result = runner.invoke(app, ["curate", "--structure"], input="y\nn\n")
 
     assert result.exit_code == 0
     assert "\n\n[references] concepts/a -> concepts/b\n  rationale: because" in (

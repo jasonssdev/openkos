@@ -41,7 +41,7 @@ def test_a_supersession_row_names_the_exact_relate_command() -> None:
     )
 
 
-def test_another_relation_row_keeps_the_curate_command() -> None:
+def test_another_relation_row_names_the_command_that_reviews_it() -> None:
     row = _row(
         "relation_type",
         {
@@ -52,4 +52,4 @@ def test_another_relation_row_keeps_the_curate_command() -> None:
         ("a", "b"),
     )
 
-    assert report.row_resolving_command(row) == "openkos curate"
+    assert report.row_resolving_command(row) == "openkos curate --structure"

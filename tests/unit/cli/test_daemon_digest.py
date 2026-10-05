@@ -217,3 +217,70 @@ def test_on_a_terminal_the_digest_is_a_separate_section_and_stays_greppable(
     assert "\n\nopenkos daemon: what changed -- 1 automatic commit\n" in result.stdout
     assert "\x1b[" not in result.stdout  # no ANSI, ever (ADR-0042)
     assert _digest_lines(result.stdout)[0]["undo"] == "git revert aaaaaaa"
+
+
+def _seed_waiting_suggestions(root: Path, *types: str) -> None:
+    import contextlib
+
+    from openkos.config import WorkspaceLayout
+    from openkos.state import derived
+    from openkos.state import pending_queue as pq
+
+    layout = WorkspaceLayout(root)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    pq.ensure_schema(conn)
+
+    @contextlib.contextmanager
+    def section() -> Iterator[None]:
+        yield
+
+    for index, kind in enumerate(types):
+        pair = (f"concepts/s{index}", f"concepts/t{index}")
+        pq.upsert_proposal(
+            conn,
+            pq.Proposal(
+                kind="relation_type",
+                key_body=pq.relation_type_key(*pair),
+                producer="test/1",
+                payload=f'{{"suggested_type": "{kind}"}}',
+                targets=pair,
+            ),
+            commit_section=section,
+            bundle_dir=layout.bundle_dir,
+        )
+    conn.close()
+
+
+def test_the_digest_says_how_many_relation_suggestions_wait_and_the_command(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`curate` no longer presents Structure by default (#1268); the digest of
+    an unattended pass is where a person who was not watching learns they
+    wait."""
+    _seed_waiting_suggestions(root, "references", "related_to", "supersedes")
+    results = _results(("aaaaaaa",))
+    monkeypatch.setattr(daemon_module, "run_due_jobs", lambda *a, **k: results)
+    monkeypatch.setattr(daemon_module, "production_ports", lambda r: _idle_ports())
+
+    result = cli.invoke(app, ["daemon", "--once"])
+
+    assert (
+        "openkos daemon: 2 relation suggestion(s) waiting -- review them with "
+        "`openkos curate --structure`." in result.stdout
+    )
+    assert result.stdout.index("what changed") < result.stdout.index(
+        "relation suggestion(s) waiting"
+    )
+
+
+def test_the_digest_names_no_suggestions_when_none_wait(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    results = _results(("aaaaaaa",))
+    monkeypatch.setattr(daemon_module, "run_due_jobs", lambda *a, **k: results)
+    monkeypatch.setattr(daemon_module, "production_ports", lambda r: _idle_ports())
+
+    result = cli.invoke(app, ["daemon", "--once"])
+
+    assert "what changed" in result.stdout
+    assert "relation suggestion" not in result.stdout

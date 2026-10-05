@@ -203,7 +203,7 @@ def test_an_absent_queue_changes_nothing_and_is_not_created(
     _one_edge(monkeypatch)
     _answer(monkeypatch)
 
-    result = runner.invoke(app, ["curate", "--auto"])
+    result = runner.invoke(app, ["curate", "--structure", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     assert "Structure: applied 1, skipped 0." in result.stdout.splitlines()
@@ -229,7 +229,7 @@ def test_an_open_relation_row_is_served_without_a_model_call_and_resolved(
     asked = _no_model_for_edges(monkeypatch)
     _answer(monkeypatch)
 
-    result = runner.invoke(app, ["curate", "--auto"])
+    result = runner.invoke(app, ["curate", "--structure", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     assert "Structure: applied 1, skipped 0." in result.stdout.splitlines()
@@ -257,7 +257,7 @@ def test_a_row_naming_an_edited_endpoint_is_not_served(
     monkeypatch.setattr(real, _spy)
     _answer(monkeypatch)
 
-    result = runner.invoke(app, ["curate", "--auto"])
+    result = runner.invoke(app, ["curate", "--structure", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     assert [len(batch) for batch in asked] == [1]
@@ -295,7 +295,7 @@ def test_a_presented_and_declined_relation_returns_to_pending(
     _no_model_for_edges(monkeypatch)
     monkeypatch.setattr("typer.prompt", lambda *a, **k: "n")
 
-    result = runner.invoke(app, ["curate", "--auto"])
+    result = runner.invoke(app, ["curate", "--structure", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     assert "Structure: applied 0, skipped 1." in result.stdout.splitlines()
@@ -310,7 +310,7 @@ def test_a_relation_computed_with_no_open_row_is_enqueued(
     _one_edge(monkeypatch)
     monkeypatch.setattr("typer.prompt", lambda *a, **k: "n")
 
-    result = runner.invoke(app, ["curate", "--auto"])
+    result = runner.invoke(app, ["curate", "--structure", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     assert _rows(tmp_path, "relation_type") == [("pending", None)]
@@ -511,7 +511,7 @@ def test_a_log_append_between_the_relate_plan_and_its_commit_is_kept(
         application_lifecycle, "prepare_relate", _prepare_then_a_concurrent_append
     )
 
-    result = runner.invoke(app, ["curate", "--auto"])
+    result = runner.invoke(app, ["curate", "--structure", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     text = log.read_text("utf-8")
