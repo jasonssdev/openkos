@@ -304,6 +304,7 @@ def plan_auto_merges(
             cross_type_concern=cross_type_concern,
             ordered_pair=ordered_pair,
             claimed=claimed,
+            min_confidence=T_STAR,
         )
         if isinstance(reason, str):
             skipped.append(AutoMergeSkip(group.member_ids, reason))
@@ -322,14 +323,17 @@ def _first_refusal(
     cross_type_concern: Callable[[tuple[str, str]], str | None],
     ordered_pair: Callable[[tuple[str, ...]], tuple[str, str, str]],
     claimed: set[str],
+    min_confidence: float | None,
 ) -> str | tuple[str, str]:
     """The reason the first failing gate gives, or `(survivor, absorbed)` when
-    every per-group gate passes."""
+    every per-group gate passes. `min_confidence=None` drops the confidence
+    gate: a person confirms those groups, so the threshold that licenses
+    acting without one does not apply."""
     group = result.candidate
     if _group_key(group) not in fresh_keys:
         return "no fresh verdict this run"
-    if result.confidence < T_STAR:
-        return f"confidence {result.confidence} below {T_STAR:.2f}"
+    if min_confidence is not None and result.confidence < min_confidence:
+        return f"confidence {result.confidence} below {min_confidence:.2f}"
     survivor, absorbed, _criterion = ordered_pair(group.member_ids)
     if blocked.intersection((survivor, absorbed)):
         return "a member is confidential or cannot be sent to the model"
@@ -339,6 +343,48 @@ def _first_refusal(
     if survivor in claimed:
         return "survivor already merged this run"
     return survivor, absorbed
+
+
+def recommended(
+    results: Sequence[AdjudicatedCandidate],
+    *,
+    fresh_keys: frozenset[str],
+    blocked: frozenset[str],
+    cross_type_concern: Callable[[tuple[str, str]], str | None],
+    ordered_pair: Callable[[tuple[str, ...]], tuple[str, str, str]],
+    excluded_survivors: frozenset[str],
+) -> AutoMergePlan:
+    """The groups Identity's accept-recommended question may offer: the
+    planner's gates with the confidence gate removed, because a person
+    confirms the batch.
+
+    In class, a fresh SAME verdict from this run's model, no blocked member,
+    no cross-type concern, and one group per survivor (a survivor the
+    automatic pass already merged counts as taken). A group that fails any
+    gate is simply absent, so it keeps its per-item prompt; none is reported.
+    Pass `blocked=frozenset()` to admit confidential members instead (the
+    owner-revisable reading)."""
+    planned: list[PlannedAutoMerge] = []
+    claimed = set(excluded_survivors)
+    for result in results:
+        group = result.candidate
+        if not in_structural_class(group) or result.verdict is not Verdict.SAME:
+            continue
+        verdict = _first_refusal(
+            result,
+            fresh_keys=fresh_keys,
+            blocked=blocked,
+            cross_type_concern=cross_type_concern,
+            ordered_pair=ordered_pair,
+            claimed=claimed,
+            min_confidence=None,
+        )
+        if isinstance(verdict, str):
+            continue
+        survivor, absorbed = verdict
+        claimed.add(survivor)
+        planned.append(PlannedAutoMerge(result, survivor, absorbed))
+    return AutoMergePlan(tuple(planned), ())
 
 
 @dataclass(frozen=True)

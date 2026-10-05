@@ -1629,3 +1629,134 @@ def test_a_missing_survivor_file_is_not_reported_as_edited(
 def test_no_records_means_nothing_edited(tmp_path: Path) -> None:
     layout = config.WorkspaceLayout(tmp_path)
     assert auto_merge.survivors_edited_since(layout, []) == ()
+
+
+# --------------------------------------------------------------------------- #
+# the accept-recommended selector (tasks 4.1-4.3)
+# --------------------------------------------------------------------------- #
+
+
+def _recommended(
+    results: list[AdjudicatedCandidate], **overrides: Any
+) -> auto_merge.AutoMergePlan:
+    """The all-pass baseline with at most one deviation, as `_plan` builds it,
+    plus an empty `excluded_survivors`."""
+    kwargs: dict[str, Any] = {
+        "fresh_keys": frozenset(_key(r.candidate) for r in results),
+        "blocked": frozenset(),
+        "cross_type_concern": lambda pair: None,
+        "ordered_pair": functools.partial(lifecycle.ordered_merge_pair, Path("unused")),
+        "excluded_survivors": frozenset(),
+    }
+    kwargs.update(overrides)
+    return auto_merge.recommended(results, **kwargs)
+
+
+def _pairs(plan: auto_merge.AutoMergePlan) -> list[tuple[str, str]]:
+    return [(p.survivor, p.absorbed) for p in plan.planned]
+
+
+def test_the_recommended_baseline_offers_one_merge_with_the_base_as_survivor() -> None:
+    result = _verdict(_family())
+    plan = _recommended([result])
+    assert plan.planned == (
+        auto_merge.PlannedAutoMerge(result, "concepts/foo", "concepts/foo-2"),
+    )
+
+
+def test_a_recommended_set_never_reports_skips() -> None:
+    """A refused group simply keeps its per-item prompt; nothing prints a
+    "not merged automatically" line for it."""
+    plan = _recommended([_verdict(_family())], blocked=frozenset({"concepts/foo"}))
+    assert plan.planned == ()
+    assert plan.skipped == ()
+
+
+@pytest.mark.parametrize("confidence", [0.60, 0.0, 0.8999])
+def test_recommended_gate_3_is_removed_so_any_confidence_is_offered(
+    confidence: float,
+) -> None:
+    plan = _recommended([_verdict(_family(), confidence=confidence)])
+    assert _pairs(plan) == [("concepts/foo", "concepts/foo-2")]
+
+
+def test_recommended_never_reads_t_star(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(auto_merge, "T_STAR", 0.999)
+    plan = _recommended([_verdict(_family(), confidence=0.60)])
+    assert len(plan.planned) == 1
+
+
+def test_a_verdict_not_judged_this_run_is_not_recommended() -> None:
+    plan = _recommended([_verdict(_family(), confidence=1.0)], fresh_keys=frozenset())
+    assert plan.planned == ()
+
+
+@pytest.mark.parametrize("verdict", [Verdict.DIFFERENT, Verdict.UNCERTAIN])
+def test_only_a_same_verdict_is_recommended(verdict: Verdict) -> None:
+    assert _recommended([_verdict(_family(), verdict, 0.99)]).planned == ()
+
+
+@pytest.mark.parametrize(
+    "blocked_member", ["concepts/foo", "concepts/foo-2"], ids=["survivor", "absorbed"]
+)
+def test_a_blocked_member_is_not_recommended(blocked_member: str) -> None:
+    plan = _recommended([_verdict(_family())], blocked=frozenset({blocked_member}))
+    assert plan.planned == ()
+
+
+def test_the_blocked_exclusion_is_one_argument_the_owner_can_revisit() -> None:
+    """Q2: passing an empty `blocked` admits the same group, so reversing the
+    conservative reading is a one-argument change."""
+    result = _verdict(_family())
+    blocked = frozenset({"concepts/foo-2"})
+    assert _recommended([result], blocked=blocked).planned == ()
+    assert len(_recommended([result], blocked=frozenset()).planned) == 1
+
+
+def test_a_cross_type_concern_is_not_recommended() -> None:
+    plan = _recommended(
+        [_verdict(_family())], cross_type_concern=lambda pair: "types differ"
+    )
+    assert plan.planned == ()
+
+
+def test_a_survivor_the_auto_pass_already_merged_is_not_recommended() -> None:
+    result = _verdict(_group(("concepts/foo", "concepts/foo-3")))
+    assert (
+        _recommended([result], excluded_survivors=frozenset({"concepts/foo"})).planned
+        == ()
+    )
+    assert (
+        len(
+            _recommended(
+                [result], excluded_survivors=frozenset({"concepts/bar"})
+            ).planned
+        )
+        == 1
+    )
+
+
+def test_two_groups_sharing_a_survivor_recommend_only_the_first() -> None:
+    first = _verdict(_group(("concepts/foo", "concepts/foo-2")), confidence=0.6)
+    second = _verdict(_group(("concepts/foo", "concepts/foo-3")), confidence=0.7)
+    assert _pairs(_recommended([first, second])) == [("concepts/foo", "concepts/foo-2")]
+
+
+@pytest.mark.parametrize(
+    "group",
+    [
+        pytest.param(_group(("concepts/x", "concepts/x-2", "concepts/x-3")), id="3"),
+        pytest.param(_group(("concepts/p", "concepts/q"), tier=Tier.LOW), id="low"),
+        pytest.param(_group(("concepts/m", "concepts/n")), id="not a suffix family"),
+        pytest.param(
+            _group(
+                ("people/ann", "people/ann-2"),
+                "Person",
+                member_types=("Person", "Person"),
+            ),
+            id="person",
+        ),
+    ],
+)
+def test_a_group_outside_the_class_is_not_recommended(group: CandidateGroup) -> None:
+    assert _recommended([_verdict(group, confidence=0.99)]).planned == ()
