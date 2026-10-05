@@ -165,7 +165,7 @@ Where the community can contribute: schedulers, watch backends, and reconciliati
 
 *Goal: cut the number of decisions OpenKOS asks of a person per ingested source, and make the remaining ones optional.*
 
-**Status: in progress.** The arc is a named arc between MVP 4 and MVP 5, not a numbered MVP: MVP 5 and MVP 6 keep their numbers and content ([ADR-0044](adr/0044-the-quiet-engine-arc-precedes-interoperability.md)).
+**Status: complete and shipped.** The exit criteria below were measured against the pre-registered bars and met ([results](../evals/quiet_engine/results/)). Two pieces were not delivered and continue as follow-up work, each under its own pre-registered measurement: the opt-in post-hoc review for one structural class, and accept-recommended on Identity prompts. The arc is a named arc between MVP 4 and MVP 5, not a numbered MVP: MVP 5 and MVP 6 keep their numbers and content ([ADR-0044](adr/0044-the-quiet-engine-arc-precedes-interoperability.md)).
 
 MVP 6's goal is a non-technical user without a terminal, but a desktop app built over today's engine would present the same review queue with buttons. The engine also creates much of that queue itself: a concept that already exists is forked into a `-N` copy rather than attached to, and unattended writes can leave derived indexes stale. This arc removes the load at its source, before a surface is built on top of it.
 
@@ -178,7 +178,7 @@ Deliverables, in dependency order:
 - **Review becomes a digest, not a gate.** Every prompt offers skip and accept-recommended, "no" is distinguishable from "not now", unattended runs end with a "what changed" summary listing each automatic action and its undo, and `pending` never blocks querying or ingesting and states truncation
 - **Two product metrics, measured before and after:** human decisions per ingested source, and time from dropping a file to the first answer that can cite it, on a committed corpus shaped like the end-to-end corpus
 
-Exit criteria — the bars are to be fixed in a pre-registration written before the arc starts:
+Exit criteria — the bars were fixed in a [pre-registration](../evals/quiet_engine/PREREGISTRATION.md) written before the arc started:
 
 - Decisions per source at or below a registered bar
 - No `-N` duplicate created for same-type, same-key concepts outside the excluded types
