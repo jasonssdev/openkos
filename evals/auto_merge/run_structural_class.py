@@ -531,7 +531,10 @@ def render_verdict(
     lines += [
         "## Reported, never deciding",
         "",
-        f"- Cross-source-excluded in-class population, #1054 rule: **{excluded.verdict}**.",
+        # The reasons travel with the verdict: almost every structural pair is
+        # cross-source, so this population can FAIL on zero exposure alone.
+        f"- Cross-source-excluded in-class population, #1054 rule: **{excluded.verdict}**"
+        + (f" -- {'; '.join(excluded.reasons)}." if excluded.reasons else "."),
         f"- Reference `{ref_cal.model}` on the same rule (L1 not applicable): "
         f"**{ref_decision.verdict}**; B {_fmt(ref_decision.core.b)}, t* "
         f"{ref_decision.core.t_star if ref_decision.core.t_star is not None else 'undefined'}"
@@ -1113,6 +1116,13 @@ def _self_test_end_to_end(failures: list[str], stack: ExitStack) -> None:
         failures,
         "end-to-end false merge is counted as 15 of 240 (one pair, every run)",
         "| R2 false auto-merges | 0 | 15 of 240 | FAIL |"
+        in out.read_text(encoding="utf-8"),
+        True,
+    )
+    base._check_list(
+        failures,
+        "the cross-source-excluded report carries its failure reasons",
+        "#1054 rule: **FAIL** -- R2 false auto-merges: 15 negative trial(s)"
         in out.read_text(encoding="utf-8"),
         True,
     )
