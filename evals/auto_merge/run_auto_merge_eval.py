@@ -42,6 +42,11 @@ Usage:
         results/runs-calibration-<stamp>-<model>.json \\
         results/runs-confirmation-<stamp>-<model>.json
 
+`--fixture structural` runs the same arms on `structural_fixtures.py` (#1298,
+`PREREGISTRATION-1298.md`) in its own bundle, writing
+`runs-structural-<arm>-<stamp>-<model>.json`; its rule is decided by
+`run_structural_class.py --decide`, not by `--decide` here.
+
 `--decide` is pure and offline: it reads two stored `runs-*.json` files (in
 `calibration confirmation` order) and writes the verdict file. It never
 calls a model and never re-runs anything -- re-running an arm is always a
@@ -49,8 +54,9 @@ separate `--arm` invocation, on purpose (design D4): the threshold and its
 judgment must come from bytes already committed to disk, never from a value
 this process just happened to hold in memory.
 
-Live runs need Ollama serving `qwen3:8b` locally. Budget: roughly 22 pairs
-x 15 runs x ~19s, about 1.7 hours per arm (design.md "Harness shape").
+Live runs need Ollama serving the `--model` locally. Measured: about 64 s
+per 26-pair run for `qwen3:8b`, about 16 minutes per 15-run arm (the
+design's 1.7-hour estimate predates the stored runs).
 Results JSON never contains a private-corpus document: `auto_merge_fixtures`
 is committed, invented content only.
 """
@@ -67,6 +73,7 @@ import sys
 import tempfile
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -92,6 +99,7 @@ from auto_merge_fixtures import (  # noqa: E402
 )
 from harness_report import arm_identity_line  # noqa: E402
 from harness_stamp import build_stamp  # noqa: E402
+from structural_fixtures import STRUCTURAL_PAIRS  # noqa: E402
 
 from openkos import config as config_mod  # noqa: E402
 from openkos.application import lifecycle as lifecycle_mod  # noqa: E402
@@ -123,6 +131,17 @@ zero-false-merge result means nothing without the cases that could have
 failed it."""
 
 _SCHEMA: Final[str] = "openkos.eval.auto_merge/v1"
+
+FIXTURES: Final[dict[str, tuple[LabelledPair, ...]]] = {
+    "1054": PAIRS,
+    "structural": STRUCTURAL_PAIRS,
+}
+"""`--fixture` choices. Each is materialized in its OWN bundle: together
+they exceed `find_candidates`' 50-group cap (PREREGISTRATION-1298.md)."""
+
+
+def _probes_in_order(pairs: tuple[LabelledPair, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(pair.probe for pair in pairs))
 
 
 # --------------------------------------------------------------------------- #
@@ -171,7 +190,9 @@ def _fixture_digest(bundle_dir: pathlib.Path) -> str:
     return f"sha256:{hasher.hexdigest()}"
 
 
-def _materialize_workspace(root: pathlib.Path) -> config_mod.WorkspaceLayout:
+def _materialize_workspace(
+    root: pathlib.Path, docs: tuple[FixtureDoc, ...] | None = None
+) -> config_mod.WorkspaceLayout:
     """A full, minimal OKF workspace at `root` -- `bundle/index.md` and
     `bundle/log.md` (`bundle.create`), `openkos.yaml` (`config.write_config`,
     packaged defaults), then every fixture document. Needed only for the
@@ -186,7 +207,7 @@ def _materialize_workspace(root: pathlib.Path) -> config_mod.WorkspaceLayout:
     layout = config_mod.WorkspaceLayout(root)
     bundle_mod.create(layout.bundle_dir, datetime.now(UTC).date())
     config_mod.write_config(root)
-    _materialize_bundle(layout.bundle_dir, documents())
+    _materialize_bundle(layout.bundle_dir, documents() if docs is None else docs)
     return layout
 
 
@@ -206,7 +227,7 @@ def _pair_id(labelled: LabelledPair) -> str:
 
 
 _PAIR_ID_BY_KEY: Final[dict[frozenset[str], str]] = {
-    _pair_key(pair): _pair_id(pair) for pair in PAIRS
+    _pair_key(pair): _pair_id(pair) for pairs in FIXTURES.values() for pair in pairs
 }
 
 
@@ -583,7 +604,11 @@ def _assert_digest_stable_and_d3(failures: list[str], stack: ExitStack) -> None:
     _assert_d3_structural_eligibility(failures, first_root)
 
 
-def _assert_d3_structural_eligibility(failures: list[str], root: pathlib.Path) -> None:
+def _assert_d3_structural_eligibility(
+    failures: list[str],
+    root: pathlib.Path,
+    pairs: tuple[LabelledPair, ...] = PAIRS,
+) -> None:
     """Design D3: every labelled pair, on the materialized bundle, forms
     exactly one 2-member `find_candidates` group, both members declare one
     OKF type, `cross_type_concern` is `None`, and the pinned
@@ -593,11 +618,11 @@ def _assert_d3_structural_eligibility(failures: list[str], root: pathlib.Path) -
     layout = config_mod.WorkspaceLayout(root)
     groups = candidates_mod.find_candidates(layout.bundle_dir)
     found = {frozenset(g.member_ids): g for g in groups}
-    wanted = {_pair_key(pair) for pair in PAIRS}
+    wanted = {_pair_key(pair) for pair in pairs}
 
     missing = sorted(
         f"{pair.probe}:{_pair_id(pair)}"
-        for pair in PAIRS
+        for pair in pairs
         if _pair_key(pair) not in found
     )
     extra = sorted(
@@ -610,12 +635,12 @@ def _assert_d3_structural_eligibility(failures: list[str], root: pathlib.Path) -
     )
     _check_list(failures, "find_candidates produces no unlabelled group", extra, [])
     _check_list(
-        failures, "one group per labelled pair, none duplicated", len(found), len(PAIRS)
+        failures, "one group per labelled pair, none duplicated", len(found), len(pairs)
     )
 
     index_path = layout.bundle_dir / "index.md"
     log_path = layout.bundle_dir / "log.md"
-    for pair in PAIRS:
+    for pair in pairs:
         group = found.get(_pair_key(pair))
         if group is None:
             continue
@@ -1027,7 +1052,21 @@ def _trial_to_json(
     }
 
 
-def _run_arm(arm: str, runs_requested: int, model: str) -> int:
+def _run_arm(
+    arm: str,
+    runs_requested: int,
+    model: str,
+    fixture: str = "1054",
+    *,
+    run_once: Callable[
+        [pathlib.Path, OllamaClient], dict[frozenset[str], _Observed]
+    ] = _run_once,
+    results_dir: pathlib.Path | None = None,
+) -> int:
+    """One arm on `FIXTURES[fixture]`. `run_once` and `results_dir` exist
+    for the model-free self-test, which drives this whole path with a fake
+    pass into a temp directory; a live run always uses the defaults."""
+    pairs = FIXTURES[fixture]
     client = OllamaClient(
         model=model,
         max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
@@ -1046,12 +1085,12 @@ def _run_arm(arm: str, runs_requested: int, model: str) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         bundle_dir = pathlib.Path(tmp) / "bundle"
         bundle_dir.mkdir(parents=True)
-        _materialize_bundle(bundle_dir, documents())
+        _materialize_bundle(bundle_dir, documents(pairs))
         fixture_digest = _fixture_digest(bundle_dir)
         for run_index in range(runs_requested):
             started = time.monotonic()
             try:
-                observed = _run_once(bundle_dir, client)
+                observed = run_once(bundle_dir, client)
             except OllamaError as exc:
                 print(
                     f"  run {run_index + 1}/{runs_requested} FAILED ({exc}); "
@@ -1062,7 +1101,7 @@ def _run_arm(arm: str, runs_requested: int, model: str) -> int:
             latency = time.monotonic() - started
             trials = [
                 _trial_to_json(pair, observed.get(_pair_key(pair)), latency)
-                for pair in PAIRS
+                for pair in pairs
             ]
             rows.append({"run": run_index + 1, "trials": trials})
             completed_runs += 1
@@ -1072,12 +1111,15 @@ def _run_arm(arm: str, runs_requested: int, model: str) -> int:
         raise SystemExit("no run completed; nothing to score")
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    results_dir = pathlib.Path(__file__).resolve().parent / "results"
+    if results_dir is None:
+        results_dir = pathlib.Path(__file__).resolve().parent / "results"
     results_dir.mkdir(exist_ok=True)
-    slug = f"{arm}-{stamp}-{model.replace(':', '-')}"
+    prefix = "" if fixture == "1054" else f"{fixture}-"
+    slug = f"{prefix}{arm}-{stamp}-{model.replace(':', '-')}"
 
     payload = {
         "schema": _SCHEMA,
+        "fixture": fixture,
         "arm": arm,
         "model": model,
         "git_sha": git_sha,
@@ -1100,11 +1142,12 @@ def _run_arm(arm: str, runs_requested: int, model: str) -> int:
     )
 
     report_lines = [
-        f"# auto-merge eval -- arm `{arm}` (#1054)",
+        f"# auto-merge eval -- arm `{arm}`"
+        f"{' (#1054)' if fixture == '1054' else f' -- fixture `{fixture}` (#1298)'}",
         "",
         f"_Generated: {stamp}_ · model `{model}` · **{completed_runs} runs**"
         f"{'' if completed_runs == runs_requested else f' of {runs_requested} requested'}"
-        f" over {len(PAIRS)} labelled pairs.",
+        f" over {len(pairs)} labelled pairs.",
         "",
         arm_identity_line(
             max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
@@ -1112,7 +1155,8 @@ def _run_arm(arm: str, runs_requested: int, model: str) -> int:
         ),
         "",
         f"Fixture digest: `{fixture_digest}` · git `{git_sha}`.",
-        "Labels are CONSTRUCTED, not adjudicated -- see `auto_merge_fixtures.py`.",
+        "Labels are CONSTRUCTED, not adjudicated -- see "
+        f"`{'auto_merge_fixtures.py' if fixture == '1054' else 'structural_fixtures.py'}`.",
         "",
         "| probe | expected | n | same | different | uncertain | missing |",
         "| --- | --- | --- | --- | --- | --- | --- |",
@@ -1121,8 +1165,8 @@ def _run_arm(arm: str, runs_requested: int, model: str) -> int:
     for row in rows:
         for trial in cast("list[dict[str, object]]", row["trials"]):
             per_probe_verdicts[str(trial["probe"])].append(str(trial["verdict"]))
-    expected_by_probe = {pair.probe: pair.expected for pair in PAIRS}
-    for probe in PROBES:
+    expected_by_probe = {pair.probe: pair.expected for pair in pairs}
+    for probe in _probes_in_order(pairs):
         verdicts = per_probe_verdicts[probe]
         total = len(verdicts) or 1
         report_lines.append(
@@ -1235,6 +1279,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
+        "--fixture",
+        choices=sorted(FIXTURES),
+        default="1054",
+        help="1054: the #1054 fixture (default); structural: the #1298 class fixture",
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="check the fixture, D3 eligibility, and decide() with no model and no network",
@@ -1253,7 +1303,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_decide(pathlib.Path(args.decide[0]), pathlib.Path(args.decide[1]))
     if args.arm is None:
         parser.error("--arm is required unless --self-test or --decide is given")
-    return _run_arm(args.arm, args.runs, args.model)
+    return _run_arm(args.arm, args.runs, args.model, args.fixture)
 
 
 if __name__ == "__main__":
