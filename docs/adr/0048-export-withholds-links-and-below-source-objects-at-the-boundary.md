@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0048: OKF export withholds link labels into withheld objects and objects labelled below their sources"
 description: At the export boundary, a body link into a withheld object loses its target and its label, which becomes [withheld], and an object whose own sensitivity sits below its provenance high-water mark is withheld unless --allow-below-source is given.
-status: Proposed
+status: Accepted
 date: 2026-10-05
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0048: OKF export withholds link labels into withheld objects and objects labelled below their sources
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-05
 
 ## Context
