@@ -26,6 +26,27 @@ pair in that class, so it brings its own synthetic fixture. See
 model-free [`run_structural_class.py`](run_structural_class.py)
 (`--self-test`).
 
+Its arms are this harness with `--fixture structural` (the fixture gets its
+own bundle, and the files are named `runs-structural-<arm>-<stamp>-<model>.json`);
+`--fixture 1054` is the default. Its verdict is decided offline by
+`run_structural_class.py --decide`, not by this harness's `--decide`:
+
+```
+uv run python evals/auto_merge/run_auto_merge_eval.py --fixture structural --arm calibration --model gemma4:26b-a4b --runs 15
+uv run python evals/auto_merge/run_auto_merge_eval.py --fixture structural --arm confirmation --model gemma4:26b-a4b --runs 15
+# the same two arms with --model qwen3:8b (reference, for L1), then:
+uv run python evals/auto_merge/run_structural_class.py --decide \
+    results/runs-structural-calibration-<stamp>-gemma4-26b-a4b.json \
+    results/runs-structural-confirmation-<stamp>-gemma4-26b-a4b.json \
+    results/runs-structural-calibration-<stamp>-qwen3-8b.json \
+    results/runs-structural-confirmation-<stamp>-qwen3-8b.json \
+    --secondary results/runs-calibration-<stamp>-gemma4-26b-a4b.json \
+                results/runs-confirmation-<stamp>-gemma4-26b-a4b.json
+```
+
+It writes `auto-merge-verdict-1298-<stamp>-<model>.md` (R0-R5, S2, L1,
+A0-A4, the reference model, and the Q1 secondary).
+
 ## Why this harness exists
 
 `curate` never applies an Identity merge unattended today (#702):
@@ -158,8 +179,8 @@ reach `PASS`, `FAIL (no separator)`, `FAIL R2`, `FAIL R3`, `FAIL R4`,
 `findings.db`, so no verdict is ever served from cache -- production
 sampling (no seed or temperature pinned) and production client settings
 (`config.DEFAULT_CONTEXT_WINDOW`, `config.DEFAULT_MAX_GENERATION_TOKENS`).
-Needs Ollama serving `qwen3:8b` locally. Budget: roughly 22 pairs x 15 runs
-x ~19s, about 1.7 hours per arm.
+Needs Ollama serving `--model` (default `qwen3:8b`) locally. Measured:
+about 64 s per 26-pair `qwen3:8b` run, about 16 minutes per 15-run arm.
 
 `--decide CAL.json CONF.json` is pure and offline: it never calls a model.
 Calibration and confirmation are always two SEPARATE `--arm` invocations
