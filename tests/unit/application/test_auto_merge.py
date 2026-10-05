@@ -1392,19 +1392,23 @@ class _Breaker:
         )
         if self.stage == "committed":
             bundle_ledger.commit_pending(survivor, bundle_dir)
+        if self.stage == "unreadable":
+            (bundle_dir / f"{survivor}.md").chmod(0)
         fsio.remove_file(bundle_dir / f"{prepared.absorbed_canonical}.md")
         self.failed = True
         raise self.error
 
 
 @pytest.mark.parametrize("error", [OSError("disk full"), ValueError("bad plan")])
-@pytest.mark.parametrize("stage", ["pending", "committed"])
+@pytest.mark.parametrize("stage", ["pending", "committed", "unreadable"])
 def test_a_mid_run_failure_restores_that_merge_and_commits_the_landed_ones(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
     stage: str,
 ) -> None:
+    if stage == "unreadable" and os.geteuid() == 0:
+        pytest.skip("root reads a mode-0 file")
     root = _pass_workspace(tmp_path, monkeypatch)
     run = _prepare_run(root)
     breaker = _Breaker(monkeypatch, root, fail_on=2, error=error, stage=stage)
