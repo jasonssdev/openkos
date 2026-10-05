@@ -157,6 +157,32 @@ def _log_notice(message: str) -> None:
     log.warning("%s", message)
 
 
+_PREFIX = "openkos daemon: watch: "
+_INGEST_PREFIX = "openkos ingest: "
+
+
+def _daemon_line(name: str, message: str) -> str:
+    """An ingest advisory line under the daemon's own prefix, naming the file it
+    is about (the unattended path never prints `openkos ingest:`, #1265)."""
+    body = message.removeprefix(_INGEST_PREFIX)
+    return f"{_PREFIX}'{name}': {body}"
+
+
+def _outcome_line(name: str, outcome: svc.IngestOutcome) -> str:
+    """The one line an import's result earns: the file, and what happened."""
+    if isinstance(outcome, svc.IngestUnchanged):
+        return f"{_PREFIX}'{name}' unchanged -- already imported; nothing to do."
+    new_version = any(s.reason == "new_version" for s in outcome.supersessions)
+    head = f"{_PREFIX}'{name}' imported" + (" as a new version" if new_version else "")
+    parts = []
+    if outcome.derived_count:
+        noun = "object" if outcome.derived_count == 1 else "objects"
+        parts.append(f"{outcome.derived_count} new {noun}")
+    if outcome.attached:
+        parts.append(f"{len(outcome.attached)} revised")
+    return f"{head} -- {', '.join(parts) if parts else 'Source only'}."
+
+
 class _WatchObserver(svc.IngestObserver):
     """Surfaces what an unattended import would otherwise swallow (#1224): a
     legacy-encoding read and a source that ended with no extractable text."""
@@ -166,7 +192,9 @@ class _WatchObserver(svc.IngestObserver):
         self._notify = notify
 
     def notice(self, message: str) -> None:
-        self._notify(message)
+        if message == svc.UNCHANGED_NOTICE:
+            return  # `_outcome_line` words it, without a hint that is not the daemon's
+        self._notify(_daemon_line(self._name, message))
 
     def staged(self, staged: application_ingest.StagedDerivedObjects) -> None:
         if staged.report is None and staged.skip_reason == "no-extractable-text":
@@ -587,6 +615,7 @@ def _run_candidates(
                 log.warning("watch refusal row not retired; it stays open")
             _queue_supersessions(queue, outcome, base_section)
             _record(conn, cand, digest=digest, outcome=IMPORTED)
+            watch.notify(_outcome_line(cand.path.name, outcome))
             tally.done += 1
             tally.imported += 1
             if isinstance(outcome, svc.IngestUnchanged):

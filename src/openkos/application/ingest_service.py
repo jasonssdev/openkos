@@ -370,6 +370,14 @@ class IngestObserver:
         """Phase B finished, before the commit."""
 
 
+UNCHANGED_NOTICE = (
+    "openkos ingest: source unchanged and already extracted; skipping "
+    "extraction -- existing derived objects preserved; pass --re-extract to "
+    "run extraction again."
+)
+"""The line an attended ingest prints when #773's short-circuit fires. A caller
+that words the outcome itself (the unattended watch) recognises it by identity."""
+
 ConfirmCallback = Callable[[IngestPreview], ConfirmationAnswer]
 
 
@@ -924,12 +932,7 @@ def _prepare(
             and not source_plan.event_date.changed
             and not source_plan.lift_changed
         ):
-            obs.notice(
-                "openkos ingest: source unchanged and already "
-                "extracted; skipping extraction -- existing derived "
-                "objects preserved; pass --re-extract to run "
-                "extraction again."
-            )
+            obs.notice(UNCHANGED_NOTICE)
             return IngestUnchanged(
                 regenerated=True,
                 extraction_degraded=False,

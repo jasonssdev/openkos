@@ -670,3 +670,67 @@ def test_a_job_of_only_unchanged_files_refreshes_nothing(env: _Env) -> None:
 
     assert result is not None
     assert len(env.refreshes) == refreshes
+
+
+# --- the watch's lines name the file and carry the daemon's prefix (#1265) --------
+
+
+_PREFIX = "openkos daemon: watch: "
+
+
+def test_an_unchanged_file_is_reported_by_name_with_the_daemon_prefix(
+    env: _Env,
+) -> None:
+    _settled_drop(env, "a.md")
+    env.job()  # imports it
+    _forget_observations(env)
+    env.job()  # observes it again
+    env.settle()
+    env.notices.clear()
+
+    env.job()
+
+    assert env.notices == [
+        f"{_PREFIX}'a.md' unchanged -- already imported; nothing to do."
+    ]
+
+
+def test_an_import_is_reported_by_name_and_outcome(env: _Env) -> None:
+    _settled_drop(env, "a.md")
+    env.notices.clear()
+
+    env.job()
+
+    assert len(env.notices) == 1
+    assert env.notices[0].startswith(f"{_PREFIX}'a.md' imported -- ")
+
+
+def test_a_new_version_is_reported_as_such(env: _Env) -> None:
+    path = env.drop("a.md")
+    env.job()
+    env.settle()
+    env.job()
+    path.write_text("A different save.\n", encoding="utf-8")
+    env.job()
+    env.settle()
+    env.notices.clear()
+
+    env.job()
+
+    assert any(
+        n.startswith(f"{_PREFIX}'a.md' imported as a new version") for n in env.notices
+    )
+
+
+def test_every_watch_line_carries_the_daemon_prefix_and_no_ingest_hint(
+    env: _Env,
+) -> None:
+    original = "Decisión\rcoordinación\r".encode("mac_roman")
+    (env.inbox / "a.txt").write_bytes(original)
+    env.job()
+    env.settle()
+    env.job()
+
+    assert env.notices
+    assert all(n.startswith(_PREFIX) for n in env.notices)
+    assert not any("--re-extract" in n or "openkos ingest:" in n for n in env.notices)
