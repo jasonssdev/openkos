@@ -8875,6 +8875,14 @@ class _CliMergeObserver(merge_service.MergeObserver):
         # `(survivor, absorbed)` here, so it also states the direction.
         if preview.cross_type_concern is not None:
             typer.echo(_cross_type_walk_note(preview.cross_type_concern))
+        # #1293: the one scalar `type_alternative` cannot hold a second type,
+        # so say what the merge drops BEFORE the human consents.
+        if prepared.discarded_absorbed_type is not None:
+            typer.echo(
+                f"  note: the absorbed type '{prepared.discarded_absorbed_type}' "
+                "is discarded -- the survivor already records type_alternative "
+                f"'{prepared.kept_type_alternative}'"
+            )
 
     def merged(self, summary: merge_service.MergeSummary) -> None:
         output.section_break()

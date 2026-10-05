@@ -137,6 +137,8 @@ def suggest_volatility_tiers(
         raise unreadable_refusal(_VERB, exc) from exc
 
     llm = ports.chat_client(cfg, "volatility_typing")
+    # The model THIS task resolved (#1294), not the global `model:`.
+    task_model = config.resolve_task_model(cfg, "volatility_typing")
     local_exemption = ports.resolve_local_exemption(
         cast(application_backends.HasLocality, llm), cfg
     )
@@ -167,8 +169,8 @@ def suggest_volatility_tiers(
         ) from exc
     except BackendModelNotFound as exc:
         raise ModelNotInstalled(
-            f"openkos {_VERB}: failed -- model '{cfg.model}' is "
-            f"not installed. {application_backends.install_hint(cfg, cfg.model)}, "
+            f"openkos {_VERB}: failed -- model '{task_model}' is "
+            f"not installed. {application_backends.install_hint(cfg, task_model)}, "
             "then try again."
         ) from exc
     # The two specific handlers above MUST precede this generic handler: both
@@ -177,4 +179,4 @@ def suggest_volatility_tiers(
     except BackendError as exc:
         raise BackendFailed(f"openkos {_VERB}: failed -- {exc}.") from exc
 
-    return VolatilityOutcome(batch=batch, model=cfg.model, cfg=cfg)
+    return VolatilityOutcome(batch=batch, model=task_model, cfg=cfg)

@@ -326,6 +326,13 @@ class PreparedMerge:
     """The merge's `index.md`/`log.md` edit as a pure function of their current
     text, so the commit phase re-composes it over a concurrent append instead of
     refusing (`catalog_delta.recompose_catalog`)."""
+    discarded_absorbed_type: str | None = None
+    """#1293: the absorbed document's type, when a cross-type merge cannot
+    record it because the survivor already holds a `type_alternative`; the
+    preview names it before consent."""
+    kept_type_alternative: str | None = None
+    """The survivor's own `type_alternative` that displaced it, for the same
+    preview line."""
 
 
 @dataclass(frozen=True)
@@ -607,6 +614,12 @@ def prepare_merge(
         status_outcome=status_outcome,
         read_dependencies=read_dependencies,
         catalog_edit=merge_catalog,
+        discarded_absorbed_type=okf.discarded_absorbed_type(
+            survivor_metadata, absorbed_metadata
+        ),
+        kept_type_alternative=_text_or_none(
+            survivor_metadata.get(okf.TYPE_ALTERNATIVE_KEY)
+        ),
     )
 
 
@@ -2983,6 +2996,10 @@ def cross_type_concern(bundle_dir: Path, member_ids: tuple[str, ...]) -> str | N
         return None
     label = " / ".join(dict.fromkeys(types))
     return f"members declare different OKF types ({label})"
+
+
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def prepare_one_merge(
