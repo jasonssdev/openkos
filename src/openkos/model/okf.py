@@ -2859,6 +2859,35 @@ def _union_frontmatter(
     return merged
 
 
+def _absorbed_cross_type(
+    survivor_metadata: Mapping[str, object], absorbed_metadata: Mapping[str, object]
+) -> str | None:
+    """The absorbed document's declared `type` when it names a DIFFERENT
+    type than the survivor's (a cross-type merge, #437), else `None`. An
+    absent, blank or non-string type is not a usable type and yields `None`."""
+    absorbed_type = absorbed_metadata.get("type")
+    if not isinstance(absorbed_type, str) or not absorbed_type.strip():
+        return None
+    if absorbed_type == survivor_metadata.get("type"):
+        return None
+    return absorbed_type
+
+
+def discarded_absorbed_type(
+    survivor_metadata: Mapping[str, object], absorbed_metadata: Mapping[str, object]
+) -> str | None:
+    """The absorbed type a cross-type merge DISCARDS (#1293), or `None`.
+
+    `type_alternative` is one scalar, so a survivor that already records a
+    runner-up keeps it and the absorbed type has nowhere to go. The merge
+    preview names it before consent. `None` when the types agree, or when
+    the absorbed type was recorded (the survivor had no runner-up)."""
+    absorbed_type = _absorbed_cross_type(survivor_metadata, absorbed_metadata)
+    if absorbed_type is None or TYPE_ALTERNATIVE_KEY not in survivor_metadata:
+        return None
+    return absorbed_type
+
+
 def build_merged_document(
     survivor_metadata: dict[str, object],
     survivor_body: str,
@@ -2897,7 +2926,17 @@ def build_merged_document(
     no such check, so inheritance could leave a survivor carrying
     `type: X` + `type_alternative: X` -- a state the builder will not
     produce. A survivor that carries its OWN `type_alternative` keeps it,
-    since `merged` starts as `dict(survivor_metadata)`. `event_date`
+    since `merged` starts as `dict(survivor_metadata)`.
+
+    The absorbed document's `type` -- not its `type_alternative` -- is a
+    different matter (#1293). On a cross-type merge it would otherwise
+    vanish without a trace, so when the survivor has NO `type_alternative`
+    the absorbed TYPE is recorded there: the existing scalar field, "the
+    type it nearly chose", read by duplicate detection exactly as before.
+    A scalar cannot hold two types, so a survivor that already records one
+    keeps it and the absorbed type is discarded;
+    `discarded_absorbed_type` names it for the merge preview. Both are
+    reversible: `unmerge` restores the ledger's verbatim pre-merge bytes. `event_date`
     (issue #1014c, ADR-0023) is EXCLUDED from the same generic branch, for
     the same reason: it records evidence about WHEN ONE Source's event
     happened, not a property of a merged entity, so importing it would
@@ -2941,6 +2980,12 @@ def build_merged_document(
     headings, are otherwise stacked verbatim.
     """
     merged = _union_frontmatter(survivor_metadata, absorbed_metadata)
+    # #1293: record the absorbed TYPE of a cross-type merge when the single
+    # `type_alternative` scalar is free; otherwise the survivor's own value
+    # stays (see the docstring).
+    cross_type = _absorbed_cross_type(survivor_metadata, absorbed_metadata)
+    if cross_type is not None and TYPE_ALTERNATIVE_KEY not in merged:
+        merged[TYPE_ALTERNATIVE_KEY] = cross_type
     # A merge revises the survivor: one more revision of ITS counter, never
     # the absorbed side's value. `unmerge` restores the ledger's verbatim
     # pre-merge bytes, so the previous value comes back with them.

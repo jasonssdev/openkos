@@ -130,9 +130,16 @@ in the Phase A preview. The `type` scalar follows the same survivor-wins
 scalar rule as any other scalar field, including when survivor and
 absorbed declare DIFFERENT OKF types (a cross-type merge): the merged
 document's `type` MUST be the survivor's declared type, and the absorbed
-object's `type` MUST be discarded without being surfaced as a "conflict"
-requiring resolution — this is explicit, tested behavior, not an
-incidental side effect of generic scalar-merge logic.
+object's `type` MUST NOT be surfaced as a "conflict" requiring resolution
+— this is explicit, tested behavior, not an incidental side effect of
+generic scalar-merge logic. The absorbed type is not silently lost: when
+the survivor has NO `type_alternative`, the merged document MUST record
+the absorbed object's `type` in `type_alternative`; when the survivor
+already carries one, that single-valued field cannot hold a second type,
+so the survivor's value is kept, the absorbed type is discarded, and the
+Phase A preview MUST name the discarded type before confirmation. Nothing
+is recorded when the two types are equal or the absorbed `type` is absent
+or blank.
 
 `type_alternative` is EXCLUDED from the generic fill-the-gap branch: the
 absorbed side's value MUST NEVER be imported into the merged document.
@@ -145,7 +152,9 @@ exclusion also removes a latent hazard: the concept builder REFUSES
 inheritance could leave a survivor carrying `type: X` plus
 `type_alternative: X`, a state the builder will not produce. A survivor
 carrying its OWN `type_alternative` MUST keep it; the absorbed document's
-value MUST be restored to it unchanged by `unmerge`.
+value MUST be restored to it unchanged by `unmerge`. This exclusion
+concerns the absorbed document's `type_alternative` FIELD, not its `type`
+(see above).
 
 `event_date` is likewise EXCLUDED from the generic fill-the-gap branch:
 the absorbed side's value MUST NEVER be imported onto a survivor that
@@ -196,22 +205,33 @@ restores the absorbed document's own `status` and marker unchanged.
 - GIVEN a survivor declared `type: Concept` and an absorbed object declared
   `type: Entity`
 - WHEN `merge <survivor> <absorbed>` is confirmed
-- THEN the merged document's `type` is `Concept`, and the absorbed object's
-  `Entity` type is discarded
+- THEN the merged document's `type` is `Concept`, and, the survivor having no
+  `type_alternative`, the merged document records `type_alternative: Entity`
+- AND `unmerge` restores both documents byte for byte
 
 #### Scenario: The absorbed `type_alternative` does not cross the merge
 
 - GIVEN a survivor with no `type_alternative` and an absorbed object
   declaring one
 - WHEN `merge <survivor> <absorbed>` is confirmed
-- THEN the merged document carries no `type_alternative`, and `unmerge`
-  restores the absorbed document's own value unchanged
+- THEN the merged document does not carry the absorbed document's own
+  `type_alternative` value, and `unmerge` restores it unchanged
 
 #### Scenario: The survivor keeps its own `type_alternative`
 
 - GIVEN both sides declaring a DIFFERENT `type_alternative`
 - WHEN `merge <survivor> <absorbed>` is confirmed
 - THEN the merged document carries the survivor's value
+
+#### Scenario: A cross-type merge whose survivor already has a `type_alternative`
+
+- GIVEN a survivor declared `type: Concept` with `type_alternative: Project`
+  and an absorbed object declared `type: Entity`
+- WHEN `merge --include-cross-type <survivor> <absorbed>` previews
+- THEN the preview states that the absorbed type `Entity` is discarded
+  because the survivor already records `type_alternative: Project`
+- AND once confirmed the merged document keeps `type_alternative: Project`,
+  and `unmerge` restores both documents byte for byte
 
 #### Scenario: The absorbed event_date does not cross the merge
 

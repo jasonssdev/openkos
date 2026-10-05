@@ -56,10 +56,11 @@ def _write_concept(
     sensitivity: str | None = None,
     body: str = "Body.",
     type_alternative: str | None = None,
+    concept_type: str = "Concept",
 ) -> None:
     concept_path = tmp_path / "bundle" / f"{concept_id}.md"
     concept_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["---", "type: Concept", f"title: {title}"]
+    lines = ["---", f"type: {concept_type}", f"title: {title}"]
     if sensitivity is not None:
         lines.append(f"sensitivity: {sensitivity}")
     if type_alternative is not None:
@@ -724,3 +725,120 @@ def test_merge_then_unmerge_round_trip_covers_all_three_rewrite_kinds(
     assert unmerge_result.exit_code == 0, unmerge_result.stderr
 
     _assert_byte_parity_except_log(tmp_path, pre_snapshot)
+
+
+def _cross_type_pair(
+    tmp_path: Path, *, survivor_type_alternative: str | None
+) -> dict[Path, bytes]:
+    """A `Concept` survivor and an `Entity` absorbed document, and the
+    pre-merge byte snapshot of the bundle."""
+    _write_concept(
+        tmp_path,
+        "concepts/claude-md",
+        title="CLAUDE.md",
+        body="Survivor body.",
+        type_alternative=survivor_type_alternative,
+    )
+    _write_concept(
+        tmp_path,
+        "entities/claude-md",
+        title="CLAUDE.md",
+        section="Entities",
+        body="Absorbed body.",
+        concept_type="Entity",
+    )
+    return _bundle_bytes_snapshot(tmp_path)
+
+
+def test_cross_type_merge_records_the_absorbed_type_and_unmerge_restores_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1293: a survivor with no runner-up records the absorbed document's
+    type in `type_alternative`, and `unmerge` still restores both documents
+    byte for byte (the ledger snapshots the verbatim pre-merge bytes)."""
+    _init_workspace(tmp_path, monkeypatch)
+    pre_snapshot = _cross_type_pair(tmp_path, survivor_type_alternative=None)
+
+    merge_result = runner.invoke(
+        app,
+        [
+            "merge",
+            "concepts/claude-md",
+            "entities/claude-md",
+            "--auto",
+            "--include-cross-type",
+        ],
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    merged_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "concepts" / "claude-md.md").read_text(encoding="utf-8")
+    )
+    assert merged_metadata["type"] == "Concept"
+    assert merged_metadata[okf.TYPE_ALTERNATIVE_KEY] == "Entity"
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/claude-md", "entities/claude-md", "--auto"]
+    )
+    assert unmerge_result.exit_code == 0, unmerge_result.stderr
+    _assert_byte_parity_except_log(tmp_path, pre_snapshot)
+
+
+def test_cross_type_merge_keeps_the_survivors_alternative_and_unmerge_restores_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1293: a survivor that already has a runner-up keeps it -- one scalar
+    cannot hold two -- the preview names the discarded absorbed type before
+    consent, and `unmerge` restores both documents byte for byte."""
+    _init_workspace(tmp_path, monkeypatch)
+    pre_snapshot = _cross_type_pair(tmp_path, survivor_type_alternative="Project")
+
+    merge_result = runner.invoke(
+        app,
+        [
+            "merge",
+            "concepts/claude-md",
+            "entities/claude-md",
+            "--auto",
+            "--include-cross-type",
+        ],
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+    assert (
+        "note: the absorbed type 'Entity' is discarded -- the survivor already "
+        "records type_alternative 'Project'"
+    ) in merge_result.stdout
+
+    merged_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "concepts" / "claude-md.md").read_text(encoding="utf-8")
+    )
+    assert merged_metadata[okf.TYPE_ALTERNATIVE_KEY] == "Project"
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/claude-md", "entities/claude-md", "--auto"]
+    )
+    assert unmerge_result.exit_code == 0, unmerge_result.stderr
+    _assert_byte_parity_except_log(tmp_path, pre_snapshot)
+
+
+def test_cross_type_merge_without_a_discard_prints_no_discard_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The discard note is for the discard only: when the absorbed type was
+    recorded there is nothing lost to disclose."""
+    _init_workspace(tmp_path, monkeypatch)
+    _cross_type_pair(tmp_path, survivor_type_alternative=None)
+
+    result = runner.invoke(
+        app,
+        [
+            "merge",
+            "concepts/claude-md",
+            "entities/claude-md",
+            "--auto",
+            "--include-cross-type",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "is discarded" not in result.stdout

@@ -2322,6 +2322,88 @@ def test_build_merged_document_keeps_the_survivors_own_type_alternative() -> Non
     assert merged[okf.TYPE_ALTERNATIVE_KEY] == "Project"
 
 
+def test_build_merged_document_records_the_absorbed_type_on_a_cross_type_merge() -> (
+    None
+):
+    """#1293: a cross-type merge with no survivor runner-up records the
+    absorbed document's TYPE (not its own `type_alternative`) in the survivor's
+    `type_alternative`; the survivor's `type` still wins."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(),
+        "Survivor body.",
+        _absorbed_metadata(type="Entity", type_alternative="Organization"),
+        "Absorbed body.",
+        "entities/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert merged["type"] == "Concept"
+    assert merged[okf.TYPE_ALTERNATIVE_KEY] == "Entity"
+
+
+def test_build_merged_document_keeps_the_survivors_alternative_cross_type() -> None:
+    """#1293: one scalar cannot hold two types, so a survivor that already has
+    a runner-up keeps it and the absorbed type is discarded."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(type_alternative="Project"),
+        "Survivor body.",
+        _absorbed_metadata(type="Entity"),
+        "Absorbed body.",
+        "entities/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert merged[okf.TYPE_ALTERNATIVE_KEY] == "Project"
+
+
+@pytest.mark.parametrize("absorbed_type", ["Concept", "", None, 7])
+def test_build_merged_document_records_no_type_when_there_is_no_cross_type(
+    absorbed_type: object,
+) -> None:
+    """#1293: the same type, or an absent/unusable absorbed type, records
+    nothing -- `type_alternative == type` is a state the builder refuses."""
+    absorbed = _absorbed_metadata()
+    if absorbed_type is None:
+        del absorbed["type"]
+    else:
+        absorbed["type"] = absorbed_type
+
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(),
+        "Survivor body.",
+        absorbed,
+        "Absorbed body.",
+        "entities/absorbed-id",
+        "concepts/survivor-id",
+    )
+
+    assert okf.TYPE_ALTERNATIVE_KEY not in merged
+
+
+def test_discarded_absorbed_type_is_named_only_when_the_survivor_blocks_it() -> None:
+    """#1293: the preview's source of truth -- the absorbed type that a
+    survivor's own runner-up displaced, else `None`."""
+    assert (
+        okf.discarded_absorbed_type(
+            _survivor_metadata(type_alternative="Project"),
+            _absorbed_metadata(type="Entity"),
+        )
+        == "Entity"
+    )
+    assert (
+        okf.discarded_absorbed_type(
+            _survivor_metadata(), _absorbed_metadata(type="Entity")
+        )
+        is None
+    )
+    assert (
+        okf.discarded_absorbed_type(
+            _survivor_metadata(type_alternative="Project"), _absorbed_metadata()
+        )
+        is None
+    )
+
+
 def test_build_merged_document_never_inherits_absorbed_event_date() -> None:
     """#1014c/ADR-0023: `event_date` records evidence about WHEN a single
     Source's event happened, not a property that generalizes to a merged
@@ -2403,8 +2485,10 @@ def test_build_merged_document_type_alternative_cannot_equal_merged_type() -> No
         "concepts/survivor-id",
     )
 
+    # #1293: the absorbed TYPE is what is recorded now, never the absorbed
+    # side's own runner-up, so the invariant holds: it differs from `type`.
     assert merged["type"] == "Person"
-    assert okf.TYPE_ALTERNATIVE_KEY not in merged
+    assert merged[okf.TYPE_ALTERNATIVE_KEY] == "Organization"
 
 
 def test_build_merged_document_absorbed_marker_never_crosses() -> None:
