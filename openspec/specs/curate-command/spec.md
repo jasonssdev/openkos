@@ -41,7 +41,11 @@ MUST then run and report, while a write stage (`writes: true`) MUST
 decline its per-item write walk — because per-item write confirmation
 cannot happen without a TTY — and MUST print a pointer to the
 corresponding standalone verb (e.g. `adjudicate --apply-same
---confirm-count` for Identity).
+--confirm-count` for Identity). The one exception is Identity's automatic
+pass under `--auto-merge`, which is not a per-item write walk and which
+MUST run on a non-TTY once the gate is accepted by `--auto`; the pass's
+spend is part of the Identity gate's disclosed call count, and the per-item
+remainder still declines with the pointer.
 
 #### Scenario: Gate states cost before any model call
 
@@ -72,6 +76,15 @@ corresponding standalone verb (e.g. `adjudicate --apply-same
   `adjudicate --apply-same --confirm-count`, and Contradictions runs and
   reports its findings
 
+#### Scenario: Non-TTY with --auto and --auto-merge runs only the automatic pass
+
+- GIVEN stdin is not a TTY, `--auto` and `--auto-merge` are passed, and
+  Identity has an eligible in-class group and an out-of-class group
+- WHEN `curate` reaches Identity
+- THEN the automatic pass runs and merges the eligible group, the per-item
+  write walk is declined with the pointer, and the Identity cost line's call
+  count covered the pass's judgments
+
 ### Requirement: Preconditions Stage Halts The Run
 
 `curate` MUST probe `vectors.db` via the existing degrade seam before
@@ -92,6 +105,12 @@ Identity MUST call `find_candidates` then `adjudicate_candidates`, then
 apply each accepted pair via `_prepare_one_merge`/`_commit_one_merge`,
 auto-committing per merge. N>2 groups MUST NOT be auto-merged; `curate`
 MUST print the exact pairwise `openkos merge` commands per group.
+When `--auto-merge` is passed and the run is eligible, Identity MUST run the
+automatic pass (`identity-auto-merge`) before the per-item walk, through the
+same merge cores with no reconcile, and MUST NOT offer a group again that
+the pass merged. The pass's merges are committed once per run
+(`workspace-autocommit`) rather than per merge; every other merge in Identity
+keeps its per-merge commit.
 Because `find_candidates` bounds and ranks its output before any
 adjudication call (`entity-resolution`: Bounded Candidate-Group
 Output Per Call), the number of `CandidateGroup`s Identity's probe
@@ -100,7 +119,8 @@ number of adjudication calls `_identity_run` issues, MUST never exceed
 `_MAX_CANDIDATE_GROUPS` regardless of corpus size — the SAME sequencer
 that already gates Identity's cost line and consent flow (curate-command:
 Per-Stage Cost Gate) is unchanged; only the upstream group count it reads
-from `probe.llm_calls` is bounded.
+from `probe.llm_calls` is bounded. A group beyond that cap is not seen by the
+automatic pass in that run, and the existing cap disclosure still applies.
 
 #### Scenario: Accepted pair is committed per-item
 
@@ -123,6 +143,27 @@ from `probe.llm_calls` is bounded.
 - WHEN `curate` runs the Identity stage with `--auto`
 - THEN the printed cost line's call count and the number of adjudication
   calls actually issued both stay at or below `_MAX_CANDIDATE_GROUPS`
+
+#### Scenario: The automatic pass precedes the per-item walk
+
+- GIVEN `--auto-merge`, an eligible run, one in-class group the pass merges
+  and one out-of-class group
+- WHEN Identity runs on a TTY
+- THEN the in-class group is merged first, without a prompt, and the
+  out-of-class group is then prompted individually
+
+#### Scenario: A group the pass declines is still prompted
+
+- GIVEN `--auto-merge`, an in-class group judged `same` at confidence 0.80
+- WHEN Identity runs on a TTY
+- THEN the pass does not merge it and the normal per-item prompt offers it
+
+#### Scenario: A group beyond the cap is not seen by the pass
+
+- GIVEN more candidate groups than `_MAX_CANDIDATE_GROUPS`, with an
+  eligible in-class group beyond the cap
+- WHEN `curate --auto --auto-merge` runs
+- THEN that group is not merged in this run and the cap disclosure is printed
 
 ### Requirement: Structure Stage Writes Through The Relate Core
 
@@ -260,12 +301,17 @@ is not a stage at all. Both refusals MUST run BEFORE the workspace gate, so
 a typo is reported as itself rather than as a missing workspace, and the
 refusal MUST name the acceptable stages. Identity is excluded because a
 merge absorbs one concept into another and DELETES the absorbed file; no
-flag and no config value may apply one unreviewed.
+flag and no config value may apply one unreviewed, with one exception: the
+per-run `--auto-merge` flag, which applies only the measured structural class
+under `identity-auto-merge` and leaves every other Identity group to its
+per-item prompt. `--auto-merge` is not an `--accept` stage name and does not
+widen `--accept`.
 
 Naming a stage in `--accept` IS per-item write consent for that stage, so
 an accepted stage MUST also pass the non-TTY write refusal — `curate --auto
 --accept structure` on a pipe writes, matching `suggest-relations --auto`.
-Identity MUST remain subject to that refusal on every path.
+Identity MUST remain subject to that refusal on every path, apart from the
+automatic pass under `--auto-merge`.
 
 #### Scenario: An accepted stage applies without prompting
 
@@ -286,6 +332,13 @@ Identity MUST remain subject to that refusal on every path.
 - GIVEN any workspace
 - WHEN `curate --accept strcture` runs
 - THEN the exit code is 2 and stderr names the offending value
+
+#### Scenario: `--auto-merge` does not make Identity acceptable in bulk
+
+- GIVEN an in-class group the pass merges and an out-of-class `same` group
+- WHEN `curate --auto-merge` runs on a TTY
+- THEN only the in-class group is merged without a prompt and the other is
+  prompted individually
 
 ### Requirement: Bulk Acceptance Excludes Asymmetric Relation Types
 
@@ -347,7 +400,9 @@ saving" for the standalone verbs, and `curate` MUST stop ignoring it.
 It MUST NOT reach Identity. A value set for the standalone verbs cannot
 become retroactive authorization to delete a concept, so every merge still
 prompts, and on a non-TTY run Identity still refuses its write walk and
-prints the standalone-verb hint.
+prints the standalone-verb hint. `review: false` MUST neither enable the
+automatic pass nor make Identity's accept-recommended offer unnecessary; both
+remain governed by their own per-run inputs.
 
 An explicit `--accept` MUST override `review` and name the exact accepted
 set rather than widening it, so an operator running with `review: false`
@@ -365,6 +420,12 @@ can still re-review a single stage without editing the config file.
 - GIVEN `review: false`, a Structure queue and a Metadata queue
 - WHEN `curate --accept structure` runs
 - THEN Structure applies silently and Metadata prompts per item
+
+#### Scenario: `review: false` does not enable the automatic pass
+
+- GIVEN `review: false` and an eligible in-class `same` group
+- WHEN `curate` runs without `--auto-merge`
+- THEN the group is not merged without a per-item answer
 
 ### Requirement: A Failed Writing Stage Discloses What It Already Applied
 
@@ -768,8 +829,9 @@ accepts the item and every remaining item of that stage that is acceptable in
 bulk, for the rest of the run -- the same set `--accept` applies. Structure's
 asymmetric relation types MUST still be asked per item (`a` on a symmetric
 prompt never applies one; the asymmetric prompt's own `a` keeps its per-type
-meaning), and `a` MUST NOT be offered on the Identity prompt, whose
-accept-recommended path is not defined. Before applying items without asking,
+meaning), and `a` MUST NOT be offered on the Identity per-item prompt. Identity's
+accept-recommended is a separate pre-pass question over the recommended set
+only, not an accept-remaining answer. Before applying items without asking,
 the stage MUST print a one-line notice on stderr that it is doing so. `a` is
 offered only on the prompt of a bulk-acceptable item.
 
@@ -790,3 +852,184 @@ offered only on the prompt of a bulk-acceptable item.
 - GIVEN one Identity pair
 - WHEN the operator answers `a`
 - THEN the answer is unrecognized and the prompt is asked again
+### Requirement: `--auto-merge` Applies The Measured Identity Class Without A Prompt
+
+`curate` MUST accept a boolean `--auto-merge` flag, off by default and
+meaningful only for the run it is passed to. When set and the run is
+eligible (`identity-auto-merge`: Run Eligibility Is Checked Once And Every
+Failure Is Reported), Identity MUST run an automatic pass before its
+per-item walk that merges the groups meeting `identity-auto-merge`:
+Per-Group Eligibility, without a per-item prompt. Every group the pass does
+not merge MUST continue through the normal Identity flow.
+
+`--auto-merge` MUST NOT imply `--auto`. Unattended use is `curate --auto
+--auto-merge`. With `--auto-merge` alone the Identity cost gate MUST behave
+as it does without the flag: it prompts on a TTY and, on a non-TTY, declines
+before any model call, so the automatic pass makes no judgment and no merge.
+The automatic pass MUST run only after the Identity cost gate has been
+accepted.
+
+`--auto-merge` together with `--reconcile` MUST be refused with exit 2,
+naming both flags, before any workspace gate or read, with no write and no
+model call.
+
+On a non-TTY, `--auto-merge` MUST exempt only the automatic pass from the
+Identity non-TTY write refusal. The interactive remainder MUST still be
+declined on a non-TTY exactly as today, with the standalone-verb pointer, and
+MUST NOT reach a prompt on a pipe.
+
+#### Scenario: Unattended run merges an eligible in-class pair
+
+- GIVEN stdin is not a TTY, an eligible run, and one in-class `same` group at
+  confidence 0.95
+- WHEN `curate --auto --auto-merge` runs
+- THEN the pair is merged, the disclosure block names it with
+  `openkos unmerge <survivor>`, and no prompt is printed
+
+#### Scenario: `--auto-merge` without `--auto` still hits the cost gate on a TTY
+
+- GIVEN a TTY and an in-class `same` group
+- WHEN `curate --auto-merge` runs
+- THEN the Identity cost line is printed and a confirmation is asked before
+  any model call
+
+#### Scenario: `--auto-merge` without `--auto` on a non-TTY spends nothing
+
+- GIVEN stdin is not a TTY and an in-class `same` group
+- WHEN `curate --auto-merge` runs without `--auto`
+- THEN Identity declines before any model call, no group is merged, and no
+  prompt is printed
+
+#### Scenario: `--auto-merge` with `--reconcile` is refused
+
+- GIVEN any workspace
+- WHEN `curate --auto-merge --reconcile` runs
+- THEN the exit code is 2, stderr names both flags, and nothing is read,
+  written or sent to a model
+
+#### Scenario: The non-TTY remainder is still declined
+
+- GIVEN stdin is not a TTY, one eligible in-class group and one out-of-class
+  `same` group
+- WHEN `curate --auto --auto-merge` runs
+- THEN the in-class group is merged, the out-of-class group is neither
+  judged nor merged, and the stage notice counts it among the candidate
+  groups left for review and points to running `openkos curate` on a terminal
+
+#### Scenario: The flag does not carry over
+
+- GIVEN a run that used `--auto-merge`
+- WHEN `curate` runs again without the flag
+- THEN no group is merged without a per-item answer
+
+#### Scenario: `--accept identity` stays refused alongside the flag
+
+- GIVEN any workspace
+- WHEN `curate --auto-merge --accept identity` runs
+- THEN the exit code is 2 and nothing is written
+
+### Requirement: Identity Offers Accept-Recommended For In-Class Groups
+
+When the run is eligible and, after the automatic pass (if any), at least one
+remaining Identity group belongs to the recommended set
+(`identity-auto-merge`: The Recommended Set For Accept-Recommended), Identity
+MUST, before its per-item walk, offer one accept-recommended question on a
+TTY. The offer MUST list every group of the set with its survivor, its
+absorbed id and the undo command `openkos unmerge <survivor>`. If the
+operator accepts, each listed group MUST be applied as an ordinary per-item
+merge with its own commit (#800) and its own `log.md` bullet. If the operator
+declines, every group MUST proceed to the per-item walk unchanged.
+
+Accept-recommended MUST be a separate pre-pass question, not an answer on the
+per-item prompt. It MUST NOT be offered when the set is empty, when the run
+is ineligible, or on a non-TTY. Groups outside the set MUST keep their
+per-item prompt whatever the operator answers. It MUST NOT be added to
+`adjudicate --apply` or `adjudicate --apply-same`.
+
+The offer MUST NOT depend on `--auto-merge`, but its set only holds verdicts
+judged in this run, so without the flag a verdict served from the store or a
+queue row is not offered and the cost line is unchanged. When the flag was not
+passed, run eligibility MUST be established only after judging and only when
+at least one fresh in-class `same` verdict exists; an ineligible run then
+offers nothing and prints no ineligibility line, because no automatic pass was
+requested.
+
+Each listed group MUST be prepared immediately before its own write, because
+every earlier merge changes what the next one reads. A bulk answer MUST NOT
+cover a group whose stacked body crosses the stacked-body guardrail when it is
+prepared (the rule `adjudicate --apply-same` applies): such a group MUST be
+left unmerged, MUST be named on stderr as keeping its per-item prompt, and
+MUST then be prompted individually in the per-item walk.
+
+#### Scenario: The offer lists survivor, absorbed and undo per item
+
+- GIVEN a TTY and two in-class groups judged `same`, at confidences 0.95 and
+  0.60
+- WHEN Identity reaches the accept-recommended offer
+- THEN both groups are listed, each with survivor, absorbed and `openkos
+  unmerge <survivor>`
+
+#### Scenario: Accepting applies per-merge commits
+
+- GIVEN the previous scenario and the operator accepts
+- WHEN Identity applies the set
+- THEN two merges are applied with two separate commits
+
+#### Scenario: Declining falls through to per-item prompts
+
+- GIVEN the same offer and the operator declines
+- WHEN Identity continues
+- THEN both groups are prompted individually and none is merged without `y`
+
+#### Scenario: An out-of-set group keeps its prompt after accepting
+
+- GIVEN an offer for one in-class group and a separate out-of-class `same`
+  group, and the operator accepts
+- WHEN Identity continues
+- THEN the in-class group is merged and the out-of-class group is prompted
+  individually
+
+#### Scenario: No offer for an empty set
+
+- GIVEN no remaining group is in the recommended set
+- WHEN Identity runs
+- THEN no accept-recommended question is printed
+
+#### Scenario: No offer on a non-TTY
+
+- GIVEN stdin is not a TTY and a group in the recommended set
+- WHEN `curate --auto` runs without `--auto-merge`
+- THEN no accept-recommended question is printed and no group is merged
+
+#### Scenario: A guardrail-crossing group is listed but keeps its prompt
+
+- GIVEN an offer for two in-class groups, one of which merges to a stacked
+  body crossing the guardrail, and the operator accepts
+- WHEN Identity applies the set
+- THEN the other group is merged with its own commit
+- AND the crossing group is not merged, is named on stderr as keeping its
+  per-item prompt, and is prompted individually in the walk
+
+#### Scenario: A served verdict is not offered without `--auto-merge`
+
+- GIVEN a TTY, an in-class group whose `same` verdict is served from the
+  store, and a second in-class group judged `same` in this run
+- WHEN `curate --auto` runs without `--auto-merge`
+- THEN only the group judged in this run is offered
+- AND the cost line prices exactly the groups it priced before this change
+
+#### Scenario: An ineligible run offers nothing and is silent without the flag
+
+- GIVEN a TTY, a fresh in-class `same` group, and a run whose model digest
+  differs from the measured digest
+- WHEN `curate --auto` runs without `--auto-merge`
+- THEN no accept-recommended question is printed
+- AND no ineligibility line is printed
+- AND the group is prompted individually in the walk
+
+#### Scenario: Groups already merged by the pass are not offered again
+
+- GIVEN `--auto-merge` merged one in-class group in this run
+- WHEN Identity reaches the accept-recommended offer
+- THEN the merged group is not listed
+
