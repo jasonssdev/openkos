@@ -593,6 +593,9 @@ def suggest_relations(
     # the SAME client the typing run later sends through (#240). Construction
     # performs no I/O.
     llm = ports.chat_client(cfg, "edge_typing")
+    # The model THIS task resolved (#1294), not the global `model:`: the
+    # not-installed refusal must name the tag the user has to pull.
+    task_model = config.resolve_task_model(cfg, "edge_typing")
     local_exemption = ports.resolve_local_exemption(
         cast(application_backends.HasLocality, llm), cfg
     )
@@ -630,7 +633,7 @@ def suggest_relations(
         # there is nothing untyped at all.
         if request.edge_offset > 0 and not edges:
             observer.empty_window(request.edge_offset)
-            return SuggestRelationsOutcome(status="empty_window", model=cfg.model)
+            return SuggestRelationsOutcome(status="empty_window", model=task_model)
         # #378 slice 2: pass 3's cap truncation, never silent -- but restricted
         # to what THIS caller may see, re-derived through the same sensitivity
         # walk `candidate_edges` just ran. Read INSIDE the `with` block, since
@@ -665,7 +668,7 @@ def suggest_relations(
                 status="no_candidates",
                 truncation_notice=truncation,
                 next_offset=next_offset,
-                model=cfg.model,
+                model=task_model,
             )
 
     # Everything from here on runs OUTSIDE the `with` block: the minutes-long
@@ -700,7 +703,7 @@ def suggest_relations(
             total=total,
             truncation_notice=truncation,
             next_offset=next_offset,
-            model=cfg.model,
+            model=task_model,
         )
 
     # The unattended budget's bound truncates the edges still to type, in
@@ -742,8 +745,8 @@ def suggest_relations(
         ) from exc
     except BackendModelNotFound as exc:
         raise ModelNotInstalled(
-            f"openkos {_VERB}: failed -- model '{cfg.model}' is "
-            f"not installed. {application_backends.install_hint(cfg, cfg.model)}, "
+            f"openkos {_VERB}: failed -- model '{task_model}' is "
+            f"not installed. {application_backends.install_hint(cfg, task_model)}, "
             "then try again."
         ) from exc
     # The two specific handlers above MUST precede this generic handler: both
@@ -776,7 +779,7 @@ def suggest_relations(
         truncation_notice=truncation,
         next_offset=next_offset,
         failure=batch.failure,
-        model=cfg.model,
+        model=task_model,
         batch=batch,
         cfg=cfg,
         deferred_by_bound=deferred,

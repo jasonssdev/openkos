@@ -637,6 +637,54 @@ def test_suggest_volatility_partial_batch_reports_completed_then_exits_one(
     assert "Traceback" not in result.stderr
 
 
+def test_suggest_volatility_model_not_found_names_the_resolved_task_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace that keys `models: {volatility_typing: ...}` gets the
+    TASK's model named in the not-installed refusal, not `model:` (#1294)."""
+    _init_workspace(tmp_path, monkeypatch)
+    global_model = "llama3.2:1b-openkos-test"
+    task_model = "gemma2:27b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {global_model}\nmodels:\n  volatility_typing: {task_model}\n",
+        encoding="utf-8",
+    )
+
+    def _raise_model_not_found(
+        bundle_dir: Path, **kwargs: object
+    ) -> TierSuggestionBatch:
+        raise OllamaModelNotFound("Model not found (404): {}")
+
+    monkeypatch.setattr("openkos.cli.main.suggest_volatility", _raise_model_not_found)
+
+    result = runner.invoke(app, ["suggest-volatility"])
+
+    assert result.exit_code == 1
+    assert f"model '{task_model}' is not installed" in result.stderr
+    assert f"ollama pull {task_model}" in result.stderr
+    assert global_model not in result.stderr
+
+
+def test_suggest_volatility_partial_batch_names_the_resolved_task_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The partial-batch line names the `volatility_typing` model (#1294)."""
+    _init_workspace(tmp_path, monkeypatch)
+    global_model = "llama3.2:1b-openkos-test"
+    task_model = "gemma2:27b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {global_model}\nmodels:\n  volatility_typing: {task_model}\n",
+        encoding="utf-8",
+    )
+    _partial_volatility_batch(monkeypatch, OllamaModelNotFound("Model not found (404)"))
+
+    result = runner.invoke(app, ["suggest-volatility"])
+
+    assert result.exit_code == 1
+    assert f"ollama pull {task_model}" in result.stderr
+    assert global_model not in result.stderr
+
+
 def test_suggest_volatility_partial_batch_unavailable_keeps_remediation_and_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

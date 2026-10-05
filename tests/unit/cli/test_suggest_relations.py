@@ -587,6 +587,56 @@ def test_suggest_relations_model_not_found_maps_to_exit_one(
     assert _snapshot(tmp_path) == before
 
 
+def test_suggest_relations_model_not_found_names_the_resolved_task_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace that keys `models: {edge_typing: ...}` gets the TASK's
+    model named in the not-installed refusal, not the global `model:` (#1294)."""
+    _init_workspace(tmp_path, monkeypatch)
+    global_model = "llama3.2:1b-openkos-test"
+    task_model = "gemma2:27b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {global_model}\nmodels:\n  edge_typing: {task_model}\n",
+        encoding="utf-8",
+    )
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+
+    def _raise_model_not_found(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        raise OllamaModelNotFound("Model not found (404): {}")
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _raise_model_not_found)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 1
+    assert f"model '{task_model}' is not installed" in result.stderr
+    assert f"ollama pull {task_model}" in result.stderr
+    assert global_model not in result.stderr
+
+
+def test_suggest_relations_partial_batch_names_the_resolved_task_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The partial-batch line names the `edge_typing` model too (#1294)."""
+    _init_workspace(tmp_path, monkeypatch)
+    global_model = "llama3.2:1b-openkos-test"
+    task_model = "gemma2:27b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {global_model}\nmodels:\n  edge_typing: {task_model}\n",
+        encoding="utf-8",
+    )
+    _two_edge_partial_batch(monkeypatch, OllamaModelNotFound("Model not found (404)"))
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 1
+    assert "1 of 2" in result.stderr
+    assert f"ollama pull {task_model}" in result.stderr
+    assert global_model not in result.stderr
+
+
 def _init_openai_compatible_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
