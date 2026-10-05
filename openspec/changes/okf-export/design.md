@@ -1,6 +1,7 @@
 # Design: okf-export
 
-Inputs: `proposal.md`, `docs/roadmap.md` (MVP 5),
+Refs #1301. ADR-0048. Inputs: `proposal.md`, the owner's decisions on #1301
+(Q1 = C, Q2 = C, Q3 = C, Q4 = A), `docs/roadmap.md` (MVP 5),
 `docs/knowledge-object-model.md` ("Sensitivity and access boundaries"),
 ADR-0003, ADR-0008, ADR-0019, ADR-0028, ADR-0039, ADR-0042, the OKF v0.2
 SPEC (§2, §3, §4.1, §5.1, §5.4, §6, §8, §9, §11, §12), and the code at
@@ -9,7 +10,7 @@ SPEC (§2, §3, §4.1, §5.1, §5.4, §6, §8, §9, §11, §12), and the code at
 ## Technical approach
 
 ```
-openkos export <target> [--include-private] [--auto]          (cli/main.py: parse, present, exit)
+openkos export <target> [--include-private] [--allow-below-source] [--auto]   (cli/main.py)
         |
         v
  target checks: absent or empty, outside workspace  ------------------ refuse, exit 1
@@ -17,15 +18,15 @@ openkos export <target> [--include-private] [--auto]          (cli/main.py: pars
         v
  export_service.plan(workspace, include_private)                (application/export_service.py)
    1. one walk of bundle/ via okf._iter_docs  -> {path: bytes} snapshot (inputs)
-   2. allowed = sensitivity.exportable_concept_ids(...)          (fail-closed ALLOWED set)
+   2. boundary = sensitivity.export_boundary(metadata, ...)       (fail-closed ALLOWED set + reasons)
    3. superseded = lifecycle.superseded_from_metadata(all docs)  (whole bundle, withheld included)
    4. per allowed doc:
-        frontmatter = okf.export_frontmatter(meta, allowed)      (relations/provenance filter,
-                                                                  sources re-projection,
-                                                                  strip origin_key/merged_from)
-        frontmatter = okf.apply_deprecation_export(...)          (in memory only)
-        body        = links.withhold_links(body, file, allowed)  (Q1)
-   5. index.md -> index.filter_index(text, allowed); log.md -> log.render_export_log(date)  (Q3)
+        text = okf.export_document(text, allowed, superseded, complete)
+                 (relations/provenance filter, sources re-projection,
+                  strip origin_key/merged_from, deprecated-status projection)
+        body = links.withhold_links(body, file, allowed)        (decision 1)
+   5. index.md -> index.filter_index_for_export(text, allowed);
+      log.md   -> log.render_export_log(date)                    (decision 3)
    -> ExportPlan(files, withheld-by-reason, status-drift count)
         |
         v
@@ -33,7 +34,7 @@ openkos export <target> [--include-private] [--auto]          (cli/main.py: pars
         |
         v
  export_service.publish(plan, target)
-   a. write every file under <target-parent>/.<target-name>.openkos-export-<pid>/
+   a. write every file under mkdtemp(prefix=".<target-name>.openkos-export-", dir=<target-parent>)
    b. okf.check_conformance(staging)          -- violation -> rm staging, exit 1
    c. leak_check(staging, withheld ids)       -- hit       -> rm staging, exit 1
    d. re-read every input; bytes differ       -- changed   -> rm staging, exit 3
@@ -55,8 +56,10 @@ separately-audited egress path.
 
 ### D2. The boundary is its own allowed-set predicate
 
-`sensitivity.exportable_concept_ids(bundle_dir, *, include_private: bool)`
-returns the ids that MAY leave, built from one walk, mirroring
+`sensitivity.export_boundary(docs, *, include_private, allow_below_source)`
+is pure over the metadata the service already read in its one walk (so the
+bytes the drift check compares are the bytes the predicate judged), and
+returns the ids that MAY leave plus a reason per withheld id, mirroring
 `disclosable_concept_ids` (ADR-0028): an id the walk never reached —
 an unreadable file, a file created after the walk — is withheld by
 construction. It reuses the fail-closed rank (absent, blank, non-string and
@@ -68,6 +71,14 @@ and `private` under `--include-private`; there is no parameter that reaches
 "not exported or shared unless you explicitly choose to" and
 `confidential` is "excluded from exports and sharing". The predicate also
 returns, per withheld id, its reason, which the preview groups.
+
+The below-source rule (decision 2, ADR-0048) is folded into the same
+predicate: an allowed object whose own rank is below the maximum rank over
+its transitive provenance ancestors is withheld unless `allow_below_source`.
+The ancestor walk is a few lines over the same metadata map, kept in
+`sensitivity.py` so the module stays a leaf that imports only `okf`. It
+ranks ancestors with the fail-closed rank, skips `raw/` entries and ids
+naming no document, and treats a malformed `provenance` as below-source.
 
 Rationale for a separate predicate rather than reusing `blocks_disclosure`:
 MCP's threshold is `confidential` with a launch opt-in that admits it; the
@@ -138,11 +149,11 @@ the background is never blocked by an export.
 
 ### D7. Stage beside the target, publish by rename
 
-Staging lives in the target's parent so `os.replace` is a same-filesystem
-rename. A refused or interrupted export leaves at most a dot-prefixed
-staging directory with the pid in its name, which the next run of the same
-target removes if its pid is not alive; the target itself is either absent
-or complete. A target inside the workspace is refused because writing
+Staging lives in the target's parent (`tempfile.mkdtemp`, dot-prefixed) so
+the publish is a same-filesystem rename; an empty target directory is
+removed just before the rename. A refused export removes its staging
+directory; only a killed process can leave one behind, dot-prefixed and
+never at the target. The target itself is either absent or complete. A target inside the workspace is refused because writing
 there would put non-concept or duplicate concept files inside `bundle/` or
 next to `raw/` (AGENTS.md: never put non-concept files inside `bundle/`).
 
@@ -174,13 +185,12 @@ CLI            export_service            okf / links / sensitivity        filesy
 ## ADR gate
 
 Evaluated against both conditions. The boundary thresholds come from the
-KOM and ADR-0028 already; they are not a new decision. The choices that
-would be hard to reverse once exports have been shared are the answers to
-open questions Q1 (editing link labels, a departure from ADR-0028's
-"prose is not redacted") and Q2 (whether the boundary honors a human
-downgrade below the high-water mark). They are not decided here, so no ADR
-is written now. If the owner chooses Q1 option C or Q2 option B or C,
-task 0.2 writes ADR-0048 (next free number) as `Proposed` before Phase 1.
+KOM and ADR-0028 already; they are not a new decision. The owner's answers
+to Q1 (link labels into withheld objects become `[withheld]`, a departure
+from ADR-0028's "prose is not redacted" at this boundary) and Q2 (own label,
+but below-source objects withheld unless `--allow-below-source`) are both
+hard to reverse once exports have been shared, so they are recorded as
+ADR-0048, status `Proposed`.
 
 ## Testing strategy
 

@@ -1,9 +1,8 @@
 # Proposal: okf-export — write a shareable, conformant OKF bundle that withholds what must not leave the device
 
-MVP 5 (Interoperability), first deliverable, per `docs/roadmap.md` ("OKF
-export first … sensitivity enforcement at the export boundary — confidential
-objects excluded from exports and sharing"). No issue exists yet; one is
-opened before the first implementation PR and referenced from there.
+Refs #1301. ADR-0048. MVP 5 (Interoperability), first deliverable, per
+`docs/roadmap.md` ("OKF export first … sensitivity enforcement at the export
+boundary — confidential objects excluded from exports and sharing").
 
 ## Intent
 
@@ -38,15 +37,16 @@ makes OpenKOS's conformance claim testable by somebody else.
 | `sources` as a projection of `provenance` (§5.1) | yes | filter `provenance` to exported ids, then RE-project `sources` from it — never edit `sources` directly |
 | deprecated-status export (`status: deprecated` + marker) | kept consistent by `repair` | project it in memory over the whole bundle so drift on disk never reaches an external reader |
 | Sensitivity | a label on every object | enforce it: allowed set, fail-closed |
-| Pointers into withheld objects | n/a (nothing is withheld in place) | remove every structured pointer; decide what happens to body links (open question 1) |
+| Pointers into withheld objects | n/a (nothing is withheld in place) | remove every structured pointer; body links lose target and label (decision 1) |
 
 ## Scope
 
 ### In Scope
 
 - A new read-only verb `openkos export <target-dir>`, with
-  `--include-private` (explicit opt-in to export `private` objects) and
-  `--auto` (skip the confirm gate), following the preview / confirm / exit
+  `--include-private` (explicit opt-in to export `private` objects),
+  `--allow-below-source` (export an object labelled below its sources,
+  decision 2) and `--auto` (skip the confirm gate), following the preview / confirm / exit
   code conventions of `docs/cli.md` and the TTY output convention of
   ADR-0042.
 - A fail-closed ALLOWED-set predicate for the export boundary in
@@ -57,8 +57,8 @@ makes OpenKOS's conformance claim testable by somebody else.
 - Frontmatter transformation inside the OKF seam (`model/okf.py`):
   `relations:` and `provenance:` filtered to exported ids, `sources:`
   re-projected, deprecated-status projected, machine-local keys stripped.
-- Removal of structured pointers into withheld objects from bodies (per open
-  question 1), from `index.md`, and from `log.md` (per open question 3).
+- Removal of structured pointers into withheld objects from bodies
+  (decision 1) and from `index.md`; a fresh `log.md` (decision 3).
 - Two self-checks on the staged output before it is published: §11
   conformance (`okf.check_conformance`) and a leak check that no exported byte
   contains a pointer to a withheld id.
@@ -76,16 +76,15 @@ makes OpenKOS's conformance claim testable by somebody else.
   resolution, its own arc).
 - Tarball / zip output: OKF §3 permits both, and `tar`/`zip` over the
   exported directory produce them; a built-in archive flag can follow.
-- Shipping `raw/` material (open question 4 records the choice; this change
-  ships none).
+- Shipping `raw/` material (decision 4: none is shipped).
 - Exporting `confidential` objects under any flag.
 - Writing anything to the workspace: no `log.md` entry, no commit, no lock.
 - Incremental / re-export into an existing export directory.
 - A stable public Python API (MVP 6, ADR-0039): export is built on a narrow
   `application/` service only.
 - Redacting prose: text that is not a link stays as written (ADR-0028's
-  "exclusion, not redaction" rule), unless open question 1 is answered
-  otherwise for link labels.
+  "exclusion, not redaction" rule); link labels into withheld objects are
+  replaced (decision 1, ADR-0048).
 
 ## Approach
 
@@ -155,7 +154,7 @@ None beyond shipped code: `okf.check_conformance`,
 
 - Exporting `examples/good-life-demo` with `--include-private` yields exactly
   `concepts/epicureanism` and `sources/notes-on-the-enchiridion-2026-07-05`
-  plus `index.md` (and `log.md` per Q3), passes `okf.check_conformance`, and
+  plus `index.md` and a fresh `log.md`, passes `okf.check_conformance`, and
   no output byte contains `stoicism`, `maria-salazar`,
   `frame-the-essay-on-the-dichotomy-of-control` or
   `call-with-maria-2026-07-14` as a link target, relation target,
@@ -164,7 +163,10 @@ None beyond shipped code: `okf.check_conformance`,
   writes nothing.
 - Two exports of an unchanged workspace are byte-identical.
 
-## Open Questions (product decisions — not decided here)
+## Decisions (resolved by the owner on 2026-10-05, recorded on #1301)
+
+Q1 = C, Q2 = C, Q3 = C, Q4 = A — each the recommendation below. Q1 and Q2
+are recorded as ADR-0048. The options are kept for the record.
 
 ### Q1. A link in an exported body that points at a withheld object
 
@@ -185,12 +187,12 @@ confidential.
   confidential link withholds the whole linker, transitively; most private
   objects in a real workspace would vanish.
 
-**Recommendation: C.** ADR-0028 already classes titles and ids as
+**Decided: C.** ADR-0028 already classes titles and ids as
 structured channels to filter, and a link label written by the engine is
 the target's title — it is that channel, embedded in the body. Prose
 outside links stays verbatim, so the "exclusion, not redaction" rule still
-holds for text. If chosen, record the departure from ADR-0028 for the export
-boundary in ADR-0048.
+holds for text. The departure from ADR-0028 for the export boundary is
+ADR-0048.
 
 ### Q2. An object a human downgraded below its sources' sensitivity
 
@@ -207,7 +209,7 @@ stale machine labelling (lint's `below-source-sensitivity`).
   mark unless `--allow-below-source`** is given, and list those objects in
   the preview.
 
-**Recommendation: C.** It keeps one predicate for the label and honors the
+**Decided: C.** It keeps one predicate for the label and honors the
 human downgrade, but puts friction exactly where the machine and the human
 may disagree — the same placement ADR-0008 uses for `--allow-downgrade`.
 
@@ -224,7 +226,7 @@ forgotten-object tombstones, and lines that link several objects at once.
 - **C. Write a fresh `log.md`** with one `**Export**` entry dated the export
   day.
 
-**Recommendation: C.** Export is a publication, not a mirror; the workspace
+**Decided: C.** Export is a publication, not a mirror; the workspace
 log is curation history whose prose cannot be filtered fail-closed. A fresh
 one-entry log keeps the bundle self-describing at no leak risk.
 
@@ -240,6 +242,6 @@ the export.
   unprocessed original — often far more than the compiled Source says.
 - **C. Ship nothing and drop `resource`** from exported Sources.
 
-**Recommendation: A** for this change, with B as a later opt-in flag. The
+**Decided: A** for this change, with B as a later opt-in flag. The
 compiled bundle is what OKF consumers read; the raw original is the most
 sensitive artifact in the workspace and should never leave by default.

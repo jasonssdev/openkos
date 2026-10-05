@@ -1,6 +1,6 @@
 # Tasks: okf-export — write a shareable, conformant OKF bundle that withholds what must not leave the device
 
-MVP 5 (Interoperability), first deliverable. Design: `design.md`. Proposal:
+Refs #1301. ADR-0048. MVP 5 (Interoperability), first deliverable. Design: `design.md`. Proposal:
 `proposal.md`. Delta specs: `specs/okf-export/spec.md` (new capability),
 `specs/workspace-lock/spec.md` (MODIFIED "Every Command Is Classified").
 
@@ -33,35 +33,46 @@ advisory only), stacked in order.
 
 ## Phase 0 — Decisions before code
 
-- [ ] 0.1 Record the owner's answers to Q1–Q4 (`proposal.md`) in the
+- [x] 0.1 Record the owner's answers to Q1–Q4 (`proposal.md`) in the
   proposal, and update the two "Pending open question" notes in
   `specs/okf-export/spec.md` (and, for Q2 option C, add the
   `--allow-below-source` requirement and scenarios) before Phase 1 starts.
-- [ ] 0.2 If Q1 is answered C or Q2 is answered B or C, write
+- [x] 0.2 If Q1 is answered C or Q2 is answered B or C, write
   `docs/adr/0048-*.md` from `docs/adr/template.md`, status `Proposed`, with
   its row in `docs/adr/README.md`; run
   `uv run pytest -q tests/unit/test_adr_index.py`.
-- [ ] 0.3 Open the issue for this change and reference it from the proposal
-  header.
+- [x] 0.3 Open the issue for this change and reference it from the proposal
+  header. (#1301, opened by the owner.)
 
 ## Phase 1 — The export boundary (`sensitivity.py`)
 
 - [ ] 1.1 [TEST] `tests/unit/test_sensitivity_export.py`:
-  `exportable_concept_ids(bundle, include_private=False)` admits `public`
-  only; with `True` admits `public` + `private`; withholds `confidential`,
-  absent, blank, whitespace, non-string and unknown labels under both; an
-  unparseable document and one without `type` are withheld; a Source with
-  `ingest_pending: true` is withheld. Each withheld id carries its reason.
-  RED: function missing.
-- [ ] 1.2 [IMPL] Add `exportable_concept_ids` (allowed set, one
-  `okf._iter_docs` walk, reasons per withheld id), reusing
-  `blocks_llm_send`'s fail-closed rank. GREEN 1.1.
-- [ ] 1.3 [TEST] Signature guard: the function exposes no parameter beyond
-  `bundle_dir` and `include_private` (inspect the signature), so no caller
-  can admit `confidential`. [MUT] add an `expose_confidential` keyword,
-  observe RED, revert.
-- [ ] 1.4 [MUT] Flip the absent-label branch to rank `private` (ADR-0003's
-  combine default); a 1.1 test must go RED. Revert, purge `__pycache__`.
+  `export_boundary(docs, include_private=False, allow_below_source=False)`
+  admits `public` only; with `include_private=True` admits `public` +
+  `private`; withholds `confidential`, absent, blank, whitespace, non-string
+  and unknown labels under every flag; an unreadable document (`None`) and
+  one without `type` are withheld; a Source with `ingest_pending: true` is
+  withheld. Each withheld id carries its reason. RED: function missing.
+- [ ] 1.2 [IMPL] Add `export_boundary` (pure over an id -> metadata map,
+  reasons per withheld id), reusing `blocks_llm_send`'s fail-closed rank.
+  GREEN 1.1.
+- [ ] 1.3 [TEST] Below-source rule (ADR-0048): a `private` object citing a
+  `confidential` Source is withheld as below-source unless
+  `allow_below_source`; the walk is transitive (through an intermediate
+  concept); an unreadable or unlabelled ancestor ranks `confidential`; a
+  `raw/` entry and a dangling id contribute nothing; a malformed
+  `provenance` counts as below-source; `below_source` lists every id the
+  rule withheld or admitted. RED: rule missing.
+- [ ] 1.4 [IMPL] The ancestor walk and the rule. GREEN 1.3.
+- [ ] 1.5 [TEST] Signature guard: the function exposes no parameter beyond
+  `docs`, `include_private` and `allow_below_source`, so no caller can admit
+  `confidential`. [MUT] add an `expose_confidential` keyword, observe RED,
+  revert.
+- [ ] 1.6 [MUT] (a) Flip the absent-label branch to rank `private`
+  (ADR-0003's combine default); (b) drop the `confidential` withhold; (c)
+  make the below-source comparison `<=`-inverted / skip the transitive step;
+  (d) admit `private` without the flag. Each must turn a named test RED.
+  Revert by inverse edit, purge `__pycache__`.
 
 ## Phase 2 — Exported frontmatter (`model/okf.py`)
 

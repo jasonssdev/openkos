@@ -30,14 +30,21 @@ withheld by construction. A concept is allowed only when its document reads
 and parses, carries a non-empty `type`, carries no `ingest_pending` marker,
 and its own `sensitivity` is `public`, or is `private` and the run was given
 `--include-private`. A `confidential`, absent, blank, non-string or
-unrecognized `sensitivity` MUST be withheld under every flag. The predicate
-MUST live in `sensitivity.py` beside the other boundary predicates and MUST
+unrecognized `sensitivity` MUST be withheld under every flag. A symlinked
+document MUST be withheld as unreadable. The predicate MUST live in
+`sensitivity.py` beside the other boundary predicates, MUST take only the
+documents' metadata, `include_private` and `allow_below_source`, and MUST
 NOT accept any parameter that admits `confidential`.
 
-(Pending open question Q2 in `proposal.md`: this requirement decides on the
-object's own label. If option C is chosen, an object whose own label sits
-below its provenance high-water mark is additionally withheld unless
-`--allow-below-source` is given, and the preview lists those objects.)
+An otherwise-allowed object whose own label ranks below the highest label
+among its provenance ancestors (transitively, through every ancestor that is
+a concept document in the bundle) MUST be withheld unless the run is given
+`--allow-below-source` (ADR-0048). For this test an ancestor that cannot be
+read, or whose label is missing or unrecognized, ranks as `confidential`; a
+provenance entry under `raw/` or naming no document in the bundle
+contributes nothing; an object whose `provenance` is present but malformed
+counts as below its sources. Every object this rule withholds or admits
+MUST be listed by id in the preview.
 
 #### Scenario: Private objects stay home by default
 
@@ -71,12 +78,28 @@ below its provenance high-water mark is additionally withheld unless
 - THEN that Source is not in `out/` and the report counts it as withheld
   for an incomplete ingest
 
+#### Scenario: An object labelled below its source is withheld by default
+
+- GIVEN `concepts/a` labelled `private` with `provenance: [sources/s]`, and
+  `sources/s` labelled `confidential`
+- WHEN `openkos export out/ --include-private` runs
+- THEN `concepts/a` is not in `out/`, and the preview names it as below its
+  sources
+
+#### Scenario: The human downgrade is honored on the explicit flag
+
+- GIVEN the same bundle
+- WHEN `openkos export out/ --include-private --allow-below-source` runs
+- THEN `concepts/a` is in `out/`, `sources/s` is not, and `concepts/a`
+  carries no pointer to `sources/s`
+
 ### Requirement: Exported Documents Keep Their Concept IDs
 
 Every exported concept MUST be written at the same bundle-relative path it
 has in `bundle/`, so its Concept ID (OKF §2) is identical on both sides of
-the boundary. Only `.md` concept documents and the reserved files
-`index.md` and `log.md` MUST be written; `bundle/.state/`, every other
+the boundary. Only `.md` concept documents and the bundle-root reserved
+files `index.md` and `log.md` MUST be written (a reserved file in a
+subdirectory is not exported); `bundle/.state/`, every other
 dot-directory, every non-`.md` file, and `raw/` MUST NOT be read into the
 output.
 
@@ -166,17 +189,17 @@ projection and name `openkos repair` as the fix.
 
 ### Requirement: Body Links Into A Withheld Object Are Removed
 
-Every markdown link in an exported document's body that resolves to a
-concept id that is not exported — in the bundle-relative (`/x.md`) or the
+Every markdown link in an exported document's body whose target resolves
+inside the bundle to a `.md` path that is not an exported concept or a
+bundle-root reserved file — in the bundle-relative (`/x.md`) or the
 relative (`./x.md`, `../x.md`) form, inline or reference-style — MUST be
 rewritten so that the output carries neither the withheld id nor a link to
 it. Its label MUST be replaced by the fixed text `[withheld]`. Text outside
 links MUST be kept as written. A link inside a fenced code block is text,
 not a link, and is subject only to the leak check. Links to exported ids,
-external URLs, and anchors MUST be kept unchanged.
-
-(Pending open question Q1 in `proposal.md`: this requirement encodes the
-recommended option C; the label rule changes if another option is chosen.)
+external URLs, and anchors MUST be kept unchanged. A reference-style
+definition into a withheld object MUST be removed, and every use of its
+reference label MUST become `[withheld]` (ADR-0048).
 
 #### Scenario: A Related line into a confidential concept
 
@@ -201,10 +224,9 @@ bullet whose link resolves to an id that is not exported, and MUST drop a
 section heading left with no entries; the bundle-root `okf_version`
 frontmatter MUST be kept. The exported `log.md` MUST be a fresh log
 following OKF §9 with one `**Export**` entry under the export date that
-names no object, and MUST NOT carry any line of `bundle/log.md`.
-
-(Pending open question Q3 in `proposal.md`: the `log.md` rule encodes the
-recommended option C.)
+names no object, and MUST NOT carry any line of `bundle/log.md`. A bullet
+of `index.md` is dropped when ANY of its links resolves to a withheld
+object, not only its first.
 
 #### Scenario: A withheld object leaves no index line
 
@@ -224,9 +246,11 @@ recommended option C.)
 The export MUST build the whole output in a staging directory beside the
 target and run two checks over the staged tree before publishing it: OKF
 §11 conformance via `okf.check_conformance`, and a leak check that no
-staged file's bytes contain any withheld concept id in a link-target,
-relation-target, provenance or `sources` form (`/<id>.md`, `<id>.md`
-relative to the referring file, or the bare id as a YAML value). If either
+staged file's bytes contain any withheld concept id as a token: a
+whitespace- or punctuation-delimited token that, after removing a leading
+`/` and a trailing `.md` or `#anchor`, equals a withheld id, or that
+resolves to one relative to the referring file. Here "withheld" means
+every concept document in the bundle that is not exported. If either
 check fails, the export MUST remove the staging directory, write nothing at
 the target, name the failing file and rule, and exit 1. Only when both pass
 MUST the staging directory be renamed to the target.
@@ -267,16 +291,19 @@ directory, publish nothing, and exit 3, so that a re-run is safe.
 
 ### Requirement: `openkos export` Surface And Exit Codes
 
-`openkos export <target>` MUST take one positional target directory. The
-target MUST NOT exist or MUST be an empty directory, and MUST NOT be inside
-the workspace; otherwise the verb refuses with exit 1 before reading the
-bundle. Before writing, the verb MUST print a preview stating how many
+`openkos export <target>` MUST take one positional target directory and
+the flags `--include-private`, `--allow-below-source` and `--auto`. The
+target MUST NOT exist or MUST be an empty directory, its parent MUST exist,
+and it MUST NOT be inside the workspace; otherwise the verb refuses with
+exit 1 before reading the bundle. Before writing, the verb MUST print a preview stating how many
 concepts will be exported and how many are withheld, grouped by reason
 (`confidential`, `private` without `--include-private`, missing or
-unrecognized label, unreadable, incomplete ingest), and that prose outside
+unrecognized label, unreadable, incomplete ingest, below its sources), the
+ids the below-source rule withheld or admitted, and that prose outside
 links is not redacted; it MUST then ask for confirmation unless `--auto` is
 given or the workspace's `review` is `false`. A declined confirmation exits
-1 with nothing written. When no concept is exportable, the verb MUST refuse
+1 with nothing written, and so does a non-interactive stdin without
+`--auto` while review is on. When no concept is exportable, the verb MUST refuse
 with exit 1, write nothing, and name `--include-private` if any concept was
 withheld only for being `private`. Human-readable output MUST follow the
 TTY-gated convention (ADR-0042). Exports of an unchanged workspace with the
