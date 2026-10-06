@@ -4250,7 +4250,8 @@ IMPORTED_KEY: Final = "imported"
 would otherwise read as a local fact, verbatim, plus the origin: the namespace,
 the foreign Concept ID and a content digest. NO local consumer reads it: it is
 referenced only by `adopt_foreign_document`, `build_import_anchor`,
-`adopted_violations` and `_union_frontmatter`'s skip list (a test pins both)."""
+`adopted_violations`, `is_import_anchor_of` and `_union_frontmatter`'s skip
+list (a test pins both)."""
 
 IMPORT_KEY_GROUPS: Final[Mapping[str, tuple[str, ...]]] = {
     "keep": (
@@ -4609,6 +4610,28 @@ def adopted_violations(
             if not relation.target.startswith(f"{prefix}/")
         )
     return problems
+
+
+def is_import_anchor_of(text: str, *, namespace: str, label: str) -> bool:
+    """Whether `text` is the engine-written anchor of `namespace` at `label`:
+    the ownership test of a file found at an anchor path, so a torn import's
+    own anchor is overwritten on retry and any other file is never touched.
+
+    The `imported` block is read here and nowhere else (a test pins it). `text`
+    is a local file, read with the ordinary parser; anything that does not
+    parse, or whose `imported` block is not this namespace's anchor, is not
+    ours."""
+    try:
+        metadata, _ = load_frontmatter(text)
+    except FrontmatterError:
+        return False
+    imported = metadata.get(IMPORTED_KEY)
+    return (
+        isinstance(imported, dict)
+        and imported.get("role") == "anchor"
+        and imported.get("namespace") == namespace
+        and imported.get("label") == label
+    )
 
 
 @dataclass(frozen=True)

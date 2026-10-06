@@ -8,7 +8,7 @@ by accident:
     so a key added to the engine later fails here until it is classified
     instead of being trusted from foreign input by default.
 (b) No module under `src/openkos/` reads `IMPORTED_KEY` (or the literal
-    `"imported"`) outside the three functions that own the key; the shape of
+    `"imported"`) outside the functions that own the key; the shape of
     `tests/unit/test_sources_key_guard.py`.
 (c) `IMPORTED_KEY` is in `_union_frontmatter`'s skip list, so an absorbed
     imported document's `imported` block is never gap-filled into a local
@@ -125,7 +125,12 @@ def test_the_treatment_lookup(key: str, group: str) -> None:
 # --- (b) no reader of the imported key outside its owners --------------------
 
 _IMPORTED_OWNERS = frozenset(
-    {"adopt_foreign_document", "build_import_anchor", "adopted_violations"}
+    {
+        "adopt_foreign_document",
+        "build_import_anchor",
+        "adopted_violations",
+        "is_import_anchor_of",
+    }
 )
 
 

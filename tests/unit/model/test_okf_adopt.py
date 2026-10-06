@@ -1058,3 +1058,51 @@ class TestExportBoundaryOverAnImportedMix:
         assert boundary.withheld["imports/demo/concepts/public"] is (
             sensitivity.ExportReason.BELOW_SOURCE
         )
+
+
+# --- `is_import_anchor_of` (slice 4: the torn-anchor ownership test) --------
+
+
+class TestIsImportAnchorOf:
+    """The OKF seam is the only reader of the `imported` key, so the service
+    asks it whether a file at an anchor path is this namespace's own anchor."""
+
+    def _text(self, *, label: str = "private") -> str:
+        return _anchor([_entry("concepts/a")], label=label)[2]
+
+    def test_an_anchor_built_for_the_namespace_and_label_is_its_own(self) -> None:
+        assert okf.is_import_anchor_of(self._text(), namespace="demo", label="private")
+
+    def test_another_namespace_is_not_its_own(self) -> None:
+        assert not okf.is_import_anchor_of(
+            self._text(), namespace="other", label="private"
+        )
+
+    def test_another_label_is_not_its_own(self) -> None:
+        assert not okf.is_import_anchor_of(
+            self._text(), namespace="demo", label="public"
+        )
+
+    def test_an_adopted_document_is_not_an_anchor(self) -> None:
+        doc = okf.dump_frontmatter(
+            {
+                "type": "Concept",
+                okf.IMPORTED_KEY: {"namespace": "demo", "label": "private", "id": "x"},
+            },
+            "body\n",
+        )
+        assert not okf.is_import_anchor_of(doc, namespace="demo", label="private")
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            "not frontmatter at all\n",
+            "---\ntype: Source\n---\nbody\n",
+            "---\ntype: Source\nimported: just a string\n---\nbody\n",
+            "---\ntype: Source\nimported: [1, 2]\n---\nbody\n",
+            "---\ntype: [unclosed\n---\nbody\n",
+        ],
+    )
+    def test_anything_else_is_not_an_anchor(self, text: str) -> None:
+        assert not okf.is_import_anchor_of(text, namespace="demo", label="private")
