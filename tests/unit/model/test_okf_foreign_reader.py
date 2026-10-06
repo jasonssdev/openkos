@@ -835,7 +835,11 @@ class TestInvariants:
         monkeypatch.setattr(fsio, "symlinked_segment", lambda path, boundary: None)
         _refuses(tree, "symlink", "concepts/ok.md")
 
-    @pytest.mark.cross_platform_smoke
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows refuses to replace or delete an open file, so the swap "
+        "this test simulates cannot happen there",
+    )
     @pytest.mark.parametrize("swap", ["other-file", "symlink"])
     def test_without_nofollow_a_swap_after_open_is_refused(
         self, tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, swap: str
