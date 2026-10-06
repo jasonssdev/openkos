@@ -878,7 +878,9 @@ its `--self-test` is run, not edited), `src/openkos/bundle/imports.py`
 ## Phase 6 — Slice 6: CLI verb and e2e (PR 6)
 
 Owns: `src/openkos/cli/main.py`, `tests/unit/cli/test_import_cmd.py` (new),
-`tests/unit/e2e/test_import_round_trip.py` (new). Depends on: slice 5 merged.
+`tests/unit/cli/test_import_curate.py` (new), `tests/unit/cli/import_support.py`
+(new), `tests/unit/e2e/test_import_round_trip.py` (new), and the `okf-import`
+spec (one scenario corrected, see 6.18). Depends on: slice 5 merged.
 Branch `feat/okf-import-cli`. Spec: `okf-import` "Import Is A Human-Invoked,
 Model-Free, Local Verb", "The Input Is A Local Directory", "Every Concept Lands
 Under One Namespace" (usage half), "Import Previews, Confirms, Then Publishes
@@ -891,7 +893,7 @@ fixture), `src/openkos/mcp/` (read-only, tool list pin),
 `src/openkos/state/pending_queue.py` (read-only, kind tuple pin),
 `tests/unit/cli/conftest.py` (read-only, `plain_rich_output`).
 
-- [ ] 6.1 [TEST] `tests/unit/cli/test_import_cmd.py`, usage and refusals (all
+- [x] 6.1 [TEST] `tests/unit/cli/test_import_cmd.py`, usage and refusals (all
   help and rich assertions through `plain_rich_output`): missing `--namespace`
   exits 2 before any workspace read (a workspace-gate stub fails if called); an
   invalid namespace (`a/b`, `..`, `Acme`, empty) exits 2 naming the rule via a
@@ -902,7 +904,7 @@ fixture), `src/openkos/mcp/` (read-only, tool list pin),
   exits 1 with "re-import is not supported" and writes nothing; a hostile tree
   exits 1 with the reader's code in the message and writes nothing. Assert the
   exact messages and exit codes, not just non-zero. RED: no such command.
-- [ ] 6.2 [TEST] Preview, confirm and exit codes: the preview shows namespace,
+- [x] 6.2 [TEST] Preview, confirm and exit codes: the preview shows namespace,
   `okf_version` observed and whether known, adopted count, label distribution and
   how many foreign labels the floor raised, per-type raises (the ingest
   born-above-floor shape), every skipped file by path and reason code, dropped
@@ -917,7 +919,7 @@ fixture), `src/openkos/mcp/` (read-only, tool list pin),
   prints adopted and skipped counts then
   `_echo_commit_disclosure(sha, prefix="openkos import: ")`. Global-stream
   assertions pin their git environment. RED: missing.
-- [ ] 6.3 [IMPL] `src/openkos/cli/main.py`: `@app.command("import")` on a
+- [x] 6.3 [IMPL] `src/openkos/cli/main.py`: `@app.command("import")` on a
   function named `import_bundle`, decorated
   `@_guard_workspace_lock("import", commit_phase=True)` (adds `--wait`); Typer
   callbacks for namespace and `--sensitivity`; call
@@ -925,11 +927,11 @@ fixture), `src/openkos/mcp/` (read-only, tool list pin),
   `publish_import(commit_section=..., autocommit=..., load_config=...)`; map
   `ImportRefusal.retry_safe` to exit 3 and the rest to exit 1. Not in
   `_READ_ONLY_COMMANDS`. GREEN 6.1-6.2.
-- [ ] 6.4 [MUT] Drop the namespace callback; run it after the read; exit 1 for a
+- [x] 6.4 [MUT] Drop the namespace callback; run it after the read; exit 1 for a
   bad namespace; drop the confirm gate; let a non-TTY proceed without `--auto`;
   map `retry_safe` to exit 1; omit the disclosure; omit the undo sentence. Each
   RED. Revert, purge.
-- [ ] 6.5 [TEST] Pins, each written GREEN on first run and mutated next:
+- [x] 6.5 [TEST] Pins, each written GREEN on first run and mutated next:
   `import` is classified locked with a commit phase and
   `test_every_command_is_classified` stays GREEN without edits;
   `import_service` is imported only by `cli/main.py` (AST pin); the MCP tool
@@ -938,12 +940,12 @@ fixture), `src/openkos/mcp/` (read-only, tool list pin),
   (pin on the tuple); `import_service` imports no LLM module; `import` joins the
   recovery-critical commit disclosure and says a revert is safe only while it is
   the latest commit.
-- [ ] 6.6 [MUT] Add `import` to `_READ_ONLY_COMMANDS` in a scratch edit and
+- [x] 6.6 [MUT] Add `import` to `_READ_ONLY_COMMANDS` in a scratch edit and
   observe the lock pin RED; import `import_service` from a scratch module and
   observe the AST pin RED; add an import kind to the pending-queue tuple and
   observe the queue pin RED; register a scratch MCP tool and observe the MCP pin
   RED. Revert, purge.
-- [ ] 6.7 [TEST] E2E fresh round trip in
+- [x] 6.7 [TEST] E2E fresh round trip in
   `tests/unit/e2e/test_import_round_trip.py`, all under a poisoned
   `OLLAMA_HOST` (`http://127.0.0.1:9`), real git repo, pinned git identity: copy
   `examples/good-life-demo` (read-only source), `export --include-private --auto`,
@@ -955,7 +957,7 @@ fixture), `src/openkos/mcp/` (read-only, tool list pin),
   succeeds; exactly ONE commit exists and the tree is clean; then
   `export --include-private` again: no imported document withheld as
   below-source. RED: command missing.
-- [ ] 6.8 [TEST] E2E mixed labels (the ADR-0048 regression pin): a
+- [x] 6.8 [TEST] E2E mixed labels (the ADR-0048 regression pin): a
   `default_sensitivity: public` workspace imports the same export; public
   documents cite the public anchor, private ones the private anchor; `export`
   without flags exports the public imported documents and withholds the private
@@ -965,14 +967,14 @@ fixture), `src/openkos/mcp/` (read-only, tool list pin),
   document above its anchor leaves its title in the lower anchor body and export
   replaces the link with `[withheld]`; lowering one makes it below-source and it
   is withheld unless `--allow-below-source`.
-- [ ] 6.9 [TEST] E2E origin round trip: import the export back into its origin
+- [x] 6.9 [TEST] E2E origin round trip: import the export back into its origin
   workspace under a new namespace: no pre-existing concept file changes (byte
   hashes), only `index.md` and `log.md` change outside the namespace; a second
   import into the same namespace is refused with a named reason and writes
   nothing; and `git revert <sha>` while it is the latest commit restores the
   pre-import tree BYTE FOR BYTE (compare tree hashes, using `git rev-parse
   HEAD^{tree}`; the pre-import tree OID is recorded before import).
-- [ ] 6.10 [TEST] E2E third-party shape and hostile fixtures through the verb:
+- [x] 6.10 [TEST] E2E third-party shape and hostile fixtures through the verb:
   `tests/unit/fixtures/okf_third_party_v02/` (read-only) imports with every skip
   reported and the deprecated document not effective-deprecated; each hostile
   fixture (traversal is unit-only; symlink, oversize file, oversize total, too
@@ -982,20 +984,72 @@ fixture), `src/openkos/mcp/` (read-only, tool list pin),
   runtime probe that both spellings can coexist; on APFS it skips and is first
   verified on Linux CI, so the string-level check above is the platform-independent
   proof.
-- [ ] 6.11 [TEST] Unattended surfaces and derived caches: a daemon, queue and
+- [x] 6.11 [TEST] Unattended surfaces and derived caches: a daemon, queue and
   MCP enumeration shows no import operation; an import writes no file under
   `.openkos/` (derived stores) and does not refresh FTS or embeddings;
   a full import with the backend resolvers patched to raise makes zero model or
   network calls.
-- [ ] 6.12 [IMPL] Wire anything the e2e tests still show missing in
+- [x] 6.12 [IMPL] Wire anything the e2e tests still show missing in
   `src/openkos/cli/main.py` (preview wording, disclosure). GREEN 6.7-6.11.
   Reproduce CI colour handling: `GITHUB_ACTIONS=true FORCE_COLOR=1 uv run pytest
   tests/unit/cli/test_import_cmd.py -q`.
-- [ ] 6.13 Run the five-command slice gate. All green; record observed results.
+- [x] 6.13 Run the five-command slice gate. All green; record observed results.
   Also `uv run pytest tests/unit/cli -q` (full CLI suite: Typer help and
   command-classification guards) and the colour-forced rerun above.
-- [ ] 6.14 Commit (`feat(cli): add openkos import`, `test(cli): round-trip
-  import through export`). Open PR 6 (`Refs`), CI green on a rebased branch.
+- [x] 6.14 Commit (`feat(cli): add openkos import`, `test(cli): round-trip
+  import through export`). Not pushed; the PR is left to the orchestrator.
+- [x] 6.15 [TEST] `tests/unit/cli/test_import_curate.py`: through the CLI
+  harness with a stub judge, an imported group is still prompted per item in
+  curate Identity (and a human can accept it), is NOT counted by the
+  accept-recommended offer (a local group beside it is), and is NOT merged by
+  `--auto-merge`. Written GREEN first (slice 5 owned the behavior). [MUT] drop the
+  imported clause in `in_structural_class`; make it return `True` for an imported
+  group; each RED. Survivor at this layer: checking only the first member (an
+  imported family has both members imported); killed one layer down by
+  `test_the_class_exclusion_checks_each_member_alone`.
+- [x] 6.16 [TEST] The preview lists EVERY rename (`ImportPlan.renames`) and every
+  skipped document with its reason code (`test_import_cmd.py`), plus the
+  conditional lines (floor raise counted from the foreign label against the
+  floor, type-default raise with the most-common qualifier, dropped keys, HTML
+  links, a flag that raised nothing).
+- [x] 6.17 [TEST] E2E in `tests/unit/e2e/test_import_round_trip.py`: the
+  good-life-demo round trip (export, init, import, lint and status clean, one
+  commit, export again with nothing below-source); the mixed-label export (the
+  ADR-0048 regression pin, with the single-maximum-anchor mutation observed RED
+  for the right reason); a human raise and lower of an imported document;
+  importing the workspace's own export back (only `index.md` and `log.md`
+  change, a second import refused, `git revert` restores the tree by OID and by
+  bytes); a hand-built third-party bundle (v0.1 `timestamp` kept inert, a
+  non-concept file skipped, a name with a space renamed, a broken link
+  tolerated); the shared third-party fixture; every hostile class through the
+  verb with the workspace unchanged. The case-collision and NFC/NFD tests skip
+  on a case-insensitive or normalizing filesystem and are first verified on
+  Linux CI.
+- [x] 6.18 Spec correction (`specs/okf-import/spec.md`, "Export After Import
+  Does Not Withhold For The Anchor's Label"): the scenario "A public imported
+  document exports by default" claimed a human could RAISE a foreign `public`
+  document to `public` in a stock workspace and export it without
+  `--allow-below-source`. In a stock workspace the foreign `public` folds to
+  `private` at import, and making it `public` afterwards is a DOWNGRADE below its
+  private anchor, withheld as below-source like any concept below its source.
+  The scenario set now states what the code does (a foreign public document in a
+  stock workspace is private; a lowered document is withheld unless allowed) and
+  the mixed-label scenario names the `default_sensitivity: public` workspace it
+  needs.
+
+### Apply notes (slice 6)
+
+- `import_service` already pins "imports no model code" (slice 4); 6.5 does not
+  copy it. The CLI-level pins added: locked with a commit phase and not
+  read-only, `import_service` imported only by `cli/main.py` (AST), no MCP
+  tool, no daemon job, the pending-queue kind tuple and CHECK constraint.
+- Usage errors come from a Typer callback on `--namespace` and a `Literal`
+  choice on `--sensitivity` (parsing finishes before the body, so before the
+  workspace gate); the workspace gate and every refusal then print
+  `openkos import: refusing to import -- <reason>.`
+- The preview's floor-raise count compares the foreign label with the floor
+  directly rather than reading `type_raised`, so a label raised by BOTH the
+  floor and a type default is counted in both lines.
 
 ## Phase 7 — Slice 7: docs (PR 7)
 

@@ -617,20 +617,28 @@ label, or the `--include-private` gate), never solely because of its anchor.
 
 #### Scenario: Mixed labels export without below-source withholding
 
-- GIVEN an import with documents labelled `public`, `private` and
-  `confidential`
+- GIVEN a workspace with `default_sensitivity: public` and an import with
+  documents labelled `public`, `private` and `confidential`
+- WHEN `openkos export out/` runs, and again with `--include-private`
+- THEN the `public` documents are exported by default, the `private` ones only
+  with `--include-private`, and none is reported as below-source; the
+  `confidential` ones are withheld by their own label
+
+#### Scenario: A foreign public document in a stock workspace is private
+
+- GIVEN a stock workspace (`default_sensitivity: private`) with a foreign
+  `public` document imported
 - WHEN `openkos export out/ --include-private` runs
-- THEN the `public` and `private` documents are exported and are not
-  reported as below-source, and the `confidential` one is withheld by its own
-  label
+- THEN that document is exported, labelled `private`, and is not reported as
+  below-source
 
-#### Scenario: A public imported document exports by default
+#### Scenario: A document a human lowers below its anchor is withheld
 
-- GIVEN a stock workspace (`default_sensitivity: private`) with a
-  foreign `public` document imported, then raised to `public` by a human
-  `set-sensitivity`
+- GIVEN an imported document that a human then lowers with `set-sensitivity`
+  below its anchor's label
 - WHEN `openkos export out/` runs
-- THEN that document is exported without `--allow-below-source`
+- THEN that document is withheld as below-source unless
+  `--allow-below-source` is given, as any concept below its source is
 
 ### Requirement: Import Previews, Confirms, Then Publishes Under The Lock
 
