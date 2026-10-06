@@ -479,7 +479,12 @@ Owns: `src/openkos/bundle/imports.py` (new),
 `src/openkos/application/import_service.py` (new),
 `tests/unit/bundle/test_imports_layout.py` (new),
 `tests/unit/application/test_import_service.py` (new),
-`tests/unit/fixtures/okf_third_party_v02/` (new). Depends on: slices 1, 2, 3
+`tests/unit/fixtures/okf_third_party_v02/` (new). Also touched, each for a
+reason recorded in "Apply notes (slice 4)" below: `src/openkos/model/okf.py`
+(`is_import_anchor_of`, portable open flags),
+`tests/unit/model/test_okf_adopt.py`,
+`tests/unit/model/test_imported_key_guard.py`,
+`tests/unit/model/test_okf_foreign_reader.py`. Depends on: slices 1, 2, 3
 merged. Branch `feat/okf-import-service`. Spec: `okf-import` "Every Concept
 Lands Under One Namespace", "Importing Into An Existing Namespace Is Refused",
 "Import Previews, Confirms, Then Publishes Under The Lock" (service half), "A
@@ -493,7 +498,7 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
 `write_exclusive`, `write_atomic`), `src/openkos/config.py` (read-only,
 `symlink_boundary_reason`).
 
-- [ ] 4.1 [TEST] `tests/unit/bundle/test_imports_layout.py`:
+- [x] 4.1 [TEST] `tests/unit/bundle/test_imports_layout.py`:
   `namespace_reason(ns)` returns `None` for `acme`, `a-b`, `a1`, a 64-char slug;
   a reason for `a/b`, `..`, `.`, `Acme`, `a b`, `a--b`, `-a`, `a-`, empty, a
   Unicode slug (`café`), a 65-char slug (one test each, naming the rule);
@@ -503,12 +508,12 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
   `imports/x`), false for `concepts/imports/x`, `imports-x/y`, `import/x` and the
   empty string; two valid namespaces never collide with each other's anchors
   (no `--` in a slug). RED: module missing.
-- [ ] 4.2 [IMPL] Create `src/openkos/bundle/imports.py` (canonical layer, imports
+- [x] 4.2 [IMPL] Create `src/openkos/bundle/imports.py` (canonical layer, imports
   only `okf`): `IMPORTS_DIR`, `NAMESPACE_RE`, the five functions of D2. GREEN
   4.1. [MUT] one per clause: drop the `--` exclusion; allow a leading hyphen; `64`
   to `65`; make `is_imported_concept` a substring match; each RED. Revert,
   purge.
-- [ ] 4.3 [TEST] Build the fixture `tests/unit/fixtures/okf_third_party_v02/`,
+- [x] 4.3 [TEST] Build the fixture `tests/unit/fixtures/okf_third_party_v02/`,
   hand-written from the OKF SPEC examples (no network, no copied sample data, so
   no attribution file): root `index.md` with `okf_version: "0.2"`,
   `generated: {by: reference_agent/1.2}`, a `verified:` attestation list, URL
@@ -517,7 +522,7 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
   link, a fenced link, `viz.html`, `references/data.csv`, a `.git/` directory and
   a v0.1-style `timestamp` document. (Fixture files only; no `.git` directory is
   committed: the test creates `.git/` in `tmp_path` at run time.)
-- [ ] 4.4 [TEST] `plan_import` refusals, one per code, each leaving `bundle/`,
+- [x] 4.4 [TEST] `plan_import` refusals, one per code, each leaving `bundle/`,
   `raw/` and `openkos.yaml` byte-identical (tree hash equal) and asserting
   `ImportRefusal.code`, `.reason` and `.retry_safe`: input is a file, an
   archive-like path, a URL string, a missing path; input inside `bundle/`; input
@@ -528,13 +533,13 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
   `ImportRefusal` with the reader's code. A foreign path equal to a local path
   (`concepts/foo.md`) plans a namespaced id and never touches the local file.
   RED: module missing.
-- [ ] 4.5 [TEST] `plan_import` proof gate: with `rewrite_links_into_namespace`
+- [x] 4.5 [TEST] `plan_import` proof gate: with `rewrite_links_into_namespace`
   monkeypatched to return the body unchanged (assert the patch was hit), the plan
   refuses with code `link-outside-namespace` naming the document and the
   offending destination; with the adopt step patched to emit a label below the
   floor, it refuses via `adopted_violations`; a clean fixture plans. RED:
   missing.
-- [ ] 4.6 [TEST] `plan_import` content: the plan holds adopted texts, one anchor
+- [x] 4.6 [TEST] `plan_import` content: the plan holds adopted texts, one anchor
   per effective label present, skipped paths with reason codes, dropped-key
   count, link counts, `html_link_documents`, `label_fingerprint`
   (`default_sensitivity`, type offsets), `floor`, the `manifest`, and the type
@@ -545,16 +550,16 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
   imports nothing from `openkos.llm`, `openkos.application.backends` or
   `openkos.extraction` (AST guard) and runs with the backend resolvers
   monkeypatched to raise. RED: missing.
-- [ ] 4.7 [IMPL] `src/openkos/application/import_service.py`: `ImportRefusal`,
+- [x] 4.7 [IMPL] `src/openkos/application/import_service.py`: `ImportRefusal`,
   `AdoptedPlan`, `AnchorPlan`, `ImportPlan`, `ImportOutcome`, `plan_import` per
   D7 and the diagram (steps 1-6 of Phase A). GREEN 4.4-4.6.
-- [ ] 4.8 [MUT] One per refusal and gate on its exact line: skip the
+- [x] 4.8 [MUT] One per refusal and gate on its exact line: skip the
   not-inside-bundle check; skip the ancestor check; skip the symlink-boundary
   check; treat an existing empty `imports/<ns>/` as free; skip the torn-anchor
   ownership test; skip the proof; skip `adopted_violations`; let a label fall
   below the floor; call a model module. Each turns its named test RED. Revert,
   purge.
-- [ ] 4.9 [TEST] `publish_import` happy path in a tmp workspace with a real git
+- [x] 4.9 [TEST] `publish_import` happy path in a tmp workspace with a real git
   repo (pinned `GIT_CONFIG_COUNT` identity): `commit_section` spy entered EXACTLY
   once; every adopted file exists under its NFC path inside
   `bundle/imports/<ns>/`; anchors at `bundle/imports/<ns>--<label>.md`;
@@ -570,7 +575,7 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
   holding a `.git/` directory and another holding a `.git` file are skipped, the
   commit lands in the workspace repository, and the foreign repository is
   unchanged. RED: missing.
-- [ ] 4.10 [TEST] Phase B drift and races, each the only failing fact, exit-code
+- [x] 4.10 [TEST] Phase B drift and races, each the only failing fact, exit-code
   semantics via `retry_safe`: a foreign file edited, added or removed between
   plan and publish refuses with `retry_safe=True` ("changed since the
   preview"); a changed skip list refuses likewise; a config label change
@@ -579,7 +584,7 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
   an anchor path claimed by a non-ours file refuses; a `WorkspaceBusyError`
   from `commit_section` propagates before anything is written. Each leaves the
   tree byte-identical. RED: missing.
-- [ ] 4.11 [TEST] Torn runs — failure injection at EACH step of the publish
+- [x] 4.11 [TEST] Torn runs — failure injection at EACH step of the publish
   sequence (design D7 steps 4-10): a failure removing stale staging; during the
   snapshot; mid-write of the staging documents (after some files); in
   `check_conformance(staging)` (violation is a defect: staging removed, refuse,
@@ -589,7 +594,7 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
   staging removed) and a retry is not refused as an existing namespace. Patch at
   the exact call target the service imports and assert the patch was hit. A
   failing restore reports it and commits nothing.
-- [ ] 4.12 [TEST] Torn-run recovery: simulate a kill before the rename (leave a
+- [x] 4.12 [TEST] Torn-run recovery: simulate a kill before the rename (leave a
   dot-prefixed staging directory, a torn anchor owned by this namespace and an
   index bullet): a retry succeeds, removes the stale staging, overwrites the
   torn anchor, and leaves exactly ONE index bullet per anchor; the torn run's
@@ -598,7 +603,7 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
   as an existing namespace and the reason mentions `git status`. Stale staging
   removal touches real directories only, never through a symlink, only directly
   under `bundle/imports`. RED: missing.
-- [ ] 4.13 [IMPL] `publish_import` in
+- [x] 4.13 [IMPL] `publish_import` in
   `src/openkos/application/import_service.py` per D7 steps 1-12: re-read and
   compare the manifest; reload config and compare `label_fingerprint`; recheck
   the namespace; remove stale staging; snapshot; `tempfile.mkdtemp` staging;
@@ -607,36 +612,81 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
   indexed anchor); `os.replace(staging, bundle/imports/<ns>)` as the completion
   point; restore on any exception in the write steps; one `autocommit`. GREEN
   4.9-4.12.
-- [ ] 4.14 [MUT] One per guard on its exact line: enter `commit_section` twice;
+- [x] 4.14 [MUT] One per guard on its exact line: enter `commit_section` twice;
   skip the manifest compare; skip the fingerprint compare; skip the
   namespace-exists recheck; write the anchors AFTER the rename; skip the
   conformance check; skip the snapshot restore; keep the staging directory on
   failure; add a second index bullet on retry; pass `-A` instead of a pathspec;
   list every file instead of one directory pathspec; commit on a failed restore.
   Each turns exactly its named test RED. Revert, purge.
-- [ ] 4.15 [TEST] Guarded-read pin at the service level: patch `okf._parse_post`
+- [x] 4.15 [TEST] Guarded-read pin at the service level: patch `okf._parse_post`
   and `frontmatter.loads` to raise (patch proven live) and run `plan_import`
   over `okf_third_party_v02`: it succeeds. The third-party fixture imports, every
   skip is reported with its code, the deprecated document is not
   effective-deprecated, and `repair`'s plan migrates none of the imported
   documents. The v0.1 fixture `tests/unit/fixtures/good_life_demo_v01/bundle`
   (read-only) also plans best-effort with "version absent" recorded.
-- [ ] 4.16 [TEST] Resource audit (design D4 audit): over a tmp workspace holding
+- [x] 4.16 [TEST] Resource audit (design D4 audit): over a tmp workspace holding
   an anchor and an imported URL-`resource` Source, run the purge plan, the forget
   plan, `lint` and `next` and assert no raw path is resolved and no retry hint is
   printed; an imported foreign `resource: raw/notes.txt` lands only under
   `imported.frontmatter`, a purge of the imported copy never touches the local
   `raw/notes.txt`, and `lint` does not count the local raw file as referenced.
   Written GREEN once 4.13 lands; mutate next.
-- [ ] 4.17 [MUT] Keep a path `resource` at the top level in a scratch edit of the
+- [x] 4.17 [MUT] Keep a path `resource` at the top level in a scratch edit of the
   adopt step and observe 4.16 RED (purge would touch the local raw). Revert,
   purge.
-- [ ] 4.18 Run the five-command slice gate. All green; record observed results.
+- [x] 4.18 Run the five-command slice gate. All green; record observed results.
   Also run `uv run pytest tests/unit -q -k "layering or lock"` (the new modules
   respect the layers and no verb is registered yet).
-- [ ] 4.19 Commit (`feat(bundle): add the imports layout leaf`,
+- [x] 4.19 Commit (`feat(bundle): add the imports layout leaf`,
   `feat(ingest): add the okf import plan and publish service`). Open PR 4
-  (`Refs`), CI green on a rebased branch.
+  (`Refs`), CI green on a rebased branch. (Commits done; opening the PR is left
+  to the orchestrator.)
+
+### Apply notes (slice 4)
+
+- **A foreign name with whitespace is refused, not linked.** An anchor link to
+  `My Note.md` cannot be read by every engine link reader in any spelling: plain
+  (`/imports/ns/My Note.md`), angle-bracketed (`</imports/ns/My Note.md>`) and
+  percent-encoded (`/imports/ns/My%20Note.md`) each lose the anchor-to-document
+  graph edge, because `graph/sqlite_graph.py:_LINK_RE` needs a `/` straight after
+  `(`, stops at whitespace and never decodes. The service therefore refuses the
+  whole import with code `whitespace-in-name` naming the foreign path (control
+  characters were already refused by the reader as `unsafe-name`). The natural
+  home for the rule is the reader's unsafe-name set (slice 1); it lives in
+  `plan_import` here to keep this slice's ownership, and moving it is a one-line
+  follow-up. `test_import_service.py::TestPathologicalNamesCannotBeLinked` runs
+  every reader of `test_link_recognizer_inventory.READERS` over the three
+  spellings.
+- **`okf.is_import_anchor_of`** is the torn-anchor ownership test. The
+  `imported` key may be read only inside the OKF seam (slice 3 guard), so the
+  service asks the seam; the function joins that guard's owner list.
+- **The reader opens files portably.** `os.O_NOFOLLOW` and `os.O_NONBLOCK` do not
+  exist on Windows and `os.open` there needs `os.O_BINARY` (else a CRLF is
+  translated before the digest). Each flag is now looked up with `getattr` at
+  open time. Without this the `cross_platform_smoke` test could not run on a
+  Windows runner.
+- **Staging is `Path.mkdir` plus a random suffix, not `tempfile.mkdtemp`.**
+  `mkdtemp` creates a `0700` directory, and the final rename would publish the
+  namespace directory with that mode, unlike every other directory of the
+  bundle. A test compares the published mode with its sibling's.
+- **The guarded-read pin records instead of raising.** `adopted_violations` and
+  the proof re-read the engine's OWN adopted output with the ordinary parser, so
+  patching both parsers to raise would fail on engine bytes. The pin asserts
+  that no RAW foreign file text is ever handed to either parser, after a test
+  that proves the patch is live.
+- **`bundle_sha256` covers one label's documents.** A digest over the whole
+  import in a lower-labelled anchor would let it confirm the ids and bytes of
+  higher-labelled documents.
+- **A torn anchor of a label the retry no longer writes is removed** (with its
+  index bullet): a retry after a config change would otherwise leave an anchor
+  listing documents that do not exist.
+- **A bundle with no conformant document is refused** (`nothing-to-import`):
+  there would be no anchor to write.
+- **The v0.1 fixture declares `okf_version: "0.1"`**, so it plans with that
+  version observed, not "absent"; the absent case has its own test over a bundle
+  with no root index.
 
 ## Phase 5 — Slice 5: entity-resolution exclusion (PR 5)
 
