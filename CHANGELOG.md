@@ -16,6 +16,12 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- `openkos curate --auto-merge` merges one measured class of Identity duplicates without a per-item prompt: a same-type base id and its `-N` copy (Event and Person excluded) that the measured model, `gemma4:26b-a4b`, judges the same at confidence 0.90 or more. It is per run, off by default, has no config key, and needs `--auto` for model spend. The run must be eligible (measured model and digest, rubric, token settings, no pinned `temperature` or `seed`) and acts on fresh verdicts only; otherwise it names every reason and falls back to the per-item prompts. All of a run's merges land in one commit with one `log.md` bullet each, and each is undone with `openkos unmerge <survivor>`. It is refused with `--reconcile`, and the daemon never merges ([ADR-0049](docs/adr/0049-structural-identity-class-merges-under-measured-constants.md), #1298).
+- `openkos curate` offers accept-recommended on a terminal: before the Identity walk, the same-class groups judged the same this run are offered for one `y/N` answer, with or without `--auto-merge`. Each accepted merge commits on its own (#1298).
+- `InstalledModel` carries the backend's content `digest` when it reports one (#1298).
+
 ## [0.5.0] - 2026-10-05
 
 The Quiet Engine. Ingest revises an existing concept instead of forking a `-N` duplicate, the contradiction and identity judges move to `gemma4:26b-a4b`, a review prompt can be skipped without recording a ruling, `curate` stops presenting relation suggestions by default, and every unattended pass ends with a digest of what it changed and how to undo it.

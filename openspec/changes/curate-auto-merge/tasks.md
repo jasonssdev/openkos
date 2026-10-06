@@ -550,22 +550,22 @@ Depends on: slice 3 merged.
 
 Owns: `docs/cli.md`, `CHANGELOG.md`. Depends on: slice 4 merged.
 
-- [ ] 5.1 `docs/cli.md`: add the `--auto-merge` flag to the `curate` entry (the
+- [x] 5.1 `docs/cli.md`: add the `--auto-merge` flag to the `curate` entry (the
   class, per-run opt-in, `--auto` is still the only spend consent, one commit,
   per-merge `log.md` bullets, undo with `openkos unmerge <survivor>` and the
   `--discard-survivor-edits` caveat, ineligibility reporting, refused with
   `--reconcile`, never in the daemon) and the accept-recommended Identity
   answer. State timelessly: no counts, no "since #NNN", no issue numbers; do not
   restate every constant (the ADR and `--help` own that).
-- [ ] 5.2 `CHANGELOG.md`: an Unreleased entry for `--auto-merge` and
+- [x] 5.2 `CHANGELOG.md`: an Unreleased entry for `--auto-merge` and
   accept-recommended, plus `InstalledModel.digest`, in the file's existing
   format.
-- [ ] 5.3 Audit the docs against the code, not by re-reading them: diff
+- [x] 5.3 Audit the docs against the code, not by re-reading them: diff
   `uv run openkos curate --help` against the `docs/cli.md` flag text; grep
   `src/openkos/templates` (including `openkos.yaml.template`) for any comment
   that teaches pre-change Identity behavior and fix it if it does; confirm no
   doc claims a flag or config key that does not exist (there is no config key).
-- [ ] 5.4 Run the five-command slice gate plus
+- [x] 5.4 Run the five-command slice gate plus
   `uv run pytest tests/unit/test_adr_index.py -q`. Open PR 5 (`Refs #1298`),
   CI green on a rebased branch. Do NOT flip ADR-0049 to Accepted here:
   archive owns the status change (in both the frontmatter and the body line,
