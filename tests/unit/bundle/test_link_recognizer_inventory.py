@@ -150,7 +150,7 @@ def _in_index_domain(body: str, local_id: str) -> bool:
     return True
 
 
-def _inside(resolved: str | None) -> bool:
+def _inside(resolved: str | None, prefix: str = PREFIX) -> bool:
     """A resolved identity that cannot be a different local document."""
     if resolved is None:
         return True  # external, anchor, empty, or resolves to no concept
@@ -159,7 +159,7 @@ def _inside(resolved: str | None) -> bool:
         # the index reader does not strip `<>`: the identity names a path
         # no Concept ID can have (an unsafe name is refused at import)
         return True
-    return identity == PREFIX or identity.startswith(f"{PREFIX}/")
+    return identity == prefix or identity.startswith(f"{prefix}/")
 
 
 def _local_id(case: Case) -> str:
