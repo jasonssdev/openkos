@@ -25,6 +25,7 @@ from openkos.cli.main import _READ_ONLY_COMMANDS, app
 from openkos.mcp import tools as mcp_tools
 from openkos.model import okf
 from openkos.state import pending_queue
+from openkos.state.fts import open_fts_index_readonly
 from tests.unit.application.test_import_service import (
     foreign_copy,
     rewrite_config,
@@ -296,7 +297,10 @@ def test_the_preview_reports_the_whole_plan(ws: Path, tmp_path: Path) -> None:
     ):
         assert f"    {path} ({code})" in lines
     assert "  links: 7 rewritten, 1 clamped." in lines
-    assert "  derived indexes are not refreshed; run `openkos reindex`." in lines
+    assert (
+        "  the lexical index is refreshed after the commit; embeddings are not "
+        "(no model call): run `openkos reindex` to embed." in lines
+    )
     assert (
         "  to undo: revert the import commit, then import again (a second import "
         "into the same namespace is refused)." in lines
@@ -682,6 +686,61 @@ def test_the_summary_prints_the_counts_then_the_commit_disclosure(
     assert git(ws, "log", "-1", "--format=%s") == "openkos: import demo (+5 concepts)"
 
 
+def _fts_ids(root: Path, query: str) -> list[str]:
+    index = open_fts_index_readonly(config.WorkspaceLayout(root).fts_db_path)
+    assert index is not None, "no lexical index was written"
+    with index:
+        return [hit.concept_id for hit in index.search(query)]
+
+
+def test_an_imported_document_is_found_by_lexical_search_without_a_reindex(
+    ws: Path, tmp_path: Path
+) -> None:
+    foreign = small_foreign(
+        tmp_path,
+        a=foreign_doc(title="Quokka", body="# Quokka\n\nA marsupial.\n"),
+        b=foreign_doc(title="Wombat", body="# Wombat\n\nBurrows.\n"),
+    )
+
+    result = runner.invoke(app, import_args(foreign))
+
+    assert result.exit_code == 0, result.stderr
+    assert _fts_ids(ws, "marsupial") == ["imports/demo/a"]
+    assert _fts_ids(ws, "burrows") == ["imports/demo/b"]
+
+
+def test_the_summary_says_what_the_refresh_did_and_did_not_do(
+    ws: Path, tmp_path: Path
+) -> None:
+    foreign = small_foreign(tmp_path, a=foreign_doc())
+
+    result = runner.invoke(app, import_args(foreign))
+
+    assert result.exit_code == 0, result.stderr
+    assert (
+        "openkos import: lexical index refreshed; embeddings catch up on the "
+        "next `openkos reindex`." in _lines(result)
+    )
+
+
+def test_a_failed_lexical_refresh_is_an_advisory_not_a_failed_import(
+    ws: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("fts module missing")
+
+    monkeypatch.setattr("openkos.state.reindex._reindex_fts", boom)
+    foreign = small_foreign(tmp_path, a=foreign_doc())
+
+    result = runner.invoke(app, import_args(foreign))
+
+    assert result.exit_code == 0, result.stderr
+    assert (ws / "bundle" / "imports" / "demo" / "a.md").exists()
+    assert "fts: fts module missing" in result.stderr
+    assert "Run `openkos reindex`." in result.stderr
+    assert "lexical index refreshed" not in result.stdout
+
+
 def test_a_degraded_commit_still_succeeds_and_discloses_no_commit(
     ws: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -792,18 +851,20 @@ def test_a_full_import_makes_no_model_or_network_call(
     assert (ws / "bundle" / "imports" / "demo" / "people" / "ada.md").exists()
 
 
-def test_an_import_writes_nothing_under_the_derived_state_directory(
+def test_an_import_writes_no_vector_store_and_makes_no_embedding(
     ws: Path, tmp_path: Path
 ) -> None:
-    state = ws / ".openkos"
-    before = tree_state(state) if state.exists() else {}
+    """Only the lexical stores (FTS, graph) are refreshed; the vector store is
+    the one derived store that needs a model, so it is never created."""
+    layout = config.WorkspaceLayout(ws)
+    assert not layout.vectors_db_path.exists()
     foreign = foreign_copy(tmp_path)
 
     result = runner.invoke(app, import_args(foreign))
 
     assert result.exit_code == 0, result.stderr
-    after = tree_state(state) if state.exists() else {}
-    assert after == before
+    assert layout.fts_db_path.exists()
+    assert not layout.vectors_db_path.exists()
 
 
 @pytest.mark.cross_platform_smoke

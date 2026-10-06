@@ -1050,6 +1050,12 @@ fixture), `src/openkos/mcp/` (read-only, tool list pin),
 - The preview's floor-raise count compares the foreign label with the floor
   directly rather than reading `type_raised`, so a label raised by BOTH the
   floor and a type default is counted in both lines.
+- Parent review amendment: task 6.11's "does not refresh FTS or embeddings" is
+  superseded. Import now refreshes the LEXICAL stores in `after_commit` (as
+  `merge` does), never the vector store; design D7 "Derived caches" and the
+  `okf-import` "One Import Is One Commit" requirement say so, and
+  `test_import_cmd.py` pins it (FTS finds the document, `vectors.db` is not
+  created, a failed refresh is an advisory).
 
 ## Phase 7 — Slice 7: docs (PR 7)
 

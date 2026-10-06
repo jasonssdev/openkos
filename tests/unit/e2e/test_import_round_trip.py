@@ -44,7 +44,7 @@ def _tree(root: Path) -> dict[str, bytes]:
     return {
         p.relative_to(root).as_posix(): p.read_bytes()
         for p in sorted(root.rglob("*"))
-        if p.is_file() and ".git" not in p.relative_to(root).parts
+        if p.is_file() and not {".git", ".openkos"} & set(p.relative_to(root).parts)
     }
 
 
@@ -273,6 +273,9 @@ def _origin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     shutil.copytree(_EXAMPLE, root)
     monkeypatch.chdir(root)
     git(root, "init", "-q")
+    # `init` writes this for a real workspace; the example has none, and the
+    # refresh after the import creates the derived `.openkos/` stores.
+    write_text(root, ".gitignore", ".openkos/\n")
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "origin")
     return root

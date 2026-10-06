@@ -10775,7 +10775,10 @@ def _echo_import_preview(
             f"  --sensitivity {sensitivity} raised nothing: the floor stays "
             f"{plan.floor}."
         )
-    typer.echo("  derived indexes are not refreshed; run `openkos reindex`.")
+    typer.echo(
+        "  the lexical index is refreshed after the commit; embeddings are not "
+        "(no model call): run `openkos reindex` to embed."
+    )
     typer.echo(
         "  to undo: revert the import commit, then import again (a second import "
         "into the same namespace is refused)."
@@ -10884,9 +10887,16 @@ def import_bundle(
             commit_section=_commit_section_for(root),
             load_config=config.read_config,
             autocommit=_autocommit,
+            # The LEXICAL half of the #640 refresh (FTS and graph, pure SQLite)
+            # runs inside the section. The vector half would call the embedder,
+            # which the model-free guarantee forbids, so it is never run here:
+            # vectors catch up through `reindex`.
+            after_commit=lambda: _refresh_derived_after_write_quietly(root, "import"),
         )
     except application_import.ImportRefusal as refusal:
         _exit_for_import_refusal(refusal)
+    refresh_failures = _CARRIED_REFRESH_FAILURES.get() or []
+    _CARRIED_REFRESH_FAILURES.set(None)
 
     typer.echo(
         f"openkos import: imported {outcome.adopted} document(s) into namespace "
@@ -10894,6 +10904,18 @@ def import_bundle(
     )
     if outcome.commit is not None:
         _echo_commit_disclosure(outcome.commit, prefix="openkos import: ")
+    if refresh_failures:
+        typer.echo(
+            "openkos import: the lexical index refresh did not complete ("
+            + "; ".join(refresh_failures)
+            + "); the import itself is written. Run `openkos reindex`.",
+            err=True,
+        )
+    else:
+        typer.echo(
+            "openkos import: lexical index refreshed; embeddings catch up on the "
+            "next `openkos reindex`."
+        )
 
 
 @app.command(

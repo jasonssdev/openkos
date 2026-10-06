@@ -705,8 +705,10 @@ The log MUST receive one `**Import**` entry naming the namespace, the count
 adopted and the count skipped. WHEN the
 commit is degraded (no repository or identity) the import MUST still succeed
 and report the usual non-fatal warning. The import MUST write only canonical
-files, no derived store; FTS and embeddings catch up through the existing
-derived-index path or `reindex`.
+files itself, make no model call, and then refresh the model-free (lexical)
+derived stores, so an imported document is found by lexical search without a
+`reindex`; it MUST NOT create or refresh the vector store, which catches up
+through `reindex`.
 
 #### Scenario: One commit, revertable while latest
 
@@ -730,11 +732,12 @@ derived-index path or `reindex`.
 - WHEN `bundle/log.md` is read
 - THEN it holds one `**Import**` entry naming the namespace, 5 and 2
 
-#### Scenario: No derived store is written
+#### Scenario: The lexical index is fresh and no embedding is made
 
 - GIVEN a completed import
-- WHEN the workspace's derived stores are inspected
-- THEN import has written none of them
+- WHEN a lexical search runs for text of an imported document
+- THEN the document is found without a `reindex`
+- AND no vector store was created and no model was called
 
 ### Requirement: Imported Concepts Are Not Attach Targets Or Automatic-Merge Candidates
 

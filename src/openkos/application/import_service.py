@@ -39,6 +39,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from openkos import config, fsio
+from openkos.application import commit_phase
 from openkos.application.lock_wait import CommitSection
 from openkos.bundle import imports as bundle_imports
 from openkos.bundle import index as bundle_index
@@ -842,12 +843,15 @@ def publish_import(
     commit_section: CommitSection,
     load_config: Callable[[Path], config.Config],
     autocommit: Callable[[Path, Sequence[str], str], str | None],
+    after_commit: Callable[[], None] = commit_phase.no_after_commit,
 ) -> ImportOutcome:
     """Write `plan` into the workspace and make the one commit, or raise
     `ImportRefusal`. The whole of Phase B runs inside `commit_section`, with no
     model call and no prompt: the foreign tree and the label inputs are judged
     again, the namespace is rechecked, and only then is anything written, so a
     refusal leaves the tree byte-identical.
+
+    `after_commit` runs last inside the section and must not call a model.
 
     The commit follows the rename and is outside the restore: an import killed
     after the rename is complete and uncommitted (a retry is refused as an
@@ -860,6 +864,9 @@ def publish_import(
             paths,
             f"openkos: import {plan.namespace} (+{len(plan.adopted)} concepts)",
         )
+        # Still under the lock, after the commit: the adapter's model-free
+        # refresh of the derived stores that are pure projections of the bundle.
+        after_commit()
     return ImportOutcome(
         namespace=plan.namespace,
         adopted=len(plan.adopted),
