@@ -233,8 +233,8 @@ dates and scope belong to [`roadmap.md`](roadmap.md), not here.
   entry-point group for third-party ingesters and exporters are a Horizon item
   (the stable Python API they build on is MVP 6). No interface, protocol, or entry point for them exists
   today, and adopting one would need its own ADR.
-- **Format and store options.** A second vector backend, full OKF import/export
-  (MVP 5), and memory projections (Horizon) are all named in the roadmap and unbuilt.
+- **Format and store options.** A second vector backend and memory
+  projections (Horizon) are named in the roadmap and unbuilt.
 
 Two long-standing entries in this document turned out to be decisions rather
 than pending work, and are recorded here so they are not re-proposed as gaps: a
@@ -365,7 +365,7 @@ A watched inbox folder is outside the workspace and read-only to OpenKOS
 - **MVP 3 (The Ask Surface)** — delivered: the application-service extraction
   for the read verbs (`application/concept_read.py`, `application/consistency.py`,
   `application/backends.py`), and the `mcp` adapter built on it. A local REST
-  API and full OKF import/export were split out to their own arcs; see
+  API and OKF import/export were split out to their own arcs; see
   [`roadmap.md`](roadmap.md).
 - **MVP 4 (The Unattended Engine)** — delivered: the runner, call budget and
   inbox watch (`application/runner.py`, `budget.py`, `watch.py`), the

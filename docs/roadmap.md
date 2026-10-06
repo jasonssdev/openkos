@@ -197,12 +197,12 @@ Where the community can contribute: fixtures with hard negatives for the structu
 
 *Goal: exchange knowledge with any OKF-speaking tool.*
 
-**Status: in progress.** OKF export, with sensitivity enforced at its boundary, ships as `openkos export`; import is next.
+**Status: in progress.** OKF export, with sensitivity enforced at its boundary, ships as `openkos export`, and OKF import ships as `openkos import`.
 
 Deliverables:
 
 - **OKF export first.** The bundle is already OKF-conformant, so export is the cheap half — and it is what first makes our conformance claim testable by somebody else
-- **OKF import second.** Consuming bundles produced by other tools, including Google's reference producers, is cross-bundle entity resolution. It is an arc of work in its own right, not the mirror image of export
+- **OKF import second.** Consuming bundles produced by other tools, including Google's reference producers, is cross-bundle entity resolution. It is an arc of work in its own right, not the mirror image of export. A foreign bundle is adopted as written under its own namespace with its labels only raised, and what it shares with local knowledge is reconciled by a person, never automatically ([ADR-0050](adr/0050-okf-import-adopts-a-foreign-bundle-under-its-own-namespace.md))
 - Sensitivity enforcement at the export boundary — confidential objects excluded from exports and sharing
 
 This arc is deliberately narrow. Export and import are built on the internal `application/` services; a public API is a compatibility promise of a different kind, and freezing it before import has pressured those services, while OKF is still v0.2, would freeze the wrong shape. The stable Python API therefore moves to MVP 6, and the extension points that depend on it to the Horizon ([ADR-0039](adr/0039-the-stable-python-api-ships-with-a-desktop-app-as-its-first-client.md)).

@@ -9,12 +9,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 > OpenKOS is **alpha** — it runs, and the API may still change. The package is
 > published on [PyPI](https://pypi.org/project/openkos/); the MVP 1 (Compiler),
 > MVP 2 (Graph and Memory), MVP 3 (Ask Surface), and MVP 4 (Unattended Engine) arcs
-> are complete; MVP 5 (Interoperability) is in progress, with export shipped and
-> import next, then MVP 6 (the desktop app and the stable Python API). The project's vision,
+> are complete; MVP 5 (Interoperability) is in progress, with export and import shipped,
+> then MVP 6 (the desktop app and the stable Python API). The project's vision,
 > architecture, and design live in the documents under
 > [`docs/`](https://github.com/jasonssdev/openkos/tree/main/docs).
 
 ## [Unreleased]
+
+### Added
+
+- `openkos import <dir> --namespace <ns>` adopts a foreign OKF bundle from a local directory, as written, under `bundle/imports/<ns>/`, with no model call and one commit that `git revert` undoes (#1314, [ADR-0050](docs/adr/0050-okf-import-adopts-a-foreign-bundle-under-its-own-namespace.md)). Links are rewritten into the namespace and whitespace names become slugs. Labels only rise (the workspace default, the per-type offset and `--sensitivity`; an unknown foreign label becomes confidential), foreign claims are kept inert under `imported`, and hostile input is refused with a named reason. Imported concepts are kept out of attach-at-ingest, `curate --auto-merge` and accept-recommended; embeddings wait for `openkos reindex`.
 
 ## [0.5.1] - 2026-10-05
 

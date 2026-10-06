@@ -1063,26 +1063,26 @@ Owns: `docs/cli.md`, `docs/okf-alignment.md`, `docs/roadmap.md`,
 `docs/knowledge-object-model.md`. Depends on: slice 6 merged. Branch
 `docs/okf-import`.
 
-- [ ] 7.1 `docs/cli.md`: add the `import` entry (the namespace rule and that it
+- [x] 7.1 `docs/cli.md`: add the `import` entry (the namespace rule and that it
   is required, `--sensitivity` raise-only, `--auto`, preview then confirm, exit
   codes 0/1/2/3, one commit, the undo "revert the import commit, then import
   again", re-import unsupported, human-only, model-free). State timelessly: no
   counts, no "since #NNN", no issue numbers; do not restate every cap (ADR-0050
   and `--help` own that).
-- [ ] 7.2 `docs/okf-alignment.md`: describe import against OKF (adopt as written
+- [x] 7.2 `docs/okf-alignment.md`: describe import against OKF (adopt as written
   under a namespace, the inert `imported` key as a §4.1 extension, labels
   folded fail-closed, non-conformant documents skipped) and the OpenKOS
   decisions OKF leaves open. `docs/roadmap.md`: mark the interoperability import
   half delivered and update what MVP 5 still owes. `docs/knowledge-object-model.md`:
   the import boundary. Shape only; behavior detail stays in specs and ADR-0050.
-- [ ] 7.3 Audit the docs against the code, not by re-reading them: diff
+- [x] 7.3 Audit the docs against the code, not by re-reading them: diff
   `uv run openkos import --help` against the `docs/cli.md` flag text; grep
   `src/openkos/templates` (including `openkos.yaml.template`) for any comment
   that teaches pre-change behavior and fix it if it does; confirm no doc claims
   a flag or config key that does not exist (there is no config key); the
   paragraphs NOT edited in these four files are checked too, because a stale
   sentence next to a new one is the usual defect.
-- [ ] 7.4 Run the five-command slice gate plus
+- [x] 7.4 Run the five-command slice gate plus
   `uv run pytest tests/unit/test_adr_index.py -q`. Open PR 7 (`Refs`), CI green
   on a rebased branch. Do NOT flip ADR-0050 to Accepted here: archive owns the
   status change (frontmatter, the `**Status:**` body line and the README row).
