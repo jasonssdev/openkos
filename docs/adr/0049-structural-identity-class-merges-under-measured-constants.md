@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0049: The structural base/-N Identity class merges without prior consent under measured constants, one commit per run"
 description: The structural base/-N Identity class that passed its pre-registered measurement may merge without a per-item answer on an opt-in curate run, under fixed measured constants and fresh verdicts only, in one commit per run with one reversible log entry per merge, and Identity offers an accept-recommended answer on its own bars.
-status: Proposed
+status: Accepted
 date: 2026-10-05
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0049: The structural base/-N Identity class merges without prior consent under measured constants, one commit per run
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-05
 
 ## Context

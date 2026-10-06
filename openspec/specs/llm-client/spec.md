@@ -206,7 +206,13 @@ tag — this D2 field-variance handling is unchanged. It MUST additionally
 surface the entry's family, sourced from the `details.family` field when
 present. WHEN an entry's `details` object or `family` field is absent, the
 entry MUST still be returned (never dropped), with its family
-absent/unknown rather than fabricated. A connection failure or timeout
+absent/unknown rather than fabricated. It MUST also surface the entry's
+content digest, sourced from the entry's `digest` field when present; WHEN
+that field is absent or not a string, the entry MUST still be returned with
+its digest absent/unknown rather than fabricated. The digest MUST exist only in
+memory on the returned entry: it MUST NOT be written to any file. A backend
+that cannot report a digest MUST return its entries with the digest absent.
+A connection failure or timeout
 MUST raise `OllamaUnavailable`; any other non-200 response or a 200
 response whose body is not valid JSON MUST raise `OllamaError` — following
 the same error-mapping discipline as `chat()`. `list_models()` MUST remain
@@ -249,6 +255,25 @@ config-free: the `llm` package MUST NOT import `openkos.config`.
 - WHEN `list_models()` is called
 - THEN `OllamaError` is raised rather than an unhandled exception
 
+#### Scenario: The digest is surfaced
+
+- GIVEN a reachable server whose `/api/tags` entry carries a `digest` string
+- WHEN `list_models()` is called
+- THEN the returned entry carries that digest unchanged
+
+#### Scenario: An entry without a digest is still returned
+
+- GIVEN an entry with no `digest` field, or a non-string `digest`
+- WHEN `list_models()` is called
+- THEN the entry is returned with its digest absent/unknown and no other
+  field is affected
+
+#### Scenario: A backend that reports no digest returns entries without one
+
+- GIVEN a backend that exposes no model digests (an `openai-compatible`
+  backend)
+- WHEN it lists models
+- THEN each entry is returned with its digest absent
 ### Requirement: Family-Based Embedding Model Classification
 
 A pure classification helper MUST determine whether an installed model

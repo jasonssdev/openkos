@@ -592,6 +592,13 @@ persisted (a row whose staleness can never be checked would serve
 forever -- this also keeps the no-readable-member UNCERTAIN
 short-circuit out of the store).
 
+The one exception to serving is `curate`'s automatic Identity pass
+(`identity-auto-merge`): it MUST judge its in-class groups fresh in the run
+with the measured model and MUST NOT act on a served verdict, because a
+persisted row records neither the model that produced it nor its digest. The
+exception changes only what the pass acts on; every other caller of the store
+serves as above, and the store's schema is unchanged.
+
 The run MUST report the split on stderr
 (`N of M candidate group(s) served from persisted adjudications; K judged
 fresh.`), mirroring `contradictions`' line, and a `--fresh` flag MUST
@@ -661,6 +668,19 @@ rationale the row already stores. Writes stay confined to derived state under
 - WHEN `openkos adjudicate` runs
 - THEN stderr carries no judgment-rubric line
 
+#### Scenario: The automatic pass ignores a servable verdict
+
+- GIVEN an in-class group with a persisted verdict that `adjudicate` would
+  serve with no model call, and an eligible `curate --auto-merge` run
+- WHEN the automatic pass decides on that group
+- THEN the group is judged by the model in this run and the persisted
+  verdict is not the basis for the merge decision
+
+#### Scenario: `adjudicate` still serves after the exception
+
+- GIVEN the same persisted verdict
+- WHEN plain `openkos adjudicate` runs on the unchanged bundle
+- THEN the group is served from the store with no model call
 ### Requirement: Machine-Readable `--json` Output Mode
 
 `openkos adjudicate` MUST accept a `--json` flag. When set, stdout MUST be a
