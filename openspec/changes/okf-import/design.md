@@ -579,6 +579,7 @@ def publish_import(root: Path, layout: config.WorkspaceLayout, plan: ImportPlan,
                    commit_section: CommitSection,
                    load_config: Callable[[Path], config.Config],
                    autocommit: Callable[[Path, Sequence[str], str], str | None],
+                   after_commit: Callable[[], None] = no_after_commit,
                    ) -> ImportOutcome: ...
 ```
 
@@ -644,10 +645,17 @@ non-OpenKOS process that creates an empty `bundle/imports/<ns>/` between
 step 3 and step 10, inside the lock window, would be replaced silently. The
 window is the duration of steps 4 to 9 under the workspace lock.
 
-**Derived caches.** Import writes only canonical files. FTS and embeddings
-catch up through the existing derived-index staleness path or `reindex`;
-the summary says so. Import never refreshes them itself, because the
-embedding half needs a model and the model-free guarantee forbids it.
+**Derived caches.** The import itself writes only canonical files. After the
+commit, still inside the commit section, the CLI runs the LEXICAL half of the
+shipped derived refresh through `publish_import`'s `after_commit` port
+(`_refresh_derived_after_write_quietly`, the wiring `merge` uses): FTS and the
+graph are pure SQLite projections of the bundle, so an imported document is
+found by lexical search with no manual `reindex`. The VECTOR half is never run
+by import: it calls the embedder, which the model-free guarantee forbids, so
+embeddings catch up through `reindex`. A lexical failure is one stderr
+advisory and never fails the import (the write is already committed). The
+summary states what happened: "lexical index refreshed; embeddings catch up on
+the next `openkos reindex`".
 
 ### D8. Entity-resolution exclusion by Concept ID
 
@@ -730,8 +738,9 @@ openkos import <dir> --namespace <slug> [--sensitivity public|private|confidenti
   distribution, and how many foreign labels were raised by the floor; per-type
   raises (the born-above-floor disclosure shape ingest uses); skipped files
   by path and reason code; machine-local keys dropped; links rewritten and
-  links clamped; documents with HTML links left as written; "derived indexes
-  are not refreshed; run `openkos reindex`"; and the undo sentence.
+  links clamped; documents with HTML links left as written; "the lexical
+  index is refreshed after the commit; embeddings are not (no model call): run
+  `openkos reindex` to embed"; and the undo sentence.
 - Confirm: `if not auto and cfg.review:` then `typer.confirm(..., abort=True)`
   on a TTY, or on a non-TTY print a refusal that names `--auto` and exit 1
   (the `forget` shape, `main.py:5601-5606`). With `review: false` the run

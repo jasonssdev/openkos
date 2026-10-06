@@ -54,6 +54,7 @@ from openkos.application import (
 from openkos.application import doctor as application_doctor
 from openkos.application import drift as application_drift
 from openkos.application import export_service as application_export
+from openkos.application import import_service as application_import
 from openkos.application import ingest as application_ingest
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import lint as application_lint
@@ -70,6 +71,7 @@ from openkos.application import suggest_volatility_service as volatility_service
 from openkos.application.revisions_report import revisions_report
 from openkos.bundle import bundle, listing, source_titles
 from openkos.bundle import decisions as bundle_decisions
+from openkos.bundle import imports as bundle_imports
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import log as bundle_log
@@ -10679,6 +10681,241 @@ def export_cmd(
         raise typer.Exit(code=1) from exc
 
     typer.echo(f"openkos export: exported {exported} concept(s) to {target}.")
+
+
+_ImportSensitivity = Literal["public", "private", "confidential"]
+"""`import --sensitivity`'s levels; Typer turns a `Literal` into a choice, so an
+unknown level is a usage error (exit 2) that lists the valid ones."""
+
+
+def _namespace_option(value: str) -> str:
+    """Validate `import --namespace` while the arguments are parsed, so a bad
+    value is a usage error (exit 2) before the workspace or the foreign
+    directory is read (a Typer callback on the option, not a check in the body:
+    the body runs after the workspace gate)."""
+    reason = bundle_imports.namespace_reason(value)
+    if reason is not None:
+        raise typer.BadParameter(reason)
+    return value
+
+
+def _exit_for_import_refusal(refusal: application_import.ImportRefusal) -> NoReturn:
+    """Print an import refusal and exit: 3 when re-running the same command can
+    succeed (the foreign tree or the label configuration moved since the
+    preview), 1 for every other refusal."""
+    typer.echo(f"openkos import: refusing to import -- {refusal.reason}.", err=True)
+    raise typer.Exit(code=3 if refusal.retry_safe else 1) from refusal
+
+
+def _echo_import_preview(
+    plan: application_import.ImportPlan,
+    *,
+    cfg: config.Config,
+    sensitivity: str | None,
+) -> None:
+    """Print what an import would do, one plain line per fact, to stdout (the
+    export verb's style). Conditional lines print only when they have
+    something to say, so the healthy path is short."""
+    adopted = len(plan.adopted)
+    typer.echo(
+        f"openkos import: will import {adopted} document(s) into namespace "
+        f"'{plan.namespace}'; {len(plan.skipped)} file(s) skipped."
+    )
+    version = plan.okf_version
+    if version is None:
+        typer.echo("  okf_version: not declared")
+    elif version == okf.OKF_VERSION:
+        typer.echo(f"  okf_version: {version} (known)")
+    else:
+        typer.echo(f"  okf_version: {version} (unknown; read best-effort)")
+    typer.echo(
+        "  labels: "
+        + ", ".join(f"{count} {label}" for label, count in plan.label_counts.items())
+    )
+    floor_raised = sum(
+        1
+        for a in plan.adopted
+        if a.foreign_label is not None
+        and okf.combine_sensitivity(a.foreign_label, plan.floor) != a.foreign_label
+    )
+    if floor_raised:
+        typer.echo(
+            f"  {floor_raised} foreign label(s) were raised to the floor "
+            f"({plan.floor})."
+        )
+    raises = Counter((a.doc_type, a.label) for a in plan.type_raises)
+    if raises:
+        (primary_type, primary_level), _ = raises.most_common(1)[0]
+        qualifier = "all" if len(raises) == 1 else "most common"
+        typer.echo(
+            f"  {len(plan.type_raises)} of {adopted} document(s) were raised "
+            f"above the floor by type default ({qualifier}: {primary_type} -> "
+            f"{primary_level})."
+        )
+    if plan.skipped:
+        typer.echo(f"  skipped ({len(plan.skipped)}):")
+        for path, code in plan.skipped:
+            typer.echo(f"    {path} ({code})")
+    if plan.renames:
+        typer.echo(f"  renamed ({len(plan.renames)}):")
+        for foreign_path, renamed in plan.renames:
+            typer.echo(f"    {foreign_path} -> {renamed}")
+    if plan.dropped_keys:
+        typer.echo(f"  machine-local key(s) dropped: {plan.dropped_keys}.")
+    typer.echo(
+        f"  links: {plan.links_rewritten} rewritten, {plan.links_clamped} clamped."
+    )
+    if plan.html_link_documents:
+        typer.echo(
+            f"  {plan.html_link_documents} document(s) with HTML links are left "
+            "as written."
+        )
+    if sensitivity is not None and plan.floor == str(cfg.default_sensitivity):
+        typer.echo(
+            f"  --sensitivity {sensitivity} raised nothing: the floor stays "
+            f"{plan.floor}."
+        )
+    typer.echo(
+        "  the lexical index is refreshed after the commit; embeddings are not "
+        "(no model call): run `openkos reindex` to embed."
+    )
+    typer.echo(
+        "  to undo: revert the import commit, then import again (a second import "
+        "into the same namespace is refused)."
+    )
+
+
+@app.command(
+    "import",
+    help=(
+        "Adopt a foreign OKF bundle from a local directory under its own "
+        "namespace, as written: no model call, one commit. Concepts land in "
+        "bundle/imports/<namespace>/, labelled no lower than the workspace "
+        "default, and are reconciled with local ones only by you."
+    ),
+    rich_help_panel="Get started",
+)
+@_guard_workspace_lock("import", commit_phase=True)
+def import_bundle(
+    source: Path = typer.Argument(
+        ...,
+        help="Local directory holding the foreign OKF bundle (not an archive or URL).",
+    ),
+    namespace: str = typer.Option(
+        ...,
+        "--namespace",
+        help=(
+            "Where the bundle lands: one lowercase ASCII slug (letters, digits, "
+            "single hyphens), required, no default. An existing namespace is "
+            "refused."
+        ),
+        callback=_namespace_option,
+    ),
+    sensitivity: _ImportSensitivity | None = typer.Option(
+        None,
+        "--sensitivity",
+        help=(
+            "Raise the lowest label the import may write. It only raises: a "
+            "document is never labelled below the workspace default."
+        ),
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and import immediately (unattended).",
+    ),
+) -> None:
+    """Import a foreign OKF bundle (okf-import, #1314; ADR-0050): the use case
+    is `application/import_service`; this command only checks the workspace,
+    prints the preview, asks, and maps outcomes to exit codes.
+
+    Usage errors (exit 2) -- a missing or invalid `--namespace`, an unknown
+    `--sensitivity` -- are raised while the arguments are parsed, before the
+    workspace or the foreign directory is read. Refusals (exit 1) -- outside a
+    workspace, an input that is not an existing local directory outside the
+    bundle, a hostile tree, a taken namespace, a declined or unconfirmable
+    prompt -- write nothing. A foreign tree or label configuration that moved
+    between the preview and the write, or a busy workspace, exits 3, the
+    retry-safe refusal. The preview takes no lock; the write runs inside the
+    commit section. The confirm gate mirrors `forget`'s: `--auto` or
+    `review: false` skips it, a TTY prompts, a non-interactive stdin refuses.
+    No daemon, queue, watch or MCP path reaches this verb."""
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos import: refusing to import -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+    layout = config.WorkspaceLayout(root)
+    cfg = config.read_config(root)
+
+    try:
+        plan = application_import.plan_import(
+            root,
+            layout,
+            cfg,
+            source,
+            namespace=namespace,
+            sensitivity_flag=sensitivity,
+            now=datetime.now(UTC),
+        )
+    except application_import.ImportRefusal as refusal:
+        _exit_for_import_refusal(refusal)
+
+    output.section_break()
+    _echo_import_preview(plan, cfg=cfg, sensitivity=sensitivity)
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm(
+                f"Import {len(plan.adopted)} document(s) into namespace "
+                f"'{plan.namespace}'?",
+                abort=True,
+            )
+        else:
+            typer.echo(
+                "openkos import: refusing to import without confirmation -- "
+                "stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        outcome = application_import.publish_import(
+            root,
+            layout,
+            plan,
+            commit_section=_commit_section_for(root),
+            load_config=config.read_config,
+            autocommit=_autocommit,
+            # The LEXICAL half of the #640 refresh (FTS and graph, pure SQLite)
+            # runs inside the section. The vector half would call the embedder,
+            # which the model-free guarantee forbids, so it is never run here:
+            # vectors catch up through `reindex`.
+            after_commit=lambda: _refresh_derived_after_write_quietly(root, "import"),
+        )
+    except application_import.ImportRefusal as refusal:
+        _exit_for_import_refusal(refusal)
+    refresh_failures = _CARRIED_REFRESH_FAILURES.get() or []
+    _CARRIED_REFRESH_FAILURES.set(None)
+
+    typer.echo(
+        f"openkos import: imported {outcome.adopted} document(s) into namespace "
+        f"'{outcome.namespace}'; {outcome.skipped} file(s) skipped."
+    )
+    if outcome.commit is not None:
+        _echo_commit_disclosure(outcome.commit, prefix="openkos import: ")
+    if refresh_failures:
+        typer.echo(
+            "openkos import: the lexical index refresh did not complete ("
+            + "; ".join(refresh_failures)
+            + "); the import itself is written. Run `openkos reindex`.",
+            err=True,
+        )
+    else:
+        typer.echo(
+            "openkos import: lexical index refreshed; embeddings catch up on the "
+            "next `openkos reindex`."
+        )
 
 
 @app.command(

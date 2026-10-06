@@ -617,20 +617,28 @@ label, or the `--include-private` gate), never solely because of its anchor.
 
 #### Scenario: Mixed labels export without below-source withholding
 
-- GIVEN an import with documents labelled `public`, `private` and
-  `confidential`
+- GIVEN a workspace with `default_sensitivity: public` and an import with
+  documents labelled `public`, `private` and `confidential`
+- WHEN `openkos export out/` runs, and again with `--include-private`
+- THEN the `public` documents are exported by default, the `private` ones only
+  with `--include-private`, and none is reported as below-source; the
+  `confidential` ones are withheld by their own label
+
+#### Scenario: A foreign public document in a stock workspace is private
+
+- GIVEN a stock workspace (`default_sensitivity: private`) with a foreign
+  `public` document imported
 - WHEN `openkos export out/ --include-private` runs
-- THEN the `public` and `private` documents are exported and are not
-  reported as below-source, and the `confidential` one is withheld by its own
-  label
+- THEN that document is exported, labelled `private`, and is not reported as
+  below-source
 
-#### Scenario: A public imported document exports by default
+#### Scenario: A document a human lowers below its anchor is withheld
 
-- GIVEN a stock workspace (`default_sensitivity: private`) with a
-  foreign `public` document imported, then raised to `public` by a human
-  `set-sensitivity`
+- GIVEN an imported document that a human then lowers with `set-sensitivity`
+  below its anchor's label
 - WHEN `openkos export out/` runs
-- THEN that document is exported without `--allow-below-source`
+- THEN that document is withheld as below-source unless
+  `--allow-below-source` is given, as any concept below its source is
 
 ### Requirement: Import Previews, Confirms, Then Publishes Under The Lock
 
@@ -697,8 +705,10 @@ The log MUST receive one `**Import**` entry naming the namespace, the count
 adopted and the count skipped. WHEN the
 commit is degraded (no repository or identity) the import MUST still succeed
 and report the usual non-fatal warning. The import MUST write only canonical
-files, no derived store; FTS and embeddings catch up through the existing
-derived-index path or `reindex`.
+files itself, make no model call, and then refresh the model-free (lexical)
+derived stores, so an imported document is found by lexical search without a
+`reindex`; it MUST NOT create or refresh the vector store, which catches up
+through `reindex`.
 
 #### Scenario: One commit, revertable while latest
 
@@ -722,11 +732,12 @@ derived-index path or `reindex`.
 - WHEN `bundle/log.md` is read
 - THEN it holds one `**Import**` entry naming the namespace, 5 and 2
 
-#### Scenario: No derived store is written
+#### Scenario: The lexical index is fresh and no embedding is made
 
 - GIVEN a completed import
-- WHEN the workspace's derived stores are inspected
-- THEN import has written none of them
+- WHEN a lexical search runs for text of an imported document
+- THEN the document is found without a `reindex`
+- AND no vector store was created and no model was called
 
 ### Requirement: Imported Concepts Are Not Attach Targets Or Automatic-Merge Candidates
 
