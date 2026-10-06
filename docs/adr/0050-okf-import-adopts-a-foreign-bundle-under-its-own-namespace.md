@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0050: OKF import adopts a foreign bundle under its own namespace, labelled fail-closed, anchored per label, and outside automatic identity"
 description: OKF import adopts a foreign bundle as written under one required namespace, labels every concept fail-closed at or above the workspace floor, anchors each effective label with one engine-written Source, keeps every foreign trust key inert, excludes imported concepts from automatic identity, and reads untrusted trees through a bounded reader that refuses hostile input with a named reason.
-status: Proposed
+status: Accepted
 date: 2026-10-05
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0050: OKF import adopts a foreign bundle under its own namespace, labelled fail-closed, anchored per label, and outside automatic identity
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-05
 
 ## Context

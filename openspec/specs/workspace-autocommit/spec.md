@@ -12,13 +12,14 @@ reuses its primitives (`repo_root`, `has_git_identity`, `commit_paths`).
 
 ### Requirement: Post-Phase-B Commit Per Mutating Verb
 
-After a successful Phase B, each of `ingest`, `forget`, `relate`, `merge`,
+After a successful Phase B, each of `ingest`, `import`, `forget`, `relate`, `merge`,
 `unmerge`, `reconcile`, `set-volatility`, and `set-sensitivity` MUST make
 exactly one commit via a shared `_autocommit(root, paths, message)` helper,
 containing the verb's own Phase-B-written paths, including
 `bundle/index.md` and/or `bundle/log.md` where that verb writes them,
 leaving the working tree clean. The commit message MUST follow the per-verb
-format: `openkos: ingest <source> (+N concepts)`, `openkos: forget <id>`,
+format: `openkos: ingest <source> (+N concepts)`, `openkos: import
+<namespace> (+N concepts)`, `openkos: forget <id>`,
 `openkos: relate <src> -> <dst> (<type>)`, `openkos: merge <src> into
 <dst>`, `openkos: unmerge <id>`, `openkos: reconcile (<summary>)`, `openkos:
 set-volatility <ConceptType> -> <tier>`, `openkos: set-sensitivity <id> ->
@@ -71,6 +72,17 @@ set-volatility <ConceptType> -> <tier>`, `openkos: set-sensitivity <id> ->
 - THEN exactly one commit exists with message `openkos: set-sensitivity
   <id> -> <level>`, containing the concept file and `bundle/log.md`, with no
   `bundle/index.md` change
+- AND `git status` reports a clean tree
+
+#### Scenario: Import commits the namespace, anchor, index and log
+
+- GIVEN a git-backed workspace with configured identity
+- WHEN `openkos import <dir> --namespace acme` completes Phase B
+  successfully, adopting N concepts
+- THEN exactly one commit exists with message `openkos: import acme
+  (+N concepts)`, containing the adopted files under
+  `bundle/imports/acme/`, the import anchor Source(s), `bundle/index.md`
+  and `bundle/log.md`, and nothing else
 - AND `git status` reports a clean tree
 
 ### Requirement: Scoped Staging Only
@@ -215,7 +227,7 @@ missing, blank, or unparseable `sensitivity` — MUST NOT emit the notice.
 
 ### Requirement: Commit Disclosure For The Recovery-Critical Verbs
 
-`forget`, `merge`, and `curate` MUST each print one line naming the commit
+`forget`, `merge`, `import`, and `curate` MUST each print one line naming the commit
 `_autocommit` just wrote and the `git revert` that undoes it. `curate` has
 four commit points — the Identity automatic pass (one commit for the run's
 automatic merges), Identity (per accepted merge), Structure (per accepted
@@ -227,9 +239,11 @@ sites cannot drift into several spellings of the same sentence.
 The line MUST NOT advertise an unconditional undo. Every commit appends to
 `bundle/log.md`, so `git revert` of any commit but the latest conflicts there
 and leaves the bundle unparseable mid-revert; the line therefore states that
-`git revert <sha>` undoes the commit only while it is the latest commit.
+`git revert <sha>` undoes the commit only while it is the latest commit. For
+`import`, whose re-import is refused, that revert followed by a new import is
+the documented way to start over.
 
-The scope is exactly those three verbs. Every other mutating verb —
+The scope is exactly those four verbs. Every other mutating verb —
 `ingest`, `relate`, `unmerge`, `reconcile`, `set-volatility`,
 `set-sensitivity`, `adjudicate`'s merge walks — MUST keep its output
 unchanged: these are the verbs whose writes a human most often wants back,
@@ -257,6 +271,14 @@ non-fatal WARNING remains the whole report in that case.
 - THEN stdout carries one line naming the new commit's short sha and the
   `git revert <sha>` that undoes it
 
+#### Scenario: `import` names the commit it wrote
+
+- GIVEN a git-backed workspace with configured identity
+- WHEN `openkos import <dir> --namespace acme` completes Phase B
+  successfully
+- THEN stdout carries one line naming the new commit's short sha and the
+  `git revert <sha>` that undoes it only while it is the latest commit
+
 #### Scenario: Each `curate` stage names its own commit
 
 - GIVEN a git-backed workspace with configured identity
@@ -277,7 +299,7 @@ non-fatal WARNING remains the whole report in that case.
 
 - GIVEN a workspace where `_autocommit` degrades (no repository, identity
   unset, or the commit raising)
-- WHEN `forget`, `merge`, or any writing `curate` stage completes
+- WHEN `forget`, `merge`, `import`, or any writing `curate` stage completes
 - THEN no commit line is printed on any stream, and only the existing
   non-fatal WARNING reports what happened
 ### Requirement: Exclusions and Unconditional Behavior

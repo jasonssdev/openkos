@@ -906,13 +906,20 @@ whatever the bodies weigh, and the preview MUST state
 `survivor: <id> (canonical id (base of a -N family))`: the Concept ID is
 the entity's identity under OKF, so a disambiguator must not become
 permanent. The absorbed body is not lost -- the merge stacks and
-reconciles both. For every other group, the survivor MUST be the member
+reconciles both. For every group that is not such a family and in which
+exactly one member is an imported concept (a Concept ID under `imports/`,
+adopted by `openkos import`) and the other is local, the survivor MUST be the
+local member whatever the bodies weigh, and the preview MUST state
+`survivor: <id> (local over imported)`: the merged concept then lives at a
+local Concept ID, and an imported Concept ID must not become the permanent
+identity of a locally held entity. For every other group, the survivor MUST be the member
 with the RICHER BODY (longer stripped body text), falling back to `member_ids[0]`
 (ascending id) only on an exact tie (string order alone made a
 bilingual pleonasm the permanent Concept ID purely because `f` sorts
 before `o`; the richer-body rule mirrors the extraction union's own
-twin-drop precedent). An unreadable member measures below every readable
-one and never survives on this rule. The criterion that DECIDED MUST be
+twin-drop precedent). A group whose two members are both imported, or both
+local, is ordered by the same rules as before. An unreadable member measures below every readable
+one and never survives on the richer-body rule. The criterion that DECIDED MUST be
 stated in the preview (`survivor: <id> (richer body)` or `survivor: <id>
 (id order -- equal body length)`) -- an arbitrary-looking choice with no
 stated criterion is the defect, not the determinism. Before prompting, a
@@ -968,6 +975,38 @@ itself remains as defense in depth).
 - THEN `member_ids[0]` is the survivor and the preview states the id-order
   tiebreak
 
+#### Scenario: A local member survives an imported one whatever the bodies weigh
+
+- GIVEN a SAME 2-member group of `concepts/stoicism` (local, short body) and
+  `imports/acme/concepts/stoicism` (imported, longer body)
+- WHEN any apply walk previews it, and again with the ids' sort order
+  reversed
+- THEN `concepts/stoicism` is the survivor in both cases and the preview
+  states `local over imported`
+
+#### Scenario: The surviving local concept is no longer imported
+
+- GIVEN the previous group is merged by `curate` Identity
+- WHEN the merge completes
+- THEN the surviving concept has a local Concept ID, the absorbed imported
+  document is gone from `imports/acme/`, and the survivor's content,
+  provenance and label follow the existing merge rules
+
+#### Scenario: Two imported members use the existing rules
+
+- GIVEN a SAME 2-member group where both members are imported
+- WHEN any apply walk previews it
+- THEN the survivor is chosen by the base/`-N` rule or the richer-body rule
+  exactly as for two local members, and the preview does not state `local
+  over imported`
+
+#### Scenario: An imported base/-N family keeps the canonical-id rule
+
+- GIVEN a group `imports/acme/concepts/python` and
+  `imports/acme/concepts/python-3`, both imported
+- WHEN any apply walk previews it
+- THEN `imports/acme/concepts/python` is the survivor by the canonical-id
+  rule, as before this change
 ### Requirement: Cross-Source SAME Verdicts Are Flagged And Batch-Gated
 
 A SAME verdict over a 2-member group whose members BOTH carry non-empty

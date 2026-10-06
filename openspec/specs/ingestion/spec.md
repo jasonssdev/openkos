@@ -3666,10 +3666,14 @@ NOT match. The OKF types `Event` and `Person` are EXCLUDED: a candidate of
 either type MUST take the unchanged slug-collision path. A concept whose
 effective status is deprecated MUST NOT be an attach target; WHEN it is the
 only same-key match, the candidate MUST take the unchanged slug-collision
-path. WHEN any same-key match already lists this ingest's `sources/<slug>`
-in its `provenance`, the candidate MUST be skipped create-only and every
-matching file left byte-untouched (the unchanged same-source no-op), so a
-re-ingest never attaches twice and never bumps `version` twice.
+path. An imported concept (one adopted by `openkos import`) MUST NOT be an
+attach target either; WHEN it is the only same-key match, the candidate MUST
+take the unchanged slug-collision path and the imported concept MUST stay
+byte-untouched. WHEN any same-key match already lists this ingest's
+`sources/<slug>` in its `provenance`, the candidate MUST be skipped
+create-only and every matching file left byte-untouched (the unchanged
+same-source no-op), so a re-ingest never attaches twice and never bumps
+`version` twice.
 
 #### Scenario: A foreign-source candidate attaches instead of forking
 
@@ -3735,6 +3739,20 @@ re-ingest never attaches twice and never bumps `version` twice.
 - THEN it attaches (the exclusion list is the only guard against homonyms;
   this scenario pins that the list, not a heuristic, decides)
 
+#### Scenario: An imported concept is never an attach target
+
+- GIVEN an imported `Concept` titled "Atlas" under `imports/acme/` and no
+  local same-key `Concept`
+- WHEN a local source yields a `Concept` titled "Atlas"
+- THEN the candidate takes the slug-collision path (a new local file), and
+  the imported concept is byte-identical to before
+
+#### Scenario: A local match still wins over an imported one
+
+- GIVEN a local `Concept` "Atlas" and an imported `Concept` "Atlas"
+- WHEN a source yields a `Concept` titled "Atlas"
+- THEN the candidate attaches to the local concept, never to the imported
+  one
 ### Requirement: An Attach Revises The Existing Concept Deterministically
 
 An attach MUST produce the revised document without a model call and

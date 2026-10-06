@@ -19,12 +19,18 @@ the class keeps its per-item prompt.
 A candidate group MUST be in the class if and only if all of the following
 hold: its tier is HIGH; it has exactly two members; both members have the
 same single concept type; that type is not one of the attach-excluded types
-(`ATTACH_EXCLUDED_TYPES`, today Event and Person); and one member's Concept
+(`ATTACH_EXCLUDED_TYPES`, today Event and Person); neither member is an
+imported concept (one adopted by `openkos import`); and one member's Concept
 ID is the other's ID plus a `-N` ingest-time disambiguator (digits only, same
 directory, the `is_suffix_family` relation, in either order). The predicate
-MUST be structural only: it MUST NOT read a verdict, a confidence or a file.
-Production and the `evals/auto_merge` harness MUST share the one predicate; no
-second copy may exist.
+MUST be structural only: it MUST NOT read a verdict or a confidence. Whether
+a member is imported is a property of the concept's own recorded identity,
+and the predicate MUST NOT depend on a model. Production and the
+`evals/auto_merge` harness MUST share the one predicate; no second copy may
+exist. A group the predicate refuses for an imported member MUST remain
+visible to `duplicates`, `adjudicate`, `merge` and curate Identity's
+per-item prompt, but, being out of class, it is neither merged
+automatically nor offered through accept-recommended.
 
 #### Scenario: A base/`-N` pair of one allowed type is in class
 
@@ -42,11 +48,28 @@ second copy may exist.
 - WHEN the predicate is evaluated for each variant
 - THEN every variant is out of class
 
-#### Scenario: The predicate reads no verdict and no file
+#### Scenario: A group with an imported member is out of class
 
-- GIVEN an in-class group and a workspace whose member files cannot be read
+- GIVEN a HIGH-tier base/`-N` pair of one allowed type in which both members
+  are imported concepts (a base/`-N` pair shares one directory, so a pair
+  with exactly one imported member is never in that shape; the predicate
+  still refuses on either member alone)
 - WHEN the predicate is evaluated
-- THEN it returns in class without raising and without a model call
+- THEN the pair is out of class, and the same shape between two local
+  concepts stays in class
+
+#### Scenario: An imported group is still offered to a human
+
+- GIVEN a HIGH-tier pair with an imported member that the predicate refuses
+- WHEN curate Identity runs interactively
+- THEN the group is prompted individually, and is not listed in any
+  accept-recommended offer
+
+#### Scenario: The predicate reads no verdict and no model
+
+- GIVEN an in-class group
+- WHEN the predicate is evaluated
+- THEN it returns in class without a verdict, a confidence or a model call
 
 #### Scenario: The eval harness uses the production predicate
 
@@ -426,12 +449,15 @@ daemon and the pending-work maintenance pass MUST NEVER auto-merge.
 ### Requirement: The Recommended Set For Accept-Recommended
 
 The set that Identity's accept-recommended answer may offer MUST be exactly
-the groups that satisfy: the run is eligible; the group is in the class; its
+the groups that satisfy: the run is eligible; the group is in the class (so
+no member is an imported concept); its
 `cross_type_concern` is `None`; no member is confidential or LLM-blocked; and
 the measured model judged it `same` in this run at any confidence. Confidence
 below 0.90 MUST NOT exclude a group from the recommended set. A group outside
 the set MUST NOT be offered through accept-recommended and MUST keep its
-per-item prompt.
+per-item prompt. A group with an imported member is outside the measured
+population (ingest-time `-N` siblings) and is therefore outside the set,
+whatever its verdict and confidence.
 
 #### Scenario: A lower-confidence in-class `same` group is recommended
 
@@ -462,3 +488,17 @@ per-item prompt.
 - GIVEN a run whose model digest differs from the measured digest
 - WHEN the recommended set is built
 - THEN it is empty
+
+#### Scenario: A `same` group with an imported member is not recommended
+
+- GIVEN a HIGH-tier base/`-N` pair of one allowed type, such as
+  `imports/acme/concepts/python` and `imports/acme/concepts/python-3`,
+  judged `same` at high confidence in an eligible run
+- WHEN the recommended set is built
+- THEN the group is not in the set and keeps its per-item prompt
+
+#### Scenario: A mixed local and imported group is not recommended
+
+- GIVEN a `same` group with one local and one imported member
+- WHEN the recommended set is built
+- THEN the group is not in the set and keeps its per-item prompt
