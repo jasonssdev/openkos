@@ -40,10 +40,13 @@ it MUST NOT read a file.)
 
 #### Scenario: A group with an imported member is out of class
 
-- GIVEN a HIGH-tier base/`-N` pair of one allowed type in which one member,
-  then the other, then both are imported concepts
-- WHEN the predicate is evaluated for each variant
-- THEN every variant is out of class
+- GIVEN a HIGH-tier base/`-N` pair of one allowed type in which both members
+  are imported concepts (a base/`-N` pair shares one directory, so a pair
+  with exactly one imported member is never in that shape; the predicate
+  still refuses on either member alone)
+- WHEN the predicate is evaluated
+- THEN the pair is out of class, and the same shape between two local
+  concepts stays in class
 
 #### Scenario: An imported group is still offered to a human
 

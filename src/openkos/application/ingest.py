@@ -40,6 +40,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from openkos import config, source_date, source_title
+from openkos.bundle import imports as bundle_imports
 from openkos.bundle import index as bundle_index
 from openkos.bundle import log as bundle_log
 from openkos.bundle import source_titles
@@ -159,7 +160,9 @@ def build_attach_lookup(
     exact-title eligibility rule (`candidates.keyed_documents`: readable,
     typed, titled, not a Source, not deprecated) minus `ATTACH_EXCLUDED_TYPES`,
     so a deprecated concept is never an attach target and "same family" means
-    what it means in `duplicates`."""
+    what it means in `duplicates`. An imported concept (a Concept ID under
+    `imports/`) is never a target either: only a local concept absorbs an
+    extraction candidate (okf-import, D8)."""
     groups: dict[tuple[str, str], tuple[str, ...]] | None = None
 
     def find(okf_type: str, title: str) -> tuple[str, ...]:
@@ -171,7 +174,11 @@ def build_attach_lookup(
             for concept_id, doc_type, key in resolution_candidates.keyed_documents(
                 bundle_dir
             ):
-                if doc_type in ATTACH_EXCLUDED_TYPES or not key:
+                if (
+                    doc_type in ATTACH_EXCLUDED_TYPES
+                    or not key
+                    or bundle_imports.is_imported_concept(concept_id)
+                ):
                     continue
                 built.setdefault((doc_type, key), []).append(concept_id)
             groups = {k: tuple(sorted(ids)) for k, ids in built.items()}
