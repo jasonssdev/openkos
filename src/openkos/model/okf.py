@@ -4026,6 +4026,65 @@ def validate_foreign_collisions(paths: Iterable[str]) -> None:
             raise ForeignRefusal("case-collision", by_nfc[key])
 
 
+def rename_foreign_segment(segment: str) -> str:
+    """The name an adopted path segment is written under (okf-import, the slug
+    rule). A segment holding whitespace is renamed: every whitespace run
+    (`str.split()`, so every `isspace()` character) becomes ONE `-`, then
+    `casefold()` and NFC. Any other segment is returned as written, so
+    only a name the graph link reader could not represent changes at all.
+
+    Casefolding, not lowercasing, so a renamed name can never differ from
+    another only by case (the collision check compares casefolded). The
+    engine's `slugify` is deliberately not reused: it also rewrites `_`, `.`
+    and every other non-alphanumeric character, which the foreign name never
+    needed. Idempotent: a renamed segment holds no whitespace."""
+    if not any(char.isspace() for char in segment):
+        return segment
+    return unicodedata.normalize("NFC", "-".join(segment.split()).casefold())
+
+
+def renamed_foreign_id(foreign_id: str) -> str:
+    """`foreign_id` with every segment renamed by `rename_foreign_segment`: the
+    path (minus `.md`) an adopted document is written at, below the namespace."""
+    return "/".join(rename_foreign_segment(part) for part in foreign_id.split("/"))
+
+
+def validate_foreign_renames(paths: Iterable[str]) -> None:
+    """Refuse foreign paths whose rename (`rename_foreign_segment`) would go
+    wrong: a renamed segment grown past the segment cap by casefolding
+    (`name-too-long`, naming the foreign path), or two names, files or
+    directory prefixes, that are equal after the rename compared as the
+    existing check compares them (NFC, then `casefold()`) and different as
+    written (`rename-collision`, naming BOTH foreign names). Pure.
+
+    A pair that no rename touches is the reader's own `case-collision` /
+    `nfc-collision` and is not judged here."""
+    ordered = sorted(set(paths))
+    for path in ordered:
+        renamed_parts = [rename_foreign_segment(part) for part in path.split("/")]
+        nfc_bytes = len(unicodedata.normalize("NFC", "/".join(renamed_parts)).encode())
+        if (
+            any(
+                len(unicodedata.normalize("NFC", part).encode("utf-8"))
+                > FOREIGN_MAX_SEGMENT_BYTES
+                for part in renamed_parts
+            )
+            or FOREIGN_NAMESPACE_RESERVE_BYTES + nfc_bytes > FOREIGN_MAX_PATH_BYTES
+        ):
+            raise ForeignRefusal("name-too-long", path)
+    seen: dict[str, tuple[str, bool]] = {}
+    for path in ordered:
+        parts = path.split("/")
+        for end in range(1, len(parts) + 1):
+            original = "/".join(parts[:end])
+            renamed = "/".join(rename_foreign_segment(part) for part in parts[:end])
+            changed = renamed != original
+            key = unicodedata.normalize("NFC", renamed).casefold()
+            first, first_changed = seen.setdefault(key, (original, changed))
+            if first != original and (changed or first_changed):
+                raise ForeignRefusal("rename-collision", f"{first} and {original}")
+
+
 _FOREIGN_RESERVED_NAMES: Final = frozenset({"index.md", "log.md"})
 """Reserved filenames, matched case-insensitively (design D1 rule 8): an adopted
 `INDEX.md` would be a concept `forget` could never name."""
@@ -4181,6 +4240,7 @@ def read_foreign_bundle(root: Path) -> ForeignBundle:
 
     md_paths, skipped = _walk_foreign_tree(root)
     validate_foreign_collisions(md_paths)
+    validate_foreign_renames(md_paths)
 
     manifest: dict[str, str] = {rel: f"skip:{code}" for rel, code in skipped.items()}
     documents: list[ForeignDocument] = []
@@ -4368,7 +4428,7 @@ def namespaced_concept_id(target: str, prefix: str) -> str | None:
             if segments:
                 segments.pop()
             continue
-        segments.append(part)
+        segments.append(rename_foreign_segment(part))
     if not segments:
         return None
     return f"{prefix}/{'/'.join(segments)}"
@@ -4462,6 +4522,8 @@ def adopt_foreign_document(
         "id": doc.foreign_id,
         "sha256": doc.sha256,
     }
+    if renamed_foreign_id(doc.foreign_id) != doc.foreign_id:
+        imported["path"] = doc.path
     if inert:
         imported["frontmatter"] = inert
     metadata[IMPORTED_KEY] = imported
@@ -4519,7 +4581,8 @@ def build_import_anchor(
         if "[" in entry.title or "]" in entry.title:
             raise ValueError("anchor title must be sanitized (no link delimiters)")
         bullets.append(
-            f"- [{entry.title}](/imports/{namespace}/{entry.foreign_id}.md)"
+            f"- [{entry.title}]"
+            f"(/imports/{namespace}/{renamed_foreign_id(entry.foreign_id)}.md)"
             f" \u2014 foreign id `{entry.foreign_id}`, sha256 `{entry.sha256}`"
         )
     title = f"Import {namespace} ({label})"
