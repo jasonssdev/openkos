@@ -81,3 +81,32 @@ almost no failures to remove (3 of 30 combined).
   on five fixtures only (`--fixture`), so rule 2 for that fixture rests on the
   baseline and `persons` arms.
 - Stored runs: `results/runs-*.json`.
+
+## Second pass on (c): three narrow clauses, none adopted (2026-10-06)
+
+Pre-registered in `PREREGISTRATION-1231c.md` before any treatment run: two
+baseline arms pooled (30 runs per fixture), the target must beat the pooled
+rate (17 of 30) by more than the 0.40 block spread, which only 15 of 15
+meets. A re-run baseline on current main gave 9 of 15 (the first gave 8 of
+15).
+
+The stored baseline outputs show that (c) is not a Person-recall gap: every
+miss is a whole-run collapse to one `Event` (`produced = 1`, judge skipped).
+When the run does not collapse, the Person is emitted.
+
+| arm | edit | target person hit | guard verdict |
+| --- | --- | --- | --- |
+| `role` | after the Person definition, "A newcomer introduced by role ... even when named only in a decision or staffing line." | 7 of 15 | fails target; `es-meeting-new-engineer` split 3 of 15 (< 4) |
+| `attendees` | after "not five Person stubs", "; but a person the decisions or staffing lines are about ... is a subject, not an attendee." | 9 of 15 | fails target (no gain) |
+| `newcomer` | after the Person definition, "(including a newcomer's role on a team)." | 6 of 15 | fails target |
+
+Guards held for every arm (recall, `es-meeting-new-engineer` person hit 15 of
+15, the control's over-split 0 of 15, no errored runs); the targets simply did
+not move. **Nothing shipped.** Wording that targets the Person cannot fix a
+failure that happens before Persons are considered; a fix would have to
+address the collapse itself (#522), which a single-clause prompt edit has not
+done on this model. Run-to-run noise is large: `en-review-3-decisions` split
+7 of 15 in one baseline arm and 4 of 15 in the next, which is why the rule
+pools both baselines.
+
+Stored runs: `results/runs-{baseline,role,attendees,newcomer}-2026100*.json`.

@@ -116,6 +116,26 @@ TREATMENTS: Final[dict[str, tuple[str, str]]] = {
         "several choices yields one Decision per choice, never one object "
         "listing them all.",
     ),
+    # #1231 (c), second pass: the baseline failure is a whole-run collapse to
+    # one Event, so each candidate is a narrow clause at the place the model
+    # decides who counts as a subject. See PREREGISTRATION-1231c.md.
+    "role": (
+        "their identity, role, work, or biography.",
+        "their identity, role, work, or biography. A newcomer introduced by "
+        "role (for example joining a team as its second backend engineer) is "
+        "such an individual, even when named only in a decision or staffing "
+        "line.",
+    ),
+    "attendees": (
+        "not five Person stubs.",
+        "not five Person stubs; but a person the decisions or staffing lines "
+        "are about (for example a new hire) is a subject, not an attendee.",
+    ),
+    "newcomer": (
+        "their identity, role, work, or biography.",
+        "their identity, role, work, or biography (including a newcomer's "
+        "role on a team).",
+    ),
 }
 
 
