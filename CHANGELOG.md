@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-06
+
+The second half of MVP 5. `openkos import` adopts an OKF bundle produced by another tool, or by another OpenKOS workspace's export, as written, under its own namespace: labels only rise, nothing calls a model, and whatever it shares with your own knowledge is left for you to reconcile. Nothing changes unless you use the new verb.
+
 ### Added
 
 - `openkos import <dir> --namespace <ns>` adopts a foreign OKF bundle from a local directory, as written, under `bundle/imports/<ns>/`, with no model call and one commit that `git revert` undoes (#1314, [ADR-0050](docs/adr/0050-okf-import-adopts-a-foreign-bundle-under-its-own-namespace.md)). Links are rewritten into the namespace and whitespace names become slugs. Labels only rise (the workspace default, the per-type offset and `--sensitivity`; an unknown foreign label becomes confidential), foreign claims are kept inert under `imported`, and hostile input is refused with a named reason. Imported concepts are kept out of attach-at-ingest, `curate --auto-merge` and accept-recommended; embeddings wait for `openkos reindex`.
@@ -3584,7 +3588,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/jasonssdev/openkos/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/jasonssdev/openkos/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jasonssdev/openkos/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jasonssdev/openkos/compare/v0.3.1...v0.4.0
