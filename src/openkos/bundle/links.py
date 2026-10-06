@@ -39,7 +39,7 @@ from pathlib import PurePosixPath
 from typing import Final, Literal
 from urllib.parse import quote, unquote
 
-from openkos.model.okf import LinkRewrite
+from openkos.model.okf import LinkRewrite, rename_foreign_segment
 
 _LINK_RE: Final = re.compile(r"\[[^\]]*\]\(/([^)\s#]+\.md)(#[^)\s]*)?\)")
 """A bundle-relative `[text](/….md)` markdown link, per
@@ -592,6 +592,34 @@ def _is_byte_preserving(inner: str) -> bool:
     return not any(segment in ("", ".", "..") for segment in segments)
 
 
+def _rename_path(path: str) -> str:
+    """`path` with every segment renamed as the import renames a name with
+    whitespace (`okf.rename_foreign_segment`). A `?query` on the last segment
+    is not part of any name (a foreign name cannot hold a `?`), so it is kept
+    as written."""
+    segments = path.split("/")
+    head, mark, query = segments[-1].partition("?")
+    renamed = [rename_foreign_segment(segment) for segment in segments[:-1]]
+    renamed.append(rename_foreign_segment(head) + mark + query)
+    return "/".join(renamed)
+
+
+def _renamed_own_path(inner: str) -> str | None:
+    """The path the destination `inner` itself names (decoded, no `#fragment`),
+    renamed, or `None` when no segment it names holds whitespace. Only what the
+    link spells counts: a relative link inherits the whitespace of its
+    document's directory, and that directory moves with the document."""
+    base = unquote(_strip_angle(inner).partition("#")[0])
+    renamed = _rename_path(base)
+    return None if renamed == base else renamed
+
+
+def _quote_path(path: str) -> str:
+    return _PERCENT_ENCODED_CHARS_RE.sub(
+        lambda found: quote(found.group(), safe=""), path
+    )
+
+
 def _namespaced_destination(
     destination: str, *, foreign_id: str, prefix: str
 ) -> tuple[str, bool] | None:
@@ -600,14 +628,22 @@ def _namespaced_destination(
     angle = len(destination) >= 2 and destination[0] == "<" and destination[-1] == ">"
     inner = destination[1:-1] if angle else destination
     resolved = resolve_link_target(inner, file_id=foreign_id)
-    if resolved.kind != "path" or not (resolved.absolute or resolved.escaped):
+    if resolved.kind != "path":
         return None
-    if resolved.absolute and not resolved.escaped and _is_byte_preserving(inner):
+    own = _renamed_own_path(inner)
+    if not (resolved.absolute or resolved.escaped):
+        if own is None:
+            return None
+        new_inner = f"{_quote_path(own)}{resolved.suffix}"
+    elif (
+        own is None
+        and resolved.absolute
+        and not resolved.escaped
+        and _is_byte_preserving(inner)
+    ):
         new_inner = f"/{prefix}{inner}"
     else:
-        quoted = _PERCENT_ENCODED_CHARS_RE.sub(
-            lambda found: quote(found.group(), safe=""), resolved.path
-        )
+        quoted = _quote_path(_rename_path(resolved.path))
         new_inner = f"/{prefix}/{quoted}{resolved.suffix}"
     return (f"<{new_inner}>" if angle else new_inner), resolved.escaped
 

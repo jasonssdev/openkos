@@ -236,6 +236,57 @@ ROWS: list[tuple[str, str, str, str, bool]] = [
     ("external", "a", "https://example.org/x.md", "https://example.org/x.md", False),
     ("mailto", "a", "mailto:a@b.c", "mailto:a@b.c", False),
     ("anchor", "a", "#sec", "#sec", False),
+    # names with whitespace are renamed to slugs (slice 4b): every link that
+    # names one follows the rename, in every form the destination can take
+    (
+        "abs-space-nested",
+        "a",
+        "/My%20Folder/Mi%20Nota.md",
+        "/imports/acme/my-folder/mi-nota.md",
+        False,
+    ),
+    ("abs-space-root", "a", "/Mi%20Nota.md", "/imports/acme/mi-nota.md", False),
+    (
+        "abs-space-keeps-case",
+        "a",
+        "/Concepts/Mi%20Nota.md",
+        "/imports/acme/Concepts/mi-nota.md",
+        False,
+    ),
+    (
+        "abs-space-no-ext",
+        "a",
+        "/My%20Folder/Mi%20Nota",
+        "/imports/acme/my-folder/mi-nota",
+        False,
+    ),
+    ("abs-space-fragment", "a", "/Mi%20Nota.md#s", "/imports/acme/mi-nota.md#s", False),
+    ("abs-space-nbsp", "a", "/a%C2%A0b.md", "/imports/acme/a-b.md", False),
+    (
+        "abs-space-query",
+        "a",
+        "/Mi%20Nota.md?v=a%20b",
+        "/imports/acme/mi-nota.md?v=a%20b",
+        False,
+    ),
+    ("abs-space-escape", "a", "/../Mi%20Nota.md", "/imports/acme/mi-nota.md", True),
+    (
+        "abs-space-asset",
+        "a",
+        "/My%20Folder/pic.png",
+        "/imports/acme/my-folder/pic.png",
+        False,
+    ),
+    ("rel-space-file", "a", "Mi%20Nota.md", "mi-nota.md", False),
+    ("rel-space-dot", "a", "./Mi%20Nota.md", "./mi-nota.md", False),
+    ("rel-space-dir", "a", "My%20Folder/b.md", "my-folder/b.md", False),
+    ("rel-space-fragment", "a", "Mi%20Nota.md#s", "mi-nota.md#s", False),
+    ("rel-space-up", "My Folder/b", "../Mi%20Nota.md", "../mi-nota.md", False),
+    ("rel-space-escape", "a", "../Mi%20Nota.md", "/imports/acme/mi-nota.md", True),
+    # a relative link that names nothing with whitespace stays as written even
+    # when its document sits in a renamed directory: both move together
+    ("rel-inherited-dir", "My Folder/b", "c.md", "c.md", False),
+    ("rel-inherited-up", "My Folder/b", "../x.md", "../x.md", False),
 ]
 
 
@@ -276,12 +327,46 @@ def test_the_corpus_exercises_every_outcome() -> None:
 @pytest.mark.parametrize(
     ("body", "expected", "rewritten", "clamped"),
     [
-        # a spaced target, inside and outside
-        ("[X](<my doc.md>)", "[X](<my doc.md>)", 0, 0),
-        ("[X](</my doc.md>)", "[X](</imports/acme/my doc.md>)", 1, 0),
-        ("[X](</a b/../c d.md>)", "[X](</imports/acme/c%20d.md>)", 1, 0),
-        ("[ref]: <a b.md>", "[ref]: <a b.md>", 0, 0),
-        ("[ref]: </a b.md>", "[ref]: </imports/acme/a b.md>", 1, 0),
+        # a spaced target, inside and outside, follows the rename
+        ("[X](<my doc.md>)", "[X](<my-doc.md>)", 1, 0),
+        ("[X](</my doc.md>)", "[X](</imports/acme/my-doc.md>)", 1, 0),
+        ("[X](</a b/../c d.md>)", "[X](</imports/acme/c-d.md>)", 1, 0),
+        ("[ref]: <a b.md>", "[ref]: <a-b.md>", 1, 0),
+        ("[ref]: </a b.md>", "[ref]: </imports/acme/a-b.md>", 1, 0),
+        (
+            "[X](<My Folder/Mi Nota.md>)",
+            "[X](<my-folder/mi-nota.md>)",
+            1,
+            0,
+        ),
+        (
+            '[X](</My Folder/Mi Nota.md> "Keep  this")',
+            '[X](</imports/acme/my-folder/mi-nota.md> "Keep  this")',
+            1,
+            0,
+        ),
+        (
+            "Read [X][ref].\n\n[ref]: </My Folder/Mi Nota.md>\n",
+            "Read [X][ref].\n\n[ref]: </imports/acme/my-folder/mi-nota.md>\n",
+            1,
+            0,
+        ),
+        # a renamed relative destination is re-quoted like an absolute one
+        ("[X](Mi%20Nota%28x%29.md)", "[X](mi-nota%28x%29.md)", 1, 0),
+        # an unspaced name keeps its case; a spaced one is casefolded
+        (
+            "[a](</Keep Case/Mi Nota.md>) [b](/Keep/Case.md)",
+            "[a](</imports/acme/keep-case/mi-nota.md>) [b](/imports/acme/Keep/Case.md)",
+            2,
+            0,
+        ),
+        # a name with whitespace and the `_` and `.` it holds: only whitespace goes
+        (
+            "[a](</Mi Nota_v1.2.md>)",
+            "[a](</imports/acme/mi-nota_v1.2.md>)",
+            1,
+            0,
+        ),
         # balanced parentheses survive byte for byte on the insertion path
         ("[X](/a(1).md)", "[X](/imports/acme/a(1).md)", 1, 0),
         # a decoded parenthesis is re-quoted so no reader can end the target early
@@ -314,6 +399,44 @@ def test_rewrite_details(
     assert result.text == expected
     assert result.links_rewritten == rewritten
     assert result.links_clamped == clamped
+
+
+@pytest.mark.parametrize(
+    ("foreign_id", "body", "expected", "rewritten"),
+    [
+        # sibling with whitespace, from a document in a spaced directory
+        ("My Folder/b", "[x](<Mi Nota.md>)", "[x](<mi-nota.md>)", 1),
+        # a sibling with no whitespace is not touched: the document moved with it
+        ("My Folder/b", "[x](c.md)", "[x](c.md)", 0),
+        # the document's own name has whitespace and the link is absolute
+        ("Mi Nota", "[x](/other.md)", "[x](/imports/acme/other.md)", 1),
+        # the document's own name has whitespace and the link is relative
+        ("Mi Nota", "[x](other.md)", "[x](other.md)", 0),
+    ],
+)
+def test_links_are_resolved_in_the_foreign_frame_then_renamed(
+    foreign_id: str, body: str, expected: str, rewritten: int
+) -> None:
+    result = links.rewrite_links_into_namespace(
+        body, foreign_id=foreign_id, prefix=PREFIX
+    )
+    assert result.text == expected
+    assert result.links_rewritten == rewritten
+
+
+def test_a_renamed_relative_link_still_resolves_to_the_renamed_document() -> None:
+    # the property the rewrite exists for: from the renamed carrier, the
+    # rewritten relative link lands on the renamed target
+    from openkos.model import okf
+
+    carrier, target = "My Folder/Sub Dir/b", "My Folder/Mi Nota"
+    result = links.rewrite_links_into_namespace(
+        "[x](<../Mi Nota.md>)", foreign_id=carrier, prefix=PREFIX
+    )
+    new_carrier = f"{PREFIX}/{okf.renamed_foreign_id(carrier)}"
+    destination = links.pointer_sites(result.text)[0].destination
+    resolved = links.resolve_link_target(destination, file_id=new_carrier)
+    assert resolved.path == f"{PREFIX}/{okf.renamed_foreign_id(target)}.md"
 
 
 def test_raw_html_and_wiki_links_are_not_pointer_sites() -> None:

@@ -25,6 +25,7 @@ from typing import Final
 from openkos import lint
 from openkos.bundle import index, links
 from openkos.graph import sqlite_graph
+from openkos.model import okf
 from tests.unit.bundle.test_links_namespace import CORPUS, PREFIX, Case
 
 # --- the readers ---------------------------------------------------------------
@@ -162,7 +163,8 @@ def _inside(resolved: str | None) -> bool:
 
 
 def _local_id(case: Case) -> str:
-    return f"{PREFIX}/{case.foreign_id}"
+    # the carrying document is written under its RENAMED id
+    return f"{PREFIX}/{okf.renamed_foreign_id(case.foreign_id)}"
 
 
 def _output(case: Case) -> str:
