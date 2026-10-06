@@ -26,18 +26,23 @@ service, no engine).
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
+import shutil
 import stat
-from collections.abc import Mapping, Sequence
+import uuid
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from openkos import config
+from openkos import config, fsio
+from openkos.application.lock_wait import CommitSection
 from openkos.bundle import imports as bundle_imports
 from openkos.bundle import index as bundle_index
 from openkos.bundle import links as bundle_links
+from openkos.bundle import log as bundle_log
 from openkos.model import okf
 
 _URL_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9+.-]+:/")
@@ -539,3 +544,319 @@ def _prove(
             "adopted-violation",
             f"an adopted document is unsound: {_summarize(frontmatter_problems)}",
         )
+
+
+# --- Phase B -----------------------------------------------------------------
+
+
+def _remove_tree(path: Path) -> None:
+    """Remove a directory tree. A seam of its own so a test can fail it."""
+    shutil.rmtree(path)
+
+
+def _publish_directory(staging: Path, target: Path) -> None:
+    """Publish `staging` as `target` with one rename: the completion point of
+    an import. `Path.replace` (`os.replace`) is atomic on POSIX and, on Windows,
+    cannot replace an existing directory, which is exactly what is wanted here (the caller
+    has just checked that `target` is absent)."""
+    staging.replace(target)
+
+
+def _read_or_none(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _take_snapshot(paths: Sequence[Path]) -> dict[Path, bytes | None]:
+    """The bytes of every path a failed run must put back, `None` for a path
+    that did not exist."""
+    return {path: _read_or_none(path) for path in paths}
+
+
+def _restore_bytes(path: Path, data: bytes | None) -> None:
+    """Put `path` back as it was: its bytes, or absent. Written through a
+    temporary file and a rename, so a restore never leaves a half-written
+    file either."""
+    if data is None:
+        path.unlink(missing_ok=True)
+        return
+    tmp_path = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        tmp_path.write_bytes(data)
+        tmp_path.replace(path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _remove_stale_staging(imports_dir: Path, namespace: str) -> None:
+    """Remove the staging directories a killed run of THIS namespace left:
+    real directories directly under `imports_dir` named with the staging
+    prefix. A symlink, a file, another namespace's staging and anything
+    nested deeper are never touched."""
+    prefix = bundle_imports.staging_name_prefix(namespace)
+    try:
+        with os.scandir(imports_dir) as entries:
+            stale = [
+                Path(entry.path)
+                for entry in entries
+                if entry.name.startswith(prefix) and entry.is_dir(follow_symlinks=False)
+            ]
+    except FileNotFoundError:
+        return
+    for path in stale:
+        try:
+            _remove_tree(path)
+        except OSError as exc:
+            raise ImportRefusal(
+                "stale-staging",
+                f"cannot remove the leftover of an earlier import ({path.name}): {exc}",
+            ) from exc
+
+
+def _revalidate(
+    layout: config.WorkspaceLayout,
+    plan: ImportPlan,
+    load_config: Callable[[Path], config.Config],
+) -> None:
+    """The guards that run under the lock (design D7 steps 1 to 3): the
+    foreign tree and the label inputs are what the preview judged, and the
+    namespace is still free."""
+    try:
+        current = okf.read_foreign_bundle(plan.source)
+    except okf.ForeignRefusal as exc:
+        raise ImportRefusal(
+            "foreign-changed",
+            f"the foreign bundle changed since the preview and is now refused "
+            f"({exc.code}); run the import again",
+            retry_safe=True,
+        ) from exc
+    if current.manifest != plan.manifest:
+        raise ImportRefusal(
+            "foreign-changed",
+            "the foreign bundle changed since the preview; run the import again",
+            retry_safe=True,
+        )
+    if label_fingerprint(load_config(layout.root)) != plan.label_fingerprint:
+        raise ImportRefusal(
+            "labels-changed",
+            "the workspace's sensitivity configuration changed since the "
+            "preview, so the labels shown are no longer the labels that would "
+            "be written; run the import again",
+            retry_safe=True,
+        )
+    _check_namespace_free(_check_imports_dir(layout), plan.namespace)
+
+
+def _index_with_anchors(
+    index_text: str, plan: ImportPlan, *, stale_anchor_ids: Sequence[str]
+) -> str:
+    """`index_text` with one `# Sources` bullet per anchor (one already listed
+    is left alone, so a retry never doubles it) and without the bullets of this
+    namespace's torn anchors that the import no longer writes."""
+    listed = bundle_index.indexed_concept_ids(index_text)
+    for anchor in plan.anchors:
+        if anchor.concept_id in listed:
+            continue
+        index_text = bundle_index.insert_index_entry(
+            index_text,
+            section="Sources",
+            link_dir=bundle_imports.IMPORTS_DIR,
+            title=anchor.title,
+            slug=PurePosixPath(anchor.concept_id).name,
+            description=anchor.description,
+        )
+    for concept_id in stale_anchor_ids:
+        index_text, _ = bundle_index.remove_index_entry(index_text, concept_id)
+    return index_text
+
+
+def _import_log_entry(plan: ImportPlan) -> str:
+    anchors = ", ".join(f"[{a.title}](/{a.concept_id}.md)" for a in plan.anchors)
+    count = len(plan.adopted)
+    noun = "document" if count == 1 else "documents"
+    return (
+        f"**Import**: Imported {count} {noun} into "
+        f"`{bundle_imports.namespace_prefix(plan.namespace)}` "
+        f"(anchors: {anchors}); {len(plan.skipped)} skipped."
+    )
+
+
+def _relative_posix(layout: config.WorkspaceLayout, path: Path) -> str:
+    return path.relative_to(layout.root).as_posix()
+
+
+def _write_namespace(layout: config.WorkspaceLayout, plan: ImportPlan) -> list[str]:
+    """Steps 4 to 10 of design D7: stage, check, write the anchors, index and
+    log, and publish the namespace with one rename. Returns the workspace-
+    relative paths the commit takes. Any failure puts every touched path back
+    and removes the staging directory."""
+    namespace = plan.namespace
+    imports_dir = layout.bundle_dir / bundle_imports.IMPORTS_DIR
+    target = imports_dir / namespace
+    anchor_paths = {
+        label: _anchor_path(imports_dir, namespace, label)
+        for label in okf.SENSITIVITY_ORDER
+    }
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+
+    _remove_stale_staging(imports_dir, namespace)
+    try:
+        snapshot = _take_snapshot([index_path, log_path, *anchor_paths.values()])
+    except OSError as exc:
+        raise ImportRefusal(
+            "snapshot-failed", f"cannot read the files the import updates: {exc}"
+        ) from exc
+
+    created_imports = _lstat_or_none(imports_dir) is None
+    staging: Path | None = None
+    try:
+        imports_dir.mkdir(exist_ok=True)
+        staging = imports_dir / (
+            f"{bundle_imports.staging_name_prefix(namespace)}{uuid.uuid4().hex[:12]}"
+        )
+        staging.mkdir()
+        for item in plan.adopted:
+            path = staging / f"{item.foreign_id}.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fsio.write_exclusive(path, item.text)
+
+        prefix = f"{staging}{os.sep}"
+        violations = [v.replace(prefix, "") for v in okf.check_conformance(staging)]
+        if violations:
+            raise ImportRefusal(
+                "conformance",
+                f"the staged import is not a conformant OKF bundle: "
+                f"{_summarize(violations)}",
+            )
+
+        written = {a.label for a in plan.anchors}
+        for anchor in plan.anchors:
+            fsio.write_atomic(anchor_paths[anchor.label], anchor.text)
+        stale_anchor_ids: list[str] = []
+        for label, path in anchor_paths.items():
+            if label not in written and snapshot[path] is not None:
+                path.unlink()
+                stale_anchor_ids.append(bundle_imports.anchor_id(namespace, label))
+
+        fsio.write_atomic(
+            index_path,
+            _index_with_anchors(
+                index_path.read_text(encoding="utf-8"),
+                plan,
+                stale_anchor_ids=stale_anchor_ids,
+            ),
+        )
+        fsio.write_atomic(
+            log_path,
+            bundle_log.insert_log_entry(
+                log_path.read_text(encoding="utf-8"),
+                plan.now.date(),
+                _import_log_entry(plan),
+            ),
+        )
+
+        _check_namespace_free_at_rename(target)
+        _publish_directory(staging, target)
+    except BaseException as exc:
+        failures = _roll_back(
+            snapshot, staging, imports_dir if created_imports else None
+        )
+        if not isinstance(exc, Exception):
+            raise
+        if failures:
+            raise ImportRefusal(
+                "restore-failed",
+                f"the import failed ({exc}) and the workspace could not be "
+                f"fully restored ({'; '.join(failures)}); `git status` shows "
+                f"what was left",
+            ) from exc
+        if isinstance(exc, ImportRefusal):
+            raise
+        raise ImportRefusal(
+            "write-failed", f"writing the import failed ({exc}); nothing was kept"
+        ) from exc
+
+    return [
+        _relative_posix(layout, target),
+        *(_relative_posix(layout, anchor_paths[a.label]) for a in plan.anchors),
+        _relative_posix(layout, index_path),
+        _relative_posix(layout, log_path),
+    ]
+
+
+def _check_namespace_free_at_rename(target: Path) -> None:
+    """The last look before the rename: POSIX `rename` replaces an EMPTY
+    directory, so one created in the window since the first check would be
+    replaced silently."""
+    if _lstat_or_none(target) is not None:
+        raise ImportRefusal(
+            "namespace-exists",
+            f"namespace '{target.name}' appeared while the import ran; "
+            f"{_RE_IMPORT_HINT}",
+        )
+
+
+def _roll_back(
+    snapshot: Mapping[Path, bytes | None],
+    staging: Path | None,
+    created_imports: Path | None,
+) -> list[str]:
+    """Undo a failed run: put every snapshotted path back (only the ones that
+    differ), remove the staging directory, and remove the `imports/` directory
+    the run created. Every step is attempted; what could not be undone is
+    returned, so the caller can say so instead of claiming a clean refusal."""
+    failures: list[str] = []
+    for path, data in snapshot.items():
+        try:
+            if _read_or_none(path) != data:
+                _restore_bytes(path, data)
+        except OSError as exc:
+            failures.append(f"{path.name}: {exc}")
+    if staging is not None and staging.exists():
+        try:
+            _remove_tree(staging)
+        except OSError as exc:
+            failures.append(f"{staging.name}: {exc}")
+    if created_imports is not None and not failures:
+        with contextlib.suppress(OSError):
+            created_imports.rmdir()
+    return failures
+
+
+def publish_import(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    plan: ImportPlan,
+    *,
+    commit_section: CommitSection,
+    load_config: Callable[[Path], config.Config],
+    autocommit: Callable[[Path, Sequence[str], str], str | None],
+) -> ImportOutcome:
+    """Write `plan` into the workspace and make the one commit, or raise
+    `ImportRefusal`. The whole of Phase B runs inside `commit_section`, with no
+    model call and no prompt: the foreign tree and the label inputs are judged
+    again, the namespace is rechecked, and only then is anything written, so a
+    refusal leaves the tree byte-identical.
+
+    The commit follows the rename and is outside the restore: an import killed
+    after the rename is complete and uncommitted (a retry is refused as an
+    existing namespace, and `git status` shows it)."""
+    with commit_section():
+        _revalidate(layout, plan, load_config)
+        paths = _write_namespace(layout, plan)
+        commit = autocommit(
+            root,
+            paths,
+            f"openkos: import {plan.namespace} (+{len(plan.adopted)} concepts)",
+        )
+    return ImportOutcome(
+        namespace=plan.namespace,
+        adopted=len(plan.adopted),
+        skipped=len(plan.skipped),
+        anchors=tuple(a.concept_id for a in plan.anchors),
+        commit=commit,
+    )
