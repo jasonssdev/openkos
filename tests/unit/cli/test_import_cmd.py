@@ -52,6 +52,13 @@ def ws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return new_workspace(tmp_path, monkeypatch)
 
 
+def _flat(text: str) -> str:
+    """`text` with rich panel borders removed and whitespace collapsed: CI
+    renders usage errors in a box narrower than the message, so a border
+    lands inside the phrase (`TERMINAL_WIDTH=80` reproduces it)."""
+    return " ".join(re.sub(r"[│╭╮╰╯─]", " ", text).split())
+
+
 def _refusal(reason: str) -> str:
     return f"openkos import: refusing to import -- {reason}."
 
@@ -117,7 +124,7 @@ def test_an_invalid_namespace_is_a_usage_error_naming_the_rule_before_any_read(
     # The directory does not exist: a refusal for it would exit 1, so exit 2
     # with the namespace rule proves the callback ran first.
     assert result.exit_code == 2
-    assert rule in " ".join(result.stderr.split())
+    assert rule in _flat(result.stderr)
     assert reached == []
 
 
@@ -133,7 +140,7 @@ def test_an_invalid_sensitivity_is_a_usage_error_listing_the_levels(
     )
 
     assert result.exit_code == 2
-    page = " ".join(result.stderr.split())
+    page = _flat(result.stderr)
     assert "'secret' is not one of 'public', 'private', 'confidential'" in page
     assert tree_state(ws) == before
 
