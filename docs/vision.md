@@ -59,7 +59,7 @@ OpenKOS is simultaneously:
 - an **OKF consumer** — it retrieves, reasons over, and answers questions from an OKF bundle, always with citations;
 - a **local runtime** — a CLI and an MCP agent interface that keeps the bundle honest and current over time.
 
-Because the output is *just an OKF bundle* — plain markdown files — it opens in Obsidian, VS Code, GitHub, or any tool, and the goal is for it to exchange knowledge with any other OKF-speaking system, including Google's (full import/export is MVP 5). Standing on OKF means your knowledge is interoperable from day one, not trapped inside OpenKOS.
+Because the output is *just an OKF bundle* — plain markdown files — it opens in Obsidian, VS Code, GitHub, or any tool, and the goal is for it to exchange knowledge with any other OKF-speaking system, including Google's (export and import ship in MVP 5). Standing on OKF means your knowledge is interoperable from day one, not trapped inside OpenKOS.
 
 The name says it: OpenKOS is an **Open Knowledge Orchestration System**. It orchestrates the whole lifecycle of your knowledge — sources, knowledge objects, the graph, embeddings and indexes, local models, provenance, and freshness, plus the agents that act on all of it. Knowledge is one component; OpenKOS coordinates everything around it. And your knowledge **lives with you and moves freely** — local-first ownership and open portability are not a trade-off; you get both.
 
