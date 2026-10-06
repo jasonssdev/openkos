@@ -9,15 +9,20 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 > OpenKOS is **alpha** — it runs, and the API may still change. The package is
 > published on [PyPI](https://pypi.org/project/openkos/); the MVP 1 (Compiler),
 > MVP 2 (Graph and Memory), MVP 3 (Ask Surface), and MVP 4 (Unattended Engine) arcs
-> are complete; MVP 5 (Interoperability) is next, then MVP 6 (the desktop app and
-> the stable Python API). The project's vision,
+> are complete; MVP 5 (Interoperability) is in progress, with export shipped and
+> import next, then MVP 6 (the desktop app and the stable Python API). The project's vision,
 > architecture, and design live in the documents under
 > [`docs/`](https://github.com/jasonssdev/openkos/tree/main/docs).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-05
+
+The first half of MVP 5, and The Quiet Engine's two follow-ups. `openkos export` writes a shareable OKF bundle with sensitivity enforced at the boundary, and `openkos curate` can now merge one measured class of Identity duplicates by itself, opt-in for each run, or accept a recommended set with one answer. Nothing changes unless you use the new verb or flag.
+
 ### Added
 
+- `openkos export <target>` writes a standalone OKF bundle for sharing into an empty directory outside the workspace. Public concepts leave by default, private ones only with `--include-private`, and confidential ones never; a concept labelled below the sensitivity of what it was compiled from leaves only with `--allow-below-source`. Every pointer into a withheld object is removed (body links, `relations`, `provenance`, the re-projected `sources`, and the `index.md` and `log.md` lines). The bundle is written to a staging directory and published only after it passes OKF conformance, a byte scan for withheld ids, and a re-read of its inputs. It is read-only: no lock, no model call, no commit ([ADR-0048](docs/adr/0048-export-withholds-links-and-below-source-objects-at-the-boundary.md), #1301).
 - `openkos curate --auto-merge` merges one measured class of Identity duplicates without a per-item prompt: a same-type base id and its `-N` copy (Event and Person excluded) that the measured model, `gemma4:26b-a4b`, judges the same at confidence 0.90 or more. It is per run, off by default, has no config key, and needs `--auto` for model spend. The run must be eligible (measured model and digest, rubric, token settings, no pinned `temperature` or `seed`) and acts on fresh verdicts only; otherwise it names every reason and falls back to the per-item prompts. All of a run's merges land in one commit with one `log.md` bullet each, and each is undone with `openkos unmerge <survivor>`. It is refused with `--reconcile`, and the daemon never merges ([ADR-0049](docs/adr/0049-structural-identity-class-merges-under-measured-constants.md), #1298).
 - `openkos curate` offers accept-recommended on a terminal: before the Identity walk, the same-class groups judged the same this run are offered for one `y/N` answer, with or without `--auto-merge`. Each accepted merge commits on its own (#1298).
 - `InstalledModel` carries the backend's content `digest` when it reports one (#1298).
@@ -3575,7 +3580,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/jasonssdev/openkos/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jasonssdev/openkos/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jasonssdev/openkos/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jasonssdev/openkos/compare/v0.3.0...v0.3.1
