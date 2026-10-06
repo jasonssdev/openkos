@@ -131,20 +131,20 @@ Read-only references: `src/openkos/fsio.py` (read-only, `symlinked_segment`),
 `src/openkos/model/okf.py` guarded parser entries `parse_incoming_frontmatter`
 and `frontmatter_block_end` (reused, not edited).
 
-- [ ] 1.1 [TEST] `tests/unit/model/test_okf_foreign_reader.py`, pure helpers
+- [x] 1.1 [TEST] `tests/unit/model/test_okf_foreign_reader.py`, pure helpers
   first: `okf.split_incoming_document(text)` returns the guarded parse and a body
   that excludes exactly the block the parser judged (the same
   `frontmatter_block_end` rule); a single leading BOM is stripped; no-fence,
   empty block, unterminated block and a TOML/JSON-fenced block each map to a
   guarded status and never raise. RED: `AttributeError`, function missing.
-- [ ] 1.2 [IMPL] Add the `Final` constants (`FOREIGN_MAX_FILE_BYTES` 8 MiB,
+- [x] 1.2 [IMPL] Add the `Final` constants (`FOREIGN_MAX_FILE_BYTES` 8 MiB,
   `FOREIGN_MAX_TOTAL_BYTES` 256 MiB, `FOREIGN_MAX_DOCUMENTS` 10 000,
   `FOREIGN_MAX_ENTRIES` 50 000, `FOREIGN_MAX_DEPTH` 32), `ForeignRefusal(ValueError)`
   with `.code` and `.path`, `ForeignDocument`, `ForeignBundle`, and
   `split_incoming_document` in `src/openkos/model/okf.py`, in a new reader
   section beside `_iter_docs`. Never call `_parse_post`, `load_frontmatter` or
   `concept_metadata` on foreign bytes. GREEN 1.1.
-- [ ] 1.3 [TEST] The pure path validator (`traversal`, `unsafe-name`,
+- [x] 1.3 [TEST] The pure path validator (`traversal`, `unsafe-name`,
   `name-too-long`) over strings: an empty, `.`, `..` or absolute component is
   `traversal`; a segment with a control character, `\`, `:`, `[`, `]`, `(`, `)`,
   `<`, `>`, `#`, `%`, `?`, `*`, `"`, `|`, or leading/trailing whitespace is
@@ -152,24 +152,24 @@ and `frontmatter_block_end` (reused, not edited).
   is `name-too-long`; a namespaced path of 1024 bytes passes and 1025 refuses.
   Boundaries at cap and cap + 1. Traversal is unreachable from a link-free walk,
   so it is tested on the validator only. RED: missing.
-- [ ] 1.4 [IMPL] Implement the validator in `src/openkos/model/okf.py`. GREEN 1.3.
-- [ ] 1.5 [MUT] One mutation per validator guard on its exact line: drop the
+- [x] 1.4 [IMPL] Implement the validator in `src/openkos/model/okf.py`. GREEN 1.3.
+- [x] 1.5 [MUT] One mutation per validator guard on its exact line: drop the
   `..` check; drop each deny-list character in turn (a table-driven test names
   the surviving character); `255` to `256`; `1024` to `1025`. Each must turn its
   named 1.3 case RED. Revert, purge.
-- [ ] 1.6 [TEST] The pure collision validator over lists of relative paths
+- [x] 1.6 [TEST] The pure collision validator over lists of relative paths
   (platform-independent, no disk): two paths equal after NFC but different as
   written is `nfc-collision`; two equal after NFC then `casefold()` but
   different after NFC is `case-collision`; a collision between a file and a
   directory prefix (`a/b.md` vs `A/c.md`) is `case-collision`; identical NFC
   names are not a collision; the two codes are distinct as the scenario
   requires. RED: missing.
-- [ ] 1.7 [IMPL] Implement the collision validator in `src/openkos/model/okf.py`.
+- [x] 1.7 [IMPL] Implement the collision validator in `src/openkos/model/okf.py`.
   GREEN 1.6.
-- [ ] 1.8 [MUT] Drop the NFC step (so NFD stops colliding); drop the `casefold()`
+- [x] 1.8 [MUT] Drop the NFC step (so NFD stops colliding); drop the `casefold()`
   step; collapse both codes to one; skip directory prefixes. Each RED. Revert,
   purge.
-- [ ] 1.9 [TEST] Tree walk, refuse-class reason codes, one test per code from a
+- [x] 1.9 [TEST] Tree walk, refuse-class reason codes, one test per code from a
   one-file-valid baseline tree in `tmp_path`, each asserting the exact `code`,
   the relative path and no absolute path in the message: `symlink` to a file, to
   a directory, and to a target inside the tree (all three refused); `special-file`
@@ -181,12 +181,12 @@ and `frontmatter_block_end` (reused, not edited).
   `bundle-too-large` at cap and cap + 1; `unreadable` (a file with mode 000, skip
   if running as root); `unsafe-name` and `name-too-long` end to end on a real
   file name. RED: `read_foreign_bundle` missing.
-- [ ] 1.10 [TEST] Tree walk, frontmatter refuse-class codes, one test each:
+- [x] 1.10 [TEST] Tree walk, frontmatter refuse-class codes, one test each:
   `frontmatter-alias` (anchor and alias, never expanded), `frontmatter-too-deep`,
   `frontmatter-too-large`, `frontmatter-not-a-mapping` (list and scalar roots),
   `frontmatter-unsupported-value` (a non-plain value). The guarded parser, not an
   unguarded loader, produced each status. RED: missing.
-- [ ] 1.11 [TEST] Tree walk, skip-class reason codes, one test each, each
+- [x] 1.11 [TEST] Tree walk, skip-class reason codes, one test each, each
   asserting the whole import still succeeds and the path is reported with its
   code: `dot-entry` (file, directory not descended, a `.git/` directory and a
   `.git` file), `not-markdown` (`README.sh`, `viz.html`, `page.mdx` are never
@@ -197,7 +197,7 @@ and `frontmatter_block_end` (reused, not edited).
   `missing-type` (missing, empty and non-string `type`). A document with an
   unknown `type` (`Recipe`, a type with a space) is adopted verbatim. RED:
   missing.
-- [ ] 1.12 [TEST] Reader invariants: results are sorted and deterministic;
+- [x] 1.12 [TEST] Reader invariants: results are sorted and deterministic;
   `manifest` lists `(relative path, sha256)` for every `.md` read plus the
   skipped paths so a Phase B re-read can compare; the `sha256` is over the bytes
   as read; the FIFO swap-in after the walk cannot hang (open with `O_NOFOLLOW |
@@ -206,18 +206,18 @@ and `frontmatter_block_end` (reused, not edited).
   string and a non-string are returned as observed and never refuse; a root
   `index.md` whose frontmatter is not `parsed` degrades to "version unknown", it
   never refuses. RED: missing.
-- [ ] 1.13 [TEST] Guarded-parse-only pin: patch `okf._parse_post` and
+- [x] 1.13 [TEST] Guarded-parse-only pin: patch `okf._parse_post` and
   `frontmatter.loads` to raise (first prove the patch is live: a patched
   `_iter_docs` over the same tree fails), then `read_foreign_bundle` over a full
   fixture succeeds. Also assert `yaml` is not imported by any new function.
-- [ ] 1.14 [IMPL] Implement `read_foreign_bundle(root)` in
+- [x] 1.14 [IMPL] Implement `read_foreign_bundle(root)` in
   `src/openkos/model/okf.py`: `os.walk(root, followlinks=False)` with sorted
   names; classify each entry by design D1's table in order, first match wins;
   open with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`, `fstat`, bounded read; route
   every frontmatter block through `parse_incoming_frontmatter`; compute
   collisions over strings, write nothing, return `ForeignBundle`. GREEN
   1.9-1.13.
-- [ ] 1.15 [MUT] One mutation per guard on its exact line, each killing exactly
+- [x] 1.15 [MUT] One mutation per guard on its exact line, each killing exactly
   its named test: skip the `lstat` symlink check (files, then directories); skip
   the special-file check; depth `> 32` to `> 33`; entries cap by one;
   documents cap by one; per-file cap by one and the `fstat` pre-check separately;
@@ -225,7 +225,7 @@ and `frontmatter_block_end` (reused, not edited).
   refusal instead of a skip; treat `frontmatter-alias` as a skip; drop the
   `O_NOFOLLOW` flag; drop the `O_NONBLOCK` flag; make the reserved-file match
   case-sensitive; drop the dot-entry check. Revert by inverse edit, purge.
-- [ ] 1.16 Write
+- [x] 1.16 Write
   `docs/adr/0050-okf-import-adopts-a-foreign-bundle-under-its-own-namespace.md`
   from `docs/adr/template.md`: status `Proposed` in frontmatter AND the
   `**Status:**` body line, with `description`, date and timestamp. Content per
@@ -234,15 +234,22 @@ and `frontmatter_block_end` (reused, not edited).
   the Consequences listed there; the Alternatives listed there; and the reader's
   caps named as code constants. Add its row to `docs/adr/README.md`. Write it now
   while the forces are fresh, never afterwards.
-- [ ] 1.17 [TEST] Run `uv run pytest tests/unit/test_adr_index.py -q` (ADR status
+- [x] 1.17 [TEST] Run `uv run pytest tests/unit/test_adr_index.py -q` (ADR status
   is checked in more than one place) and the layering test
   (`uv run pytest tests/unit -q -k layering`): `okf.py` still imports no
   derived-layer module.
-- [ ] 1.18 Run the five-command slice gate (header). All green; record the
+- [x] 1.18 Run the five-command slice gate (header). All green; record the
   observed results.
-- [ ] 1.19 Commit as work units (`feat(okf): add bounded foreign bundle reader`,
+- [x] 1.19a [TEST]/[IMPL]/[MUT] (parent review of slice 1) Foreign line
+  endings: `\r\n` and a lone `\r` become `\n` after the UTF-8 decode and BOM
+  strip, inside `split_incoming_document` only; `ForeignDocument` records
+  `line_endings_normalized`; the manifest digest stays over the raw bytes;
+  `frontmatter_block_end` is untouched. Commit
+  `fix(okf): normalize CRLF line endings in foreign bundle documents`.
+- [x] 1.19 Commit as work units (`feat(okf): add bounded foreign bundle reader`,
   `docs(sdd): add ADR-0050`). Open PR 1 (`Refs` the issue, name the change in
-  prose). CI green on a branch up to date with `main`.
+  prose). CI green on a branch up to date with `main`. (Commits done; opening
+  the PR is left to the orchestrator.)
 
 ## Phase 2 — Slice 2: link rewrite, proof and recognizer inventory (PR 2)
 

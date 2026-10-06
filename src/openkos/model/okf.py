@@ -11,12 +11,14 @@ All three §11 rules are implemented here: rules 1-2 walk every non-reserved
 """
 
 import copy
+import errno
 import hashlib
 import math
 import os
 import re
+import stat
 import unicodedata
-from collections.abc import Hashable, Iterator, Mapping, Sequence
+from collections.abc import Hashable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -3849,6 +3851,385 @@ def _iter_docs(bundle_dir: Path) -> Iterator[DocScan]:
             yield DocScan(path, None, None, "no parseable frontmatter")
         else:
             yield DocScan(path, post.metadata, None, None)
+
+
+# --- Foreign-bundle reader (okf-import, ADR-0050, design D1) ----------------
+#
+# A bounded, read-only walk of a tree this engine did NOT write. Foreign bytes
+# NEVER reach `_parse_post`, `load_frontmatter` or `concept_metadata`: every
+# frontmatter block goes through `parse_incoming_frontmatter`, which is bounded
+# and refuses aliases. Nothing in this section imports or calls `yaml`.
+
+FOREIGN_MAX_FILE_BYTES: Final = 8 * 1024 * 1024
+"""Per-file byte cap (8 MiB), decided by `fstat` and by reading cap + 1."""
+
+FOREIGN_MAX_TOTAL_BYTES: Final = 256 * 1024 * 1024
+"""Total `.md` byte cap across the tree (256 MiB)."""
+
+FOREIGN_MAX_DOCUMENTS: Final = 10_000
+"""Cap on `.md` documents considered (reserved files excluded)."""
+
+FOREIGN_MAX_ENTRIES: Final = 50_000
+"""Cap on directory entries walked, files and directories alike."""
+
+FOREIGN_MAX_DEPTH: Final = 32
+"""Cap on directory nesting below the foreign root."""
+
+FOREIGN_MAX_SEGMENT_BYTES: Final = 255
+"""Cap on one path segment, in UTF-8 bytes (a common filesystem limit)."""
+
+FOREIGN_MAX_PATH_BYTES: Final = 1024
+"""Cap on a NAMESPACED path (`imports/<ns>/<foreign path>`), in UTF-8 bytes."""
+
+FOREIGN_NAMESPACE_RESERVE_BYTES: Final = len("imports/") + 64 + len("/")
+"""Bytes the reader reserves for `imports/<ns>/` before the namespace is known
+(a namespace slug is at most 64 characters), so the path cap is conservative."""
+
+_FOREIGN_UNSAFE_CHARS: Final = frozenset('\\:[]()<>#%?*"|')
+"""The characters some engine reader treats as structure (design D1 rule 9)."""
+
+
+class ForeignRefusal(ValueError):
+    """A foreign tree refused whole, with a named `code` and the foreign-
+    RELATIVE `path` (never an absolute one) that caused it."""
+
+    def __init__(self, code: str, path: str = "") -> None:
+        self.code = code
+        self.path = path
+        super().__init__(f"{code}: {path}" if path else code)
+
+
+@dataclass(frozen=True)
+class ForeignDocument:
+    """One adoptable foreign document: parsed by the guarded parser only."""
+
+    path: str
+    """Relative POSIX path as written in the foreign tree."""
+    foreign_id: str
+    """The path minus `.md`, NFC-normalized (what an adopted file is named)."""
+    doc_type: str
+    mapping: Mapping[str, object]
+    body: str
+    sha256: str
+    """Digest of the file's RAW bytes as read (before any normalization)."""
+    line_endings_normalized: bool = False
+    """Whether the file used `\\r\\n` or a lone `\\r`; `mapping` and `body` are
+    always LF, because the adopted document is written fresh by the engine."""
+
+
+@dataclass(frozen=True)
+class ForeignBundle:
+    """The result of `read_foreign_bundle`; sorted and deterministic."""
+
+    documents: tuple[ForeignDocument, ...]
+    skipped: tuple[tuple[str, str], ...]
+    """`(relative path, reason code)` for every file or directory left out."""
+    manifest: tuple[tuple[str, str], ...]
+    """`(relative path, sha256)` for every file whose bytes were read, and
+    `(relative path, "skip:<code>")` for every path skipped unopened, so a
+    later re-read can compare the two trees."""
+    okf_version: object | None
+    """The root `index.md`'s `okf_version` as observed; `None` when absent or
+    when the file is not a parsed frontmatter block."""
+
+
+def _normalize_line_endings(text: str) -> str:
+    """`\\r\\n` and a lone `\\r` to `\\n` (foreign documents only)."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def split_incoming_document(text: str) -> tuple[IncomingFrontmatter, str]:
+    """Guarded parse of `text` plus a body that excludes exactly the block the
+    parser judged (the SAME `frontmatter_block_end` rule). A single leading BOM
+    is stripped first, then `\\r\\n` and a lone `\\r` become `\\n` so a CRLF-authored
+    bundle is read like its LF twin. This normalization is foreign-only:
+    `frontmatter_block_end` itself still compares to `"---"` exactly. Never
+    raises."""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    text = _normalize_line_endings(text)
+    incoming = parse_incoming_frontmatter(text)
+    lines = text.split("\n")
+    end = frontmatter_block_end(lines)
+    body = "\n".join(lines[end:]) if end else text
+    return incoming, body
+
+
+def _foreign_segment_problem(segment: str) -> str | None:
+    """The reason code a single path segment fails with, or `None`."""
+    if segment in ("", ".", ".."):
+        return "traversal"
+    if segment != segment.strip() or any(
+        char in _FOREIGN_UNSAFE_CHARS or unicodedata.category(char) == "Cc"
+        for char in segment
+    ):
+        return "unsafe-name"
+    if len(unicodedata.normalize("NFC", segment).encode("utf-8")) > (
+        FOREIGN_MAX_SEGMENT_BYTES
+    ):
+        return "name-too-long"
+    return None
+
+
+def validate_foreign_path(
+    relative: str, *, reserve_bytes: int = FOREIGN_NAMESPACE_RESERVE_BYTES
+) -> None:
+    """Refuse a foreign-relative POSIX path that is unsafe to adopt (design D1
+    rules 3, 9 and 10). Pure: it reads no disk.
+
+    Raises `ForeignRefusal` with `traversal` (an empty, `.`, `..` or absolute
+    component), `unsafe-name` (a control character, a structural character, or
+    leading/trailing whitespace) or `name-too-long` (a segment over
+    `FOREIGN_MAX_SEGMENT_BYTES`, or `reserve_bytes` plus the whole NFC path
+    over `FOREIGN_MAX_PATH_BYTES`). `reserve_bytes` stands for the
+    `imports/<ns>/` prefix the namespace will add; the reader does not know the
+    namespace yet, so it reserves the longest one.
+    """
+    for segment in relative.split("/"):
+        code = _foreign_segment_problem(segment)
+        if code is not None:
+            raise ForeignRefusal(code, relative)
+    nfc_bytes = len(unicodedata.normalize("NFC", relative).encode("utf-8"))
+    if reserve_bytes + nfc_bytes > FOREIGN_MAX_PATH_BYTES:
+        raise ForeignRefusal("name-too-long", relative)
+
+
+def validate_foreign_collisions(paths: Iterable[str]) -> None:
+    """Refuse foreign paths (files and their directory prefixes) that would
+    collide on some filesystem (design D1 rules 14 and 15). Pure: it compares
+    strings, so the verdict does not depend on the machine's filesystem.
+
+    Raises `ForeignRefusal` with `nfc-collision` (equal after NFC, different as
+    written) or, failing that, `case-collision` (equal after NFC then
+    `casefold()`, different after NFC). Every adopted file is written under its
+    NFC name, so the NFC collision is checked first and on its own.
+    """
+    names: set[str] = set()
+    for path in paths:
+        parts = path.split("/")
+        for end in range(1, len(parts) + 1):
+            names.add("/".join(parts[:end]))
+    by_nfc: dict[str, str] = {}
+    for name in sorted(names):
+        key = unicodedata.normalize("NFC", name)
+        if by_nfc.setdefault(key, name) != name:
+            raise ForeignRefusal("nfc-collision", name)
+    by_fold: dict[str, str] = {}
+    for key in sorted(by_nfc):
+        folded = key.casefold()
+        if by_fold.setdefault(folded, by_nfc[key]) != by_nfc[key]:
+            raise ForeignRefusal("case-collision", by_nfc[key])
+
+
+_FOREIGN_RESERVED_NAMES: Final = frozenset({"index.md", "log.md"})
+"""Reserved filenames, matched case-insensitively (design D1 rule 8): an adopted
+`INDEX.md` would be a concept `forget` could never name."""
+
+_FOREIGN_REFUSED_STATUSES: Final = frozenset(
+    {"alias", "too-deep", "too-large", "not-a-mapping", "unsupported-value"}
+)
+"""Guarded-parse statuses that refuse the whole import (design D1 rule 17)."""
+
+_FOREIGN_READ_CHUNK: Final = 64 * 1024
+
+
+def _foreign_rel(root: str, path: str) -> str:
+    """`path` relative to `root`, POSIX-separated, for a refusal message."""
+    return Path(os.path.relpath(path, root)).as_posix()
+
+
+def _walk_foreign_tree(
+    root: Path,
+) -> tuple[list[str], dict[str, str]]:
+    """Pass 1: classify every entry by lstat and name, reading no file bytes.
+
+    Returns the `.md` paths to read (design D1 rules 1-11) and the skipped
+    `{relative path: reason code}`. Raises `ForeignRefusal` on a tree hazard.
+    """
+    base = str(root)
+
+    def unreadable(exc: OSError) -> None:
+        raise ForeignRefusal(
+            "unreadable", _foreign_rel(base, str(exc.filename or base))
+        )
+
+    entries = 0
+    md_paths: list[str] = []
+    skipped: dict[str, str] = {}
+    for dirpath, dirnames, filenames in os.walk(
+        base, onerror=unreadable, followlinks=False
+    ):
+        rel_dir = _foreign_rel(base, dirpath)
+        prefix = "" if rel_dir == "." else rel_dir + "/"
+        dirnames.sort()
+        filenames.sort()
+        kept_dirs: list[str] = []
+        for name in [*filenames, *dirnames]:
+            entries += 1
+            rel = prefix + name
+            if entries > FOREIGN_MAX_ENTRIES:
+                raise ForeignRefusal("too-many-entries", rel)
+            try:
+                mode = os.lstat(Path(dirpath) / name).st_mode
+            except OSError as exc:
+                raise ForeignRefusal("unreadable", rel) from exc
+            if stat.S_ISLNK(mode):
+                raise ForeignRefusal("symlink", rel)
+            is_dir = stat.S_ISDIR(mode)
+            if not (is_dir or stat.S_ISREG(mode)):
+                raise ForeignRefusal("special-file", rel)
+            if name.startswith("."):
+                skipped[rel] = "dot-entry"
+                continue
+            if is_dir:
+                if rel.count("/") + 1 > FOREIGN_MAX_DEPTH:
+                    raise ForeignRefusal("too-deep", rel)
+                kept_dirs.append(name)
+                continue
+            if name.casefold() in _FOREIGN_RESERVED_NAMES:
+                skipped[rel] = "reserved-file"
+                continue
+            if not name.endswith(".md"):
+                skipped[rel] = "not-markdown"
+                continue
+            validate_foreign_path(rel)
+            if len(md_paths) >= FOREIGN_MAX_DOCUMENTS:
+                raise ForeignRefusal("too-many-files", rel)
+            md_paths.append(rel)
+        dirnames[:] = kept_dirs
+    return md_paths, skipped
+
+
+def _read_foreign_file(root: Path, rel: str) -> bytes:
+    """Read one foreign file, bounded: refuse a linked segment, open without
+    following links and without blocking, require a regular file, and read at
+    most `FOREIGN_MAX_FILE_BYTES + 1` bytes (design D1)."""
+    path = root / rel
+    if fsio.symlinked_segment(path, root) is not None:
+        raise ForeignRefusal("symlink", rel)
+    # `O_NOFOLLOW` and `O_NONBLOCK` do not exist on Windows. Windows has no
+    # FIFOs in the filesystem tree, so a blocking open cannot hang there; and
+    # without `O_NOFOLLOW` the identity check below stands in for it.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | nofollow
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        code = "symlink" if exc.errno == errno.ELOOP else "unreadable"
+        raise ForeignRefusal(code, rel) from exc
+    try:
+        info = os.fstat(fd)
+        if not nofollow:
+            # The path may have become a link between the walk and the open:
+            # it must still be the very file the descriptor refers to.
+            now = os.lstat(path)
+            if (
+                stat.S_ISLNK(now.st_mode)
+                or now.st_ino != info.st_ino
+                or now.st_dev != info.st_dev
+            ):
+                raise ForeignRefusal("symlink", rel)
+        if not stat.S_ISREG(info.st_mode):
+            raise ForeignRefusal("special-file", rel)
+        if info.st_size > FOREIGN_MAX_FILE_BYTES:
+            raise ForeignRefusal("file-too-large", rel)
+        chunks: list[bytes] = []
+        remaining = FOREIGN_MAX_FILE_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(fd, min(_FOREIGN_READ_CHUNK, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except OSError as exc:
+        raise ForeignRefusal("unreadable", rel) from exc
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if len(data) > FOREIGN_MAX_FILE_BYTES:
+        raise ForeignRefusal("file-too-large", rel)
+    return data
+
+
+def read_foreign_bundle(root: Path) -> ForeignBundle:
+    """Read a foreign OKF tree into adoptable documents, skipped paths and a
+    manifest, writing nothing (okf-import, design D1).
+
+    A bounded two-pass walk: pass 1 classifies every entry without reading
+    bytes and checks collisions over strings; pass 2 reads each `.md` file
+    bounded and routes its frontmatter through `parse_incoming_frontmatter`
+    only, never an unguarded loader. Tree hazards and frontmatter hazards
+    refuse the whole import with a `ForeignRefusal` code; a document that is
+    merely not conformant (§11) is skipped and reported.
+    """
+    try:
+        is_directory = root.is_dir()
+    except OSError as exc:
+        raise ForeignRefusal("unreadable") from exc
+    if not is_directory:
+        raise ForeignRefusal("unreadable")
+
+    md_paths, skipped = _walk_foreign_tree(root)
+    validate_foreign_collisions(md_paths)
+
+    manifest: dict[str, str] = {rel: f"skip:{code}" for rel, code in skipped.items()}
+    documents: list[ForeignDocument] = []
+    okf_version: object | None = None
+    total = 0
+    reading = sorted(md_paths)  # also fixes the order of `documents`
+    if skipped.get("index.md") == "reserved-file":
+        reading.append("index.md")
+    for rel in reading:
+        data = _read_foreign_file(root, rel)
+        total += len(data)
+        if total > FOREIGN_MAX_TOTAL_BYTES:
+            raise ForeignRefusal("bundle-too-large", rel)
+        digest = hashlib.sha256(data).hexdigest()
+        manifest[rel] = digest
+        is_index = rel == "index.md" and skipped.get(rel) == "reserved-file"
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            if not is_index:
+                skipped[rel] = "not-utf8"
+            continue
+        incoming, body = split_incoming_document(text)
+        if is_index:
+            if incoming.mapping is not None:
+                okf_version = incoming.mapping.get(OKF_VERSION_KEY)
+            continue
+        if incoming.status in _FOREIGN_REFUSED_STATUSES:
+            raise ForeignRefusal(f"frontmatter-{incoming.status}", rel)
+        mapping = incoming.mapping
+        if mapping is None:
+            skipped[rel] = f"frontmatter-{incoming.status}"
+            continue
+        doc_type = mapping.get("type")
+        if not isinstance(doc_type, str) or not doc_type.strip():
+            skipped[rel] = "missing-type"
+            continue
+        documents.append(
+            ForeignDocument(
+                path=rel,
+                foreign_id=unicodedata.normalize("NFC", rel[: -len(".md")]),
+                doc_type=doc_type,
+                mapping=mapping,
+                body=body,
+                sha256=digest,
+                line_endings_normalized="\r" in text,
+            )
+        )
+    return ForeignBundle(
+        documents=tuple(documents),
+        skipped=tuple(sorted(skipped.items())),
+        manifest=tuple(sorted(manifest.items())),
+        okf_version=okf_version,
+    )
 
 
 @dataclass(frozen=True)
