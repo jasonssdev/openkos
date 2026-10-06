@@ -706,31 +706,31 @@ Read-only references: `evals/auto_merge/run_structural_class.py` (read-only,
 its `--self-test` is run, not edited), `src/openkos/bundle/imports.py`
 (read-only).
 
-- [ ] 5.1 [TEST] Characterization first: run
+- [x] 5.1 [TEST] Characterization first: run
   `uv run pytest tests/unit/application/test_auto_merge.py tests/unit -q -k "attach or auto_merge or ordered_merge or structural"`
   and record the baseline GREEN.
-- [ ] 5.2 [TEST] Attach exclusion in
+- [x] 5.2 [TEST] Attach exclusion in
   `tests/unit/application/test_import_entity_resolution.py`: an imported
   `Concept` titled like an extraction candidate is NEVER an attach target while a
   local twin still is; the exclusion is on the target side only (an ingest
   candidate is never imported); a local match wins over an imported one; Person
   and Event keep today's behavior; `ATTACH_EXCLUDED_TYPES` is not widened (assert
   its value). RED: the imported concept is chosen.
-- [ ] 5.3 [IMPL] `src/openkos/application/ingest.py::build_attach_lookup` skips a
+- [x] 5.3 [IMPL] `src/openkos/application/ingest.py::build_attach_lookup` skips a
   keyed document when `doc_type in ATTACH_EXCLUDED_TYPES or not key or
   is_imported_concept(concept_id)`. GREEN 5.2.
-- [ ] 5.4 [MUT] Drop the imported clause; widen it to a type-based exclusion;
+- [x] 5.4 [MUT] Drop the imported clause; widen it to a type-based exclusion;
   exclude local documents too. Each RED. Revert, purge.
-- [ ] 5.5 [TEST] Structural class: an imported base/`-N` pair is out of
+- [x] 5.5 [TEST] Structural class: an imported base/`-N` pair is out of
   `in_structural_class` for each member alone and for both (three variants), and
   a local pair with the identical shape stays in class; the group stays visible
   to `duplicates`, `adjudicate` and `merge` (they still read every concept).
   Reading `group.member_ids` only: no verdict, no confidence, no file read, no
   model. RED: the imported pair is in class.
-- [ ] 5.6 [IMPL] `src/openkos/application/auto_merge.py::in_structural_class`
+- [x] 5.6 [IMPL] `src/openkos/application/auto_merge.py::in_structural_class`
   gains `not any(is_imported_concept(m) for m in group.member_ids)`; it stays the
   ONE shared predicate with no second copy. GREEN 5.5.
-- [ ] 5.7 [TEST] Both consumers go through the one predicate: given fresh SAME
+- [x] 5.7 [TEST] Both consumers go through the one predicate: given fresh SAME
   verdicts for an in-shape base/`-N` pair with one imported member, then both,
   plus an otherwise identical local pair, `recommended(...)` returns ONLY the
   local pair and `plan_auto_merges(...)` plans ONLY the local pair. Patching
@@ -741,12 +741,12 @@ its `--self-test` is run, not edited), `src/openkos/bundle/imports.py`
   stub judge). Patching `is_imported_concept` to `True` for a local id causes
   BOTH the attach lookup and the structural class to exclude it (the seam is
   proven used by both sites). RED: imported pair planned.
-- [ ] 5.8 [MUT] Remove the imported clause from `in_structural_class` and
+- [x] 5.8 [MUT] Remove the imported clause from `in_structural_class` and
   observe 5.5 and 5.7 RED; make `recommended` use a private copy of the
   predicate and observe 5.7 RED; make `plan_auto_merges` use a private copy and
   observe 5.7 RED; make `is_imported_concept` a substring match and observe a
   false-positive case RED. Revert, purge.
-- [ ] 5.9 [TEST] Survivor rule: `lifecycle.ordered_merge_pair` with exactly one
+- [x] 5.9 [TEST] Survivor rule: `lifecycle.ordered_merge_pair` with exactly one
   imported member returns the local member as survivor for BOTH argument orders
   and with the ids' sort order reversed, and states the criterion
   `local over imported`; it sits AFTER the base/`-N` rule and BEFORE
@@ -759,12 +759,12 @@ its `--self-test` is run, not edited), `src/openkos/bundle/imports.py`
   label is the high-water mark, and the absorbed `imported` block is NOT
   gap-filled into the survivor (it survives in the ledger snapshot). RED:
   richer-body picks the imported member.
-- [ ] 5.10 [IMPL] `src/openkos/application/lifecycle.py::ordered_merge_pair`: one
+- [x] 5.10 [IMPL] `src/openkos/application/lifecycle.py::ordered_merge_pair`: one
   rule after the suffix-family rule and before richer-body. GREEN 5.9.
-- [ ] 5.11 [MUT] Move the rule before the suffix-family rule; move it after
+- [x] 5.11 [MUT] Move the rule before the suffix-family rule; move it after
   richer-body; apply it when both are imported; invert local and imported; drop
   the criterion string. Each RED. Revert, purge.
-- [ ] 5.12 [TEST] Measured population unchanged: run
+- [x] 5.12 [TEST] Measured population unchanged: run
   `OLLAMA_HOST=http://127.0.0.1:9 uv run python evals/auto_merge/run_structural_class.py --self-test`
   and record it still reporting **28 of 28** structural pairs in class (no
   fixture carries an `imports/` id). Add a test in
@@ -773,14 +773,14 @@ its `--self-test` is run, not edited), `src/openkos/bundle/imports.py`
   still holds and that no `evals/auto_merge` fixture id starts with `imports/`
   (so the measured population cannot silently shift). Written GREEN first;
   mutate next.
-- [ ] 5.13 [MUT] Add a scratch `imports/x/...` pair to the harness fixture and
+- [x] 5.13 [MUT] Add a scratch `imports/x/...` pair to the harness fixture and
   observe 5.12 RED (and the self-test count drop); revert by inverse edit,
   purge.
-- [ ] 5.14 [TEST] Inert-for-existing-workspaces pin: with no `imports/`
+- [x] 5.14 [TEST] Inert-for-existing-workspaces pin: with no `imports/`
   directory, the attach lookup, the structural class and the survivor rule
   behave exactly as in 5.1's baseline (every existing test stays GREEN
   unchanged).
-- [ ] 5.15 Run the five-command slice gate. All green; record observed results.
+- [x] 5.15 Run the five-command slice gate. All green; record observed results.
   Include the eval self-test sweep (it discovers `--self-test` harnesses).
 - [ ] 5.16 Commit (`feat(ingest): exclude imported concepts from attach targets
   and the automatic merge class`, `feat(ingest): prefer the local concept in an

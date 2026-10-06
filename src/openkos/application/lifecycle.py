@@ -71,6 +71,7 @@ from openkos.application.consent import (
     boolean_confirmation,
 )
 from openkos.bundle import decisions as bundle_decisions
+from openkos.bundle import imports as bundle_imports
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
@@ -2898,6 +2899,7 @@ def member_body_length(bundle_dir: Path, member_id: str) -> int:
 
 
 _SUFFIX_FAMILY_CRITERION = "canonical id (base of a -N family)"
+_LOCAL_OVER_IMPORTED_CRITERION = "local over imported"
 
 
 def ordered_merge_pair(
@@ -2911,6 +2913,12 @@ def ordered_merge_pair(
     disambiguator must not become permanent. The absorbed (possibly richer)
     body is not lost: the merge stacks and reconciles both bodies.
 
+    Then origin (okf-import, D8): when exactly one member is imported (its
+    Concept ID is under `imports/`) the LOCAL member survives, so the merged
+    result lives at a local Concept ID and is an ordinary attach and
+    auto-merge candidate again. Two imported or two local members skip this
+    rule.
+
     Otherwise (#776): the member with the RICHER BODY survives, so a permanent
     Concept ID is no longer decided by `f` sorting before `o`. Ties
     (including two unreadable members, which `-1 == -1` here and
@@ -2923,6 +2931,11 @@ def ordered_merge_pair(
         return first, second, _SUFFIX_FAMILY_CRITERION
     if is_suffix_family(second, first):
         return second, first, _SUFFIX_FAMILY_CRITERION
+    first_imported = bundle_imports.is_imported_concept(first)
+    if first_imported != bundle_imports.is_imported_concept(second):
+        if first_imported:
+            return second, first, _LOCAL_OVER_IMPORTED_CRITERION
+        return first, second, _LOCAL_OVER_IMPORTED_CRITERION
     first_length = member_body_length(bundle_dir, first)
     second_length = member_body_length(bundle_dir, second)
     if second_length > first_length:

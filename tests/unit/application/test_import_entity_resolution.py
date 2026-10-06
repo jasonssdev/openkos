@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from openkos import config
 from openkos.application import auto_merge, lifecycle
 from openkos.application import ingest as application_ingest
 from openkos.application.ingest import AttachTarget
@@ -24,6 +25,7 @@ from openkos.bundle import imports as bundle_imports
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup, Tier
 from openkos.state import adjudications as adjudications_store
+from tests.unit.application.curation_support import make_workspace, write_concept
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _EVAL_DIR = _REPO_ROOT / "evals" / "auto_merge"
@@ -210,6 +212,124 @@ def test_patching_the_imported_predicate_excludes_a_local_id_at_both_sites(
 
     assert _lookup(bundle).find("Concept", "Skill") == ()
     assert auto_merge.in_structural_class(_LOCAL_PAIR) is False
+
+
+# --------------------------------------------------------------------------- #
+# the survivor rule
+# --------------------------------------------------------------------------- #
+
+
+def _bundle_with(tmp_path: Path, docs: dict[str, str]) -> Path:
+    bundle = tmp_path / "bundle"
+    for concept_id, body in docs.items():
+        _write(bundle, concept_id, "type: Concept\ntitle: T", body)
+    return bundle
+
+
+@pytest.mark.parametrize("flip_ids", [False, True], ids=["ids as is", "ids flipped"])
+@pytest.mark.parametrize("flip_args", [False, True], ids=["args", "args flipped"])
+def test_the_local_member_survives_the_richer_imported_one(
+    tmp_path: Path, flip_ids: bool, flip_args: bool
+) -> None:
+    local, imported = ("zz/local", "imports/acme/a/imp")
+    if flip_ids:
+        local, imported = ("a/local", "imports/acme/z/imp")
+    bundle = _bundle_with(tmp_path, {local: "short", imported: "much longer body " * 9})
+    members = (imported, local) if flip_args else (local, imported)
+
+    survivor, absorbed, criterion = lifecycle.ordered_merge_pair(bundle, members)
+
+    assert (survivor, absorbed) == (local, imported)
+    assert criterion == "local over imported"
+
+
+def test_a_missing_local_member_still_survives_an_imported_one(
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle_with(tmp_path, {"imports/acme/a/imp": "body"})
+    survivor, _absorbed, criterion = lifecycle.ordered_merge_pair(
+        bundle, ("a/local", "imports/acme/a/imp")
+    )
+    assert survivor == "a/local"
+    assert criterion == "local over imported"
+
+
+def test_the_family_rule_still_outranks_local_over_imported(tmp_path: Path) -> None:
+    bundle = _bundle_with(
+        tmp_path, {"imports/acme/c/x": "b", "imports/acme/c/x-2": "b" * 50}
+    )
+    assert lifecycle.ordered_merge_pair(
+        bundle, ("imports/acme/c/x-2", "imports/acme/c/x")
+    ) == ("imports/acme/c/x", "imports/acme/c/x-2", lifecycle._SUFFIX_FAMILY_CRITERION)
+
+
+@pytest.mark.parametrize(
+    "ids",
+    [
+        pytest.param(("imports/acme/a/p", "imports/acme/a/q"), id="both imported"),
+        pytest.param(("a/p", "a/q"), id="both local"),
+    ],
+)
+def test_same_origin_pairs_use_the_existing_rules(
+    tmp_path: Path, ids: tuple[str, str]
+) -> None:
+    bundle = _bundle_with(tmp_path, {ids[0]: "short", ids[1]: "much longer body " * 4})
+    assert lifecycle.ordered_merge_pair(bundle, ids) == (
+        ids[1],
+        ids[0],
+        "richer body",
+    )
+
+
+def test_an_unreadable_member_still_ranks_below_a_readable_one(
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle_with(tmp_path, {"a/p": "body"})
+    assert lifecycle.ordered_merge_pair(bundle, ("a/ghost", "a/p"))[2] == "richer body"
+
+
+def test_a_merge_leaves_a_local_survivor_that_is_not_imported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_workspace(tmp_path, monkeypatch)
+    layout = config.WorkspaceLayout(root)
+    local = write_concept(root, "concepts/skill", title="Skill", body="Local.")
+    assert local.exists()
+    imported = layout.bundle_dir / f"{IMPORTED}.md"
+    imported.parent.mkdir(parents=True)
+    imported.write_text(
+        "---\ntype: Concept\ntitle: Skill\nsensitivity: confidential\nprovenance:\n- imports/acme--bundle\n"
+        "imported:\n  from: acme\n---\n\n# Skill\n\n" + "Imported body. " * 20 + "\n",
+        encoding="utf-8",
+    )
+    group = _group(LOCAL, IMPORTED)
+    survivor, absorbed, criterion = lifecycle.ordered_merge_pair(
+        layout.bundle_dir, group.member_ids
+    )
+    assert (survivor, absorbed, criterion) == (LOCAL, IMPORTED, "local over imported")
+
+    prepared = lifecycle.prepare_one_merge(
+        root,
+        layout,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        group,
+        ordered_pair=(survivor, absorbed),
+    )
+    assert prepared is not None
+    lifecycle.merge_core(
+        layout.bundle_dir,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        prepared,
+    )
+
+    assert not imported.exists()
+    text = local.read_text(encoding="utf-8")
+    assert "imports/acme--bundle" in text
+    assert "imported:" not in text
+    assert "sensitivity: confidential" in text
+    assert bundle_imports.is_imported_concept(LOCAL) is False
 
 
 # --------------------------------------------------------------------------- #
