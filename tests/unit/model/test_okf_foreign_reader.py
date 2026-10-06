@@ -15,6 +15,7 @@ import hashlib
 import inspect
 import os
 import stat
+import sys
 import threading
 import unicodedata
 from pathlib import Path
@@ -24,6 +25,14 @@ import pytest
 
 from openkos import fsio
 from openkos.model import okf
+
+# `os.geteuid`, `os.mkfifo` and effective POSIX modes do not exist on Windows;
+# these are evaluated at import, so they must never raise there.
+_IS_ROOT = getattr(os, "geteuid", lambda: -1)() == 0
+_NO_FIFO = pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this OS")
+_NO_POSIX_MODES = pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows chmod does not block reads"
+)
 
 # --- 1.1 `split_incoming_document` ------------------------------------------
 
@@ -278,6 +287,7 @@ def _ids(bundle: okf.ForeignBundle) -> list[str]:
     return [doc.foreign_id for doc in bundle.documents]
 
 
+@pytest.mark.cross_platform_smoke
 def test_a_baseline_tree_reads_one_document(tree: Path) -> None:
     bundle = okf.read_foreign_bundle(tree)
     assert _ids(bundle) == ["concepts/ok"]
@@ -328,6 +338,7 @@ class TestTreeRefusals:
         alias.symlink_to(tree, target_is_directory=True)
         assert _ids(okf.read_foreign_bundle(alias)) == ["concepts/ok"]
 
+    @_NO_FIFO
     def test_special_file_is_refused_without_hanging(self, tree: Path) -> None:
         os.mkfifo(tree / "concepts" / "pipe.md")
         outcome: list[BaseException | None] = []
@@ -344,6 +355,7 @@ class TestTreeRefusals:
         assert outcome[0].code == "special-file"
         assert outcome[0].path == "concepts/pipe.md"
 
+    @_NO_FIFO
     def test_a_non_markdown_fifo_is_still_a_special_file(self, tree: Path) -> None:
         """Rule 2 precedes the `.md` rules: a FIFO is refused whatever its name,
         not skipped as `not-markdown`, and is never opened."""
@@ -480,7 +492,8 @@ class TestTreeRefusals:
         _write(tree, "concepts/two.md", _doc(size=46))
         _refuses(tree, "bundle-too-large", "concepts/two.md")
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
+    @_NO_POSIX_MODES
+    @pytest.mark.skipif(_IS_ROOT, reason="root ignores file modes")
     def test_unreadable_file(self, tree: Path) -> None:
         path = _write(tree, "concepts/secret.md", _doc())
         path.chmod(0)
@@ -489,7 +502,8 @@ class TestTreeRefusals:
         finally:
             path.chmod(0o644)
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+    @_NO_POSIX_MODES
+    @pytest.mark.skipif(_IS_ROOT, reason="root ignores directory modes")
     def test_unreadable_directory(self, tree: Path) -> None:
         sub = tree / "locked"
         _write(tree, "locked/a.md", _doc())
@@ -767,6 +781,7 @@ class TestInvariants:
         _write(tree, "concepts/ok.md", _doc() + b"x")
         assert okf.read_foreign_bundle(tree).manifest != before
 
+    @_NO_FIFO
     def test_a_fifo_swapped_in_after_the_walk_cannot_hang(
         self, tree: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -818,6 +833,36 @@ class TestInvariants:
         monkeypatch.setattr(okf, "validate_foreign_collisions", swap_then_check)
         # isolate O_NOFOLLOW from the segment check
         monkeypatch.setattr(fsio, "symlinked_segment", lambda path, boundary: None)
+        _refuses(tree, "symlink", "concepts/ok.md")
+
+    @pytest.mark.cross_platform_smoke
+    @pytest.mark.parametrize("swap", ["other-file", "symlink"])
+    def test_without_nofollow_a_swap_after_open_is_refused(
+        self, tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, swap: str
+    ) -> None:
+        """Where `O_NOFOLLOW` is unavailable (Windows), the post-open `fstat`
+        versus `lstat` comparison keeps the symlink-after-walk guarantee."""
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+        target = tree / "concepts" / "ok.md"
+        replacement = _write(tmp_path, "replacement.md", _doc())
+        if swap == "symlink":
+            try:
+                (tmp_path / "probe").symlink_to(replacement)
+            except OSError:
+                pytest.skip("symlinks are not creatable here")
+        real_open = os.open
+
+        def open_then_swap(path: object, flags: int, *args: object) -> int:
+            fd = real_open(path, flags, *args)  # type: ignore[arg-type]
+            if Path(str(path)) == target:
+                if swap == "symlink":
+                    target.unlink()
+                    target.symlink_to(replacement)
+                else:
+                    replacement.replace(target)
+            return fd
+
+        monkeypatch.setattr(os, "open", open_then_swap)
         _refuses(tree, "symlink", "concepts/ok.md")
 
     def test_a_linked_segment_found_by_fsio_is_refused(

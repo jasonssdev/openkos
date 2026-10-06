@@ -4107,13 +4107,33 @@ def _read_foreign_file(root: Path, rel: str) -> bytes:
     path = root / rel
     if fsio.symlinked_segment(path, root) is not None:
         raise ForeignRefusal("symlink", rel)
+    # `O_NOFOLLOW` and `O_NONBLOCK` do not exist on Windows. Windows has no
+    # FIFOs in the filesystem tree, so a blocking open cannot hang there; and
+    # without `O_NOFOLLOW` the identity check below stands in for it.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | nofollow
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(path, flags)
     except OSError as exc:
         code = "symlink" if exc.errno == errno.ELOOP else "unreadable"
         raise ForeignRefusal(code, rel) from exc
     try:
         info = os.fstat(fd)
+        if not nofollow:
+            # The path may have become a link between the walk and the open:
+            # it must still be the very file the descriptor refers to.
+            now = os.lstat(path)
+            if (
+                stat.S_ISLNK(now.st_mode)
+                or now.st_ino != info.st_ino
+                or now.st_dev != info.st_dev
+            ):
+                raise ForeignRefusal("symlink", rel)
         if not stat.S_ISREG(info.st_mode):
             raise ForeignRefusal("special-file", rel)
         if info.st_size > FOREIGN_MAX_FILE_BYTES:
