@@ -6,7 +6,8 @@ a preview and ask between them:
 
 - `plan_import` (Phase A) takes no lock and writes nothing. It checks the
   input and the namespace, reads the foreign tree through the bounded reader,
-  adopts every conformant document in memory, builds one anchor Source per
+  adopts every conformant document in memory (a name with whitespace is
+  renamed to a slug, every link to it follows), builds one anchor Source per
   effective label, and PROVES the result (every link of every adopted body
   stays inside the namespace; every adopted frontmatter is sound) before
   returning an `ImportPlan`.
@@ -139,6 +140,9 @@ class ImportPlan:
     anchors: tuple[AnchorPlan, ...]
     skipped: tuple[tuple[str, str], ...]
     """`(foreign path, reason code)` for every file left out."""
+    renames: tuple[tuple[str, str], ...]
+    """`(foreign path, path below the namespace)` for every document whose name
+    held whitespace and was renamed to a slug, in the reader's order."""
     dropped_keys: int
     links_rewritten: int
     links_clamped: int
@@ -289,6 +293,12 @@ def _check_namespace_free(imports_dir: Path, namespace: str) -> None:
 
 
 def _foreign_reason(exc: okf.ForeignRefusal) -> str:
+    if exc.code == "rename-collision":
+        return (
+            f"the foreign bundle was refused ({exc.code}): {exc.path} would be "
+            f"written under the same name once names with whitespace are "
+            f"renamed to slugs; rename one of them in the foreign bundle and retry"
+        )
     if exc.path:
         return f"the foreign bundle was refused ({exc.code}): {exc.path}"
     return f"the foreign bundle was refused ({exc.code}): the input could not be read"
@@ -361,15 +371,6 @@ def plan_import(
             f"the foreign bundle holds no conformant document to adopt "
             f"({len(bundle.skipped)} path(s) skipped)",
         )
-    for document in bundle.documents:
-        if any(char.isspace() for char in document.foreign_id):
-            raise ImportRefusal(
-                "whitespace-in-name",
-                f"{document.path} contains whitespace: a link to such a name "
-                f"cannot be read by every engine link reader, so the anchor "
-                f"could not list it; rename it in the foreign bundle and retry",
-            )
-
     prefix = bundle_imports.namespace_prefix(namespace)
     floor = okf.import_floor(cfg.default_sensitivity, sensitivity_flag)
 
@@ -378,6 +379,7 @@ def plan_import(
 
     adopted: list[AdoptedPlan] = []
     bodies: dict[str, str] = {}
+    renames: list[tuple[str, str]] = []
     dropped = rewritten = clamped = html_documents = 0
     for document in bundle.documents:
         label = okf.effective_import_sensitivity(
@@ -404,7 +406,7 @@ def plan_import(
             anchor_id=bundle_imports.anchor_id(namespace, label),
             prefix=prefix,
         )
-        concept_id = f"{prefix}/{document.foreign_id}"
+        concept_id = f"{prefix}/{okf.renamed_foreign_id(document.foreign_id)}"
         bodies[concept_id] = text
         adopted.append(
             AdoptedPlan(
@@ -417,6 +419,10 @@ def plan_import(
                 text=text,
             )
         )
+        if concept_id != f"{prefix}/{document.foreign_id}":
+            renames.append(
+                (document.path, f"{concept_id.removeprefix(prefix + '/')}.md")
+            )
         dropped += len(okf.dropped_foreign_keys(document.mapping))
         rewritten += namespaced.links_rewritten
         clamped += namespaced.links_clamped
@@ -435,6 +441,7 @@ def plan_import(
         adopted=tuple(adopted),
         anchors=anchors,
         skipped=bundle.skipped,
+        renames=tuple(renames),
         dropped_keys=dropped,
         links_rewritten=rewritten,
         links_clamped=clamped,
@@ -720,7 +727,7 @@ def _write_namespace(layout: config.WorkspaceLayout, plan: ImportPlan) -> list[s
         )
         staging.mkdir()
         for item in plan.adopted:
-            path = staging / f"{item.foreign_id}.md"
+            path = staging / f"{okf.renamed_foreign_id(item.foreign_id)}.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             fsio.write_exclusive(path, item.text)
 

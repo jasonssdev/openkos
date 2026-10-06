@@ -646,7 +646,8 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
 
 ### Apply notes (slice 4)
 
-- **A foreign name with whitespace is refused, not linked.** An anchor link to
+- **A foreign name with whitespace is refused, not linked.** (Superseded by
+  Phase 4b: the owner chose to rename; the finding below is why.) An anchor link to
   `My Note.md` cannot be read by every engine link reader in any spelling: plain
   (`/imports/ns/My Note.md`), angle-bracketed (`</imports/ns/My Note.md>`) and
   percent-encoded (`/imports/ns/My%20Note.md`) each lose the anchor-to-document
@@ -687,6 +688,94 @@ Read-only references: `src/openkos/bundle/index.py` (read-only,
 - **The v0.1 fixture declares `okf_version: "0.1"`**, so it plans with that
   version observed, not "absent"; the absent case has its own test over a bundle
   with no root index.
+
+## Phase 4b — Slice 4b: names with whitespace are renamed to slugs (PR 4b)
+
+Owner decision (2026-10-06, #1314): a foreign file or directory whose name holds
+whitespace is RENAMED to a slug on import instead of refused. Owns:
+`src/openkos/model/okf.py` (the slug rule, `validate_foreign_renames`, the
+reader call, `namespaced_concept_id`, `imported.path`, the anchor link),
+`src/openkos/bundle/links.py` (the rewrite follows the rename),
+`src/openkos/application/import_service.py` (drops `whitespace-in-name`, plans
+the renamed ids, `ImportPlan.renames`), `tests/unit/model/test_okf_rename.py`
+(new), `tests/unit/bundle/test_links_namespace.py`,
+`tests/unit/bundle/test_link_recognizer_inventory.py`,
+`tests/unit/application/test_import_service.py`, and the `okf-import` spec and
+design. Depends on: slice 4. Branch `feat/1314-import-slugs`, stacked on slice
+4. Spec: `okf-import` "A Name With Whitespace Is Renamed To A Slug".
+
+- [x] 4b.1 [TEST] `tests/unit/model/test_okf_rename.py`: the slug rule
+  (`rename_foreign_segment`: a whitespace run is ONE `-`, casefold not lower,
+  NFC in and out, no-break and ideographic space, `_` and `.` kept, a segment
+  without whitespace keeps its bytes, idempotent) and `renamed_foreign_id`. RED:
+  functions missing.
+- [x] 4b.2 [IMPL] `okf.rename_foreign_segment`, `okf.renamed_foreign_id`. GREEN
+  4b.1. [MUT] always rename; `-` to `_`; drop `casefold`; drop the closing NFC;
+  each RED. Reverted by the inverse edit, `__pycache__` purged.
+- [x] 4b.3 [TEST] Collisions after the rename (`validate_foreign_renames`):
+  renamed against unchanged, two renamed, casefolded, NFC, a renamed directory,
+  order independence, distinct names pass (different directories, a file against
+  a directory, the same path twice), a pair no rename touches is not judged, a
+  slug grown past the segment cap by casefolding, exactly at the cap (segment and
+  path), an NFD segment measured in NFC; and the reader refuses the tree with
+  `rename-collision` naming both foreign paths and no absolute path. RED:
+  function missing.
+- [x] 4b.4 [IMPL] `okf.validate_foreign_renames`, called by
+  `read_foreign_bundle` beside the other collision checks (so Phase B judges it
+  again). GREEN 4b.3. [MUT] drop the `changed` clause; drop the `first_changed`
+  clause; drop the rename filter; collision key without casefold; without NFC;
+  both caps `>` to `>=`; the segment measure without NFC; remove the reader call;
+  each RED.
+- [x] 4b.5 [TEST] `namespaced_concept_id` renames each spaced segment (relation
+  targets follow), `adopt_foreign_document` records `imported.path` only for a
+  renamed document and the `imported` block keeps a closed key set, and the
+  anchor links the renamed path while its text keeps the foreign id. RED today.
+- [x] 4b.6 [IMPL] `namespaced_concept_id`, `adopt_foreign_document`,
+  `build_import_anchor` call the rule. `IMPORT_KEY_GROUPS` gains no key: `path`
+  is a sub-key of the `imported` block (a top-level `path:` foreign key stays an
+  ordinary kept key), so the totality guard needed no new group; the closed
+  `imported` key set is pinned by `test_the_imported_block_has_a_closed_set_of_keys`.
+  [MUT] no rename in `namespaced_concept_id`; `path` never / always recorded;
+  anchor link not renamed; each RED.
+- [x] 4b.7 [TEST] Link rewrite: corpus rows (absolute, relative, `%20`, fragment,
+  query, no-break space, escaping, asset, inherited directory) crossed with every
+  form (inline, image, angle, titled, reference, multi-line, fenced, inline code),
+  detail rows (angle, titled angle, reference definition, case kept for an
+  unspaced name, `_` and `.` kept, re-quoting) and a resolution property: from the
+  renamed carrier the rewritten relative link lands on the renamed target. The
+  slice 2 recognizer cross-check runs the same corpus through EVERY engine reader
+  with the carrier under its renamed id. RED: 162 failures.
+- [x] 4b.8 [IMPL] `links._namespaced_destination` renames the segments a link
+  spells (a relative link keeps its relative form; an absolute or escaping one is
+  rebuilt from the renamed path; a `?query` is never renamed; the byte-preserving
+  insertion is skipped when a whitespace segment is present). GREEN 4b.7. [MUT]
+  whole-segment rename of a query; always return the renamed path; no early
+  `None` for an unchanged relative link; byte-preserving without the rename
+  guard; quoted branch without the rename; no re-quote; no fragment; no unquote;
+  fragment not split; middle segments not renamed; each RED.
+- [x] 4b.9 [TEST] Service: the planned id and the staged path are the slug, the
+  preview reports each rename (`ImportPlan.renames`, empty when none), a collision
+  after the rename is refused naming both foreign paths with the reason that
+  mentions the slug rename (a skipped file still counts), a renamed name cannot
+  land on a local document, every link form is rewritten, the proof holds against
+  every engine reader (all seven extract something), the anchor lists the slug and
+  keeps the foreign id in text, the digest still covers the foreign ids, a
+  relation follows, and a published import writes the slug and the GRAPH reader
+  finds the anchor-to-document edge and the entry-to-document edge. RED: the
+  `whitespace-in-name` refusal fires first.
+- [x] 4b.10 [IMPL] `plan_import` drops `whitespace-in-name`, plans
+  `imports/<ns>/<renamed id>`, fills `ImportPlan.renames`; `_write_namespace`
+  stages the renamed path; the collision reason names the slug rename. GREEN
+  4b.9. [MUT] concept id not renamed; staged path not renamed; `renames` always /
+  never appended; original path swapped; collision reason branch off; `renames`
+  not stored; each RED.
+- [x] 4b.11 Spec and design: `specs/okf-import/spec.md` (the requirement "A Name
+  With Whitespace Is Renamed To A Slug" and four scenarios replace the refusal
+  sentence and scenario), `design.md` (D1 rows 15b and 15c, the `rename-collision`
+  reason row, D2 rule, D3 table rows, the `imported.path` example, the anchor
+  bullet).
+- [x] 4b.12 Gates and commit (`feat(okf): ...`, `feat(ingest): ...`, `Refs #1314`).
+  Not pushed; the PR is left to the orchestrator.
 
 ## Phase 5 — Slice 5: entity-resolution exclusion (PR 5)
 

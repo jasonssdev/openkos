@@ -93,6 +93,8 @@ this order; the first matching rule decides:
 | 13 | running total of `.md` bytes > `FOREIGN_MAX_TOTAL_BYTES` (256 MiB) | refuse import | `bundle-too-large` |
 | 14 | two paths (files or directory prefixes) equal after NFC but different as written | refuse import | `nfc-collision` |
 | 15 | two paths equal after `NFC` then `casefold()` but different after NFC | refuse import | `case-collision` |
+| 15b | a segment with whitespace is renamed to a slug (D2, slice 4b); two paths equal after that rename (NFC then `casefold()`) but different as written, at least one renamed | refuse import | `rename-collision` |
+| 15c | a renamed segment over 255 UTF-8 bytes, or a renamed namespaced path over 1024 bytes (casefolding can grow a name) | refuse import | `name-too-long` |
 | 16 | bytes that are not UTF-8 (a single leading BOM is stripped) | skip, report | `not-utf8` |
 | 17 | guarded parse status `alias`, `too-deep`, `too-large`, `not-a-mapping`, `unsupported-value` | refuse import | `frontmatter-<status>` |
 | 18 | guarded parse status `absent`, `empty` or `malformed` (a YAML syntax error) | skip, report (§11 rule 1) | `frontmatter-absent` / `frontmatter-empty` / `frontmatter-malformed` |
@@ -137,6 +139,7 @@ another requirement is named):
 | `frontmatter-alias` | 1 | A frontmatter alias bomb is refused |
 | `frontmatter-too-large`, `frontmatter-too-deep` | 1 | The requirement's clause "a frontmatter block over the guarded parser's bounds" |
 | `frontmatter-not-a-mapping` | 1 | A non-mapping frontmatter root is refused |
+| `rename-collision` | 1 | A collision after the rename is refused (requirement "A Name With Whitespace Is Renamed To A Slug") |
 | `case-collision`, `nfc-collision` | 1 | Case-fold and NFD collisions are refused (one code each, distinct as the scenario requires) |
 | `frontmatter-unsupported-value`, `special-file`, `unsafe-name`, `name-too-long`, `too-deep`, `unreadable` | 1 | No dedicated scenario: design hardening under the same requirement ("refused with a named reason, workspace unchanged") |
 | `frontmatter-malformed`, `frontmatter-absent`, `frontmatter-empty`, `missing-type`, `not-utf8` (skip, not refuse) | — | "A Non-Conformant Document Is Tolerated, Not Adopted" (`frontmatter-malformed` satisfies "Unparseable frontmatter is skipped, not fatal"; `missing-type` satisfies "A document with no `type` is skipped and reported") |
@@ -206,7 +209,8 @@ def staging_name_prefix(namespace: str) -> str: ...       # ".<ns>.openkos-impor
 def is_imported_concept(concept_id: str) -> bool: ...     # first segment == "imports"
 ```
 
-Every adopted Concept ID is `imports/<ns>/<foreign id>`. `--namespace` is
+Every adopted Concept ID is `imports/<ns>/<foreign id>`, with each segment that
+holds whitespace renamed to a slug (below). `--namespace` is
 required and has no default. A default derived from the directory name
 would put a local directory name into every Concept ID, which travels in an
 export, and would take effect with no preview under `--auto`.
@@ -224,6 +228,27 @@ same namespace (D6). Both refuse with exit 1 and a reason naming the
 namespace and stating that re-import is unsupported (owner decision 4).
 `bundle/imports` itself must not be a symlink or sit under one
 (`config.symlink_boundary_reason`, as `forget` checks at `lifecycle.py:186`).
+
+**A name with whitespace is renamed (slice 4b, owner decision 2026-10-06).**
+The graph link reader (`sqlite_graph._LINK_RE`) needs a `/` straight after `(`,
+stops at whitespace and never decodes, so a link to a name with a space cannot
+be represented in any spelling (plain, `<...>` or `%20`) and the anchor-to-
+document edge would silently vanish. Slice 4 first refused such a name
+(`whitespace-in-name`); the owner chose to rename instead. The rule is
+`okf.rename_foreign_segment`: a segment holding whitespace has every whitespace
+run (`str.split()`, so every `isspace()` character) replaced by one `-`, then
+`casefold()` and NFC; a segment without whitespace keeps its bytes. Casefolding
+rather than lowercasing is what stops a renamed name from differing from another
+only by case. The engine's `source_titles.slugify` was considered and rejected:
+it also rewrites `_`, `.` and every other non-alphanumeric, which the foreign
+name did not need. The rename applies to directory segments too. Two names equal
+after the rename (NFC then `casefold()`, against renamed AND unchanged names,
+files and directory prefixes) are refused as `rename-collision`, naming both
+foreign paths: it runs in the reader beside the other collision checks
+(`okf.validate_foreign_renames`), so the Phase B re-read judges it again. The
+original path is kept as `imported.path` (only when the document was renamed;
+`imported.id` stays the foreign id, which also keeps the anchor digest stable),
+and `ImportPlan.renames` lists each `(foreign path, new path)` for the preview.
 
 **Alternatives considered.** Keep foreign ids and refuse on collision
 (rejected by the owner, decision 2). Prefix only on collision (rejected:
@@ -262,9 +287,9 @@ in the foreign frame (the referring document's foreign id):
 | Destination (after `<>` strip; decision on the unquoted form) | Rewrite |
 |---|---|
 | empty, `#anchor` only, or `scheme:` (`_SCHEME_RE`, `links.py:289`) | unchanged |
-| relative, and it stays inside the foreign root | unchanged (it resolves inside `imports/<ns>/` by translation) |
+| relative, and it stays inside the foreign root | unchanged (it resolves inside `imports/<ns>/` by translation), unless a segment the link itself spells holds whitespace: then those segments are renamed in place and the destination re-quoted (a relative link inherits the whitespace of its own document's directory, and that directory moves with the document) |
 | relative, and it climbs above the foreign root | replaced by `/imports/<ns>/<path clamped per RFC 3986 §5.2.4>` |
-| absolute (`/…`, including `//…`), any extension or none | `/imports/<ns>` inserted before it when the raw path has no dot segment and no percent-escape (byte-preserving); otherwise replaced by `/imports/<ns>/<quote(clamped path)>` |
+| absolute (`/…`, including `//…`), any extension or none | `/imports/<ns>` inserted before it when the raw path has no dot segment, no percent-escape and no whitespace segment (byte-preserving); otherwise replaced by `/imports/<ns>/<quote(renamed clamped path)>` |
 
 The fragment, a query and an optional title after the destination are kept
 byte for byte. Fenced code and inline code are rewritten too: lint reads
@@ -346,6 +371,7 @@ imported:
   namespace: demo
   id: concepts/stoicism              # foreign Concept ID (NFC)
   sha256: 3f1c…                      # sha256 of the foreign file's bytes, as read
+  path: My Folder/Mi Nota.md         # the foreign path as written; present only when the name was renamed
   frontmatter:                       # the moved keys, verbatim; omitted when empty
     generated: {by: reference_agent/1.2, at: "2026-09-01T10:00:00Z"}
     provenance: [sources/x]
@@ -468,7 +494,9 @@ imported:
 
 The body lists, for this label only, one bullet per document:
 `- [<sanitized title>](/imports/demo/<id>.md) — foreign id \`<id>\`, sha256 \`<hex>\``.
-Titles pass `index.sanitize_link_label` and newlines are refused.
+Titles pass `index.sanitize_link_label` and newlines are refused. The link names the renamed path
+(`okf.renamed_foreign_id`); the text after `foreign id` keeps the foreign id as
+written, so the digest and the origin stay verifiable.
 
 **Why per label.** The export boundary withholds an object whose own rank
 is below the highest rank among its provenance ancestors (ADR-0048, folded

@@ -404,22 +404,9 @@ class TestOtherRefusals:
         assert refusal.code == "nothing-to-import"
         assert refusal.retry_safe is False
 
-    @pytest.mark.parametrize("rel", ["My Note.md", "My Folder/note.md", "a\u00a0b.md"])
-    def test_a_name_with_internal_whitespace_is_refused(
-        self, workspace: Ws, tmp_path: Path, rel: str
-    ) -> None:
-        root, _, _ = workspace
-        foreign = tmp_path / "foreign"
-        write_foreign(foreign, rel, doc())
-        refusal = refusal_of(root, foreign)
-        assert refusal.code == "whitespace-in-name"
-        assert rel.split("/")[0] in refusal.reason
-        assert str(tmp_path) not in refusal.reason
-        assert refusal.retry_safe is False
-
 
 class TestPathologicalNamesCannotBeLinked:
-    """Why a foreign Concept ID with whitespace is refused rather than linked:
+    """Why a foreign Concept ID with whitespace is renamed rather than linked:
     an anchor link to it cannot be read by every engine link reader in ANY
     spelling, so the anchor-to-document edge would silently vanish."""
 
@@ -459,6 +446,239 @@ class TestPathologicalNamesCannotBeLinked:
         found = self.resolved_by_each_reader("/imports/ns/MyNote.md")
         graph = found["graph/sqlite_graph.py:_LINK_RE"]
         assert graph == {"imports/ns/MyNote"}
+
+
+# --- 4b names with whitespace are renamed to slugs ----------------------------
+
+
+class TestWhitespaceNamesAreRenamed:
+    """A foreign name with whitespace is adopted under its slug (owner
+    decision, #1314): every link follows, a collision refuses, and the
+    original path is kept in the inert `imported` block."""
+
+    @pytest.mark.parametrize(
+        ("rel", "concept"),
+        [
+            ("My Note.md", "my-note"),
+            ("My Folder/note.md", "my-folder/note"),
+            ("a\u00a0b.md", "a-b"),
+            ("Keep/Mi  Nota.md", "Keep/mi-nota"),
+        ],
+    )
+    def test_the_document_is_planned_under_its_slug(
+        self, workspace: Ws, tmp_path: Path, rel: str, concept: str
+    ) -> None:
+        root, _, _ = workspace
+        foreign = tmp_path / "foreign"
+        write_foreign(foreign, rel, doc())
+        adopted = plan(root, foreign).adopted[0]
+        assert adopted.concept_id == f"imports/{NS}/{concept}"
+        assert adopted.foreign_id == rel.removesuffix(".md")  # the origin, as written
+        block = imported_block(adopted.text)
+        assert block["path"] == rel
+        assert block["id"] == adopted.foreign_id
+
+    def test_an_unspaced_document_is_not_renamed_and_records_no_path(
+        self, workspace: Ws, tmp_path: Path
+    ) -> None:
+        root, _, _ = workspace
+        foreign = small_bundle(tmp_path, **{"Plain.md": doc()})
+        adopted = plan(root, foreign).adopted[0]
+        assert adopted.concept_id == f"imports/{NS}/Plain"
+        assert "path" not in imported_block(adopted.text)
+
+    def test_the_preview_reports_each_rename(
+        self, workspace: Ws, tmp_path: Path
+    ) -> None:
+        root, _, _ = workspace
+        foreign = small_bundle(
+            tmp_path,
+            **{
+                "My Folder__Mi Nota.md": doc(),
+                "plain.md": doc(),
+                "Other One.md": doc(),
+            },
+        )
+        assert plan(root, foreign).renames == (
+            ("My Folder/Mi Nota.md", "my-folder/mi-nota.md"),
+            ("Other One.md", "other-one.md"),
+        )
+
+    def test_a_bundle_with_nothing_renamed_reports_none(
+        self, workspace: Ws, tmp_path: Path
+    ) -> None:
+        root, _, _ = workspace
+        assert plan(root, foreign_copy(tmp_path)).renames == ()
+
+    @pytest.mark.parametrize(
+        ("names", "both"),
+        [
+            (["Mi Nota.md", "mi-nota.md"], ("Mi Nota.md", "mi-nota.md")),
+            (["Mi Nota.md", "MI  NOTA.md"], ("Mi Nota.md", "MI  NOTA.md")),
+            (["My Folder/a.md", "my-folder/b.md"], ("My Folder", "my-folder")),
+        ],
+    )
+    def test_a_collision_after_the_rename_is_refused_naming_both(
+        self, workspace: Ws, tmp_path: Path, names: list[str], both: tuple[str, str]
+    ) -> None:
+        root, _, _ = workspace
+        foreign = tmp_path / "foreign"
+        for rel in names:
+            write_foreign(foreign, rel, doc())
+        refusal = refusal_of(root, foreign)
+        assert refusal.code == "rename-collision"
+        assert all(name in refusal.reason for name in both)
+        assert "renamed to slugs" in refusal.reason
+        assert str(tmp_path) not in refusal.reason
+        assert refusal.retry_safe is False
+
+    def test_a_document_that_cannot_be_adopted_still_counts_for_a_collision(
+        self, workspace: Ws, tmp_path: Path
+    ) -> None:
+        # the reader judges every `.md` path, adopted or not, so a skipped file
+        # cannot hide a collision
+        root, _, _ = workspace
+        foreign = small_bundle(
+            tmp_path,
+            **{"Mi Nota.md": doc(), "mi-nota.md": "---\ntitle: no type\n---\nx\n"},
+        )
+        assert refusal_of(root, foreign).code == "rename-collision"
+
+    def test_a_renamed_name_cannot_land_on_a_local_document(
+        self, workspace: Ws, tmp_path: Path
+    ) -> None:
+        # the namespace keeps every adopted name away from the local concepts
+        root, layout, _ = workspace
+        local = layout.bundle_dir / "mi-nota.md"
+        local.write_text(doc(title="Local"), encoding="utf-8")
+        foreign = small_bundle(tmp_path, **{"Mi Nota.md": doc(title="Foreign")})
+        before = tree_state(root)
+        import_plan = plan(root, foreign)
+        assert [a.concept_id for a in import_plan.adopted] == [f"imports/{NS}/mi-nota"]
+        assert tree_state(root) == before
+
+    LINKING = (
+        "[plain](/My%20Folder/Mi%20Nota.md) [angle](</My Folder/Mi Nota.md>)\n"
+        "[relative](<My Folder/Mi Nota.md>) [encoded](My%20Folder/Mi%20Nota.md#s)\n"
+        "Read [X][ref].\n\n[ref]: </My Folder/Mi Nota.md>\n"
+    )
+
+    def bundle_with_links(self, tmp_path: Path) -> Path:
+        return small_bundle(
+            tmp_path,
+            **{
+                "entry.md": okf.dump_frontmatter({"type": "Concept"}, self.LINKING),
+                "My Folder__Mi Nota.md": doc(title="Mi Nota"),
+                "My Folder__sibling.md": okf.dump_frontmatter(
+                    {"type": "Concept"}, "[a](<Mi Nota.md>) [b](c.md)\n"
+                ),
+            },
+        )
+
+    def test_every_link_form_to_a_renamed_name_is_rewritten(
+        self, workspace: Ws, tmp_path: Path
+    ) -> None:
+        root, _, _ = workspace
+        by_id = {
+            a.foreign_id: a
+            for a in plan(root, self.bundle_with_links(tmp_path)).adopted
+        }
+        _, body = okf.load_frontmatter(by_id["entry"].text)
+        # three absolute links, then the two relative ones keep their form
+        assert body.count("(/imports/demo/my-folder/mi-nota.md)") == 1
+        assert body.count("</imports/demo/my-folder/mi-nota.md>") == 2
+        assert "[relative](<my-folder/mi-nota.md>)" in body
+        assert "[encoded](my-folder/mi-nota.md#s)" in body
+        assert "Mi Nota" not in body.replace("[plain]", "")
+        _, sibling = okf.load_frontmatter(by_id["My Folder/sibling"].text)
+        assert "[a](<mi-nota.md>) [b](c.md)" in sibling
+
+    def test_the_proof_holds_against_every_engine_reader(
+        self, workspace: Ws, tmp_path: Path
+    ) -> None:
+        from tests.unit.bundle.test_link_recognizer_inventory import (
+            INDEX_READERS,
+            READERS,
+            _in_index_domain,
+            _inside,
+        )
+
+        root, _, _ = workspace
+        import_plan = plan(root, self.bundle_with_links(tmp_path))
+        extracted = dict.fromkeys(READERS, 0)
+        outside: list[str] = []
+        texts = [(a.concept_id, a.text) for a in import_plan.adopted]
+        texts += [(a.concept_id, a.text) for a in import_plan.anchors]
+        for concept_id, text in texts:
+            _, body = okf.load_frontmatter(text)
+            for name, reader in READERS.items():
+                if name in INDEX_READERS and not _in_index_domain(body, concept_id):
+                    continue
+                for target, resolved in reader(body, concept_id):
+                    extracted[name] += 1
+                    if not _inside(resolved, f"imports/{NS}"):
+                        outside.append(f"{name} {concept_id}: {target!r}")
+        assert outside == []
+        assert all(count for count in extracted.values()), extracted
+
+    def test_the_anchor_lists_the_slug_and_keeps_the_foreign_id_in_text(
+        self, workspace: Ws, tmp_path: Path
+    ) -> None:
+        root, _, _ = workspace
+        import_plan = plan(root, self.bundle_with_links(tmp_path))
+        text = import_plan.anchors[0].text
+        assert "(/imports/demo/my-folder/mi-nota.md)" in text
+        assert "foreign id `My Folder/Mi Nota`" in text
+        assert "(/imports/demo/My Folder" not in text
+
+    def test_the_anchor_digest_still_covers_the_foreign_ids(
+        self, workspace: Ws, tmp_path: Path
+    ) -> None:
+        root, _, _ = workspace
+        import_plan = plan(root, self.bundle_with_links(tmp_path))
+        manifest = dict(import_plan.manifest)
+        expected = okf.import_bundle_digest(
+            (a.foreign_id, manifest[f"{a.foreign_id}.md"]) for a in import_plan.adopted
+        )
+        assert imported_block(import_plan.anchors[0].text)["bundle_sha256"] == expected
+
+    def test_a_relation_to_a_spaced_name_follows_the_rename(
+        self, workspace: Ws, tmp_path: Path
+    ) -> None:
+        root, _, _ = workspace
+        foreign = small_bundle(
+            tmp_path,
+            **{
+                "a.md": doc(
+                    relations=[{"target": "My Folder/Mi Nota", "type": "uses"}]
+                ),
+                "My Folder__Mi Nota.md": doc(),
+            },
+        )
+        adopted = {a.foreign_id: a for a in plan(root, foreign).adopted}
+        relations = okf.decode_relations(okf.load_frontmatter(adopted["a"].text)[0])
+        assert [r.target for r in relations] == [f"imports/{NS}/my-folder/mi-nota"]
+
+    def test_a_published_import_writes_the_slug_and_the_graph_edge_exists(
+        self, git_workspace: Ws, tmp_path: Path
+    ) -> None:
+        from openkos.graph import sqlite_graph
+
+        root, layout, _ = git_workspace
+        import_plan = plan(root, self.bundle_with_links(tmp_path))
+        publish(root, import_plan)
+        namespace_dir = layout.bundle_dir / "imports" / NS
+        assert (namespace_dir / "my-folder" / "mi-nota.md").is_file()
+        assert not (namespace_dir / "My Folder").exists()
+        assert okf.check_conformance(layout.bundle_dir) == []
+        store = sqlite_graph.build_graph(layout.bundle_dir)
+        try:
+            edges = {(e.source_id, e.target_id) for e in store.edges()}
+        finally:
+            store.close()
+        anchor = bundle_imports.anchor_id(NS, "private")
+        assert (anchor, f"imports/{NS}/my-folder/mi-nota") in edges
+        assert (f"imports/{NS}/entry", f"imports/{NS}/my-folder/mi-nota") in edges
 
 
 # --- 4.5 the proof gate -------------------------------------------------------
@@ -625,7 +845,7 @@ class TestPlanContent:
             assert metadata["provenance"] == [
                 bundle_imports.anchor_id(NS, adopted.label)
             ]
-            link = f"(/imports/{NS}/{adopted.foreign_id}.md)"
+            link = f"(/{adopted.concept_id}.md)"
             listing = [label for label, text in anchors.items() if link in text]
             assert listing == [adopted.label]
 

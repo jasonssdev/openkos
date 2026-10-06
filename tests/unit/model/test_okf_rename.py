@@ -185,6 +185,7 @@ class TestReader:
         assert document.path == "My Folder/Mi Nota.md"
         assert document.foreign_id == "My Folder/Mi Nota"
 
+    @pytest.mark.cross_platform_smoke
     def test_a_rename_collision_refuses_the_whole_tree(self, tmp_path: Path) -> None:
         _write(tmp_path, "Mi Nota.md")
         _write(tmp_path, "mi-nota.md")

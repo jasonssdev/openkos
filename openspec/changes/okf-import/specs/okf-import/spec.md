@@ -72,16 +72,15 @@ with a reason naming the problem, before any workspace write.
 
 Every adopted concept MUST be placed under `imports/<namespace>/` inside
 `bundle/`, with Concept ID `imports/<namespace>/<foreign Concept ID>` (the
-foreign file path minus `.md`). The foreign directory structure MUST be
-preserved under the namespace. The namespace MUST be a single valid slug
+foreign file path minus `.md`, with each path segment that holds whitespace
+renamed as the requirement "A Name With Whitespace Is Renamed To A Slug"
+states). The foreign directory structure MUST be preserved under the
+namespace. The namespace MUST be a single valid slug
 segment (lowercase ASCII letters, digits and single hyphens), given by
 `--namespace`, which is required and has no default. A missing or invalid
 namespace MUST be refused as a usage error with a reason, before the foreign
 directory is read. A foreign document MUST NOT be placed at any path outside
-`imports/<namespace>/`. A foreign path with whitespace inside a segment MUST be
-refused with a reason naming the path, because no spelling of a link to such a
-name is read by every engine link reader, so the anchor could not list the
-document readably.
+`imports/<namespace>/`.
 
 #### Scenario: Nested structure is preserved under the namespace
 
@@ -111,12 +110,60 @@ document readably.
 - THEN `bundle/concepts/foo.md` is byte-identical to before and
   `bundle/imports/x/concepts/foo.md` is the foreign document
 
-#### Scenario: A foreign name with whitespace is refused
+### Requirement: A Name With Whitespace Is Renamed To A Slug
 
-- GIVEN a foreign document at `My Note.md`, or under a directory `My Folder/`
+A foreign file or directory whose name contains whitespace MUST be adopted
+under a slug of that name, because no spelling of a link to a name with
+whitespace is read by every engine link reader, so the anchor could not list
+the document and the graph would lose its edge. The slug rule MUST be
+deterministic: for each path segment that holds whitespace, every run of
+whitespace characters becomes one `-` and the result is casefolded and
+normalized to NFC; a segment without whitespace MUST keep its bytes. The
+rename MUST apply to a directory segment as much as to a file name. Every link
+in an adopted body that names a renamed file or directory MUST be rewritten to
+the new name, in every form the engine reads (absolute, relative,
+reference-style, percent-encoded and angle-bracketed), so that it resolves to
+the same document it named before, and the anchor MUST link the renamed
+document so the anchor-to-document graph edge exists. The preview MUST report
+each rename. The original foreign path MUST be kept in the inert `imported`
+block of the renamed document. When two names are equal after the rename
+(compared as NFC then casefolded, against both renamed and unchanged names,
+files and directories alike), the import MUST be refused with the reason code
+`rename-collision` naming both foreign paths, and the workspace MUST be
+unchanged.
+
+#### Scenario: A file name with whitespace is renamed to a slug
+
+- GIVEN a foreign document at `Mi Nota.md`, or under a directory `My Folder/`
+- WHEN the bundle is imported under `--namespace demo`
+- THEN the document is adopted at `imports/demo/mi-nota` (or
+  `imports/demo/my-folder/<name>`), the preview reports the rename, and the
+  document's `imported` block records the original path `Mi Nota.md`
+
+#### Scenario: A segment without whitespace keeps its bytes
+
+- GIVEN foreign documents `Keep/Mi Nota.md` and `Plain.md`
 - WHEN the bundle is imported
-- THEN the import is refused with a reason naming that path and the workspace
-  is unchanged
+- THEN they are adopted at `imports/<ns>/Keep/mi-nota` and
+  `imports/<ns>/Plain`, and `Plain.md` records no original path
+
+#### Scenario: Links to a renamed name are rewritten in every form
+
+- GIVEN an adopted body that links to `My Folder/Mi Nota.md` as an absolute
+  path, a `%20`-encoded path, an angle-bracketed path, a relative path and a
+  reference-style definition
+- WHEN the bundle is imported
+- THEN each link names `my-folder/mi-nota.md` under the namespace, every engine
+  link reader resolves every link inside `imports/<ns>/`, and the anchor's link
+  to the document yields an anchor-to-document graph edge
+
+#### Scenario: A collision after the rename is refused
+
+- GIVEN foreign documents `Mi Nota.md` and `mi-nota.md` (or `MI  NOTA.md`, or
+  directories `My Folder/` and `my-folder/`)
+- WHEN the bundle is imported
+- THEN the import is refused with the reason code `rename-collision` naming
+  both foreign paths, and the workspace is unchanged
 
 ### Requirement: Importing Into An Existing Namespace Is Refused
 
