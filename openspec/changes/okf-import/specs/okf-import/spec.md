@@ -78,7 +78,10 @@ segment (lowercase ASCII letters, digits and single hyphens), given by
 `--namespace`, which is required and has no default. A missing or invalid
 namespace MUST be refused as a usage error with a reason, before the foreign
 directory is read. A foreign document MUST NOT be placed at any path outside
-`imports/<namespace>/`.
+`imports/<namespace>/`. A foreign path with whitespace inside a segment MUST be
+refused with a reason naming the path, because no spelling of a link to such a
+name is read by every engine link reader, so the anchor could not list the
+document readably.
 
 #### Scenario: Nested structure is preserved under the namespace
 
@@ -107,6 +110,13 @@ directory is read. A foreign document MUST NOT be placed at any path outside
 - WHEN the foreign bundle is imported under `--namespace x`
 - THEN `bundle/concepts/foo.md` is byte-identical to before and
   `bundle/imports/x/concepts/foo.md` is the foreign document
+
+#### Scenario: A foreign name with whitespace is refused
+
+- GIVEN a foreign document at `My Note.md`, or under a directory `My Folder/`
+- WHEN the bundle is imported
+- THEN the import is refused with a reason naming that path and the workspace
+  is unchanged
 
 ### Requirement: Importing Into An Existing Namespace Is Refused
 
