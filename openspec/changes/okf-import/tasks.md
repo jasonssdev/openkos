@@ -362,16 +362,16 @@ Read-only references: `src/openkos/config.py` (read-only,
 `ENGINE_OWNED_RELATION_TYPES`), `src/openkos/bundle/index.py` (read-only,
 `sanitize_link_label`).
 
-- [ ] 3.1 [TEST] `fold_foreign_sensitivity(mapping) -> str | None` in
+- [x] 3.1 [TEST] `fold_foreign_sensitivity(mapping) -> str | None` in
   `tests/unit/model/test_okf_adopt.py`, one case each: absent -> `None`; explicit
   `null` -> `None`; `public`/`private`/`confidential` ranked; an unknown string
   (`secret`), a non-string (`3`, a list) -> `confidential`; a blank string ->
   `private` (rank rule). Presence is read through `lift_incoming_frontmatter`.
   RED: missing.
-- [ ] 3.2 [IMPL] `fold_foreign_sensitivity` in `src/openkos/model/okf.py`. GREEN
+- [x] 3.2 [IMPL] `fold_foreign_sensitivity` in `src/openkos/model/okf.py`. GREEN
   3.1. [MUT] treat `null` as present; treat unknown as `private`; skip the
   non-string branch; each RED.
-- [ ] 3.3 [TEST] The effective-label fold, run in a `default_sensitivity: public`
+- [x] 3.3 [TEST] The effective-label fold, run in a `default_sensitivity: public`
   workspace so a fail-closed `confidential` is distinguishable from the floor:
   absent takes the floor; foreign `public` in a `private` workspace stays
   `private`; foreign `confidential` raises; unknown and numeric fail closed;
@@ -382,17 +382,17 @@ Read-only references: `src/openkos/config.py` (read-only,
   empty mapping applies none, and the result equals what the ingest seam yields
   for the same inputs (call `config.type_birth_sensitivity` directly as the
   oracle). Never below `default_sensitivity`. RED: missing.
-- [ ] 3.4 [IMPL] Compose the fold as a pure helper in
+- [x] 3.4 [IMPL] Compose the fold as a pure helper in
   `src/openkos/model/okf.py` (floor via `combine_sensitivity`, foreign fold,
   `config.type_birth_sensitivity`). GREEN 3.3. [MUT] let `--sensitivity` replace
   the floor; skip the type offset; apply the offset to `Source`; drop the floor
   term; each RED. Revert, purge.
-- [ ] 3.5 [TEST] `namespaced_concept_id(target, prefix) -> str | None`: strips
+- [x] 3.5 [TEST] `namespaced_concept_id(target, prefix) -> str | None`: strips
   one leading `/` and one trailing `.md`, clamps dot segments at the root,
   prefixes `imports/<ns>/`, returns `None` for an empty target. RED: missing.
   [IMPL] implement; GREEN. [MUT] drop the dot clamp; strip two leading `/`;
   each RED.
-- [ ] 3.6 [TEST] The key-classification table, table-driven over EVERY row of
+- [x] 3.6 [TEST] The key-classification table, table-driven over EVERY row of
   design D4, with the moved values compared verbatim under
   `imported.frontmatter` and the adopted document's own `sensitivity`,
   `provenance: [<anchor id>]` and `sources: project_sources(provenance)` set by
@@ -410,15 +410,15 @@ Read-only references: `src/openkos/config.py` (read-only,
   `verified` is not verified. The `imported` block carries only `namespace`,
   `id` (NFC), `sha256` and `frontmatter`, never an absolute path or directory
   name. RED: `adopt_foreign_document` missing.
-- [ ] 3.7 [IMPL] `IMPORTED_KEY`, the classification, and
+- [x] 3.7 [IMPL] `IMPORTED_KEY`, the classification, and
   `adopt_foreign_document(doc, *, body, sensitivity, anchor_id, prefix) -> str`
   in `src/openkos/model/okf.py`. GREEN 3.6.
-- [ ] 3.8 [MUT] One per row class on its exact line: keep `provenance`; keep
+- [x] 3.8 [MUT] One per row class on its exact line: keep `provenance`; keep
   `status`; keep `generated`; keep a path `resource`; keep `extraction_status`;
   keep `origin_key`; stop moving `relations` of an engine-owned type; stamp a
   `generated`; leak a directory name into `imported`. Each turns a named 3.6
   case RED. Revert, purge.
-- [ ] 3.9 [TEST] `tests/unit/model/test_imported_key_guard.py`: (a) classification
+- [x] 3.9 [TEST] `tests/unit/model/test_imported_key_guard.py`: (a) classification
   totality — every engine key constant in `okf.py` (`*_KEY: Final`, plus the
   literal keys `status`, `generated`, `verified`, `version`, `timestamp`,
   `resource`, `sensitivity`, `provenance`) appears in exactly one row of the
@@ -431,14 +431,15 @@ Read-only references: `src/openkos/config.py` (read-only,
   imported document's `imported` block is not gap-filled into a local survivor
   (tested through the real union on two mappings). RED for (a) and (c); (b) is
   GREEN first and mutated next.
-- [ ] 3.10 [IMPL] Add `IMPORTED_KEY` to `_SPECIAL_KEYS` in
+- [x] 3.10 [IMPL] Add `IMPORTED_KEY` to `_SPECIAL_KEYS` in
   `src/openkos/model/okf.py`; edit `tests/unit/test_sources_key_guard.py` to add
-  `adopt_foreign_document` and `build_import_anchor` to
-  `_ALLOWED_PROVENANCE_WRITERS` (guard 2), a deliberate, reviewed edit.
+  `adopt_foreign_document` to `_ALLOWED_PROVENANCE_WRITERS` (guard 2), a
+  deliberate, reviewed edit. (`build_import_anchor` writes no `provenance`, so it
+  is deliberately not listed.)
   GREEN 3.9. [MUT] add a scratch reader of `IMPORTED_KEY` in another module and
   observe (b) RED; remove `IMPORTED_KEY` from `_SPECIAL_KEYS` and observe (c)
   RED; add an unclassified key constant and observe (a) RED. Revert, purge.
-- [ ] 3.11 [TEST] `build_import_anchor(*, namespace, label, entries,
+- [x] 3.11 [TEST] `build_import_anchor(*, namespace, label, entries,
   bundle_sha256, okf_version, generated) -> str` (design D6): `type: Source`,
   title `Import <ns> (<label>)`, `sensitivity: <label>`, `tags: [import]`,
   `freshness: snapshot`, `status: stable`, `version: 1`, `generated`, an
@@ -452,24 +453,25 @@ Read-only references: `src/openkos/config.py` (read-only,
   machine-local identifier appears anywhere in the text (assert with a sentinel
   path string). Two labels yield two anchors that list disjoint documents.
   RED: missing.
-- [ ] 3.12 [IMPL] `build_import_anchor` in `src/openkos/model/okf.py`. GREEN 3.11.
+- [x] 3.12 [IMPL] `build_import_anchor` in `src/openkos/model/okf.py`. GREEN 3.11.
   [MUT] let an anchor list a document of another label; add a `resource`; write
   the local path; skip the title sanitizer; each RED.
-- [ ] 3.13 [TEST] `adopted_violations(text, *, prefix, anchor_id, floor) ->
+- [x] 3.13 [TEST] `adopted_violations(text, *, prefix, anchor_id, floor) ->
   list[str]` over hand-made bad outputs, one violation each: a `relations`
   target outside `imports/<ns>/`; a provenance naming a foreign id or a wrong
   anchor; a label below the floor; a missing or non-recognized `sensitivity`; a
   surviving engine-read key at the top level; a good document returns `[]`.
   RED: missing.
-- [ ] 3.14 [IMPL] `adopted_violations`. GREEN 3.13. [MUT] drop each check; each
+- [x] 3.14 [IMPL] `adopted_violations`. GREEN 3.13. [MUT] drop each check; each
   RED. Revert, purge.
-- [ ] 3.15 [TEST] Seam check: every adopted text round-trips through
+- [x] 3.15 [TEST] Seam check: every adopted text round-trips through
   `okf.check_conformance` on a tmp bundle (non-empty `type`, parseable
   frontmatter), and `okf.py` remains the only module importing `yaml`
   (existing guard stays green).
-- [ ] 3.16 Run the five-command slice gate. All green; record observed results.
-- [ ] 3.17 Commit (`feat(okf): adopt foreign documents with an inert key and
-  per-label anchors`). Open PR 3 (`Refs`), CI green on a rebased branch.
+- [x] 3.16 Run the five-command slice gate. All green; record observed results.
+- [x] 3.17 Commit (`feat(okf): adopt foreign documents with an inert key and
+  per-label anchors`). Open PR 3 (`Refs`), CI green on a rebased branch. (Commits
+  done; opening the PR is left to the orchestrator.)
 
 ## Phase 4 — Slice 4: layout leaf and the plan/publish service (PR 4)
 

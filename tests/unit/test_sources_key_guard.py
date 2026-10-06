@@ -199,6 +199,11 @@ _ALLOWED_PROVENANCE_WRITERS = frozenset(
         # document written OUTSIDE the workspace, then re-projects `sources`
         # via `okf.refresh_sources` in the same function.
         "export_frontmatter",
+        # okf-import (#1314): re-points an adopted foreign document's
+        # `provenance` at its import anchor and re-projects `sources` from it;
+        # the foreign values are kept inert under `imported`. The anchor
+        # builder writes no `provenance`, so it is deliberately not listed.
+        "adopt_foreign_document",
     }
 )
 """Confirmed against `model/okf.py`'s actual code (task 3.20): the key name
