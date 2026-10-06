@@ -9,7 +9,7 @@
 
 OpenKOS turns your scattered text into a living, portable knowledge base your AI agents can actually use — compiled once, kept current, and stored as plain [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) files so it is never locked to any app, model, or vendor.
 
-> **Project status: alpha.** The Compiler, the Graph-and-Memory, the Ask Surface, and the Unattended Engine arcs (MVP 1 through MVP 4) are complete and shipped; The Quiet Engine arc, which cuts the decisions the engine asks of you, is complete too; interoperability (MVP 5) is in progress, with OKF export and import shipped. The API may still change between releases, but OpenKOS is published and installable now. Early contributors and feedback are welcome — see [Contributing](#contributing).
+> **Project status: alpha.** The Compiler, the Graph-and-Memory, the Ask Surface, and the Unattended Engine arcs (MVP 1 through MVP 4) are complete and shipped; The Quiet Engine arc, which cuts the decisions the engine asks of you, is complete too; and interoperability (MVP 5), OKF export and import, is complete. The desktop app (MVP 6) is next. The API may still change between releases, but OpenKOS is published and installable now. Early contributors and feedback are welcome — see [Contributing](#contributing).
 
 ---
 
@@ -150,7 +150,7 @@ OpenKOS ships in arcs, each usable on its own. Full detail in [`docs/roadmap.md`
 - **MVP 3 — The Ask Surface. (Complete.)** Reading the bundle already needs no terminal — it opens as an Obsidian vault as-is. This arc adds asking: application services for the read verbs and an MCP server (`query`, `get`, `navigate`, what is pending) gated on sensitivity, so a chat client you already have becomes the interface.
 - **MVP 4 — The Unattended Engine. (Complete.)** A foreground daemon runs scheduled maintenance and watches an inbox folder inside a call budget you set; it does the non-consequential work and queues the consequential decisions as pending work for you to review, instead of asking you to remember them. The workspace lock is held only for short commit phases, so a person and the daemon can share one workspace.
 - **The Quiet Engine (a named arc before MVP 5). (Complete.)** Fewer decisions per ingested source: concepts that already exist are attached to rather than forked, indexes stay fresh after unattended writes, and review becomes an after-the-fact digest with undo.
-- **MVP 5 — Interoperability.** Full OKF export, then import, so knowledge moves in and out of the wider ecosystem without losing its structure.
+- **MVP 5 — Interoperability. (Complete.)** Full OKF export, then import, so knowledge moves in and out of the wider ecosystem without losing its structure.
 - **MVP 6 — The Desktop App.** One installer and an icon, so a non-technical user can drop files in, ask, and settle the pending queue without a terminal; it brings a local API and a stable Python API with the app as its first client.
 
 Beyond that: extension points for third-party producers and consumers, memory projections, graph visualization, and federation — explored only after the MVPs prove out with real users.
