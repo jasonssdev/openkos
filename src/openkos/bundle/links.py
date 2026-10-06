@@ -34,9 +34,10 @@ verbatim across a rewrite, rather than discarded.
 import re
 from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Final
-from urllib.parse import unquote
+from typing import Final, Literal
+from urllib.parse import quote, unquote
 
 from openkos.model.okf import LinkRewrite
 
@@ -305,35 +306,82 @@ _FULL_REFERENCE_RE: Final = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\[([^\
 _SHORTCUT_REFERENCE_RE: Final = re.compile(r"!?\[([^\[\]^][^\[\]]*)\](?![\[(:])")
 
 
+@dataclass(frozen=True)
+class LinkTarget:
+    """How one markdown link destination resolves, in the frame of the
+    document that carries it (okf-import, #1314).
+
+    `kind` is `empty` (nothing), `anchor` (an in-page `#fragment` only),
+    `external` (a `scheme:` URL) or `path`. For a `path`: `path` is the
+    bundle-relative path with its suffix kept (`.md` or not), percent-escapes
+    decoded, dot segments removed per RFC 3986 section 5.2.4 and any `..`
+    above the root CLAMPED away (`escaped` records that one was); `absolute`
+    says the destination named the root (`/...`); `suffix` is the raw
+    `#fragment`. A `?query` stays part of the last segment, which is how
+    every engine reader sees it."""
+
+    kind: Literal["empty", "anchor", "external", "path"]
+    path: str = ""
+    suffix: str = ""
+    escaped: bool = False
+    absolute: bool = False
+
+
+def _strip_angle(target: str) -> str:
+    target = target.strip()
+    if target.startswith("<") and target.endswith(">"):
+        target = target[1:-1].strip()
+    return target
+
+
+def resolve_link_target(target: str, *, file_id: str) -> LinkTarget:
+    """Resolve the raw markdown link destination `target`, written in the
+    document `file_id`. A leading `/` is bundle-relative (any number of
+    them); anything else is relative to the document's own directory. The
+    one shared core of `_bundle_target_id` and of the import rewrite and its
+    proof."""
+    target = _strip_angle(target)
+    base, hash_mark, fragment = target.partition("#")
+    suffix = hash_mark + fragment
+    base = unquote(base)
+    if not base:
+        return LinkTarget("anchor" if suffix else "empty", suffix=suffix)
+    if _SCHEME_RE.match(base):
+        return LinkTarget("external", suffix=suffix)
+    absolute = base.startswith("/")
+    if absolute:
+        candidate = PurePosixPath(base.lstrip("/"))
+    else:
+        candidate = PurePosixPath(file_id).parent / base
+    parts: list[str] = []
+    escaped = False
+    for part in candidate.parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            else:
+                escaped = True
+        else:
+            parts.append(part)
+    return LinkTarget(
+        "path", "/".join(parts), suffix=suffix, escaped=escaped, absolute=absolute
+    )
+
+
 def _bundle_target_id(target: str, *, file_id: str) -> str | None:
     """The concept id a markdown link `target` in document `file_id` points
     at, or `None` when it points at nothing that could be a concept: an
     external `scheme:` URL, a pure `#anchor`, a path that is not `.md`, or a
     path that escapes the bundle root. A leading `/` is bundle-relative;
     anything else is relative to the document's own directory."""
-    target = target.strip()
-    if target.startswith("<") and target.endswith(">"):
-        target = target[1:-1].strip()
-    target = unquote(target.split("#", 1)[0])
-    if not target or _SCHEME_RE.match(target):
+    resolved = resolve_link_target(target, file_id=file_id)
+    if resolved.kind != "path" or resolved.escaped:
         return None
-    if target.startswith("/"):
-        candidate = PurePosixPath(target.lstrip("/"))
-    else:
-        candidate = PurePosixPath(file_id).parent / target
-    parts: list[str] = []
-    for part in candidate.parts:
-        if part in ("", "."):
-            continue
-        if part == "..":
-            if not parts:
-                return None
-            parts.pop()
-        else:
-            parts.append(part)
-    if not parts or not parts[-1].endswith(".md"):
+    if not resolved.path.endswith(".md"):
         return None
-    return "/".join(parts).removesuffix(".md")
+    return resolved.path.removesuffix(".md")
 
 
 def _withholds(target: str, *, file_id: str, exported: AbstractSet[str]) -> bool:
@@ -397,3 +445,308 @@ def withhold_links(body: str, *, file_id: str, exported: AbstractSet[str]) -> st
         out.append(line)
     result = "\n".join(out)
     return body if result == body else result
+
+
+# --- okf-import (#1314): rewrite a foreign body into its namespace -----------
+#
+# The engine has several independent link readers and they disagree: the
+# graph and `_LINK_RE` read absolute `.md` targets only (the graph across
+# lines, `_LINK_RE` per line), lint reads any target up to the first `)`
+# (spaces allowed, extension-less, no unquoting), `_bundle_target_id` unquotes
+# and `<>`-strips, and the index reader is root-relative. A rewriter built on
+# any ONE of them misses a form another resolves, and a missed form is a
+# foreign link resolving to an unrelated LOCAL document. Every reader needs
+# the two characters `](` (inline, image) or a definition `]:`, so the
+# rewrite anchors on the delimiter and scans the whole body, with no line
+# split and no fence mask; the proof then re-reads the OUTPUT the way each
+# reader does.
+
+_SITE_RE: Final = re.compile(r"\](?:\(|:)")
+"""A pointer-site delimiter: `](` opens an inline link or image destination,
+`]:` a reference definition's."""
+
+_TARGET_RUN_RE: Final = re.compile(r"[^)\s]*")
+_TARGET_RUN_NO_HASH_RE: Final = re.compile(r"[^)\s#]*")
+_LOOSE_DESTINATION_RE: Final = re.compile(r"\s*(<[^>]*>|[^)\s]+)")
+_LOOSE_DEFINITION_RE: Final = re.compile(r"\s*(<[^>]*>|\S+)")
+_HTML_ABSOLUTE_ATTRIBUTE_RE: Final = re.compile(
+    r"""\b(?:href|src)\s*=\s*["']?\s*/""", re.IGNORECASE
+)
+_PERCENT_ENCODED_CHARS_RE: Final = re.compile(r"[\s()<>\"\\#%\[\]\x00-\x1f]")
+
+
+@dataclass(frozen=True)
+class PointerSite:
+    """One place a markdown body points at something: `destination` is
+    `body[start:end]`, read as CommonMark reads it; `origin` is the index
+    just after the `](` / `]:` delimiter."""
+
+    kind: Literal["inline", "definition"]
+    origin: int
+    start: int
+    end: int
+    destination: str
+
+
+@dataclass(frozen=True)
+class NamespacedBody:
+    """A body rewritten into an import namespace: the new `text`, how many
+    destinations changed and how many of those were clamped from above the
+    foreign root, and whether the body carries a bundle-absolute raw HTML
+    `href`/`src` (left as written: no engine reader resolves it)."""
+
+    text: str
+    links_rewritten: int
+    links_clamped: int
+    html_links: bool
+
+
+def _skip_gap(body: str, pos: int) -> int:
+    """Skip spaces and tabs and at most one line ending (CommonMark)."""
+    size = len(body)
+    while pos < size and body[pos] in " \t":
+        pos += 1
+    if pos < size and body[pos] in "\r\n":
+        pos += 2 if body.startswith("\r\n", pos) else 1
+        while pos < size and body[pos] in " \t":
+            pos += 1
+    return pos
+
+
+def _read_destination(body: str, pos: int, *, inline: bool) -> int:
+    """The end of the destination starting at `pos`: `<...>` (no line ending,
+    no inner `<`), else a run of non-whitespace; for an inline link the run
+    holds balanced parentheses and ends at the unbalanced `)`."""
+    size = len(body)
+    if body.startswith("<", pos):
+        index = pos + 1
+        while index < size:
+            char = body[index]
+            if char == "\\" and index + 1 < size:
+                index += 2
+                continue
+            if char == ">":
+                return index + 1
+            if char in "<\r\n":
+                break
+            index += 1
+    depth = 0
+    index = pos
+    while index < size:
+        char = body[index]
+        if char == "\\" and index + 1 < size and not body[index + 1].isspace():
+            index += 2
+            continue
+        if char.isspace():
+            break
+        if inline:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+        index += 1
+    return index
+
+
+def _scan_sites(body: str) -> list[PointerSite]:
+    """Every delimiter of `body` with the destination CommonMark reads after
+    it, which may be empty."""
+    sites: list[PointerSite] = []
+    for match in _SITE_RE.finditer(body):
+        inline = match.group(0) == "]("
+        start = _skip_gap(body, match.end())
+        end = _read_destination(body, start, inline=inline)
+        sites.append(
+            PointerSite(
+                "inline" if inline else "definition",
+                match.end(),
+                start,
+                end,
+                body[start:end],
+            )
+        )
+    return sites
+
+
+def pointer_sites(body: str) -> list[PointerSite]:
+    """Every pointer site of `body`, in document order: each `](` (inline
+    link and image) and each definition `]:`. Anchored on the delimiter over
+    the WHOLE body: no line split and no fence mask, because lint and the
+    graph read links across lines and lint does not mask fences. A delimiter
+    with no destination is not a site (the proof still reads it: see
+    `namespace_link_violations`)."""
+    return [site for site in _scan_sites(body) if site.end > site.start]
+
+
+def _is_byte_preserving(inner: str) -> bool:
+    """Whether `/imports/<ns>` may be inserted before `inner` verbatim: a
+    single leading `/`, no percent-escape and no empty or dot segment."""
+    base = inner.partition("#")[0]
+    if not base.startswith("/") or base.startswith("//") or "%" in base:
+        return False
+    segments = base[1:].split("/")
+    if segments[-1] == "":
+        segments = segments[:-1]
+    return not any(segment in ("", ".", "..") for segment in segments)
+
+
+def _namespaced_destination(
+    destination: str, *, foreign_id: str, prefix: str
+) -> tuple[str, bool] | None:
+    """`(new destination, clamped)` for a destination that must change, or
+    `None` when it stays as written."""
+    angle = len(destination) >= 2 and destination[0] == "<" and destination[-1] == ">"
+    inner = destination[1:-1] if angle else destination
+    resolved = resolve_link_target(inner, file_id=foreign_id)
+    if resolved.kind != "path" or not (resolved.absolute or resolved.escaped):
+        return None
+    if resolved.absolute and not resolved.escaped and _is_byte_preserving(inner):
+        new_inner = f"/{prefix}{inner}"
+    else:
+        quoted = _PERCENT_ENCODED_CHARS_RE.sub(
+            lambda found: quote(found.group(), safe=""), resolved.path
+        )
+        new_inner = f"/{prefix}/{quoted}{resolved.suffix}"
+    return (f"<{new_inner}>" if angle else new_inner), resolved.escaped
+
+
+def rewrite_links_into_namespace(
+    body: str, *, foreign_id: str, prefix: str
+) -> NamespacedBody:
+    """`body`, the text of the foreign document `foreign_id`, with every
+    pointer that points into the foreign bundle rewritten to resolve to the
+    same document under `prefix` (`imports/<ns>`).
+
+    A destination that is empty, an `#anchor`, a `scheme:` URL or relative
+    and inside the foreign root is left as written. A relative one climbing
+    above the root is replaced by `/<prefix>/<path clamped per RFC 3986
+    section 5.2.4>`. An absolute one gets `/<prefix>` inserted byte for byte
+    when its path is canonical, otherwise it is replaced by the clamped,
+    re-quoted path. Fragment, query, title and every other byte are kept;
+    fenced and inline code are rewritten too (over-rewriting an example is
+    visible and harmless, leaving one out is not provable). Raw HTML
+    attributes and `[[wiki]]` links are not pointer sites."""
+    out: list[str] = []
+    cursor = 0
+    rewritten = 0
+    clamped = 0
+    for site in pointer_sites(body):
+        if site.start < cursor:
+            continue  # nested in an earlier destination: the proof judges it
+        changed = _namespaced_destination(
+            site.destination, foreign_id=foreign_id, prefix=prefix
+        )
+        if changed is None:
+            continue
+        new_destination, was_clamped = changed
+        out.append(body[cursor : site.start])
+        out.append(new_destination)
+        cursor = site.end
+        rewritten += 1
+        clamped += int(was_clamped)
+    out.append(body[cursor:])
+    return NamespacedBody(
+        "".join(out),
+        rewritten,
+        clamped,
+        _HTML_ABSOLUTE_ATTRIBUTE_RE.search(body) is not None,
+    )
+
+
+def _site_readings(body: str, site: PointerSite) -> list[str]:
+    """Every string some engine reader can take as the destination of
+    `site`."""
+    readings = [site.destination]  # CommonMark
+    if site.kind == "inline":
+        close = body.find(")", site.origin)
+        if close != -1:
+            first_paren = body[site.origin : close]  # lint, index: `[^)]+`
+            readings.append(first_paren)
+            titled = first_paren.split("#", 1)[0].strip()
+            if titled.endswith('"') and ' "' in titled:
+                readings.append(titled.rsplit(' "', 1)[0].strip())  # title strip
+        run = _TARGET_RUN_RE.match(body, site.origin)
+        if run is not None:
+            readings.append(run.group())  # reconciliation: `[^)\s]+`
+        run = _TARGET_RUN_NO_HASH_RE.match(body, site.origin)
+        if run is not None:
+            readings.append(run.group())  # graph, links: `[^)\s#]+`
+        loose = _LOOSE_DESTINATION_RE.match(body, site.origin)
+        if loose is not None:
+            readings.append(loose.group(1))  # `_INLINE_LINK_RE`
+    else:
+        loose = _LOOSE_DEFINITION_RE.match(body, site.origin)
+        if loose is not None:
+            readings.append(loose.group(1))  # `_REFERENCE_DEFINITION_RE`
+    return readings
+
+
+def _outside_namespace(
+    reading: str, *, concept_id: str, prefix: str, decode: bool, unangle: bool
+) -> str | None:
+    """Why `reading`, resolved from the document `concept_id` the way one
+    reader would, leaves `prefix`, or `None` when it stays inside (or points
+    at nothing: empty, an anchor, a `scheme:` URL)."""
+    target = reading.strip()
+    if unangle and target.startswith("<") and target.endswith(">"):
+        target = target[1:-1].strip()
+    target = target.split("#", 1)[0]
+    if decode:
+        target = unquote(target)
+    target = target.strip()
+    if not target or _SCHEME_RE.match(target):
+        return None
+    if target.startswith("/"):
+        candidate = PurePosixPath(target.lstrip("/"))
+    else:
+        candidate = PurePosixPath(concept_id).parent / target
+    parts: list[str] = []
+    for part in candidate.parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                return "climbs out of the bundle"
+            parts.pop()
+        else:
+            parts.append(part)
+    resolved = "/".join(parts)
+    if resolved == prefix or resolved.startswith(f"{prefix}/"):
+        return None
+    return f"resolves to `{resolved}`"
+
+
+def namespace_link_violations(body: str, *, concept_id: str, prefix: str) -> list[str]:
+    """The proof: every way a pointer of `body` (the adopted text of the
+    local document `concept_id`) can leave `prefix`, empty when none can.
+
+    Every pointer site of the OUTPUT is re-read in the LOCAL frame under
+    every reading an engine reader can take (CommonMark, up to the first
+    `)`, up to the first whitespace, after lint's ` "title"` strip), each
+    raw and percent-decoded, each with and without `<>` stripped. A
+    destination that is external, an anchor, empty, or a path under
+    `prefix/` passes; anything else (a link left at `/concepts/x.md`, a
+    relative link climbing out of the bundle) is a violation naming the
+    destination."""
+    violations: list[str] = []
+    for site in _scan_sites(body):
+        for reading in _site_readings(body, site):
+            for decode in (False, True):
+                for unangle in (False, True):
+                    why = _outside_namespace(
+                        reading,
+                        concept_id=concept_id,
+                        prefix=prefix,
+                        decode=decode,
+                        unangle=unangle,
+                    )
+                    if why is not None:
+                        message = (
+                            f"{concept_id}: `{reading.strip()}` {why}, "
+                            f"outside {prefix}/"
+                        )
+                        if message not in violations:
+                            violations.append(message)
+    return violations
