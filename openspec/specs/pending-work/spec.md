@@ -395,6 +395,15 @@ lists groups. The only payload fields read for
 this are a type name, an inbox path and an adjudication verdict -- names and
 a verdict, never proposal prose.
 
+When relation suggestions wait (open `relation_type` rows other than
+supersessions), `openkos pending` MUST say so on the line under its heading,
+with the count and `openkos curate --structure`, the command that reviews
+them, because `curate` does not present its Structure stage by default. A
+relation row's resolving command MUST be that command, except a supersession's,
+which is `openkos relate <newer> supersedes <older>`. The only extra payload
+field read for this is a relation row's suggested type, to tell a supersession
+from a suggestion.
+
 The identity and relation-type advisors keep at most a fixed number of
 candidates per run, and the queue records no truncation. A kind whose open
 rows reach that cap MUST be listed with a note that the cap is the per-run
@@ -407,3 +416,11 @@ candidate cap, so more may exist, naming the verb that reports the total
 - WHEN `openkos pending` runs
 - THEN it says the queue has not been computed, names how to compute it,
   and does not say nothing is pending
+
+#### Scenario: Waiting relation suggestions are counted and the command named
+
+- GIVEN one open relation suggestion and one open supersession
+- WHEN `openkos pending` runs
+- THEN the line under the heading reads `1 relation suggestion(s) waiting --
+  review them with `openkos curate --structure`.`
+- AND the suggestion's resolving command is `openkos curate --structure`
