@@ -18,7 +18,7 @@ import os
 import re
 import stat
 import unicodedata
-from collections.abc import Hashable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -32,6 +32,7 @@ import frontmatter
 import yaml
 
 from openkos import fsio
+from openkos.model.relations import ENGINE_OWNED_RELATION_TYPES
 from openkos.model.types import BUILDABLE_TYPES as _CONCEPT_TYPES
 
 OKF_VERSION: Final = "0.2"
@@ -2955,6 +2956,10 @@ def _union_frontmatter(
         EVENT_DATE_KEY,
         SOURCE_FRONTMATTER_KEY,
         STATUS_DERIVED_FROM_KEY,
+        # okf-import (design D8): an absorbed imported document's origin block
+        # must never fill a local survivor, where it would misstate the
+        # survivor's origin; it survives in the ledger snapshot.
+        IMPORTED_KEY,
     )
     for key, absorbed_value in absorbed_metadata.items():
         if key in _SPECIAL_KEYS:
@@ -4230,6 +4235,380 @@ def read_foreign_bundle(root: Path) -> ForeignBundle:
         manifest=tuple(sorted(manifest.items())),
         okf_version=okf_version,
     )
+
+
+# --- Foreign-document adoption (okf-import, ADR-0050, design D4-D6) ---------
+#
+# Pure functions over a `ForeignDocument` the reader already judged: the label
+# fold, the namespaced Concept ID, the total key classification, and the adopted
+# document. Foreign values are plain data (the guarded parser guarantees it) and
+# are only ever MOVED or KEPT here, never interpreted, so no foreign key can
+# reach a local consumer as a local fact by default.
+
+IMPORTED_KEY: Final = "imported"
+"""The one extension key (OKF §4.1) that holds every foreign value the engine
+would otherwise read as a local fact, verbatim, plus the origin: the namespace,
+the foreign Concept ID and a content digest. NO local consumer reads it: it is
+referenced only by `adopt_foreign_document`, `build_import_anchor`,
+`adopted_violations` and `_union_frontmatter`'s skip list (a test pins both)."""
+
+IMPORT_KEY_GROUPS: Final[Mapping[str, tuple[str, ...]]] = {
+    "keep": (
+        "type",
+        "title",
+        "description",
+        "tags",
+        "aliases",
+        "freshness",
+        EVENT_DATE_KEY,
+        TYPE_ALTERNATIVE_KEY,
+    ),
+    "replace": ("sensitivity",),
+    "inert": (
+        "provenance",
+        SOURCES_KEY,
+        "status",
+        "generated",
+        "verified",
+        "version",
+        "timestamp",
+        INGEST_PENDING_KEY,
+        EXTRACTION_STATUS_KEY,
+        EXTRACTION_NOTICE_KEY,
+        STATUS_DERIVED_FROM_KEY,
+        SOURCE_FRONTMATTER_KEY,
+        OKF_VERSION_KEY,
+    ),
+    "resource": ("resource",),
+    "relations": (RELATIONS_KEY,),
+    "drop": (ORIGIN_KEY_KEY, MERGED_FROM_KEY),
+    "nest": (IMPORTED_KEY,),
+}
+"""The total classification of every foreign frontmatter key the engine reads
+(design D4), one group per treatment. A key the engine does not read is not
+listed and is kept as written (§4.1). A guard test asserts every engine key
+constant in this module appears in exactly one group, so a key added to the
+engine later fails until it is classified rather than being trusted."""
+
+_IMPORT_TREATMENT: Final[Mapping[str, str]] = {
+    key: group for group, keys in IMPORT_KEY_GROUPS.items() for key in keys
+}
+
+_URL_SCHEME_RE: Final = re.compile(r"\A[A-Za-z][A-Za-z0-9+.-]*:")
+
+_NEVER_TYPE_DEFAULTED: Final = "Source"
+"""A Source is never type-defaulted (`type-sensitivity-defaults`): the type
+domain already refuses it in config, and the fold refuses it again here."""
+
+
+def import_key_treatment(key: str) -> str:
+    """The treatment group of a foreign frontmatter `key`; an unclassified key
+    is `keep` (kept as written, §4.1)."""
+    return _IMPORT_TREATMENT.get(key, "keep")
+
+
+def dropped_foreign_keys(mapping: Mapping[str, object]) -> tuple[str, ...]:
+    """The machine-local keys of `mapping` an import drops, sorted, so a preview
+    can report that they were dropped."""
+    return tuple(sorted(key for key in mapping if import_key_treatment(key) == "drop"))
+
+
+def fold_foreign_sensitivity(mapping: Mapping[str, object] | None) -> str | None:
+    """A foreign document's label as one canonical level, or `None` when it
+    contributes nothing (the key is absent or an explicit `null`, read through
+    `lift_incoming_frontmatter` exactly as ADR-0030 reads an ingested source).
+
+    A present value is ranked fail-closed: an unknown string or a non-string
+    folds to `confidential`, a blank string to `private`."""
+    lift = lift_incoming_frontmatter(mapping)
+    if not lift.sensitivity_present:
+        return None
+    return combine_sensitivity(lift.sensitivity, lift.sensitivity)
+
+
+def import_floor(default_sensitivity: object, flag: str | None) -> str:
+    """The lowest label an import may produce: the workspace default raised by
+    `--sensitivity` when given. The flag only raises, because it is combined
+    with the default rather than replacing it."""
+    return combine_sensitivity(default_sensitivity, flag or default_sensitivity)
+
+
+def effective_import_sensitivity(
+    mapping: Mapping[str, object] | None,
+    doc_type: str,
+    *,
+    default_sensitivity: object,
+    flag: str | None,
+    birth: Callable[[str, object], str],
+) -> str:
+    """The label an adopted document is written at (design D5): the high-water
+    mark of the floor and the folded foreign label, then the per-type birth
+    offset. `birth` is `config.type_birth_sensitivity` bound to the workspace
+    config (a callable, because `config` imports this module), so the ingest
+    seam's formula lives in exactly one place. Never below the default."""
+    floor = import_floor(default_sensitivity, flag)
+    foreign = fold_foreign_sensitivity(mapping)
+    base = floor if foreign is None else combine_sensitivity(floor, foreign)
+    if doc_type == _NEVER_TYPE_DEFAULTED:
+        return base
+    return birth(doc_type, base)
+
+
+def namespaced_concept_id(target: str, prefix: str) -> str | None:
+    """A foreign bundle-absolute Concept ID `target` moved under `prefix`
+    (`imports/<ns>`): one trailing `.md` stripped, empty and `.` segments
+    dropped (which also drops the leading `/`), `..` clamped at the root (never
+    escaping), then prefixed. `None` when nothing remains."""
+    segments: list[str] = []
+    for part in target.removesuffix(".md").split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if segments:
+                segments.pop()
+            continue
+        segments.append(part)
+    if not segments:
+        return None
+    return f"{prefix}/{'/'.join(segments)}"
+
+
+def _detached(value: object) -> object:
+    """`value` rebuilt so no container is shared: `copy.deepcopy` keeps a shared
+    list shared (its memo), and the YAML emitter would then write an anchor and
+    an alias that the guarded parser, and every later reader, refuses."""
+    if isinstance(value, dict):
+        return {key: _detached(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_detached(item) for item in value]
+    return value
+
+
+def _split_foreign_relations(
+    value: object, prefix: str
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """`(rewritten entries, inert)` for a foreign `relations:` value, where
+    `inert` is `{"relations": <what moved>}` or empty when nothing moved.
+
+    Ordinary entries are rewritten into the namespace; engine-owned entries (a
+    provenance claim) move verbatim. A value that does not decode (an explicit
+    `null` included), or an entry naming nothing, moves inert WHOLE."""
+    whole: dict[str, object] = {RELATIONS_KEY: value}
+    if not isinstance(value, list):
+        return [], whole
+    try:
+        decoded = decode_relations({RELATIONS_KEY: value})
+    except ValueError:
+        return [], whole
+    rewritten: list[Relation] = []
+    moved: list[object] = []
+    for raw, relation in zip(value, decoded, strict=True):
+        if relation.type in ENGINE_OWNED_RELATION_TYPES:
+            moved.append(raw)
+            continue
+        target = namespaced_concept_id(relation.target, prefix)
+        if target is None:
+            return [], whole
+        rewritten.append(Relation(target=target, type=relation.type))
+    return encode_relations(rewritten), ({RELATIONS_KEY: moved} if moved else {})
+
+
+def adopt_foreign_document(
+    doc: ForeignDocument,
+    *,
+    body: str,
+    sensitivity: str,
+    anchor_id: str,
+    prefix: str,
+) -> str:
+    """The text an adopted foreign document is written as (design D4).
+
+    `body` is already link-rewritten; `sensitivity` is the effective label;
+    `anchor_id` the anchor of that label; `prefix` is `imports/<ns>`. Every key
+    the engine reads moves verbatim under `IMPORTED_KEY`; machine-local keys are
+    dropped; the document's own `sensitivity`, `provenance` (the anchor) and
+    `sources` (re-projected from it, §5.1) are set here. No `generated` and no
+    `version` is stamped: the engine did not write this content."""
+    kept: dict[str, object] = {}
+    inert: dict[str, object] = {}
+    rewritten_relations: list[dict[str, object]] = []
+    for key, value in doc.mapping.items():
+        value = _detached(value)
+        treatment = import_key_treatment(key)
+        if treatment == "keep":
+            kept[key] = value
+        elif treatment == "drop":
+            continue
+        elif treatment == "resource":
+            if isinstance(value, str) and _URL_SCHEME_RE.match(value):
+                kept[key] = value
+            else:
+                inert[key] = value
+        elif treatment == "relations":
+            rewritten_relations, moved = _split_foreign_relations(value, prefix)
+            inert.update(moved)
+        else:
+            inert[key] = value
+
+    metadata: dict[str, object] = dict(kept)
+    metadata["sensitivity"] = sensitivity
+    metadata["provenance"] = [anchor_id]
+    metadata[SOURCES_KEY] = project_sources([anchor_id])
+    if rewritten_relations:
+        metadata[RELATIONS_KEY] = rewritten_relations
+    imported: dict[str, object] = {
+        "namespace": PurePosixPath(prefix).name,
+        "id": doc.foreign_id,
+        "sha256": doc.sha256,
+    }
+    if inert:
+        imported["frontmatter"] = inert
+    metadata[IMPORTED_KEY] = imported
+    return dump_frontmatter(metadata, body)
+
+
+@dataclass(frozen=True)
+class AnchorEntry:
+    """One adopted document as an import anchor lists it (design D6)."""
+
+    foreign_id: str
+    title: str
+    """The display label, ALREADY sanitized by the caller
+    (`bundle.index.sanitize_link_label`; the model layer cannot import it).
+    The builder refuses what that sanitizer would have rewritten."""
+    sha256: str
+    generated_by: str | None = None
+    """The document's foreign `generated.by`, when it carried one."""
+
+
+def import_bundle_digest(pairs: Iterable[tuple[str, str]]) -> str:
+    """sha256 over the sorted `<foreign id>\\t<sha256>\\n` lines of every adopted
+    document: the content identity an anchor records instead of any path."""
+    lines = "".join(f"{foreign_id}\t{digest}\n" for foreign_id, digest in sorted(pairs))
+    return hashlib.sha256(lines.encode("utf-8")).hexdigest()
+
+
+def build_import_anchor(
+    *,
+    namespace: str,
+    label: str,
+    entries: Sequence[AnchorEntry],
+    bundle_sha256: str,
+    okf_version: object | None,
+    generated: Generated,
+) -> str:
+    """The engine-written anchor Source for the documents imported at `label`
+    (design D6), one per effective label so no document is below-source at
+    export and the anchor only ever names documents at its own label.
+
+    It carries no `resource` and no local path: the origin is recorded by
+    content (`bundle_sha256` and the per-document digests) and by the namespace
+    the user chose. The body links every listed document, so the anchor is also
+    the namespace's catalog and lint finds no orphan."""
+    if label not in SENSITIVITY_ORDER:
+        raise ValueError(
+            f"anchor label must be one of {SENSITIVITY_ORDER}, got {label!r}"
+        )
+    if not entries:
+        raise ValueError("an import anchor needs at least one document")
+    bullets: list[str] = []
+    for entry in sorted(entries, key=lambda e: e.foreign_id):
+        if "\n" in entry.title or "\r" in entry.title:
+            raise ValueError("anchor title must not contain newlines")
+        if "[" in entry.title or "]" in entry.title:
+            raise ValueError("anchor title must be sanitized (no link delimiters)")
+        bullets.append(
+            f"- [{entry.title}](/imports/{namespace}/{entry.foreign_id}.md)"
+            f" \u2014 foreign id `{entry.foreign_id}`, sha256 `{entry.sha256}`"
+        )
+    title = f"Import {namespace} ({label})"
+    description = (
+        f"Engine-written anchor for the documents imported into "
+        f"imports/{namespace} at sensitivity {label}."
+    )
+    metadata: dict[str, object] = {
+        "type": "Source",
+        "title": title,
+        "description": description,
+        "generated": {"by": generated.by, "at": generated.at},
+        "status": "stable",
+        "version": 1,
+        "freshness": "snapshot",
+        "sensitivity": label,
+        "tags": ["import"],
+        IMPORTED_KEY: {
+            "role": "anchor",
+            "namespace": namespace,
+            "label": label,
+            "bundle_sha256": bundle_sha256,
+            "okf_version": okf_version,
+            "generated_by": sorted(
+                {e.generated_by for e in entries if e.generated_by is not None}
+            ),
+            "documents": len(entries),
+        },
+    }
+    body = f"# {title}\n\n{description}\n\n## Documents\n\n" + "\n".join(bullets) + "\n"
+    return dump_frontmatter(metadata, body)
+
+
+_ADOPTED_OWN_KEYS: Final = ("provenance", SOURCES_KEY)
+"""Engine-read keys an adopted document legitimately carries at the top level:
+the anchor citation and its §5.1 projection, both set by the adopt builder."""
+
+
+def adopted_violations(
+    text: str, *, prefix: str, anchor_id: str, floor: str
+) -> list[str]:
+    """Why the adopted `text` must not be written (empty when it is sound): the
+    proof of the frontmatter half, run on the final bytes, the way
+    `links.namespace_link_violations` proves the body half.
+
+    Checks a recognized `sensitivity` at or above `floor`; a `provenance` that
+    names exactly the anchor and no foreign id; no engine-read key left at the
+    top level (a path-shaped `resource` included); and every `relations` target
+    inside `prefix`. `text` is engine-written, so it is read with the ordinary
+    parser."""
+    try:
+        metadata, _ = load_frontmatter(text)
+    except FrontmatterError:
+        return ["frontmatter does not parse"]
+    problems: list[str] = []
+
+    sensitivity = metadata.get("sensitivity")
+    if not isinstance(sensitivity, str) or sensitivity not in SENSITIVITY_ORDER:
+        problems.append(
+            f"sensitivity {sensitivity!r} is missing or not a recognized level"
+        )
+    elif SENSITIVITY_ORDER.index(sensitivity) < _rank(floor):
+        problems.append(f"sensitivity {sensitivity!r} is below the floor {floor!r}")
+
+    if metadata.get("provenance") != [anchor_id]:
+        problems.append(f"provenance must name only the anchor {anchor_id!r}")
+
+    for key in metadata:
+        if (
+            import_key_treatment(key) in ("inert", "drop")
+            and key not in _ADOPTED_OWN_KEYS
+        ):
+            problems.append(f"engine-read key {key!r} survives at the top level")
+    resource = metadata.get("resource")
+    if resource is not None and not (
+        isinstance(resource, str) and _URL_SCHEME_RE.match(resource)
+    ):
+        problems.append(f"resource {resource!r} is not a URL and must stay inert")
+
+    try:
+        relations = decode_relations(metadata)
+    except ValueError as exc:
+        problems.append(f"relations do not decode: {exc}")
+    else:
+        problems.extend(
+            f"relations target {relation.target!r} is outside {prefix}/"
+            for relation in relations
+            if not relation.target.startswith(f"{prefix}/")
+        )
+    return problems
 
 
 @dataclass(frozen=True)
