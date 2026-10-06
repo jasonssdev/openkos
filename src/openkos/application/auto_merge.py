@@ -27,6 +27,7 @@ from openkos.application import lifecycle
 from openkos.application.ingest import ATTACH_EXCLUDED_TYPES
 from openkos.application.lock_wait import CommitSection
 from openkos.application.merge_service import merge_commit_paths
+from openkos.bundle import imports as bundle_imports
 from openkos.bundle import ledger as bundle_ledger
 from openkos.llm.base import BackendError, InstalledModel
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict, rubric_digest
@@ -76,7 +77,9 @@ MEASURED_MAX_GENERATION_TOKENS: Final = 8192
 
 def in_structural_class(group: CandidateGroup) -> bool:
     """Whether `group` is in the #1298 class. Structural only: no verdict, no
-    confidence, no file read. `cross_type_concern` and the stacked-body
+    confidence, no file read. A group with an imported member (a Concept ID
+    under `imports/`) is outside the measured population and never in class
+    (okf-import, D8). `cross_type_concern` and the stacked-body
     guardrail stay separate production checks (ADR-0034's eligibility), which
     the fixture self-test asserts for every labelled pair."""
     if group.tier is not Tier.HIGH or len(group.member_ids) != 2:
@@ -85,6 +88,8 @@ def in_structural_class(group: CandidateGroup) -> bool:
     if len(types) != 1 or types & ATTACH_EXCLUDED_TYPES:
         return False
     first, second = group.member_ids
+    if any(bundle_imports.is_imported_concept(m) for m in group.member_ids):
+        return False
     return is_suffix_family(first, second) or is_suffix_family(second, first)
 
 
