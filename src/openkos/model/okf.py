@@ -3911,7 +3911,10 @@ class ForeignDocument:
     mapping: Mapping[str, object]
     body: str
     sha256: str
-    """Digest of the file's bytes as read."""
+    """Digest of the file's RAW bytes as read (before any normalization)."""
+    line_endings_normalized: bool = False
+    """Whether the file used `\\r\\n` or a lone `\\r`; `mapping` and `body` are
+    always LF, because the adopted document is written fresh by the engine."""
 
 
 @dataclass(frozen=True)
@@ -3930,12 +3933,21 @@ class ForeignBundle:
     when the file is not a parsed frontmatter block."""
 
 
+def _normalize_line_endings(text: str) -> str:
+    """`\\r\\n` and a lone `\\r` to `\\n` (foreign documents only)."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def split_incoming_document(text: str) -> tuple[IncomingFrontmatter, str]:
     """Guarded parse of `text` plus a body that excludes exactly the block the
     parser judged (the SAME `frontmatter_block_end` rule). A single leading BOM
-    is stripped first. Never raises."""
+    is stripped first, then `\\r\\n` and a lone `\\r` become `\\n` so a CRLF-authored
+    bundle is read like its LF twin. This normalization is foreign-only:
+    `frontmatter_block_end` itself still compares to `"---"` exactly. Never
+    raises."""
     if text.startswith("\ufeff"):
         text = text[1:]
+    text = _normalize_line_endings(text)
     incoming = parse_incoming_frontmatter(text)
     lines = text.split("\n")
     end = frontmatter_block_end(lines)
@@ -4189,6 +4201,7 @@ def read_foreign_bundle(root: Path) -> ForeignBundle:
                 mapping=mapping,
                 body=body,
                 sha256=digest,
+                line_endings_normalized="\r" in text,
             )
         )
     return ForeignBundle(

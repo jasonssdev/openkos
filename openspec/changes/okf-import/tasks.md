@@ -240,6 +240,12 @@ and `frontmatter_block_end` (reused, not edited).
   derived-layer module.
 - [x] 1.18 Run the five-command slice gate (header). All green; record the
   observed results.
+- [x] 1.19a [TEST]/[IMPL]/[MUT] (parent review of slice 1) Foreign line
+  endings: `\r\n` and a lone `\r` become `\n` after the UTF-8 decode and BOM
+  strip, inside `split_incoming_document` only; `ForeignDocument` records
+  `line_endings_normalized`; the manifest digest stays over the raw bytes;
+  `frontmatter_block_end` is untouched. Commit
+  `fix(okf): normalize CRLF line endings in foreign bundle documents`.
 - [x] 1.19 Commit as work units (`feat(okf): add bounded foreign bundle reader`,
   `docs(sdd): add ADR-0050`). Open PR 1 (`Refs` the issue, name the change in
   prose). CI green on a branch up to date with `main`. (Commits done; opening

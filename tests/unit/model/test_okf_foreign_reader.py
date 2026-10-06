@@ -959,3 +959,62 @@ class TestGuardedParseOnly:
             assert not used & {"_parse_post", "load_frontmatter", "concept_metadata"}, (
                 name
             )
+
+
+# --- line endings (CRLF-authored bundles) -------------------------------------
+
+_LF_TEXT = "---\ntype: Concept\ntitle: T\ntags: [a]\n---\n# H\n\nline one\nline two\n"
+
+
+class TestLineEndings:
+    def test_a_crlf_document_matches_its_lf_twin(self, tree: Path) -> None:
+        raw = _LF_TEXT.replace("\n", "\r\n").encode()
+        _write(tree, "concepts/win.md", raw)
+        _write(tree, "concepts/unix.md", _LF_TEXT)
+        docs = {d.path: d for d in okf.read_foreign_bundle(tree).documents}
+        win, unix = docs["concepts/win.md"], docs["concepts/unix.md"]
+        assert win.mapping == unix.mapping
+        assert win.body == unix.body == "# H\n\nline one\nline two\n"
+        assert win.line_endings_normalized is True
+        assert unix.line_endings_normalized is False
+
+    def test_mixed_endings_are_normalized(self, tree: Path) -> None:
+        raw = b"---\r\ntype: Concept\n---\r\nbody\nmore\r\n"
+        _write(tree, "concepts/mixed.md", raw)
+        doc = next(
+            d for d in okf.read_foreign_bundle(tree).documents if "mixed" in d.path
+        )
+        assert doc.mapping == {"type": "Concept"}
+        assert doc.body == "body\nmore\n"
+        assert doc.line_endings_normalized is True
+
+    def test_a_lone_cr_is_a_line_ending(self, tree: Path) -> None:
+        _write(tree, "concepts/old.md", b"---\rtype: Concept\r---\rbody\rmore\r")
+        doc = next(
+            d for d in okf.read_foreign_bundle(tree).documents if "old" in d.path
+        )
+        assert doc.mapping == {"type": "Concept"}
+        assert doc.body == "body\nmore\n"
+
+    def test_the_digest_stays_over_the_raw_bytes(self, tree: Path) -> None:
+        raw = _LF_TEXT.replace("\n", "\r\n").encode()
+        _write(tree, "concepts/win.md", raw)
+        bundle = okf.read_foreign_bundle(tree)
+        digest = hashlib.sha256(raw).hexdigest()
+        assert dict(bundle.manifest)["concepts/win.md"] == digest
+        assert next(d for d in bundle.documents if "win" in d.path).sha256 == digest
+
+    def test_a_crlf_root_index_still_yields_its_version(self, tree: Path) -> None:
+        _write(tree, "index.md", b'---\r\nokf_version: "0.2"\r\n---\r\n')
+        assert okf.read_foreign_bundle(tree).okf_version == "0.2"
+
+    def test_split_normalizes_after_the_bom_strip(self) -> None:
+        incoming, body = okf.split_incoming_document(
+            "\ufeff---\r\ntype: A\r\n---\r\nb\r\n"
+        )
+        assert incoming.status == "parsed"
+        assert body == "b\n"
+
+    def test_the_shared_block_end_rule_is_unchanged(self) -> None:
+        """Foreign normalization must not leak into our own readers."""
+        assert okf.frontmatter_block_end(["---\r", "a: 1\r", "---\r"]) == 0
