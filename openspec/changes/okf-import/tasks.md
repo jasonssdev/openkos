@@ -265,7 +265,7 @@ Read-only references (the engine link readers the corpus is checked against):
 `tests/unit/bundle/test_export_pointers.py` (read-only, pins
 `_bundle_target_id` behavior).
 
-- [ ] 2.1 [TEST] Characterization first: run
+- [x] 2.1 [TEST] Characterization first: run
   `uv run pytest tests/unit/bundle/test_export_pointers.py -q` and record it
   GREEN as the baseline. Then in `tests/unit/bundle/test_links_namespace.py`,
   `links.resolve_link_target(target, *, file_id) -> LinkTarget` (kind `empty |
@@ -274,20 +274,20 @@ Read-only references (the engine link readers the corpus is checked against):
   absolute, relative inside, relative climbing above the foreign root (clamped,
   `escaped=True`), `//` network-path, dot segments, `%2F`, query and fragment kept.
   RED: function missing.
-- [ ] 2.2 [IMPL] Refactor the core of `_bundle_target_id` in
+- [x] 2.2 [IMPL] Refactor the core of `_bundle_target_id` in
   `src/openkos/bundle/links.py` into `resolve_link_target`; `_bundle_target_id`
   becomes a thin wrapper with unchanged behavior. GREEN 2.1 AND the 2.1
   baseline `test_export_pointers.py` stays GREEN unchanged.
-- [ ] 2.3 [MUT] Drop the dot-segment clamp; flip `escaped`; drop the scheme
+- [x] 2.3 [MUT] Drop the dot-segment clamp; flip `escaped`; drop the scheme
   check; make the wrapper diverge. Each must turn a named 2.1 case or an
   `test_export_pointers.py` case RED. Revert, purge.
-- [ ] 2.4 [TEST] The pointer-site scanner: every `](` (inline and image) and
+- [x] 2.4 [TEST] The pointer-site scanner: every `](` (inline and image) and
   every definition `]:` is a pointer site; the destination is read as CommonMark
   does (skip spaces and tabs and at most one line ending, then `<...>` or a run of
   non-whitespace with balanced parentheses for `](`); the fragment, query and
   optional title are kept byte for byte. Anchored on the delimiter, whole body,
   no line split, no fence mask. RED: missing.
-- [ ] 2.5 [TEST] `rewrite_links_into_namespace(body, *, foreign_id, prefix) ->
+- [x] 2.5 [TEST] `rewrite_links_into_namespace(body, *, foreign_id, prefix) ->
   NamespacedBody` corpus: a product of forms (inline, image, angle-bracket,
   titled, reference definition, multi-line label, spaced target, extension-less,
   `%2F`-encoded, `//`, dot segments, fragment, query, fenced code, inline code)
@@ -295,15 +295,17 @@ Read-only references (the engine link readers the corpus is checked against):
   external, anchor). Each case asserts the EXACT output bytes: empty, `#anchor`,
   `scheme:` unchanged; relative inside the root unchanged; relative escaping
   replaced by `/imports/<ns>/<clamped path>`; absolute gets `/imports/<ns>`
-  inserted byte-preserving when the raw path has no dot segment and no
+  inserted byte-preserving when the raw path has no dot segment, no empty
+  segment (a leading `//` included: the engine readers strip every leading
+  slash, so `//x.md` is replaced by the canonical `/imports/<ns>/x.md`) and no
   percent-escape, otherwise `/imports/<ns>/<quote(clamped path)>`; fenced and
   inline code rewritten too; raw HTML `href`/`src` and `[[wiki]]` links are not
   pointer sites and are left alone, with `html_link_documents` counted. Counts
   `links_rewritten` and `links_clamped` asserted. RED: missing.
-- [ ] 2.6 [IMPL] Implement the scanner and `rewrite_links_into_namespace` and
+- [x] 2.6 [IMPL] Implement the scanner and `rewrite_links_into_namespace` and
   the `LinkTarget` / `NamespacedBody` types in `src/openkos/bundle/links.py`,
   calling `resolve_link_target`. GREEN 2.4-2.5.
-- [ ] 2.7 [TEST] `namespace_link_violations(body, *, concept_id, prefix)` over
+- [x] 2.7 [TEST] `namespace_link_violations(body, *, concept_id, prefix)` over
   hand-made bad outputs, one violation each: a link left at `/concepts/x.md`;
   a relative link that climbs out of the bundle; an escaping `..` after the
   transform; a destination that resolves outside `imports/<ns>/` only under the
@@ -311,11 +313,11 @@ Read-only references (the engine link readers the corpus is checked against):
   only raw versus unquoted, and only after lint's ` "title"` strip. Every
   reading each recognizer can take is re-scanned in the local frame. RED:
   missing.
-- [ ] 2.8 [IMPL] Implement `namespace_link_violations`. GREEN 2.7. Then
+- [x] 2.8 [IMPL] Implement `namespace_link_violations`. GREEN 2.7. Then
   [MUT] drop each reading in turn (CommonMark end, first `)`, first whitespace,
   raw, unquoted, title strip); each must turn its named 2.7 case RED. Revert,
   purge.
-- [ ] 2.9 [TEST] Recognizer cross-check: for EVERY output in the 2.5 corpus, run
+- [x] 2.9 [TEST] Recognizer cross-check: for EVERY output in the 2.5 corpus, run
   each real engine recognizer — `links._LINK_RE`, `links._INLINE_LINK_RE` plus
   `_bundle_target_id`, `links._REFERENCE_DEFINITION_RE`,
   `graph/sqlite_graph.py::_LINK_RE`, `lint._LINK_RE` plus `lint.normalize_link`,
@@ -324,23 +326,24 @@ Read-only references (the engine link readers the corpus is checked against):
   escaping the bundle. Assert each patch/readers was actually exercised (a
   corpus of zero extractions would pass vacuously: assert a minimum extraction
   count per recognizer). Written GREEN on first run; mutate next.
-- [ ] 2.10 [MUT] Make the rewriter return the body unchanged and observe 2.5 and
+- [x] 2.10 [MUT] Make the rewriter return the body unchanged and observe 2.5 and
   2.9 RED; make it skip multi-line labels and observe the graph recognizer case
   RED; make it skip extension-less targets and observe the lint recognizer case
   RED; make it skip fenced code and observe the lint case RED. Revert, purge.
-- [ ] 2.11 [TEST] `tests/unit/bundle/test_link_recognizer_inventory.py`: scan
+- [x] 2.11 [TEST] `tests/unit/bundle/test_link_recognizer_inventory.py`: scan
   `src/openkos/**/*.py` for regex literals containing `\](` or `\]:` and assert
   the set equals the cross-checked list from 2.9, so a new link reader fails
   until it is added to the corpus check. Prove the scan is live: a synthetic
   source string with a new recognizer makes the comparison fail. Written GREEN
   first; mutate next.
-- [ ] 2.12 [MUT] Add a scratch regex literal with `\](` to a scratch module under
+- [x] 2.12 [MUT] Add a scratch regex literal with `\](` to a scratch module under
   `src/openkos/` and observe 2.11 RED; revert by inverse edit, purge.
-- [ ] 2.13 Run the five-command slice gate. All green; record observed results.
+- [x] 2.13 Run the five-command slice gate. All green; record observed results.
   Also `uv run pytest tests/unit/bundle -q` and the export tests
   (`uv run pytest tests/unit -q -k export`) unchanged.
-- [ ] 2.14 Commit (`feat(bundle): rewrite and prove links into an import
-  namespace`). Open PR 2 (`Refs`), CI green on a rebased branch.
+- [x] 2.14 Commit (`feat(bundle): rewrite and prove links into an import
+  namespace`). Open PR 2 (`Refs`), CI green on a rebased branch. (Commits
+  done; opening the PR is left to the orchestrator.)
 
 ## Phase 3 — Slice 3: frontmatter transform, inert key and anchors (PR 3)
 
