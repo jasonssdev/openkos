@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-10-07
+
+A maintenance release from the 0.5.2 end-to-end run. `purge` now erases the purged concept everywhere it can be named, `set-volatility` stops committing your own `openkos.yaml` edits, the lexical index matches singular and plural forms, meeting-style sources stop collapsing into a single Event, and the daemon reports what an attended `ingest` reports without re-paying for answers it already has. Run `openkos reindex` once per workspace after upgrading.
+
 ### Upgrading from 0.5.2
 
 - **Run `openkos reindex` once per existing workspace.** The lexical index now stems, so the stored `fts.db` was built under an older layout version. Until it is rebuilt, `openkos status`, `openkos next` and `openkos query` report the lexical index as stale, and `reindex` rebuilds it even though the bundle has not changed. The rebuild is free and local (no model call) and leaves the embeddings alone. New workspaces need nothing.
@@ -3616,7 +3620,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/jasonssdev/openkos/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/jasonssdev/openkos/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/jasonssdev/openkos/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jasonssdev/openkos/compare/v0.4.0...v0.5.0
