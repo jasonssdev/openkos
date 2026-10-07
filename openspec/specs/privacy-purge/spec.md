@@ -6,10 +6,13 @@
 `forget`: it whole-file-expunges a concept's source `raw/<name>` and bundle
 file from ALL git history (not just the working tree) via `git-filter-repo`.
 It is honest whole-file erasure, including whole-history content-scrub of
-`index.md` and `log.md`, with one named residual: a `.openkos/` directory
-that was committed into git history (the packaged `.gitignore` keeps it out
-of git, so this occurs only when a user overrides that). It does not claim
-complete right-to-be-forgotten. `purge` itself owns argument parsing, workspace and
+`index.md` and `log.md`, of commit messages and of other concepts' historical
+`relations:`, with named residuals: titles and prose (see the Whole-History
+Content-Scrub requirement for exactly what is and is not scrubbed), and a
+`.openkos/` directory that was committed into git history (the packaged
+`.gitignore` keeps it out of git, so this occurs only when a user overrides
+that). It erases the id completely; it does not claim to erase every mention
+of a title. `purge` itself owns argument parsing, workspace and
 configuration setup, the confirmation gate, rendering the "IRREVERSIBLE
 history rewrite" disclosure from the templates the lifecycle application
 service returns, byte-for-byte, and invoking `git-filter-repo`; purge-set
@@ -21,7 +24,9 @@ are composed by the lifecycle application service.
 This spec DOES define whole-history content-scrub: `purge` removes a
 purge-set member's catalog bullet, log entries, and any `forget` tombstone
 text from every historical commit's `bundle/index.md` and `bundle/log.md`
-blobs, and removes any live `forget` tombstone from `log.md`. What this spec
+blobs, rewrites commit messages, removes the purged id from other concepts'
+historical `relations:`, and removes any live `forget` tombstone from
+`log.md`. What this spec
 does not define is:
 
 - **The committed-`.openkos` (`fts.db`) leak vector.** A prior commit of
@@ -65,7 +70,9 @@ purge set.
 `purge` MUST evaluate the following rails in this exact order and refuse
 (exit non-zero, write nothing, no partial rewrite) at the FIRST rail that
 fails: (1) reference-aware refusal — any surviving inbound reference or
-unverifiable referrer outside the purge set, unless `--force`; (2) `git` or
+unverifiable referrer outside the purge set, unless `--force`, the refusal
+naming which concept holds each reference and whether it is a link or a
+typed relation (with its type); (2) `git` or
 `git-filter-repo` is not available; (3) workspace is not a git repository, or
 the workspace root is not the git repository root; (4) the working tree is
 dirty (uncommitted changes); (5) the local repo has commits present on ANY
@@ -333,46 +340,101 @@ failed DELETE is an erasure gap.
 
 After a successful rewrite, `purge` MUST content-scrub `bundle/index.md` and
 `bundle/log.md` across ALL git history (every past commit's blob of exactly
-these two files, and no other path) by removing, as FULL LINE removals, each
-purge-set member's catalog bullet, log entries, and any `forget` tombstone
-referencing it. Matching MUST use markdown link-identity (the same
-`_link_identity` used elsewhere), never a bare id-substring match. A line
-whose link-identity does NOT match a purge-set member — including a
-surviving sibling concept's catalog bullet or an unrelated log entry that
-merely mentions the purged id in prose — MUST be left byte-identical in every
-commit. The scrub MUST run in the SAME single `git-filter-repo` pass as the
-whole-file expunge (no second rewrite). Content outside `index.md`/`log.md`
-(e.g. a surviving concept's bundle body) MUST NOT be scrubbed even if it
-contains the purged id or title.
+these two files) by removing, as FULL LINE removals, each purge-set member's
+catalog bullet, log entries, and any `forget` tombstone referencing it.
+Matching MUST use markdown link-identity (the same `_link_identity` used
+elsewhere), never a bare id-substring match. In `index.md` a bullet matches
+on its FIRST link (its own concept). In `log.md` a line matches when ANY of
+its markdown links resolves to a purge-set member, or its `(id: <x>)` anchor
+equals one, because a `**Relate**`/`**Unrelate**` line names the relation's
+target as a later link. Dropping the whole line is intended: it also removes
+the audit line of a SURVIVING concept that merely links to the purged one
+(for example `**Ingest**: Extracted [Derived] ... from [Purged Source]`),
+because privacy takes precedence over keeping that line. A line none of whose
+links resolves to a purge-set member — including a surviving sibling
+concept's catalog bullet or a log entry that merely mentions the purged id in
+prose — MUST be left byte-identical in every commit. The scrub MUST run in the
+SAME single `git-filter-repo` pass as the whole-file expunge (no second
+rewrite).
+
+In that same pass `purge` MUST ALSO:
+
+- **Rewrite commit messages.** Replace every occurrence of a purge-set
+  member's id in every commit message with `[purged]`, leaving the rest of
+  the message. An id matches only on its own boundaries (never inside a
+  longer id such as `concepts/bee-keeper`); an id with no directory part
+  matches only as the final segment of a path.
+- **Scrub other concepts' historical `relations:`.** In every historical
+  version of every other `bundle/**.md` document (never `bundle/.state/`),
+  remove each `relations:` entry whose `target` is a purge-set member; a list
+  left empty loses its `relations:` key. Only the frontmatter `relations:`
+  block is touched. This applies only when the purge found no surviving
+  inbound reference. Under `--force` past a live reference the references are
+  left dangling by contract, and since the rewrite would also change the
+  current version, no `relations:` is rewritten.
+
+What is NOT scrubbed, and so what the claim "no trace" does and does not
+cover: a purge-set member's TITLE is removed only where a `log.md` line
+linking to it is dropped; titles are not removed from commit messages, from
+other concepts' bodies or prose in any version, or from `provenance`/
+`sources` frontmatter. Body links or text in other concepts' history that
+name the purged id are likewise left (a surviving concept's body MUST NOT be
+scrubbed even if it contains the purged id or title).
 
 #### Scenario: Purged concept is gone from index.md and log.md history
-- GIVEN a successful purge of concept `<id>` with title `<title>`
+- GIVEN a successful purge of concept `<id>`
 - WHEN every commit's `bundle/index.md` and `bundle/log.md` blobs are
   inspected after the rewrite
-- THEN neither `<id>` nor `<title>` appears in any commit's blob of either
-  file
+- THEN `<id>` appears in no commit's blob of either file, and neither does
+  `<title>` where it appeared only as link text on a dropped line
+
+#### Scenario: Relate and Unrelate lines naming the target are dropped
+- GIVEN `log.md` holds `**Relate**` and `**Unrelate**` lines from concept A to
+  the purged concept B, as B's id is their second link
+- WHEN B is purged
+- THEN neither line remains in the live `log.md` or in any historical blob
 
 #### Scenario: Surviving sibling and prose mention round-trip unchanged
 - GIVEN a purge-set member's catalog bullet exists alongside a surviving
   sibling concept's catalog bullet in `index.md`, and a `log.md` entry that
-  mentions the purge-set member's id only in prose (not as its own link)
+  mentions the purge-set member's id only in prose (not as a link)
 - WHEN the history scrub runs
 - THEN the sibling's catalog bullet and the prose-mention log entry are
   byte-identical, in every historical commit, to their pre-purge content
 
-#### Scenario: Scrub is scoped to index.md and log.md only
+#### Scenario: Commit messages are redacted on id boundaries
+- GIVEN commits whose messages read `relate a -> <id> (depends_on)`,
+  `note <id>-keeper` and `note my<id>`
+- WHEN `<id>` is purged
+- THEN the first reads `relate a -> [purged] (depends_on)` and the other two
+  are unchanged
+
+#### Scenario: Other concepts' historical relations lose the target
+- GIVEN concept A once held `relations:` entries to the purged B and to C
+- WHEN B is purged with no surviving inbound reference
+- THEN every historical version of A parses, keeps its entry to C, and has no
+  entry to B
+
+#### Scenario: --force leaves the live relation alone
+- GIVEN concept A still holds a `relations:` entry to B and `--force` is
+  passed
+- WHEN B is purged
+- THEN A's `relations:` entry to B is unchanged, as the documented dangling
+  reference
+
+#### Scenario: Scrub leaves bundle bodies alone
 - GIVEN a surviving concept's bundle body contains the purged id or title in
   its own text
 - WHEN the history scrub runs
-- THEN that bundle body's content is unchanged in every commit; only
-  `bundle/index.md` and `bundle/log.md` are rewritten
+- THEN that body is unchanged in every commit
 
 ### Requirement: Live log.md Tombstone Cleanup
 
 After a successful rewrite, `purge` MUST remove any LIVE `bundle/log.md`
 `forget` tombstone entry referencing a purge-set member, via a new
 `remove_log_entry` function mirroring `remove_index_entry`'s live-index
-cleanup, matched by the same link-identity rule.
+cleanup, matched by link-identity on ANY link of the line (as in the history
+scrub), so live `**Relate**`/`**Unrelate**` lines naming a member go too.
 
 #### Scenario: Prior forget tombstone removed from live log.md
 - GIVEN a concept was previously `forget`-ed (leaving a tombstone in the
@@ -389,8 +451,10 @@ bullet for every purge-set member (reusing `forget`'s own
 pointing at a concept absent from every commit. `purge` MUST NOT print any
 warning stating that purged content remains in `index.md`/`log.md` history,
 because the whole-history content-scrub requirement (above) removes it: after
-a successful purge, the purged id/title MUST NOT appear anywhere in
-`index.md` or `log.md`, in any commit, live or historical.
+a successful purge, the purged id MUST NOT appear in `index.md` or
+`log.md`, in any commit message, or in other concepts' `relations:`, in any
+commit, live or historical (titles: see the Whole-History Content-Scrub
+requirement for the exact limits).
 
 #### Scenario: Live index bullet is removed
 - GIVEN a successful purge of any scope
@@ -466,9 +530,10 @@ After a successful purge completes its live-tree cleanup (removal of the
 live `index.md` catalog bullet and any live `log.md` tombstone for every
 purge-set member), `purge` MUST commit the resulting live-tree state via
 the shared `_autocommit(root, paths, message)` helper, staging
-`bundle/index.md` and `bundle/log.md`, with commit message `openkos: purge
-<id>` (or `openkos: purge <id> (+N)` when the purge set contains additional
-cascaded members). This commit MUST run strictly after the live-tree
+`bundle/index.md` and `bundle/log.md`, with commit message `openkos: purge 1
+concept` (or `openkos: purge N concepts` when the purge set holds N members).
+The message MUST NOT name any purged id, since this commit survives the
+purge. This commit MUST run strictly after the live-tree
 cleanup and MUST leave the working tree clean.
 
 The commit step MUST be non-fatal: a git failure (workspace not a git
