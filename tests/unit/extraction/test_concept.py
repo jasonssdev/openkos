@@ -4670,6 +4670,112 @@ def test_sole_object_flag_defaults_to_false_on_an_empty_extraction() -> None:
     assert outcome.report.sole_object_restates_source is False
 
 
+# --- Date words in the ADDITIVE predicate (issue #1318) -------------------
+#
+# A meeting note's file stem carries its date as a number
+# (`2026-02-10-architecture-review`) and the model writes the same date as
+# words in the object's title (`Architecture review, 10 February`). Token
+# containment read those as two topics, so the #584/#642 re-ask never fired
+# on the collapse it exists for, and the judge was skipped on the sole
+# object. Measured (qwen3:8b, n = 15 per fixture): the same pipeline with date
+# tokens ignored left no run collapsed to one object on either
+# architecture-review fixture, against 6 of 15 and 8 of 15 before.
+
+_DATED_REVIEW_TITLE = "2026-02-10-architecture-review"
+
+_DATED_REVIEW_EVENT = (
+    '{"type": "Event", "title": "Architecture review, 10 February", '
+    '"description": "A review of the ingestion path.", "body": ""}'
+)
+
+_DATED_REVIEW_DECISION = (
+    '{"type": "Decision", "title": "Ingestion gets a dead-letter queue", '
+    '"description": "Parked messages are replayable.", "body": ""}'
+)
+
+
+def _sole_dated_result(title: str) -> "concept_mod.ExtractionResult":
+    return concept_mod.ExtractionResult(
+        type="Event", title=title, description="d", body=""
+    )
+
+
+def test_date_written_as_words_still_restates_a_date_stamped_source() -> None:
+    result = _sole_dated_result("Architecture review, 10 February")
+
+    assert concept_mod._restates_source_topic(result, source_title=_DATED_REVIEW_TITLE)
+
+
+def test_spanish_month_name_is_a_date_word_too() -> None:
+    result = _sole_dated_result("Revisión de arquitectura, 10 de febrero")
+
+    assert concept_mod._restates_source_topic(
+        result, source_title="2026-02-10-revisión-de-arquitectura"
+    )
+
+
+def test_a_title_made_only_of_date_words_restates_nothing() -> None:
+    """Folding the date away must not leave an empty token set that is
+    "contained" in everything: a bare date names no topic."""
+    result = _sole_dated_result("10 February")
+
+    assert not concept_mod._restates_source_topic(result, source_title="2026-02-10")
+
+
+def test_a_date_word_alone_does_not_make_two_titles_the_same_topic() -> None:
+    """Two meetings on the same day are not one topic: after the date is
+    folded away the remaining tokens still have to contain each other."""
+    result = _sole_dated_result("Budget planning, 10 February")
+
+    assert not concept_mod._restates_source_topic(
+        result, source_title=_DATED_REVIEW_TITLE
+    )
+
+
+def test_a_month_written_in_two_languages_is_still_the_same_topic() -> None:
+    """Here the month is the ONLY difference left once the digits are gone,
+    so only the month names carry the verdict."""
+    result = _sole_dated_result("Revision arquitectura, February")
+
+    assert concept_mod._restates_source_topic(
+        result, source_title="2026-febrero-revision-arquitectura"
+    )
+
+
+def test_digits_are_dropped_and_may_is_kept() -> None:
+    """`may` stays a token: dropping it would hide a real word."""
+    assert concept_mod._title_tokens("may 2026") == frozenset({"may"})
+
+
+def test_union_reasks_a_sole_object_titled_after_a_dated_source() -> None:
+    """The collapse #1318 measured, end to end: both passes return the one
+    Event, the title differs from the stem only by the date, and the re-ask
+    now fires and recovers the Decision the Event body only mentioned."""
+    llm = _SequencedLLM(
+        [
+            _array(_DATED_REVIEW_EVENT),
+            _array(_DATED_REVIEW_EVENT),
+            _array(_DATED_REVIEW_DECISION),
+            _keep_reply(
+                "Architecture review, 10 February",
+                "Ingestion gets a dead-letter queue",
+            ),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes from the review of the ingestion path. Decision: a dead-letter queue.",
+        source_title=_DATED_REVIEW_TITLE,
+        llm=llm,
+    )
+
+    assert outcome.report.reask_runs == 1
+    assert [r.title for r in outcome.objects] == [
+        "Architecture review, 10 February",
+        "Ingestion gets a dead-letter queue",
+    ]
+
+
 # --- Acronym/expansion in the ADDITIVE predicate (issue #586) -------------
 #
 # `MCP` and `Model Context Protocol` are the same subject, and the twin

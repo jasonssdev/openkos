@@ -622,7 +622,11 @@ object restates the TOPIC the source title names — its normalized title
 equals the source title, or one title's meaningful tokens are contained in
 the other's, WHATEVER its type — extraction MUST ask the model once more
 and MUST ADD whatever that second ask returns to the object already
-produced. The trigger MUST be evaluated on the final
+produced. Date tokens (all-digit tokens and full English or Spanish month
+names) MUST NOT count as meaningful tokens in that comparison, so a
+date-stamped file stem (`2026-02-10-architecture-review`) and the title the
+model writes for the same meeting (`Architecture review, 10 February`) are one
+topic; a title made only of date tokens names no topic. The trigger MUST be evaluated on the final
 merged, filtered list of the whole extraction (both the single-run and the
 union+judge path, chunked or not), never per run or per chunk: "the source
 returned exactly one object" is not a statement any slice can make.
@@ -770,6 +774,13 @@ produced, exactly as the selector judge's failure degrades.
 - WHEN extraction runs
 - THEN only the genuine subject is added, and no two written objects share
   one title
+
+#### Scenario: A date written two ways does not hide the restatement
+
+- GIVEN a source titled `2026-02-10-architecture-review` whose only object is
+  titled `Architecture review, 10 February`
+- WHEN extraction finishes
+- THEN the re-ask is spent exactly as for a title restated verbatim
 
 #### Scenario: An object that does not restate the title does not trigger a re-ask
 
