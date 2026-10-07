@@ -162,6 +162,66 @@ def test_build_index_empty_bundle_produces_empty_index(tmp_path: Path) -> None:
         assert idx.search("anything", limit=10) == []
 
 
+# --- stemming (#1333) ----------------------------------------------------
+
+
+def test_a_singular_term_matches_its_plural_through_the_real_query_path(
+    tmp_path: Path,
+) -> None:
+    """`hook` finds `Hooks` and `skills` finds `skill`: without stemming a
+    singular question never matched the plural concept lexically (#1333)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "hooks.md",
+        title="Hooks",
+        body="Hooks run shell commands.",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "skill.md",
+        title="Skill",
+        body="A skill packages instructions.",
+    )
+
+    with fts.build_index(bundle_dir) as idx:
+        singular = [h.concept_id for h in idx.search("hook")]
+        plural = [h.concept_id for h in idx.search("skills")]
+
+    assert singular == ["concepts/hooks"]
+    assert plural == ["concepts/skill"]
+
+
+def test_diacritics_are_still_folded_under_stemming(tmp_path: Path) -> None:
+    """The stemmer must wrap `unicode61`, not replace it: an accented Spanish
+    title is found by its unaccented spelling and the reverse."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "mvp.md",
+        title="Producto Mínimo Viable",
+        body="La máquina de cada persona.",
+    )
+
+    with fts.build_index(bundle_dir) as idx:
+        assert [h.concept_id for h in idx.search("minimo")] == ["concepts/mvp"]
+        assert [h.concept_id for h in idx.search("máquina")] == ["concepts/mvp"]
+        assert [h.concept_id for h in idx.search("maquina")] == ["concepts/mvp"]
+
+
+def test_a_spanish_exact_form_still_matches_itself(tmp_path: Path) -> None:
+    """An English stemmer mangles Spanish words, but it mangles the document
+    side and the query side identically, so an exact form keeps matching."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "fuentes.md",
+        title="Fuentes Inmutables",
+        body="Las fuentes inmutables nunca se reescriben.",
+    )
+
+    with fts.build_index(bundle_dir) as idx:
+        hits = [h.concept_id for h in idx.search("inmutables")]
+
+    assert hits == ["concepts/fuentes"]
+
+
 # --- Phase 3: content fields --------------------------------------------
 
 

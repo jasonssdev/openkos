@@ -79,7 +79,7 @@ from openkos.application import pending, pending_queue_report
 from openkos.model import okf
 from openkos.resolution import CandidateGroup, find_exact_title_groups
 from openkos.resolution.contradiction import is_high_confidence_finding
-from openkos.state import findings
+from openkos.state import findings, fts
 from openkos.state import pending_queue as pq
 from openkos.state.derived import stale_derived_stores
 from openkos.state.vectorstore import vector_store_is_empty
@@ -296,6 +296,7 @@ class BundleSignals:
                         ("fts", self._layout.fts_db_path),
                         ("graph", self._layout.graph_db_path),
                     ),
+                    {"fts": fts.SCHEMA_VERSION},
                 )
             except Exception:  # noqa: BLE001 -- an advisory never breaks its command
                 self._stale_indexes = ()

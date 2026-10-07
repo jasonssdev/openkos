@@ -188,6 +188,44 @@ def test_schema_version_change_rebuilds(tmp_path: Path) -> None:
     _assert_equals_rebuild(db, bundle, tmp_path)
 
 
+def test_a_stale_schema_version_rebuilds_even_when_the_bundle_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    """A tokenizer change ships as a schema bump, and the bundle's manifest
+    hash does not move with it -- so the "unchanged" short-circuit must not
+    keep an index built under the OLD tokenizer alive forever (#1333)."""
+    bundle, db = _bundle(tmp_path), tmp_path / ".openkos" / "fts.db"
+    fts.refresh_fts_index(db, bundle)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE meta SET value = '0' WHERE key = ?", (fts.SCHEMA_VERSION_KEY,))
+    conn.commit()
+    conn.close()
+
+    assert fts.refresh_fts_index(db, bundle) == "rebuilt"
+    assert fts.refresh_fts_index(db, bundle) == "unchanged"
+    versions = [
+        v
+        for k, v in _query(db, "SELECT key, value FROM meta")
+        if k == fts.SCHEMA_VERSION_KEY
+    ]
+    assert versions == [fts.SCHEMA_VERSION]
+
+
+def test_a_stale_schema_version_is_reported_stale(tmp_path: Path) -> None:
+    """`query`/`status` advise `reindex` for a store the next reindex would
+    rewrite, including one whose only difference is its schema version."""
+    bundle, db = _bundle(tmp_path), tmp_path / ".openkos" / "fts.db"
+    fts.refresh_fts_index(db, bundle)
+    expected = {"fts": fts.SCHEMA_VERSION}
+    assert derived.stale_derived_stores(bundle, [("fts", db)], expected) == ()
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE meta SET value = '0' WHERE key = ?", (fts.SCHEMA_VERSION_KEY,))
+    conn.commit()
+    conn.close()
+
+    assert derived.stale_derived_stores(bundle, [("fts", db)], expected) == ("fts",)
+
+
 def test_recorded_pairs_reproduce_the_manifest_hash(tmp_path: Path) -> None:
     bundle, db = _bundle(tmp_path), tmp_path / ".openkos" / "fts.db"
     fts.write_fts_index(db, bundle)

@@ -1912,6 +1912,68 @@ def test_confidential_concept_excluded_from_fts_hits_by_default(
         assert "confidential note" not in message["content"]
 
 
+def test_confidential_exclusion_is_counted_once_per_distinct_concept(
+    tmp_path: Path,
+) -> None:
+    """The excluded concept is counted, never named (#1334): an MCP client
+    must be able to learn the answer was computed without a withheld object.
+    A concept hit by BOTH channels is one object, not two; a deprecated hit
+    is not confidential and is not counted."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "open.md",
+        title="Open",
+        body="dichotomyzz private note",
+        sensitivity_value="private",
+    )
+    index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/secret", score=1.0),
+            fts.FtsHit(concept_id="concepts/open", score=0.5),
+        ]
+    )
+    store = _FakeVectorStore(hits=[VecHit(concept_id="concepts/secret", distance=0.1)])
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="private answer only"),
+        embedder=_FakeEmbedder(),
+        vector_store=store,
+        fts_index=index,
+    )
+
+    assert result.confidential_excluded_count == 1
+    assert result.fts_hit_count == 1
+
+
+def test_nothing_is_counted_when_confidential_is_included(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    index = _RecordingIndex(hits=[fts.FtsHit(concept_id="concepts/secret", score=1.0)])
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="answer"),
+        fts_index=index,
+        include_confidential=True,
+    )
+
+    assert result.confidential_excluded_count == 0
+
+
 def test_include_confidential_true_restores_the_only_match_and_skips_the_walk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3003,6 +3065,35 @@ def test_an_insufficient_context_refuses_before_synthesis(tmp_path: Path) -> Non
     assert result.answer != answer_mod.NO_MATCH
     assert "No matching concepts" not in result.answer
     assert result.answer == answer_mod.NO_ANSWER_IN_CONTEXT
+
+
+def test_a_refusal_carries_the_retrieved_set_in_fused_rank_order(
+    tmp_path: Path,
+) -> None:
+    """A refusal reports WHAT was retrieved, not only that it was refused (#1333).
+
+    `citations` stays empty on a refusal -- nothing is cited -- so the set the
+    check judged travels in its own field, carrying the concept id and title
+    of every block that entered the prompt.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _ScriptedLLM("NONE")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert result.no_match_cause == "insufficient_context"
+    assert result.citations == []
+    assert sorted((c.concept_id, c.title) for c in result.retrieved) == [
+        ("concepts/alpha", "Alpha"),
+        ("concepts/beta", "Beta"),
+    ]
+    assert [c.concept_id for c in result.retrieved] == result.context_ids
 
 
 def test_a_sufficient_context_proceeds_to_synthesis(tmp_path: Path) -> None:

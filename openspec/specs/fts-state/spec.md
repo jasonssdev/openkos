@@ -69,6 +69,29 @@ exactly one FTS5 row per document indexing that document's frontmatter
   document, each row's searchable text drawn from that document's title,
   description, tags, and body
 
+### Requirement: Index Terms Are Stemmed, With Diacritics Folded
+
+The FTS5 index MUST tokenize with the `porter` stemmer layered over
+`unicode61`, for the in-memory and the persisted index alike, so that a term
+and its regular inflection (`hook`, `hooks`) match each other whichever one
+the document or the query uses. Case folding and diacritic folding MUST be
+unchanged by the stemmer, and an exact form of a word in any language MUST
+still match itself, since the same tokenizer runs over the document and the
+query. A stored index recorded under a different `SCHEMA_VERSION` than the
+code's MUST NOT be treated as unchanged.
+
+#### Scenario: A singular term matches a plural title
+
+- GIVEN a concept titled `Hooks`
+- WHEN `search("hook")` runs
+- THEN the concept is returned
+
+#### Scenario: Diacritics remain folded
+
+- GIVEN a concept titled `Producto Mínimo Viable`
+- WHEN `search("minimo")` runs
+- THEN the concept is returned
+
 ### Requirement: Index Never Touches Disk
 
 Calling `build_index(bundle_dir)` directly (the in-memory library entry
