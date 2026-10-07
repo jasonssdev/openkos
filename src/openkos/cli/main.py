@@ -9456,6 +9456,9 @@ class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
             f"({summary.index_name}, {summary.log_name} updated)."
         )
 
+    def committed(self, sha: str) -> None:
+        _echo_commit_disclosure(sha, prefix="openkos unmerge: ")
+
     def unwind_planned(self, plan: unmerge_service.UnwindPlan) -> None:
         total = len(plan.steps)
         output.section_break()

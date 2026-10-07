@@ -75,9 +75,10 @@ class UnmergePolicy:
 class UnmergePorts:
     """The effects the service sequences but does not own."""
 
-    autocommit: Callable[[Path, Sequence[str], str], object]
+    autocommit: Callable[[Path, Sequence[str], str], str | None]
     """Best-effort commit of the listed workspace-relative paths; must never
-    raise for a git failure (it degrades to a warning)."""
+    raise for a git failure (it degrades to a warning). Returns the commit's
+    sha, or `None` when there is no commit to name (#1334 item 3)."""
 
     clock: Callable[[], datetime] = _utc_now
 
@@ -190,6 +191,11 @@ class UnmergeObserver:
 
     def restored(self, summary: UnmergeSummary) -> None:
         """One step's Phase B finished, before the commit."""
+
+    def committed(self, sha: str) -> None:
+        """One step's auto-commit landed as `sha`; never called when the
+        commit degraded, so an observer never names a commit that does not
+        exist."""
 
     def unwind_planned(self, plan: UnwindPlan) -> None:
         """The whole `--to` plan, shown before its single confirmation."""
@@ -547,7 +553,9 @@ def _unmerge_step(
             )
         )
 
-        ports.autocommit(
+        sha = ports.autocommit(
             root, result.committed_paths, f"openkos: unmerge {absorbed_canonical}"
         )
+        if sha is not None:
+            obs.committed(sha)
         ports.after_commit()

@@ -858,6 +858,29 @@ def test_merge_names_the_commit_and_the_way_back(
     )
 
 
+def test_unmerge_names_the_commit_and_the_way_back(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`unmerge` prints the sha it just committed and the revert command that
+    undoes it, like `merge` does (#1334 item 3)."""
+    _init_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    spec = _mk_unmerge(tmp_path)
+
+    result = runner.invoke(app, spec.success_args)
+
+    assert result.exit_code == 0, result.stderr
+    sha = _head_short_sha(tmp_path)
+    assert (
+        f"openkos unmerge: committed as {sha} -- `git revert {sha}` undoes it only while it is the latest commit."
+        in _lines(result.stdout)
+    )
+    assert result.stdout.index("openkos unmerge: restored") < result.stdout.index(
+        "openkos unmerge: committed as"
+    )
+
+
 def test_forget_commit_line_lands_after_its_success_line(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
@@ -877,7 +900,7 @@ def test_forget_commit_line_lands_after_its_success_line(
     )
 
 
-@pytest.mark.parametrize("verb_builder", [_mk_forget, _mk_merge])
+@pytest.mark.parametrize("verb_builder", [_mk_forget, _mk_merge, _mk_unmerge])
 def test_no_commit_line_when_autocommit_degraded(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
