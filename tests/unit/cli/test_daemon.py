@@ -1583,3 +1583,71 @@ def test_the_volatility_stage_still_queues_what_it_served(
         conn.close()
     assert model.calls == 1
     assert kinds == ["volatility"]
+
+
+# -- #1332: a tier the user already applied is never re-proposed ------------------
+
+
+def _apply_event_slow(root: Path) -> None:
+    cfg_path = root / "openkos.yaml"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8") + "\ntype_tiers:\n  Event: slow\n",
+        encoding="utf-8",
+    )
+
+
+def test_the_volatility_stage_does_not_propose_the_tier_already_applied(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Event's registry default is `static`; the workspace maps it to `slow`
+    and the model answers `slow`: nothing differs from the EFFECTIVE tier, so
+    no pending row exists."""
+    _apply_event_slow(root)
+    write_doc(
+        root, "events/b", {"type": "Event", "title": "B", "sensitivity": "private"}
+    )
+    model = _CountingModel()  # always answers "slow"
+    monkeypatch.setattr("openkos.cli.main._chat_client", lambda cfg, task=None: model)
+    monkeypatch.setattr(
+        "openkos.cli.main._resolve_local_exemption", lambda client, cfg: True
+    )
+    stage = next(
+        s for s in daemon_module.production_stages() if s.name == "suggest-volatility"
+    )
+
+    with _volatility_ctx(root) as ctx:
+        stage.run(ctx)
+
+    conn = sqlite3.connect(config.WorkspaceLayout(root).findings_db_path)
+    try:
+        kinds = [i.kind for i in pq.open_items(conn)]
+    finally:
+        conn.close()
+    assert model.calls == 1
+    assert kinds == []
+
+
+def test_changing_type_tiers_re_asks_the_type(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The effective tier is part of the prompt, so the cached answer to the
+    old question is not served for the new one."""
+    write_doc(
+        root, "events/b", {"type": "Event", "title": "B", "sensitivity": "private"}
+    )
+    model = _CountingModel()
+    monkeypatch.setattr("openkos.cli.main._chat_client", lambda cfg, task=None: model)
+    monkeypatch.setattr(
+        "openkos.cli.main._resolve_local_exemption", lambda client, cfg: True
+    )
+    stage = next(
+        s for s in daemon_module.production_stages() if s.name == "suggest-volatility"
+    )
+    with _volatility_ctx(root) as ctx:
+        stage.run(ctx)
+    _apply_event_slow(root)
+
+    with _volatility_ctx(root) as ctx:
+        stage.run(ctx)
+
+    assert model.calls == 2

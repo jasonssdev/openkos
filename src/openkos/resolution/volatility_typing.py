@@ -31,7 +31,7 @@ show the LLM -- one `llm.chat` call per type, never per concept.
 
 import hashlib
 import json
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -103,6 +103,18 @@ class ComputedTier:
     bodies, the rationale language and the rubric. Any change re-asks."""
     input_refs: tuple[str, ...]
     """The concept ids whose bodies the prompt carried."""
+
+
+def effective_tier(type_name: str, type_tiers: Mapping[str, str] | None = None) -> str:
+    """The tier a type is actually on: the workspace's `type_tiers` override when
+    it names a valid tier, else the registry default (`""` for an unregistered
+    type). A suggestion is only worth proposing when it differs from THIS, never
+    from the registry default alone (#1332): a tier the user already applied is
+    settled."""
+    override = (type_tiers or {}).get(type_name)
+    if override in types.VOLATILITY_TIERS:
+        return str(override)
+    return types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, "")
 
 
 def prompt_digest(messages: list[Message]) -> str:
@@ -331,6 +343,7 @@ def _plan_questions(
     rationale_language: str | None,
     skip_types: Collection[str],
     served: Callable[[str, str], TierSuggestion | None] | None,
+    type_tiers: Mapping[str, str] | None,
 ) -> tuple[list[_Planned], int]:
     """Every question this run would put to the model, in sorted-type order,
     each with the answer `served` already holds for it (or `None`), plus the
@@ -362,7 +375,7 @@ def _plan_questions(
         if not type_docs:
             continue
         bodies = [doc.body[:M_TRUNCATE_CHARS] for doc in type_docs]
-        current_default = types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, "")
+        current_default = effective_tier(type_name, type_tiers)
         messages = _build_messages(
             type_name,
             current_default,
@@ -383,6 +396,7 @@ def unanswered_type_count(
     rationale_language: str | None = None,
     skip_types: Collection[str] = (),
     served: Callable[[str, str], TierSuggestion | None] | None = None,
+    type_tiers: Mapping[str, str] | None = None,
 ) -> int:
     """How many chat calls a run with these arguments would issue: the types
     whose exact prompt neither `skip_types` nor `served` already answers. The
@@ -394,6 +408,7 @@ def unanswered_type_count(
         rationale_language=rationale_language,
         skip_types=skip_types,
         served=served,
+        type_tiers=type_tiers,
     )
     return sum(1 for *_rest, hit in planned if hit is None)
 
@@ -409,6 +424,7 @@ def suggest_volatility(
     max_calls: int | None = None,
     skip_types: Collection[str] = (),
     served: Callable[[str, str], TierSuggestion | None] | None = None,
+    type_tiers: Mapping[str, str] | None = None,
 ) -> TierSuggestionBatch:
     """Suggest a volatility tier + rationale for every distinct concept TYPE
     present under `bundle_dir`, read-only.
@@ -497,7 +513,14 @@ def suggest_volatility(
     prompt was already answered: a hit lands in `results` like a fresh answer
     but costs no call, does not spend `max_calls`, does not fire `on_progress`
     and does not count toward its `total`. `None` -- the default -- asks every
-    type, byte-identical to before."""
+    type, byte-identical to before.
+
+    `type_tiers` (#1332) is the workspace's override map: a type's CURRENT tier
+    -- what the prompt names and what `TierSuggestion.current_default` carries --
+    is `effective_tier`, so a suggestion equal to a tier the user already applied
+    is not a change. Because it is in the prompt it is also in the cache key:
+    changing `type_tiers` re-asks the type. `None` -- the default -- is the
+    registry default, byte-identical to before."""
     planned, sampled_count = _plan_questions(
         bundle_dir,
         include_confidential=include_confidential,
@@ -505,6 +528,7 @@ def suggest_volatility(
         rationale_language=rationale_language,
         skip_types=skip_types,
         served=served,
+        type_tiers=type_tiers,
     )
     results: list[TierSuggestion] = []
     computed: dict[str, ComputedTier] = {}
@@ -538,7 +562,7 @@ def suggest_volatility(
         suggested_tier, rationale = _parse_reply(reply)
         suggestion = TierSuggestion(
             type_name=type_name,
-            current_default=types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, ""),
+            current_default=effective_tier(type_name, type_tiers),
             suggested_tier=suggested_tier,
             rationale=rationale,
         )

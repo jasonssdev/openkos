@@ -607,3 +607,57 @@ def test_a_no_change_answer_is_not_asked_again_by_the_next_curate(
     assert second.exit_code == 0, second.stderr
     assert asked_first == 1
     assert model.calls == 1
+
+
+class _VolatileModel(_TierModel):
+    def chat(self, messages: object) -> str:
+        self.calls += 1
+        return '{"tier": "volatile", "rationale": "churns"}'
+
+
+def test_curate_does_not_propose_the_tier_the_workspace_already_applied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concept's registry default is `slow`; the workspace maps it to
+    `volatile`, and the model agrees. That is settled: no proposal."""
+    _workspace(tmp_path, monkeypatch)
+    config_path = tmp_path / "openkos.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "\ntype_tiers:\n  Concept: volatile\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
+    )
+    model = _VolatileModel()
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: model)
+    _answer(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 0, result.stderr
+    assert model.calls == 1
+    assert "[volatile] Concept" not in result.stdout
+    assert "Metadata: applied 0, skipped 0." in result.stdout.splitlines()
+
+
+def test_a_volatility_row_is_stale_once_the_effective_tier_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row was computed against Concept's registry default; once the
+    workspace maps Concept elsewhere the row answers a question nobody asks."""
+    from openkos.application import curate_queue
+
+    _workspace(tmp_path, monkeypatch)
+    _volatility_row(tmp_path)
+    layout = _layout(tmp_path)
+    assert set(curate_queue.volatility_suggestions(layout)) == {"Concept"}
+
+    config_path = tmp_path / "openkos.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + "\ntype_tiers:\n  Concept: static\n",
+        encoding="utf-8",
+    )
+
+    assert curate_queue.volatility_suggestions(layout) == {}

@@ -39,7 +39,7 @@ from openkos.resolution.contradiction import (
 )
 from openkos.resolution.contradiction import Verdict as ContradictionKind
 from openkos.resolution.edge_typing import EdgeSuggestion
-from openkos.resolution.volatility_typing import TierSuggestion
+from openkos.resolution.volatility_typing import TierSuggestion, effective_tier
 from openkos.state import derived
 from openkos.state import pending_queue as pq
 
@@ -207,7 +207,12 @@ def volatility_suggestions(
     layout: config.WorkspaceLayout,
 ) -> dict[str, TierSuggestion]:
     """Fresh open volatility rows, keyed on type. A row is fresh while the
-    default it was computed against is still the type's default."""
+    tier it was computed against is still the type's EFFECTIVE tier (the
+    workspace's `type_tiers` override, else the registry default)."""
+    try:
+        type_tiers = config.read_config(layout.root).type_tiers
+    except (OSError, ValueError):
+        type_tiers = {}
     served: dict[str, TierSuggestion] = {}
     for row in read_open_rows(layout, "volatility"):
         payload = row.payload
@@ -222,7 +227,7 @@ def volatility_suggestions(
             and isinstance(rationale, str)
         ):
             continue
-        if default != types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, ""):
+        if default != effective_tier(type_name, type_tiers):
             continue
         if tier not in types.VOLATILITY_TIERS:
             continue

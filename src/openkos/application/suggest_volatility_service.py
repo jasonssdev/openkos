@@ -24,7 +24,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -98,7 +98,9 @@ class VolatilityPorts:
 
 
 def cached_answers(
-    layout: config.WorkspaceLayout, model: str
+    layout: config.WorkspaceLayout,
+    model: str,
+    type_tiers: Mapping[str, str] | None = None,
 ) -> Callable[[str, str], TierSuggestion | None]:
     """The `served` lookup over `findings.db`: the answer already held for
     `(type, prompt digest)` under `model`, or `None`. Fail-open: a missing or
@@ -125,7 +127,7 @@ def cached_answers(
             return None
         return TierSuggestion(
             type_name=type_name,
-            current_default=types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, ""),
+            current_default=volatility_typing.effective_tier(type_name, type_tiers),
             suggested_tier=row.suggested_tier,
             rationale=row.rationale,
         )
@@ -242,8 +244,13 @@ def suggest_volatility_tiers(
     bound: dict[str, object] = (
         {} if request.max_calls is None else {"max_calls": request.max_calls}
     )
+    if cfg.type_tiers:
+        # Forwarded only when the workspace overrides a tier, so a workspace
+        # without overrides reaches the port with exactly the arguments it
+        # always had.
+        bound["type_tiers"] = cfg.type_tiers
     if request.use_cache:
-        bound["served"] = cached_answers(layout, task_model)
+        bound["served"] = cached_answers(layout, task_model, cfg.type_tiers)
     try:
         batch = ports.suggest_volatility(
             layout.bundle_dir,

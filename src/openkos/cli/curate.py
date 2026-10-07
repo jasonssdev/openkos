@@ -2365,7 +2365,9 @@ def _volatility_cache(
 ) -> Callable[[str, str], TierSuggestion | None]:
     """The answers already held for this run's exact prompts (#1332)."""
     return volatility_service.cached_answers(
-        ctx.layout, config.resolve_task_model(ctx.cfg, "volatility_typing")
+        ctx.layout,
+        config.resolve_task_model(ctx.cfg, "volatility_typing"),
+        ctx.cfg.type_tiers,
     )
 
 
@@ -2406,6 +2408,7 @@ def _metadata_probe(ctx: CurateContext) -> StageProbe:
         rationale_language=ctx.cfg.rationale_language,
         skip_types=frozenset(row_served),
         served=_volatility_cache(ctx),
+        type_tiers=ctx.cfg.type_tiers,
     )
     llm_calls = min(llm_calls, len(type_names) - len(row_served))
     return StageProbe(
@@ -2459,6 +2462,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         llm=llm,
         skip_types=frozenset(row_served),
         served=_volatility_cache(ctx),
+        type_tiers=ctx.cfg.type_tiers,
         include_confidential=ctx.include_confidential,
         local_exemption=ctx.local_exemption,
         # #812, the other half of the pair -- see `_structure_run`'s note.
@@ -2471,8 +2475,15 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         batch,
         commit_section=cli_main._commit_section_for(ctx.root),
     )
+    # A suggestion equal to the tier the type is already on is settled, not a
+    # proposal (#1332): accepting it would rewrite nothing.
     results: Sequence[TierSuggestion] = sorted(
-        [*row_served.values(), *batch.results], key=lambda r: r.type_name
+        (
+            r
+            for r in [*row_served.values(), *batch.results]
+            if r.suggested_tier is None or r.suggested_tier != r.current_default
+        ),
+        key=lambda r: r.type_name,
     )
     curate_queue.enqueue_volatility(
         ctx.layout,

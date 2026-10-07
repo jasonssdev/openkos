@@ -109,3 +109,43 @@ own textual output is not required to be deterministic.
 - GIVEN the same bundle is used for two separate `suggest-volatility` runs
 - WHEN the per-type concept bodies are selected and passed to the LLM
 - THEN the set and order of sampled bodies is identical across both runs
+
+### Requirement: A Suggestion Is Judged Against The Effective Tier
+
+A type's current tier MUST be its EFFECTIVE tier: the workspace's `type_tiers`
+entry when it names a valid tier, otherwise the registry default. The prompt
+MUST name that tier, and a suggestion equal to it MUST NOT be proposed -- no
+pending-work row is enqueued for it and `curate` does not offer it -- because a
+tier the user already applied is settled.
+
+#### Scenario: An applied tier is not proposed again
+
+- GIVEN `Event` defaults to `static` and `type_tiers` maps `Event` to `slow`
+- WHEN the model suggests `slow` for `Event`
+- THEN no `volatility` pending-work row exists for `Event`
+- AND `curate` offers no tier change for `Event`
+
+### Requirement: Answered Questions Are Cached, Not Queued
+
+When run by the daemon or by `curate`, every non-degraded answer MUST be kept in
+`.openkos/findings.db`, keyed on the exact prompt sent and the model, so an
+unchanged type is not asked again. Only a suggestion that differs from the
+effective tier becomes a pending-work row; a "keep the current tier" answer is
+cached and never queued, because it names nothing for a person to act on. A
+degraded answer MUST NOT be cached. A change to the sampled bodies, the
+effective tier, the rationale language or the model MUST re-ask the type. The
+standalone `suggest-volatility` verb remains read-only and does not read or
+write the cache. `forget` MUST remove cached answers whose prompt carried a
+forgotten concept.
+
+#### Scenario: An unchanged bundle costs no model call
+
+- GIVEN a maintenance pass has already answered every type
+- WHEN the next pass runs over an unchanged bundle
+- THEN the model is asked nothing
+
+#### Scenario: Changing type_tiers re-asks the type
+
+- GIVEN a type's answer is cached
+- WHEN `type_tiers` changes that type's effective tier
+- THEN the type is asked again

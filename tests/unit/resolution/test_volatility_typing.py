@@ -1061,3 +1061,43 @@ def test_unanswered_type_count_is_the_exact_call_price(tmp_path: Path) -> None:
         )
         == 0
     )
+
+
+def test_the_effective_tier_replaces_the_registry_default(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Event", title="A")
+    llm = _FakeLLM(replies=[_valid_reply("slow")])
+
+    batch = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=llm, type_tiers={"Event": "slow"}
+    )
+
+    assert batch.results[0].current_default == "slow"
+    assert "slow" in llm.calls[0][1]["content"]
+
+
+def test_the_effective_tier_is_part_of_the_cache_key(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Event", title="A")
+    plain = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=_FakeLLM(replies=[_valid_reply()])
+    ).computed["Event"]
+    applied = volatility_typing_mod.suggest_volatility(
+        tmp_path,
+        llm=_FakeLLM(replies=[_valid_reply()]),
+        type_tiers={"Event": "slow"},
+    ).computed["Event"]
+
+    assert plain.prompt_digest != applied.prompt_digest
+
+
+def test_an_invalid_override_falls_back_to_the_registry_default(
+    tmp_path: Path,
+) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Event", title="A")
+
+    batch = volatility_typing_mod.suggest_volatility(
+        tmp_path,
+        llm=_FakeLLM(replies=[_valid_reply()]),
+        type_tiers={"Event": "not-a-tier"},
+    )
+
+    assert batch.results[0].current_default == types.TYPE_TO_DEFAULT_VOLATILITY["Event"]
