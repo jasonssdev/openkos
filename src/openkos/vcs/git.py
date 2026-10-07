@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import tempfile
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
 # The exact bytes to write to a fresh workspace's `.gitignore` (Slice 1,
@@ -676,6 +676,171 @@ def commit_paths(cwd: Path, rel_paths: Sequence[str], message: str) -> str | Non
     if sha_result.returncode != 0:
         return None
     return sha_result.stdout.strip() or None
+
+
+def _run_bytes(
+    argv: Sequence[str],
+    cwd: Path,
+    env: Mapping[str, str] | None = None,
+    stdin: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """`_run` for byte-exact payloads (file content in and out): text mode
+    would translate CRLF, and a config file may be CRLF at rest."""
+    try:
+        return subprocess.run(  # noqa: S603
+            list(argv),
+            cwd=cwd,
+            env=dict(env) if env is not None else None,
+            input=stdin,
+            capture_output=True,
+            check=False,
+            timeout=_COMMIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitError(f"{argv[0]} timed out after {_COMMIT_TIMEOUT_SECONDS}") from exc
+    except FileNotFoundError as exc:
+        raise GitUnavailable(f"{argv[0]} not found on PATH") from exc
+    except OSError as exc:
+        raise GitError(f"failed to invoke {argv[0]}: {exc}") from exc
+
+
+def head_file_bytes(cwd: Path, rel_path: str) -> bytes | None:
+    """The bytes of `rel_path` at `HEAD`, or `None` when `HEAD` has no such
+    file (unborn `HEAD`, or the path is untracked)."""
+    env = {**os.environ, "GIT_LITERAL_PATHSPECS": "1"}
+    result = _run_bytes(["git", "show", f"HEAD:{rel_path}"], cwd=cwd, env=env)
+    return result.stdout if result.returncode == 0 else None
+
+
+def _write_blob(cwd: Path, content: bytes, env: Mapping[str, str]) -> str:
+    result = _run_bytes(
+        ["git", "hash-object", "-w", "--no-filters", "--stdin"],
+        cwd=cwd,
+        env=env,
+        stdin=content,
+    )
+    if result.returncode != 0:
+        raise GitError(f"git hash-object failed: {result.stderr.decode().strip()}")
+    return result.stdout.decode().strip()
+
+
+def commit_transformed_file(
+    cwd: Path,
+    rel_path: str,
+    transform: Callable[[bytes], bytes],
+    message: str,
+) -> str | None:
+    """Commit `transform(<rel_path as committed at HEAD>)` as `rel_path`,
+    leaving the working tree file exactly as it is (#1330).
+
+    A verb that rewrites a file the user may have hand-edited must commit
+    ONLY its own change: `commit_paths` stages the working-tree content, so
+    an uncommitted edit would ride into a commit titled for another change,
+    and the `git revert` printed as its undo would revert the edit too.
+
+    The commit is built in a TEMPORARY index (`GIT_INDEX_FILE`) seeded from
+    `HEAD` with one entry replaced by the transformed blob, then made by a
+    plain `git commit` -- so hooks, `commit.gpgsign` and the rest of the
+    user's commit configuration apply as they do for `commit_paths`. Nothing
+    but the object database and the temporary index is written before the
+    commit, and the working tree is never touched, so a crash at any point
+    cannot lose a user's edit. Files the user staged are not in the
+    temporary index, so they are not swept in.
+
+    Afterwards the REAL index is brought in line with the new `HEAD`,
+    otherwise `git status` would show a staged revert of the change just
+    committed: an entry still equal to the old `HEAD` blob becomes the new
+    blob; an entry the user staged edits to gets `transform` applied too (and
+    is left alone if that fails). Returns the abbreviated sha, or `None` when
+    the commit landed but its name could not be read back. Raises `GitError`
+    when `rel_path` is not at `HEAD`, `transform` raises `ValueError`, the
+    transform changes nothing, or git fails."""
+    env = {**os.environ, "GIT_LITERAL_PATHSPECS": "1", "GIT_TERMINAL_PROMPT": "0"}
+    tree = _run(
+        ["git", "ls-tree", "HEAD", "--", rel_path],
+        cwd=cwd,
+        env=env,
+        timeout=_COMMIT_TIMEOUT_SECONDS,
+    )
+    fields = tree.stdout.split("	")[0].split()
+    if tree.returncode != 0 or len(fields) != 3:
+        raise GitError(f"{rel_path} is not committed at HEAD")
+    mode, _, old_blob = fields
+    head_bytes = head_file_bytes(cwd, rel_path)
+    if head_bytes is None:
+        raise GitError(f"could not read {rel_path} at HEAD")
+    try:
+        new_bytes = transform(head_bytes)
+    except ValueError as exc:
+        raise GitError(str(exc)) from exc
+    if new_bytes == head_bytes:
+        raise GitError("git commit failed: nothing to commit")
+
+    new_blob = _write_blob(cwd, new_bytes, env)
+    with tempfile.TemporaryDirectory(prefix="openkos-index-") as tmp:
+        tmp_env = {**env, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        for argv in (
+            ["git", "read-tree", "HEAD"],
+            ["git", "update-index", "--cacheinfo", f"{mode},{new_blob},{rel_path}"],
+        ):
+            res = _run(argv, cwd=cwd, env=tmp_env, timeout=_COMMIT_TIMEOUT_SECONDS)
+            if res.returncode != 0:
+                raise GitError(f"{argv[1]} failed: {res.stderr.strip()}")
+        commit = _run(
+            ["git", "commit", "-m", message],
+            cwd=cwd,
+            env=tmp_env,
+            timeout=_COMMIT_TIMEOUT_SECONDS,
+        )
+        if commit.returncode != 0:
+            raise GitError(f"git commit failed: {commit.stderr.strip()}")
+
+    _sync_real_index(cwd, rel_path, mode, old_blob, new_blob, transform, env)
+    try:
+        sha_result = _run(["git", "rev-parse", "--short", "HEAD"], cwd=cwd)
+    except GitError:
+        return None
+    if sha_result.returncode != 0:
+        return None
+    return sha_result.stdout.strip() or None
+
+
+def _sync_real_index(
+    cwd: Path,
+    rel_path: str,
+    mode: str,
+    old_blob: str,
+    new_blob: str,
+    transform: Callable[[bytes], bytes],
+    env: Mapping[str, str],
+) -> None:
+    """Best-effort: make the real index agree with the commit just made (see
+    `commit_transformed_file`). The commit already landed, so any failure
+    here is silent -- the worst outcome is a stale-looking `git status`."""
+    try:
+        staged = _run(
+            ["git", "ls-files", "-s", "--", rel_path],
+            cwd=cwd,
+            env=env,
+            timeout=_COMMIT_TIMEOUT_SECONDS,
+        ).stdout.split()
+        if len(staged) < 2:
+            return  # not in the real index: nothing to reconcile
+        if staged[1] == old_blob:
+            target = new_blob
+        else:
+            shown = _run_bytes(["git", "show", f":{rel_path}"], cwd=cwd, env=env)
+            if shown.returncode != 0:
+                return
+            target = _write_blob(cwd, transform(shown.stdout), env)
+        _run(
+            ["git", "update-index", "--cacheinfo", f"{mode},{target},{rel_path}"],
+            cwd=cwd,
+            env=env,
+            timeout=_COMMIT_TIMEOUT_SECONDS,
+        )
+    except (GitError, ValueError):
+        return
 
 
 def paths_dirty(cwd: Path, rel_paths: Sequence[str]) -> bool:

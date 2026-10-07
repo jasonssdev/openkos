@@ -1510,6 +1510,108 @@ def _autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
     return sha
 
 
+@dataclass(frozen=True)
+class _ConfigCommitPlan:
+    """How a config-rewriting verb's commit is made when `openkos.yaml`
+    already carries uncommitted edits (#1330): `apply` is the verb's own
+    change as a function of the file's bytes, applied to the COMMITTED
+    version so the user's edits stay out of the commit."""
+
+    apply: Callable[[bytes], bytes]
+
+
+def _plan_config_commit(
+    root: Path,
+    verb: str,
+    concept_type: str,
+    tier: str,
+    baseline: bytes,
+) -> _ConfigCommitPlan | None:
+    """Before `set-volatility` writes (#1330): `None` when `openkos.yaml` is
+    clean (or there is no committed version, or no git), so the ordinary
+    path-scoped commit is correct. Otherwise the file carries uncommitted
+    edits that `git add -- openkos.yaml` would sweep into a commit titled for
+    another change -- and whose printed `git revert` would undo them -- so
+    return a plan that commits the change applied to the committed version.
+
+    Refuses (exit 1, nothing written) when the change cannot be applied
+    cleanly to the committed version: the user's edit touches the very
+    `type_tiers` entry this verb sets, or the committed file is not one
+    `set_type_tier` can edit."""
+    try:
+        if not vcs_git.paths_dirty(root, ["openkos.yaml"]):
+            return None
+        head = vcs_git.head_file_bytes(root, "openkos.yaml")
+    except vcs_git.GitError:
+        return None
+    if head is None:
+        return None
+
+    def apply(content: bytes) -> bytes:
+        text = content.decode("utf-8")
+        return config.set_type_tier(text, concept_type, tier).encode("utf-8")
+
+    try:
+        same_entry = config.type_tier_entry(
+            head.decode("utf-8"), concept_type
+        ) == config.type_tier_entry(baseline.decode("utf-8"), concept_type)
+        apply(head)
+    except ValueError:
+        same_entry = False
+    if not same_entry:
+        typer.echo(
+            f"openkos {verb}: refusing to write -- openkos.yaml has "
+            f"uncommitted changes to the {concept_type!r} tier entry (or a "
+            "shape this command cannot edit in the committed version), so "
+            "the change cannot be committed on its own; commit or stash "
+            "them, then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return _ConfigCommitPlan(apply=apply)
+
+
+def _autocommit_config_edit(
+    root: Path, message: str, plan: _ConfigCommitPlan | None = None
+) -> str | None:
+    """`_autocommit` for a verb that rewrote `openkos.yaml`.
+
+    Skips the commit when it would hold nothing (#1330): re-applying the tier
+    a config already holds leaves the tree clean, and `git commit` then
+    fails with an empty reason that `_autocommit` reports as a WARNING about
+    a failure that did not happen. With a `plan`, the commit holds only the
+    verb's own change over the committed file (`commit_transformed_file`),
+    leaving the user's uncommitted edits in the working tree; a degradation
+    is reported exactly as `_autocommit` reports it."""
+    if plan is None:
+        try:
+            if not vcs_git.paths_dirty(root, ["openkos.yaml"]):
+                return None
+        except vcs_git.GitError:
+            pass  # let `_autocommit` report the real condition
+        return _autocommit(root, ["openkos.yaml"], message)
+    if not vcs_git.has_git_identity(root):
+        typer.echo(
+            "openkos: WARNING -- git identity unset; skipped auto-commit "
+            "(writes are on disk).",
+            err=True,
+        )
+        return None
+    try:
+        return vcs_git.commit_transformed_file(
+            root, "openkos.yaml", plan.apply, message
+        )
+    except (vcs_git.GitError, OSError) as exc:
+        if str(exc).endswith("nothing to commit"):
+            return None  # the committed file already holds this tier
+        typer.echo(
+            f"openkos: WARNING -- auto-commit did not complete ({exc}); "
+            "run `git status` to inspect.",
+            err=True,
+        )
+        return None
+
+
 @app.command(
     help=(
         "Create a new OpenKOS workspace in the current directory, with its "
@@ -8709,6 +8811,9 @@ def set_volatility_cmd(
         _reject_drifted_targets(
             layout, {layout.config_path: prepared.config_bytes}, "set-volatility"
         )
+        config_commit = _plan_config_commit(
+            root, "set-volatility", concept_type, tier, prepared.config_bytes
+        )
 
         try:
             application_lifecycle.set_volatility_core(layout.config_path, prepared)
@@ -8724,10 +8829,10 @@ def set_volatility_cmd(
             f"{layout.config_path.name}."
         )
 
-        _autocommit(
+        _autocommit_config_edit(
             root,
-            ["openkos.yaml"],
             f"openkos: set-volatility {concept_type} -> {tier}",
+            config_commit,
         )
 
 
