@@ -74,14 +74,14 @@ jobs:
   # 3.12 is the declared floor, 3.14 is the current release. Ubuntu only for now.
   #
   # This is the one job with a longer timeout than the others. The full suite
-  # under coverage takes 2-8 minutes depending on the runner, and a slow 3.12
-  # runner was cancelled at 98% under the old 10-minute limit: that is a failure
-  # that says nothing about the code. The limit exists to stop a hung test, and
-  # twice the slowest observed run still does that.
+  # under coverage takes 10-18 minutes depending on the runner and interpreter,
+  # and slow 3.12 runners were cancelled under earlier 10- and 20-minute limits:
+  # a failure that says nothing about the code. The limit exists to stop a hung
+  # test, and 30 minutes still does that with headroom over the slowest run.
   test:
     name: test (${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       # Report every interpreter even when one fails. The difference between
       # "3.14 alone is red" and "all are red" is the whole reason the matrix
