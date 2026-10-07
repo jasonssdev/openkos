@@ -549,6 +549,15 @@ class AnswerResult:
     list pairs: fail closed. Defaults empty via `default_factory`, so
     every short-circuit return above (and every existing caller that never
     reads this field) stays valid."""
+    retrieved: list[Citation] = field(default_factory=list)
+    """The concepts whose blocks entered the prompt, in fused-rank order, on a
+    sufficiency REFUSAL only (#1333); `[]` on every other result.
+
+    `citations` is empty on a refusal, since nothing was cited, which left the
+    operator unable to tell a bundle that lacks the concept from a retrieval
+    that missed it. This is the set the sufficiency check judged -- the same
+    blocks, index-aligned with `context_ids`. Not populated on an answered
+    call, where `citations` already says what the answer drew on."""
 
 
 def _bound_bodies(
@@ -1512,6 +1521,7 @@ def answer(
             dense_degraded=dense_degraded,
             sufficiency_degraded=sufficiency_degraded,
             context_block_count=len(context_blocks),
+            retrieved=list(citations),
             excerpted_titles=excerpted_titles,
             omitted_titles=omitted_titles,
             history_truncated_titles=history_truncated_titles,

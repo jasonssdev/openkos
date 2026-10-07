@@ -3005,6 +3005,35 @@ def test_an_insufficient_context_refuses_before_synthesis(tmp_path: Path) -> Non
     assert result.answer == answer_mod.NO_ANSWER_IN_CONTEXT
 
 
+def test_a_refusal_carries_the_retrieved_set_in_fused_rank_order(
+    tmp_path: Path,
+) -> None:
+    """A refusal reports WHAT was retrieved, not only that it was refused (#1333).
+
+    `citations` stays empty on a refusal -- nothing is cited -- so the set the
+    check judged travels in its own field, carrying the concept id and title
+    of every block that entered the prompt.
+    """
+    bundle_dir = _bundle_with_two(tmp_path)
+    llm = _ScriptedLLM("NONE")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert result.no_match_cause == "insufficient_context"
+    assert result.citations == []
+    assert sorted((c.concept_id, c.title) for c in result.retrieved) == [
+        ("concepts/alpha", "Alpha"),
+        ("concepts/beta", "Beta"),
+    ]
+    assert [c.concept_id for c in result.retrieved] == result.context_ids
+
+
 def test_a_sufficient_context_proceeds_to_synthesis(tmp_path: Path) -> None:
     """A quotation from the check lets the answer through, unchanged."""
     bundle_dir = _bundle_with_two(tmp_path)

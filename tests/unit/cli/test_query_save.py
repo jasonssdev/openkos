@@ -2721,6 +2721,58 @@ def test_the_disclosure_is_asked_about_the_question_being_filed(
     assert seen["bundle_dir"] == tmp_path / "bundle"
 
 
+def test_a_refusal_lists_what_was_retrieved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal names the retrieved set so the user can tell a missing
+    concept from a wrongly refused one (#1333)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=2,
+        llm_invoked=False,
+        no_match_cause="insufficient_context",
+        skip_notices=[],
+        fused_count=2,
+        context_block_count=2,
+        retrieved=[
+            Citation(concept_id="concepts/hooks", title="Hooks", excerpted=True),
+            Citation(concept_id="concepts/skills", title="Skills", confidential=True),
+        ],
+    )
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "difference between a hook and a skill?"])
+
+    assert result.exit_code == 0
+    assert "does not cover it" in result.stdout
+    assert "Retrieved:" in result.stdout
+    assert "  → concepts/hooks (Hooks) [partial]" in result.stdout
+    assert "  → concepts/skills (Skills) [confidential]" in result.stdout
+    assert "Citations:" not in result.stdout
+
+
+def test_a_refusal_without_a_retrieved_set_prints_no_retrieved_header(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    fake = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=0,
+        llm_invoked=False,
+        no_match_cause="zero_hits",
+        skip_notices=[],
+    )
+    monkeypatch.setattr("openkos.application.query.answer", lambda *a, **k: fake)
+
+    result = runner.invoke(app, ["query", "anything"])
+
+    assert result.exit_code == 0
+    assert "Retrieved:" not in result.stdout
+
+
 def test_a_sufficiency_refusal_reports_the_llm_as_refused_not_skipped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

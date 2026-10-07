@@ -14354,6 +14354,18 @@ def query(
             result.no_match_cause, result.fused_count
         ).splitlines():
             output.echo_wrapped(line, hanging="  ")
+        if result.retrieved:
+            # #1333: a refusal cites nothing, so without this the operator
+            # cannot tell a bundle that lacks the concept from a retrieval
+            # that missed it. Same row shape as `Citations:` below.
+            typer.echo()
+            typer.echo("Retrieved:")
+            for retrieved in result.retrieved:
+                partial = " [partial]" if retrieved.excerpted else ""
+                marker = " [confidential]" if retrieved.confidential else ""
+                typer.echo(
+                    f"  → {retrieved.concept_id} ({retrieved.title}){partial}{marker}"
+                )
         return
 
     typer.echo(result.answer)

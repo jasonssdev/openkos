@@ -273,6 +273,10 @@ whether the context contains an answer — and MUST return
 returned `answer` text MUST NOT claim that no concepts matched, since
 concepts were retrieved and read; it states that matching concepts were found
 but none answers the question, distinct from the zero-hit no-match text.
+A refusal MUST also carry the retrieved set: `retrieved` lists one `Citation`
+for every block that entered the prompt, in fused-rank order, so the operator
+can tell a bundle that lacks the concept from a retrieval that missed it.
+`retrieved` is empty on every other result.
 
 The check MUST be evidence-first: it asks for the sentence that answers and
 treats a refusal sentinel as the negative, rather than asking for a verdict.
@@ -298,7 +302,8 @@ question. The check MUST NOT run when no context was assembled.
 - GIVEN context was assembled and the check reports no answering sentence
 - WHEN `answer(..., sufficiency_check=True)` is called
 - THEN exactly one chat call is made, `no_match_cause` is
-  `"insufficient_context"`, `citations` is empty, and `llm_invoked` is `False`
+  `"insufficient_context"`, `citations` is empty, `llm_invoked` is `False`,
+  and `retrieved` names every concept placed in context
 
 #### Scenario: A quotation lets the answer through
 
