@@ -9406,6 +9406,9 @@ class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
     `--to` plan and its per-step banners, and the closing lines, in the order
     the verb has always printed them."""
 
+    def __init__(self, *, keep_distinct: bool = False) -> None:
+        self._keep_distinct = keep_distinct
+
     def proposed(self, preview: unmerge_service.UnmergePreview) -> None:
         prepared = preview.prepared
         plan = prepared.plan
@@ -9476,16 +9479,21 @@ class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
             f"from '{summary.survivor_canonical}' "
             f"({summary.index_name}, {summary.log_name} updated)."
         )
-        # #1334 item 9: an unmerge records no ruling, so the judge can propose
-        # the same pair again. Whether the unmerge MEANS "these are distinct"
-        # is the operator's call (a merge may be undone for other reasons), so
-        # this names the command rather than running it.
-        typer.echo(
-            "openkos unmerge: to stop the judge proposing this pair again, "
-            "record that they are distinct: `openkos duplicates --keep-distinct "
-            f"{shlex.quote(summary.survivor_canonical)} --keep-distinct "
-            f"{shlex.quote(summary.absorbed_canonical)}`."
-        )
+        # #1334 item 9: an unmerge records no ruling unless asked to, so the
+        # judge can propose the same pair again. Whether the unmerge MEANS
+        # "these are distinct" is the operator's call (a merge may be undone
+        # for other reasons), so without --keep-distinct this names the
+        # commands rather than running one.
+        if not self._keep_distinct:
+            survivor = shlex.quote(summary.survivor_canonical)
+            absorbed = shlex.quote(summary.absorbed_canonical)
+            typer.echo(
+                "openkos unmerge: to stop the judge proposing this pair again, "
+                "record that they are distinct: `openkos duplicates "
+                f"--keep-distinct {survivor} --keep-distinct {absorbed}` (or "
+                f"re-run as `openkos unmerge {survivor} {absorbed} "
+                "--keep-distinct`)."
+            )
 
     def committed(self, sha: str) -> None:
         _echo_commit_disclosure(sha, prefix="openkos unmerge: ")
@@ -9507,6 +9515,38 @@ class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
             f"openkos unmerge: step {step_number} of {total} -- restoring "
             f"'{absorbed_id}'"
         )
+
+
+def _record_unmerge_keep_distinct(
+    root: Path, survivor_id: str, absorbed_id: str
+) -> None:
+    """`unmerge --keep-distinct` (#1334 item 9): record the ruling for the pair
+    one step just restored, through the SAME write `duplicates --keep-distinct`
+    uses, as a commit of its own that is disclosed like any other.
+
+    Partial-failure precedent is `_record_identity_decline_from_walk`: the
+    unmerge already happened and is NOT rolled back; a failed ruling is one
+    stderr warning naming the command that records it by hand."""
+    members = tuple(sorted((survivor_id, absorbed_id)))
+    try:
+        rel_path = _apply_identity_decision(
+            config.WorkspaceLayout(root), members, target_state="declined"
+        )
+        sha = _autocommit(
+            root, [rel_path], f"openkos: keep distinct {'/'.join(members)}"
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos unmerge: warning -- the unmerge succeeded, but failed to "
+            f"record the keep-distinct ruling ({exc}); record it with `openkos "
+            f"duplicates --keep-distinct {shlex.quote(survivor_id)} "
+            f"--keep-distinct {shlex.quote(absorbed_id)}`.",
+            err=True,
+        )
+        return
+    typer.echo(f"openkos unmerge: kept distinct {' + '.join(members)}.")
+    if sha is not None:
+        _echo_commit_disclosure(sha, prefix="openkos unmerge: ")
 
 
 _UNMERGE_ARGUMENT_RULE: Final = "exactly one of the two is required"
@@ -9576,6 +9616,16 @@ def unmerge(
             "skips the confirmation prompt or any OTHER refusal (the "
             "absorbed-path collision, a rewrite-file's own drift check, or "
             "the post-confirm drift guard)."
+        ),
+    ),
+    keep_distinct: bool = typer.Option(
+        False,
+        "--keep-distinct",
+        help=(
+            "Also record the permanent keep-distinct ruling for each pair "
+            "this restores (what `openkos duplicates --keep-distinct` "
+            "records), as its own commit, so the judge stops proposing the "
+            "merge again."
         ),
     ),
 ) -> None:
@@ -9672,7 +9722,9 @@ def unmerge(
         raise typer.Exit(code=1)
 
     policy = unmerge_service.UnmergePolicy(
-        auto=auto, discard_survivor_edits=discard_survivor_edits
+        auto=auto,
+        discard_survivor_edits=discard_survivor_edits,
+        keep_distinct=keep_distinct,
     )
     ports = unmerge_service.UnmergePorts(
         autocommit=lambda root, paths, message: _autocommit(root, paths, message),
@@ -9683,8 +9735,9 @@ def unmerge(
         # every completed step's lexical stores fresh; the embedding stage runs
         # once, after the chain, whether or not it completed.
         after_commit=lambda: _refresh_derived_after_write_quietly(root, "unmerge"),
+        record_distinct=_record_unmerge_keep_distinct,
     )
-    observer = _CliUnmergeObserver()
+    observer = _CliUnmergeObserver(keep_distinct=keep_distinct)
     try:
         if to is None:
             # Classic two-arg path: one single-step unmerge, its own preview

@@ -904,6 +904,70 @@ def test_unmerge_says_how_to_stop_the_judge_proposing_the_pair_again(
     )
 
 
+def test_unmerge_hint_mentions_the_keep_distinct_flag(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    spec = _mk_unmerge(tmp_path)
+
+    result = runner.invoke(app, spec.success_args)
+
+    assert "unmerge concepts/survivor concepts/absorbed --keep-distinct" in (
+        result.stdout
+    )
+
+
+def test_unmerge_keep_distinct_records_the_ruling_in_its_own_commit(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1334 item 9: `--keep-distinct` records the same ruling
+    `duplicates --keep-distinct` does, as a reviewable commit of its own,
+    and the hint (which the ruling makes moot) is not printed."""
+    _init_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    spec = _mk_unmerge(tmp_path)
+
+    result = runner.invoke(app, [*spec.success_args, "--keep-distinct"])
+
+    assert result.exit_code == 0, result.stderr
+    sha = _head_short_sha(tmp_path)
+    subject = vcs_git._run(
+        ["git", "log", "-1", "--format=%s"], cwd=tmp_path
+    ).stdout.strip()
+    assert subject == "openkos: keep distinct concepts/absorbed/concepts/survivor"
+    assert f"openkos unmerge: committed as {sha} -- " in result.stdout
+    assert "kept distinct concepts/absorbed + concepts/survivor" in result.stdout
+    assert "to stop the judge proposing" not in result.stdout
+    listed = runner.invoke(app, ["duplicates", "--kept-distinct"])
+    assert "concepts/absorbed + concepts/survivor" in listed.stdout
+
+
+def test_unmerge_keep_distinct_failure_does_not_undo_the_unmerge(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    spec = _mk_unmerge(tmp_path)
+
+    def boom(*args: object, **kwargs: object) -> str:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "openkos.cli.main.duplicates_service.apply_identity_decision", boom
+    )
+
+    result = runner.invoke(app, [*spec.success_args, "--keep-distinct"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "absorbed.md").is_file()
+    assert "failed to record the keep-distinct ruling (disk full)" in result.stderr
+    assert "openkos duplicates --keep-distinct" in result.stderr
+
+
 def test_forget_commit_line_lands_after_its_success_line(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
