@@ -168,6 +168,37 @@ def test_open_rows_are_grouped_by_kind_with_their_resolving_command(
     )
 
 
+def test_a_cross_type_identity_row_names_the_merge_command_not_adjudicate(
+    workspace: WorkspaceLayout,
+) -> None:
+    """#1334 item 8: `adjudicate --apply` and `curate` refuse a cross-type
+    pair, so the row names `merge --include-cross-type`."""
+    for concept_id, type_name in (
+        ("concepts/claude-code", "Concept"),
+        ("procedures/installing-claude-code", "Procedure"),
+    ):
+        path = workspace.bundle_dir / f"{concept_id}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"---\ntype: {type_name}\ntitle: {concept_id}\n---\n\nBody.\n",
+            encoding="utf-8",
+        )
+    conn = _queue(workspace)
+    _enqueue(
+        conn,
+        workspace,
+        "identity",
+        ("concepts/claude-code", "procedures/installing-claude-code"),
+    )
+    conn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert result.exit_code == 0
+    assert "    resolve: openkos merge --include-cross-type " in result.output
+    assert "resolve: openkos adjudicate" not in result.output
+
+
 def test_all_also_lists_resolved_declined_and_stale_rows(
     workspace: WorkspaceLayout,
 ) -> None:

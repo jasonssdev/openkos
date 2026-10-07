@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Literal
 
 from openkos import config
+from openkos.application import lifecycle as application_lifecycle
 from openkos.application.budget import JOBS_DB_NAME
 from openkos.config import WorkspaceLayout
 from openkos.graph import sqlite_graph
@@ -136,16 +137,38 @@ def row_alternative_command(row: pq.PendingItem) -> str | None:
     return f"openkos duplicates {flags}"
 
 
-def row_resolving_command(row: pq.PendingItem, inbox: Path | None = None) -> str:
+def row_resolving_command(
+    row: pq.PendingItem,
+    inbox: Path | None = None,
+    bundle_dir: Path | None = None,
+) -> str:
     """The command that resolves THIS row. `openkos duplicates` only lists
     groups, so an identity row names the verb that can close it: the merge walk
     for a group judged the same, otherwise the judgment walk (`adjudicate
     --apply`, whose prompt takes y / s / d), with the keep-distinct ruling as
     `row_alternative_command`. A watch refusal names the refused file: the watch records its
     path relative to the inbox, so `inbox` (the configured folder, when known)
-    is joined on."""
+    is joined on.
+
+    A cross-type pair is the exception to the identity rule above (#1334): the
+    judgment walk and `curate` both refuse to merge it, so the row names the
+    one command that accepts it, `merge --include-cross-type`. That needs the
+    members' OKF types, hence `bundle_dir`; without it the type is unknown and
+    the row keeps the walk."""
     payload = _payload(row)
     if row.kind == "identity" and row.targets:
+        if bundle_dir is not None and len(row.targets) == 2:
+            first, second = row.targets
+            if application_lifecycle.cross_type_concern(bundle_dir, (first, second)):
+                survivor, absorbed, _criterion = (
+                    application_lifecycle.ordered_merge_pair(
+                        bundle_dir, (first, second)
+                    )
+                )
+                return (
+                    "openkos merge --include-cross-type "
+                    f"{shlex.quote(survivor)} {shlex.quote(absorbed)}"
+                )
         adjudication = payload.get("adjudication")
         if isinstance(adjudication, dict) and adjudication.get("verdict") == "same":
             return "openkos adjudicate --apply"
@@ -183,6 +206,9 @@ class PendingReport:
     inbox: Path | None = None
     """The configured `unattended.inbox`, when it can be read: the base a watch
     refusal's recorded path is relative to."""
+    bundle_dir: Path | None = None
+    """The workspace's bundle, so a row can be classified by its members' OKF
+    types (a cross-type identity row has its own resolving command)."""
 
 
 def _read_inbox(layout: WorkspaceLayout) -> Path | None:
@@ -254,6 +280,7 @@ def read_report(layout: WorkspaceLayout) -> PendingReport:
         attention=attention,
         jobs_unreadable=jobs_unreadable,
         inbox=_read_inbox(layout),
+        bundle_dir=layout.bundle_dir,
     )
 
 
@@ -303,7 +330,10 @@ def _listing_lines(report: PendingReport, *, include_all: bool) -> list[str]:
                 f"  - {row_subject(row)} [{'pending' if is_open else row.status}]"
             )
             if is_open:
-                lines.append(f"    resolve: {row_resolving_command(row, report.inbox)}")
+                lines.append(
+                    "    resolve: "
+                    f"{row_resolving_command(row, report.inbox, report.bundle_dir)}"
+                )
                 alternative = row_alternative_command(row)
                 if alternative is not None:
                     lines.append(f"    or: {alternative}")

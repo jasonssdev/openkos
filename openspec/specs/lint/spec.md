@@ -730,7 +730,11 @@ ignore every other and unrecognized token. Each finding's detail MUST name
 `--re-extract` (without the resource) as the flag that forces a redo, and
 MUST NOT name a plain `openkos ingest <resource>`, because re-ingesting an
 unchanged source skips extraction. Neither kind is folded into the
-unjudged scan. Both scans are read-only and non-gating.
+unjudged scan. The `unevidenced` finding MUST also name, by concept id and
+bounded to a short list, the derived objects (docs whose `provenance`
+cites the Source) that quote no line of the Source's body, and MUST fall
+back to the generic detail when none can be named. Both scans are
+read-only and non-gating.
 
 #### Scenario: A Source with objects lacking evidence is flagged
 
@@ -738,6 +742,7 @@ unjudged scan. Both scans are read-only and non-gating.
   `objects-without-evidence`
 - WHEN `openkos lint` runs
 - THEN it reports one `unevidenced` finding naming `--re-extract`
+- AND the finding names each derived object that quotes no line of the Source
 
 #### Scenario: A Source that lost candidates in staging is flagged
 

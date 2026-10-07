@@ -521,6 +521,23 @@ def test_unmerge_to_unwinds_the_chain(
     )
 
 
+def test_unmerge_to_keep_distinct_rules_every_restored_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1334 item 9: with `--to`, each step's restored pair gets its ruling,
+    mirroring the per-step commit and restore reporting."""
+    _chain(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        app, ["unmerge", _SURVIVOR, "--to", _ABSORBED, "--auto", "--keep-distinct"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    listed = runner.invoke(app, ["duplicates", "--kept-distinct"]).stdout
+    assert f"{_ABSORBED} + {_SURVIVOR}" in listed
+    assert f"{_SURVIVOR} + {_THIRD}" in listed
+
+
 def test_unmerge_to_unknown_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

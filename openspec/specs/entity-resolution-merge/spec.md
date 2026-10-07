@@ -1040,6 +1040,33 @@ of which field either side originally carried it in.
   absorbed object's more recent value — even though the survivor itself
   was legacy-shaped before the merge
 
+### Requirement: Unmerge Can Record The Keep-Distinct Ruling
+
+`openkos unmerge` MUST accept an opt-in `--keep-distinct` flag. With it, after
+each step's unmerge commit, `unmerge` MUST record the same permanent
+keep-distinct identity ruling that `openkos duplicates --keep-distinct`
+records (the same write, the same sidecar, no second store) for the pair that
+step restored, as a commit of its own disclosed with the shared
+`committed as <sha>` line. Under `--to`, every step's pair (the survivor and
+that step's absorbed id) MUST receive its own ruling. If recording a ruling
+fails, the completed unmerge MUST NOT be rolled back; `unmerge` MUST print one
+stderr warning naming the `duplicates --keep-distinct` command that records it
+by hand. Without the flag, `unmerge` MUST record no ruling and MUST print, per
+step, the command (and the flag) that would.
+
+#### Scenario: The flag records the ruling in its own commit
+
+- GIVEN a merged survivor and absorbed concept
+- WHEN `openkos unmerge <survivor> <absorbed> --auto --keep-distinct` runs
+- THEN the pair is listed by `openkos duplicates --kept-distinct`
+- AND the ruling is a separate commit whose sha is printed
+
+#### Scenario: Recording failure keeps the unmerge
+
+- GIVEN `--keep-distinct` and a ruling write that fails
+- WHEN the unmerge step has completed
+- THEN the absorbed concept stays restored and a warning is printed
+
 ### Requirement: Unmerge Refuses When The Survivor Was Edited Since Its Own Merge
 
 `unmerge <survivor-id> <absorbed-id>` MUST compare the survivor's CURRENT
