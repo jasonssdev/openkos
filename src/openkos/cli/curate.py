@@ -2490,6 +2490,13 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             cli_main._reject_drifted_targets(
                 ctx.layout, {ctx.layout.config_path: prepared.config_bytes}, "curate"
             )
+            config_commit = cli_main._plan_config_commit(
+                ctx.root,
+                "curate",
+                result.type_name,
+                result.suggested_tier,
+                prepared.config_bytes,
+            )
 
             try:
                 application_lifecycle.set_volatility_core(
@@ -2503,10 +2510,10 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 )
                 raise typer.Exit(code=1) from exc
 
-            volatility_sha = cli_main._autocommit(
+            volatility_sha = cli_main._autocommit_config_edit(
                 ctx.root,
-                ["openkos.yaml"],
                 f"openkos: set-volatility {result.type_name} -> {result.suggested_tier}",
+                config_commit,
             )
         # #800: this stage writes `openkos.yaml`, not the bundle, so neither
         # `unmerge` nor `forget` has anything to say about undoing it -- the
