@@ -65,6 +65,7 @@ from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
 from openkos.application import pending_queue_report as pending_report
 from openkos.application import query as application_query
+from openkos.application import query_report as application_query_report
 from openkos.application import repair as application_repair
 from openkos.application import revisions as revisions_service
 from openkos.application import status as application_status
@@ -14325,12 +14326,24 @@ def query(
             "model ever accounting for them."
         ),
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help=(
+            "Emit one JSON object on stdout -- the answer, every context block "
+            "sent to the model, the retrieval ranks and the prompt hashes -- "
+            "instead of the human text. Read-only: cannot be combined with "
+            "--save."
+        ),
+    ),
 ) -> None:
     """Answer a natural-language question from the compiled bundle, with citations.
 
     Read-only WITHOUT `--save`, like `status` and `lint`: no writes, no
     confirmation prompt, no `--auto`. `--save` is the sole exception and
-    brings all three with it (see below). Must be run inside an initialized
+    brings all three with it (see below). `--json` replaces the human stdout
+    with one machine-readable object (schema in `docs/cli.md`) and is a usage
+    error (exit 2) together with `--save` or any save-only flag. Must be run inside an initialized
     workspace; outside one it refuses (exit 1) with a short reason on
     stderr. Retrieval fuses TWO lists: lexical (FTS5) hits and dense
     (`vectors.db`) hits -- both read PERSISTED, read-only on-disk indexes
@@ -14426,6 +14439,27 @@ def query(
     `_autocommit` runs only on the success path -- recover a partial with
     `git status`/`git checkout` as with any sibling's mid-write failure.
     """
+    if json_output:
+        save_only = [
+            flag
+            for flag, given in (
+                ("--save", save),
+                ("--auto", auto),
+                ("--title", title is not None),
+                ("--description", description is not None),
+                ("--type", save_type != _INSIGHT_TYPE),
+                ("--allow-unattributed", allow_unattributed),
+            )
+            if given
+        ]
+        if save_only:
+            typer.echo(
+                "openkos query: --json is read-only and cannot be combined with "
+                f"{', '.join(save_only)}.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+
     root = Path.cwd()
     reason = config.require_workspace(root)
     if reason is not None:
@@ -14693,7 +14727,28 @@ def query(
         for notice in result.skip_notices:
             typer.echo(f"  {notice}", err=True)
 
+    if json_output:
+        # stdout carries the one object and nothing else (#1345); every
+        # diagnostic above and below stays on stderr.
+        try:
+            version = _pkg_version("openkos")
+        except PackageNotFoundError:
+            version = "unknown"
+        report = application_query_report.build_query_report(
+            outcome,
+            question=question,
+            limit=limit,
+            cfg=cfg,
+            openkos_version=version,
+            disclosable=application_query_report.disclosable_ids(
+                layout.bundle_dir, include_confidential=include_confidential
+            ),
+        )
+        typer.echo(json.dumps(report, indent=2))
+
     if result.no_match_cause != "none":
+        if json_output:
+            return
         # The fused count is the one the `retrieval:` summary above reports.
         for line in _no_match_message(
             result.no_match_cause, result.fused_count
@@ -14713,39 +14768,41 @@ def query(
                 )
         return
 
-    typer.echo(result.answer)
+    if not json_output:
+        typer.echo(result.answer)
     if result.citations:
-        typer.echo()
-        typer.echo("Citations:")
-        for citation in result.citations:
-            marker = " [confidential]" if citation.confidential else ""
-            # #882: the model was shown an EXCERPT of this document, not all
-            # of it. Rendered here because this list is what a reader trusts
-            # and what `--save` files as provenance -- a citation that looked
-            # identical to a fully-read one IS the false provenance claim.
-            partial = " [partial]" if citation.excerpted else ""
-            # Issue #570, issue #1003 Slice B: see
-            # `application_query.is_synthesis_citation`'s docstring for the
-            # `insights/` identity-by-link-dir rationale.
-            synthesis = (
-                " [synthesis]"
-                if application_query.is_synthesis_citation(citation)
-                else ""
-            )
-            # #1014 piece b, design Decision 6: rendered FIRST in the marker
-            # sequence -- an ordinary hit citation's `history` is `None` and
-            # renders neither marker.
-            history = (
-                " [superseded]"
-                if citation.history == "superseded"
-                else " [refined]"
-                if citation.history == "refined"
-                else ""
-            )
-            typer.echo(
-                f"  → {citation.concept_id} ({citation.title})"
-                f"{history}{synthesis}{partial}{marker}"
-            )
+        if not json_output:
+            typer.echo()
+            typer.echo("Citations:")
+            for citation in result.citations:
+                marker = " [confidential]" if citation.confidential else ""
+                # #882: the model was shown an EXCERPT of this document, not all
+                # of it. Rendered here because this list is what a reader trusts
+                # and what `--save` files as provenance -- a citation that looked
+                # identical to a fully-read one IS the false provenance claim.
+                partial = " [partial]" if citation.excerpted else ""
+                # Issue #570, issue #1003 Slice B: see
+                # `application_query.is_synthesis_citation`'s docstring for the
+                # `insights/` identity-by-link-dir rationale.
+                synthesis = (
+                    " [synthesis]"
+                    if application_query.is_synthesis_citation(citation)
+                    else ""
+                )
+                # #1014 piece b, design Decision 6: rendered FIRST in the marker
+                # sequence -- an ordinary hit citation's `history` is `None` and
+                # renders neither marker.
+                history = (
+                    " [superseded]"
+                    if citation.history == "superseded"
+                    else " [refined]"
+                    if citation.history == "refined"
+                    else ""
+                )
+                typer.echo(
+                    f"  → {citation.concept_id} ({citation.title})"
+                    f"{history}{synthesis}{partial}{marker}"
+                )
     elif result.attribution == "reported":
         # #753: the answer itself reported drawing on none of the concepts
         # retrieved for it. Announced rather than merely rendered as a missing
