@@ -56,6 +56,7 @@ layering invariant, `tests/unit/application/test_layering.py`) -- every
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -2397,6 +2398,23 @@ class PurgeDisclosure:
 
 
 @dataclass(frozen=True)
+class PurgeReferrer:
+    """One surviving inbound reference to a purge-set member, named."""
+
+    target: str
+    """The purge-set member the reference points at."""
+
+    referrer_id: str
+    """The concept id holding the reference."""
+
+    kind: Literal["link", "relation", "unverifiable"]
+    """Same vocabulary as `bundle.references.InboundReference.kind`."""
+
+    relation_type: str | None
+    """The relation's type when `kind == "relation"`, else `None`."""
+
+
+@dataclass(frozen=True)
 class PurgePlan:
     """Pure Phase-A result of `prepare_purge`: everything `purge`'s
     preview and all six rails need, built in memory without writing,
@@ -2440,6 +2458,58 @@ class PurgePlan:
     `privacy-purge` spec: 'Purge Withdraws The Deprecated-Status Export Of
     Resurrected Targets') -- WITHDRAW or DROP-MARKER only, never a target
     still superseded by a surviving concept."""
+    referrers: tuple[PurgeReferrer, ...] = ()
+    """Every surviving inbound reference rail 1 counts, with WHO holds it
+    (#1334): `verified_refs`/`unverifiable_refs` stay the plain counts the
+    gate reads, and this is the same references named, so the refusal can
+    say which concept to `unrelate` or edit instead of leaving a search."""
+    scrub_titles: tuple[str, ...] = ()
+    """The purge-set titles the history rewrite will scrub from commit
+    messages and from surviving concepts' bodies (see `scrub_title_verdict`)."""
+    skipped_titles: tuple[tuple[str, str], ...] = ()
+    """`(title, reason)` for each purge-set title judged too generic to scrub
+    safely. Never silent: the adapter prints each one."""
+    orphaned_provenance: tuple[str, ...] = ()
+    """Surviving concepts whose WHOLE `provenance` is a purge-set member, so
+    scrubbing the entry leaves them citing no source."""
+    survivor_digests: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    """`sha256` of every surviving bundle document, by concept id, as read in
+    Phase A: after the rewrite the adapter re-reads them and names the ones
+    that changed."""
+
+
+MIN_SCRUBBABLE_TITLE_LENGTH = 8
+"""A title shorter than this (in characters) is too likely to be an ordinary
+phrase to remove from every surviving document on an exact match."""
+
+
+def scrub_title_verdict(title: str, surviving_titles: Mapping[str, str]) -> str | None:
+    """Why `title` is NOT safe to scrub, or `None` when it is.
+
+    The rule is deliberately conservative and deterministic, because the
+    scrub is an exact, case-sensitive, word-boundary match applied to every
+    surviving document and commit message, and a generic title would damage
+    unrelated prose. A title is refused when it
+
+    1. contains a control character (it cannot be carried to the rewrite);
+    2. is a single word (contains no whitespace);
+    3. is shorter than `MIN_SCRUBBABLE_TITLE_LENGTH` characters;
+    4. is exactly the title of a surviving concept (the first such id in
+       sorted order is named): removing it would erase that concept's name
+       from prose that is about the survivor.
+
+    The first matching reason wins, in that order. `surviving_titles` maps
+    each surviving concept id to its title."""
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in title):
+        return "it contains a control character"
+    if len(title.split()) < 2:
+        return "a single word"
+    if len(title) < MIN_SCRUBBABLE_TITLE_LENGTH:
+        return f"shorter than {MIN_SCRUBBABLE_TITLE_LENGTH} characters"
+    for concept_id in sorted(surviving_titles):
+        if surviving_titles[concept_id] == title:
+            return f"also the title of surviving concept '{concept_id}'"
+    return None
 
 
 def purge_confirm_phrase(
@@ -2620,6 +2690,44 @@ def prepare_purge(
     verified_refs = [ref for _, ref in all_refs if ref.kind != "unverifiable"]
     unverifiable_refs = [ref for _, ref in all_refs if ref.kind == "unverifiable"]
 
+    # Title scrub (#1329): which purge-set titles are safe to remove from
+    # surviving prose and commit messages, and which are said out loud to be
+    # left. Survivors' titles and whole-provenance orphans come from the same
+    # snapshot as everything else in Phase A.
+    surviving_titles: dict[str, str] = {}
+    orphaned: list[str] = []
+    survivor_digests: dict[str, str] = {}
+    for rel, text in other_files.items():
+        cid = rel[: -len(".md")]
+        if cid in purge_ids_set:
+            continue
+        survivor_digests[cid] = hashlib.sha256(other_bytes[rel]).hexdigest()
+        cited = bundle_provenance.parse_provenance_entry(text)
+        if cited and cited <= purge_ids_set:
+            orphaned.append(cid)
+        try:
+            survivor_meta, _ = okf.load_frontmatter(text)
+        except okf.FrontmatterError:
+            continue
+        survivor_title = survivor_meta.get("title")
+        if isinstance(survivor_title, str) and survivor_title:
+            surviving_titles[cid] = survivor_title
+    scrub_titles: list[str] = []
+    skipped_titles: list[tuple[str, str]] = []
+    for member in sorted(purge_ids):
+        member_title = member_metadata[member].get("title")
+        if not isinstance(member_title, str) or not member_title.strip():
+            continue
+        if member_title in scrub_titles or any(
+            member_title == skipped for skipped, _ in skipped_titles
+        ):
+            continue
+        reason = scrub_title_verdict(member_title, surviving_titles)
+        if reason is None:
+            scrub_titles.append(member_title)
+        else:
+            skipped_titles.append((member_title, reason))
+
     # Raw-path resolution (design: "Raw-path resolution"): a Source's
     # `resource` is validated (must start with `raw/`, no `..`, resolve
     # under `layout.raw_dir`) -- an absent or malformed `resource` is
@@ -2749,6 +2857,19 @@ def prepare_purge(
         confirmation=confirmation,
         drift_targets=drift_targets,
         status_withdrawals=tuple(status_withdrawals),
+        referrers=tuple(
+            PurgeReferrer(
+                target=member,
+                referrer_id=ref.referrer_id,
+                kind=ref.kind,
+                relation_type=ref.relation_type,
+            )
+            for member, ref in all_refs
+        ),
+        scrub_titles=tuple(scrub_titles),
+        skipped_titles=tuple(skipped_titles),
+        orphaned_provenance=tuple(sorted(orphaned)),
+        survivor_digests=survivor_digests,
     )
 
 

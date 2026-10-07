@@ -4,6 +4,7 @@ import contextvars
 import dataclasses
 import functools
 import glob
+import hashlib
 import inspect
 import json
 import os
@@ -1508,6 +1509,108 @@ def _autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
             err=True,
         )
     return sha
+
+
+@dataclass(frozen=True)
+class _ConfigCommitPlan:
+    """How a config-rewriting verb's commit is made when `openkos.yaml`
+    already carries uncommitted edits (#1330): `apply` is the verb's own
+    change as a function of the file's bytes, applied to the COMMITTED
+    version so the user's edits stay out of the commit."""
+
+    apply: Callable[[bytes], bytes]
+
+
+def _plan_config_commit(
+    root: Path,
+    verb: str,
+    concept_type: str,
+    tier: str,
+    baseline: bytes,
+) -> _ConfigCommitPlan | None:
+    """Before `set-volatility` writes (#1330): `None` when `openkos.yaml` is
+    clean (or there is no committed version, or no git), so the ordinary
+    path-scoped commit is correct. Otherwise the file carries uncommitted
+    edits that `git add -- openkos.yaml` would sweep into a commit titled for
+    another change -- and whose printed `git revert` would undo them -- so
+    return a plan that commits the change applied to the committed version.
+
+    Refuses (exit 1, nothing written) when the change cannot be applied
+    cleanly to the committed version: the user's edit touches the very
+    `type_tiers` entry this verb sets, or the committed file is not one
+    `set_type_tier` can edit."""
+    try:
+        if not vcs_git.paths_dirty(root, ["openkos.yaml"]):
+            return None
+        head = vcs_git.head_file_bytes(root, "openkos.yaml")
+    except vcs_git.GitError:
+        return None
+    if head is None:
+        return None
+
+    def apply(content: bytes) -> bytes:
+        text = content.decode("utf-8")
+        return config.set_type_tier(text, concept_type, tier).encode("utf-8")
+
+    try:
+        same_entry = config.type_tier_entry(
+            head.decode("utf-8"), concept_type
+        ) == config.type_tier_entry(baseline.decode("utf-8"), concept_type)
+        apply(head)
+    except ValueError:
+        same_entry = False
+    if not same_entry:
+        typer.echo(
+            f"openkos {verb}: refusing to write -- openkos.yaml has "
+            f"uncommitted changes to the {concept_type!r} tier entry (or a "
+            "shape this command cannot edit in the committed version), so "
+            "the change cannot be committed on its own; commit or stash "
+            "them, then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return _ConfigCommitPlan(apply=apply)
+
+
+def _autocommit_config_edit(
+    root: Path, message: str, plan: _ConfigCommitPlan | None = None
+) -> str | None:
+    """`_autocommit` for a verb that rewrote `openkos.yaml`.
+
+    Skips the commit when it would hold nothing (#1330): re-applying the tier
+    a config already holds leaves the tree clean, and `git commit` then
+    fails with an empty reason that `_autocommit` reports as a WARNING about
+    a failure that did not happen. With a `plan`, the commit holds only the
+    verb's own change over the committed file (`commit_transformed_file`),
+    leaving the user's uncommitted edits in the working tree; a degradation
+    is reported exactly as `_autocommit` reports it."""
+    if plan is None:
+        try:
+            if not vcs_git.paths_dirty(root, ["openkos.yaml"]):
+                return None
+        except vcs_git.GitError:
+            pass  # let `_autocommit` report the real condition
+        return _autocommit(root, ["openkos.yaml"], message)
+    if not vcs_git.has_git_identity(root):
+        typer.echo(
+            "openkos: WARNING -- git identity unset; skipped auto-commit "
+            "(writes are on disk).",
+            err=True,
+        )
+        return None
+    try:
+        return vcs_git.commit_transformed_file(
+            root, "openkos.yaml", plan.apply, message
+        )
+    except (vcs_git.GitError, OSError) as exc:
+        if str(exc).endswith("nothing to commit"):
+            return None  # the committed file already holds this tier
+        typer.echo(
+            f"openkos: WARNING -- auto-commit did not complete ({exc}); "
+            "run `git status` to inspect.",
+            err=True,
+        )
+        return None
 
 
 @app.command(
@@ -5858,6 +5961,61 @@ def _purge_clean_live_index(
         )
 
 
+def _purge_report_rewritten(
+    layout: config.WorkspaceLayout, plan: application_lifecycle.PurgePlan
+) -> None:
+    """Name every surviving concept the history rewrite changed (#1329).
+
+    These edits are consequential and the operator did not type them, so they
+    are listed. They have no commit of their own: the rewrite changes the tip
+    in place, and a commit holding the diff would itself contain the erased
+    text. The survivors are compared by digest against what Phase A read."""
+    changed: list[str] = []
+    for concept_id, digest in sorted(plan.survivor_digests.items()):
+        path = layout.bundle_dir / f"{concept_id}.md"
+        try:
+            now = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        if now != digest:
+            changed.append(concept_id)
+    if changed:
+        typer.echo(
+            f"openkos purge: rewrote {len(changed)} surviving concept(s): "
+            f"{', '.join(changed)} -- every version, live and historical, lost "
+            "its reference to the purged concept (part of the single rewrite; "
+            "there is no separate commit)."
+        )
+
+
+def _purge_referrer_detail(
+    plan: application_lifecycle.PurgePlan,
+    *,
+    verified: bool,
+    scope: str,
+) -> str:
+    """` (concepts/a (depends_on relation), concepts/b (link))` -- WHO holds
+    each reference rail 1 refused over (#1334), so the operator knows which
+    concept to `unrelate` or edit. Under `--scope source` each entry also
+    names the purge-set member it points at, since the target is then one of
+    several. Empty when no referrer matches."""
+    entries: list[str] = []
+    for ref in plan.referrers:
+        if (ref.kind != "unverifiable") != verified:
+            continue
+        if ref.kind == "relation":
+            what = f"{ref.relation_type} relation"
+        elif ref.kind == "link":
+            what = "link"
+        else:
+            what = "unparseable frontmatter"
+        entry = f"{ref.referrer_id} ({what})"
+        if scope == "source":
+            entry += f" -> {ref.target}"
+        entries.append(entry)
+    return f" ({', '.join(entries)})" if entries else ""
+
+
 def _purge_clean_live_log(layout: config.WorkspaceLayout, purge_ids: list[str]) -> None:
     """After the (already irreversible) history rewrite has succeeded,
     remove any LIVE `log.md` `forget` tombstone entry for EVERY purge-set
@@ -6337,6 +6495,16 @@ def purge(
         )
     if plan.disclosure.cascade_total is not None:
         typer.echo(f"  Total: {plan.disclosure.cascade_total} concept(s) to purge.")
+    for skipped_title, reason in plan.skipped_titles:
+        typer.echo(
+            f"  ! title '{skipped_title}' was NOT scrubbed -- {reason}; the "
+            "id is still removed everywhere"
+        )
+    for orphan in plan.orphaned_provenance:
+        typer.echo(
+            f"  ! {orphan} now cites no source once the purged entry is "
+            "removed (--scope source would purge it too)"
+        )
     typer.echo()
 
     # Rail 1: reference-aware refusal, unless --force (spec req 2, rail 1).
@@ -6354,11 +6522,13 @@ def purge(
         if plan.verified_refs:
             messages.append(
                 f"{plan.verified_refs} inbound reference(s) to {target_desc} found"
+                + _purge_referrer_detail(plan, verified=True, scope=scope)
             )
         if plan.unverifiable_refs:
             messages.append(
                 f"could not verify {plan.unverifiable_refs} referrer(s) "
                 f"that may reference {target_desc}"
+                + _purge_referrer_detail(plan, verified=False, scope=scope)
             )
         typer.echo(
             "openkos purge: refusing to purge -- "
@@ -6519,7 +6689,18 @@ def purge(
     )
     try:
         vcs_git.expunge_paths(
-            root, plan.disclosure.expunge_targets, scrub_identities=plan.purge_ids
+            root,
+            plan.disclosure.expunge_targets,
+            scrub_identities=plan.purge_ids,
+            # Scrubbing other concepts' historical `relations:` also rewrites
+            # their tip. `--force` past a live reference promises to leave it
+            # dangling, so it keeps its history untouched too (#1329).
+            scrub_relations=not plan.referrers,
+            # The rest of the trace in surviving concepts (#1329): provenance,
+            # body links and prose, rewritten in the SAME pass so live and
+            # history end consistent -- and so no commit ever holds the diff.
+            scrub_concepts=True,
+            scrub_titles=plan.scrub_titles,
         )
     except vcs_git.GitFinalizeError as exc:
         typer.echo(
@@ -6629,13 +6810,19 @@ def purge(
         except vcs_git.GitError:
             should_commit = True
         if should_commit:
-            commit_message = f"openkos: purge {plan.canonical_id}"
-            if len(plan.purge_ids) > 1:
-                commit_message += f" (+{len(plan.purge_ids) - 1})"
+            # The message must not name what was erased: this commit survives
+            # the purge, and the contract is that no commit carries the id
+            # (#1329). The count is all the history needs to say.
+            commit_message = (
+                "openkos: purge 1 concept"
+                if len(plan.purge_ids) == 1
+                else f"openkos: purge {len(plan.purge_ids)} concepts"
+            )
             _autocommit(root, commit_paths_rel, commit_message)
 
         # No section_break here: the preview already ends with a blank line
         # on every stream, which is the section separator.
+        _purge_report_rewritten(layout, plan)
         if scope == "source":
             typer.echo(
                 f"openkos purge: permanently expunged {len(plan.purge_ids)} "
@@ -8709,6 +8896,9 @@ def set_volatility_cmd(
         _reject_drifted_targets(
             layout, {layout.config_path: prepared.config_bytes}, "set-volatility"
         )
+        config_commit = _plan_config_commit(
+            root, "set-volatility", concept_type, tier, prepared.config_bytes
+        )
 
         try:
             application_lifecycle.set_volatility_core(layout.config_path, prepared)
@@ -8724,10 +8914,10 @@ def set_volatility_cmd(
             f"{layout.config_path.name}."
         )
 
-        _autocommit(
+        _autocommit_config_edit(
             root,
-            ["openkos.yaml"],
             f"openkos: set-volatility {concept_type} -> {tier}",
+            config_commit,
         )
 
 
