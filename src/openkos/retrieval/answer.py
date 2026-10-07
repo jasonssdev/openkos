@@ -68,6 +68,7 @@ restoring today's status-blind behavior byte-for-byte at zero added cost.
 """
 
 import functools
+import hashlib
 import re
 import sqlite3
 from collections.abc import Callable, Mapping
@@ -377,6 +378,76 @@ class Citation:
 
 
 @dataclass(frozen=True)
+class RetrievedRow:
+    """One row of the fused top-`limit` list as `answer()` ranked it (#1345).
+
+    `fts_rank`/`dense_rank` are the 1-based position in that channel's
+    POST-filter list (the list fusion actually saw), `None` when the channel
+    did not return the concept. `rrf_score` is the score fusion ranked by."""
+
+    rank: int
+    concept_id: str
+    title: str
+    fts_rank: int | None
+    dense_rank: int | None
+    rrf_score: float
+
+
+@dataclass(frozen=True)
+class ContextBlockTrace:
+    """One block of the synthesis prompt, in prompt order (#1345).
+
+    `index` is the 1-based number the prompt gives the block (`[n]`), `text`
+    is exactly the block string placed after that number, after the
+    excerpting/elision rule."""
+
+    index: int
+    concept_id: str
+    title: str
+    excerpted: bool
+    text: str
+    history: Literal["superseded", "refined"] | None = None
+    confidential: bool = False
+
+
+@dataclass(frozen=True)
+class OmittedTrace:
+    """A retrieved concept the context budget dropped entirely (#1345)."""
+
+    concept_id: str
+    title: str
+    reason: str = "context_budget"
+
+
+@dataclass(frozen=True)
+class AnswerTrace:
+    """Observability-only record of how one `answer()` call was assembled
+    (#1345). Built from values `answer()` already computes; nothing here is
+    read back by retrieval, assembly, the sufficiency check, synthesis or
+    attribution.
+
+    Hashes are the full SHA-256 hex of the UTF-8 text of the message content
+    that was sent (not of a template). `system_sha256` is `None` unless
+    synthesis ran, `sufficiency_sha256` (the check's system prompt; its user
+    half is `user_sha256`) is `None` unless the check ran, and `user_sha256`
+    is `None` when no context was assembled."""
+
+    retrieved: tuple[RetrievedRow, ...] = ()
+    context_blocks: tuple[ContextBlockTrace, ...] = ()
+    omitted: tuple[OmittedTrace, ...] = ()
+    used_indices: tuple[int, ...] = ()
+    sufficiency_invoked: bool = False
+    sufficiency_raw_reply: str | None = None
+    system_sha256: str | None = None
+    user_sha256: str | None = None
+    sufficiency_sha256: str | None = None
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
 class AnswerResult:
     """The LLM's answer text, the concepts cited to produce it, and the
     retrieval metadata that explains how the answer was reached (surfaced by
@@ -570,6 +641,11 @@ class AnswerResult:
     that missed it. This is the set the sufficiency check judged -- the same
     blocks, index-aligned with `context_ids`. Not populated on an answered
     call, where `citations` already says what the answer drew on."""
+    trace: AnswerTrace | None = field(default=None, compare=False, repr=False)
+    """Observability payload for `query --json` (#1345): the context blocks as
+    sent, per-channel ranks, prompt hashes. `None` on the empty-query
+    short-circuit, where nothing was retrieved. Excluded from equality and
+    `repr` so it can never change what two results compare as."""
 
 
 def _bound_bodies(
@@ -837,6 +913,7 @@ def _assemble_context(
     history_truncated_out: list[str] | None = None,
     omitted_ids_out: list[str] | None = None,
     history_truncated_ids_out: list[str] | None = None,
+    omitted_citations_out: list[Citation] | None = None,
 ) -> tuple[list[str], list[Citation]]:
     """Guarded per-hit re-read (D2): re-read + re-parse each fused
     `concept_id`'s doc, skipping anything unreadable or unparseable rather
@@ -915,7 +992,11 @@ def _assemble_context(
     `omitted_titles_out`/`history_truncated_out`: each receives the same
     concept's id in the SAME statement as its paired title, so the two
     lists can never desynchronize under a later edit. Both default `None`
-    and are otherwise unread here."""
+    and are otherwise unread here.
+
+    `omitted_citations_out` (#1345) receives the `Citation` of every block
+    dropped for budget, at the same statement as its title; observability
+    only."""
     labels: list[str] = []
     bodies: list[str] = []
     citations: list[Citation] = []
@@ -1058,6 +1139,8 @@ def _assemble_context(
                     omitted_titles_out.append(citation.title + suffix)
                     if omitted_ids_out is not None:
                         omitted_ids_out.append(citation.concept_id)
+                    if omitted_citations_out is not None:
+                        omitted_citations_out.append(citation)
                 continue
             context_blocks.append(label + bounded)
             kept.append(
@@ -1083,11 +1166,21 @@ def _assemble_context(
                 omitted_titles_out.append(citation.title)
                 if omitted_ids_out is not None:
                     omitted_ids_out.append(citation.concept_id)
+                if omitted_citations_out is not None:
+                    omitted_citations_out.append(citation)
             continue
         context_blocks.append(label + bounded)
         kept.append(replace(citation, excerpted=True) if was_bounded else citation)
     return context_blocks, kept
 
+
+OMIT_REASON_BUDGET: Final = "context_budget"
+"""`OmittedTrace.reason` for a retrieved concept the context budget left no
+room for at all."""
+
+OMIT_REASON_EARLIER_VERSION: Final = "context_budget_earlier_version"
+"""`OmittedTrace.reason` for an attached earlier version (a `supersedes` or
+`revises` predecessor) dropped for the same cause."""
 
 _SUFFICIENCY_NONE: Final = "NONE"
 """The reply meaning "no sentence here answers the question" (#760)."""
@@ -1108,7 +1201,11 @@ negative arm cannot distinguish "this mechanism does not work" from "this
 wording does not work"."""
 
 
-def _context_holds_the_answer(llm: LLMBackend, user_content: str) -> tuple[bool, bool]:
+def _context_holds_the_answer(
+    llm: LLMBackend,
+    user_content: str,
+    reply_out: list[str] | None = None,
+) -> tuple[bool, bool]:
     """Whether the assembled context contains an answer to the question.
 
     `user_content` is the SAME string synthesis will be sent, so the check
@@ -1132,6 +1229,9 @@ def _context_holds_the_answer(llm: LLMBackend, user_content: str) -> tuple[bool,
     on the fail-open path: failing open is the right call, but failing open
     SILENTLY leaves an operator whose backend has been flaky no way to learn
     that the guard they configured has not run once (#764).
+
+    `reply_out` (#1345), when given, receives the check's raw reply and
+    nothing else reads it; observability only.
     """
     try:
         reply = llm.chat(
@@ -1148,6 +1248,8 @@ def _context_holds_the_answer(llm: LLMBackend, user_content: str) -> tuple[bool,
         raise
     except BackendError:
         return True, True
+    if reply_out is not None:
+        reply_out.append(reply)
     return reply.strip().strip("\"'`*. \t\n").upper() != _SUFFICIENCY_NONE, False
 
 
@@ -1433,6 +1535,7 @@ def answer(
     fused_ids = fusion.select_top(fusion.fuse(hits, vec_hits), limit)
     omitted_titles: list[str] = []
     omitted_ids: list[str] = []
+    omitted_citations: list[Citation] = []
     history_truncated_titles: list[str] = []
     history_truncated_ids: list[str] = []
     # superseded-history-in-query, design.md Decision 8: under
@@ -1456,6 +1559,7 @@ def answer(
         history_truncated_out=history_truncated_titles,
         omitted_ids_out=omitted_ids,
         history_truncated_ids_out=history_truncated_ids,
+        omitted_citations_out=omitted_citations,
     )
     # Captured BEFORE #753's attribution filter runs below: this reports
     # what was SENT, and a model that cites nothing must not also erase the
@@ -1475,6 +1579,55 @@ def answer(
     # correction, design Decision 9). See `AnswerResult.context_ids`'s own
     # docstring for why a citation-only check cannot close this race.
     context_ids = [c.concept_id for c in citations]
+
+    # #1345: observability only. Everything below is read from values already
+    # computed above; nothing assigned here is read by retrieval, assembly,
+    # the sufficiency check, synthesis or attribution.
+    fts_ranks = fusion.first_ranks(hits)
+    dense_ranks = fusion.first_ranks(vec_hits)
+    fused_scores = fusion.rrf_scores(hits, vec_hits)
+    titles_by_id = {c.concept_id: c.title for c in citations if c.history is None}
+    titles_by_id.update({c.concept_id: c.title for c in omitted_citations})
+    trace_retrieved = tuple(
+        RetrievedRow(
+            rank=position,
+            concept_id=concept_id,
+            title=titles_by_id[concept_id],
+            fts_rank=fts_ranks.get(concept_id),
+            dense_rank=dense_ranks.get(concept_id),
+            rrf_score=fused_scores[concept_id],
+        )
+        for position, concept_id in enumerate(fused_ids, 1)
+        # A fused concept that was never read (unreadable, unparseable or
+        # re-check blocked) has no verified title and may be exactly the
+        # concept a sensitivity gate refused: it is not listed.
+        if concept_id in titles_by_id
+    )
+    trace_blocks = tuple(
+        ContextBlockTrace(
+            index=position,
+            concept_id=citation.concept_id,
+            title=citation.title,
+            excerpted=citation.excerpted,
+            text=block,
+            history=citation.history,
+            confidential=citation.confidential,
+        )
+        for position, (block, citation) in enumerate(
+            zip(context_blocks, citations, strict=True), 1
+        )
+    )
+    trace_omitted = tuple(
+        OmittedTrace(
+            concept_id=c.concept_id,
+            title=c.title,
+            reason=(OMIT_REASON_EARLIER_VERSION if c.history else OMIT_REASON_BUDGET),
+        )
+        for c in omitted_citations
+    )
+    trace = AnswerTrace(
+        retrieved=trace_retrieved, context_blocks=trace_blocks, omitted=trace_omitted
+    )
 
     if not context_blocks:
         # The disclosure travels on THIS return too (#882). When the budget
@@ -1503,9 +1656,11 @@ def answer(
             omitted_ids=omitted_ids,
             history_truncated_ids=history_truncated_ids,
             context_ids=context_ids,
+            trace=trace,
         )
 
     user_content = _user_content(context_blocks, question)
+    user_sha256 = _sha256(user_content)
 
     # #760: judge whether this context can answer at all, BEFORE paying for
     # synthesis. #753 ruled "refuse below a relevance floor" and #760 measured
@@ -1518,12 +1673,22 @@ def answer(
     # the eval harnesses included, keeps byte-identical behavior and pays no
     # added latency unless it opts in.
     sufficiency_degraded = False
+    sufficiency_replies: list[str] = []
     if sufficiency_check:
         if progress is not None:
             progress("checking", 2, progress_total)
-        holds, sufficiency_degraded = _context_holds_the_answer(llm, user_content)
+        holds, sufficiency_degraded = _context_holds_the_answer(
+            llm, user_content, sufficiency_replies
+        )
     else:
         holds = True
+    trace = replace(
+        trace,
+        user_sha256=user_sha256,
+        sufficiency_invoked=sufficiency_check,
+        sufficiency_sha256=_sha256(_SUFFICIENCY_PROMPT) if sufficiency_check else None,
+        sufficiency_raw_reply=sufficiency_replies[0] if sufficiency_replies else None,
+    )
     if not holds:
         return AnswerResult(
             answer=NO_ANSWER_IN_CONTEXT,
@@ -1546,6 +1711,7 @@ def answer(
             omitted_ids=omitted_ids,
             history_truncated_ids=history_truncated_ids,
             context_ids=context_ids,
+            trace=trace,
         )
 
     if progress is not None:
@@ -1575,6 +1741,11 @@ def answer(
             for position, citation in enumerate(citations, 1)
             if position in reported
         ]
+    trace = replace(
+        trace,
+        system_sha256=_sha256(_SYSTEM_PROMPT),
+        used_indices=tuple(sorted(reported)) if reported is not None else (),
+    )
     return AnswerResult(
         # Stripped HERE, not at the print site, because `AnswerResult.answer`
         # feeds both -- `query` echoes it and `query --save` files it as a
@@ -1600,4 +1771,5 @@ def answer(
         omitted_ids=omitted_ids,
         history_truncated_ids=history_truncated_ids,
         context_ids=context_ids,
+        trace=trace,
     )
