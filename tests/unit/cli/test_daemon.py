@@ -1486,3 +1486,100 @@ def test_the_extraction_phase_hook_names_the_file_on_a_tty(
     assert (
         "openkos daemon: extracting window 2/5 ('a.md')..." in capsys.readouterr().err
     )
+
+
+# -- #1332: an unchanged bundle costs the volatility stage nothing ------------------
+
+
+class _CountingModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, messages: Sequence[Any]) -> str:
+        self.calls += 1
+        return '{"tier": "slow", "rationale": "changes occasionally"}'
+
+
+@contextlib.contextmanager
+def _volatility_ctx(root: Path) -> Iterator[runner.StageContext]:
+    from openkos.application import budget as budget_module
+    from openkos.application.lock_wait import locked_commit_section
+    from openkos.application.runtime import UnattendedPolicy
+    from openkos.state import derived
+
+    layout = config.WorkspaceLayout(root)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    pq.ensure_schema(conn)
+    try:
+        yield runner.StageContext(
+            root=root,
+            layout=layout,
+            budget=budget_module.start_budgeted_run(
+                layout, config.read_config(root).unattended, _NOW
+            ),
+            policy=UnattendedPolicy(),
+            commit_section=locked_commit_section(root, wait_seconds=0),
+            queue=lambda: conn,
+        )
+    finally:
+        conn.close()
+
+
+def test_the_volatility_stage_does_not_re_ask_an_unchanged_bundle(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_doc(
+        root, "concepts/a", {"type": "Concept", "title": "A", "sensitivity": "private"}
+    )
+    write_doc(
+        root, "events/b", {"type": "Event", "title": "B", "sensitivity": "private"}
+    )
+    model = _CountingModel()
+    monkeypatch.setattr("openkos.cli.main._chat_client", lambda cfg, task=None: model)
+    monkeypatch.setattr(
+        "openkos.cli.main._resolve_local_exemption", lambda client, cfg: True
+    )
+    stage = next(
+        s for s in daemon_module.production_stages() if s.name == "suggest-volatility"
+    )
+
+    with _volatility_ctx(root) as ctx:
+        stage.run(ctx)
+    first_pass_calls = model.calls
+    with _volatility_ctx(root) as ctx:
+        stage.run(ctx)
+
+    assert first_pass_calls == 2
+    assert model.calls == first_pass_calls
+
+
+def test_the_volatility_stage_still_queues_what_it_served(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A served answer must stay in the published set: a complete run retires
+    every row it does not republish."""
+    write_doc(
+        root,
+        "projects/p",
+        {"type": "Project", "title": "P", "sensitivity": "private"},
+    )
+    model = _CountingModel()  # "slow" differs from Project's default
+    monkeypatch.setattr("openkos.cli.main._chat_client", lambda cfg, task=None: model)
+    monkeypatch.setattr(
+        "openkos.cli.main._resolve_local_exemption", lambda client, cfg: True
+    )
+    stage = next(
+        s for s in daemon_module.production_stages() if s.name == "suggest-volatility"
+    )
+
+    for _ in range(2):
+        with _volatility_ctx(root) as ctx:
+            stage.run(ctx)
+
+    conn = sqlite3.connect(config.WorkspaceLayout(root).findings_db_path)
+    try:
+        kinds = [i.kind for i in pq.open_items(conn)]
+    finally:
+        conn.close()
+    assert model.calls == 1
+    assert kinds == ["volatility"]

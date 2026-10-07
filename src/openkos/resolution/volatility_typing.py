@@ -29,8 +29,10 @@ of that type's concept bodies (design's "Deterministic Sampling Rule") to
 show the LLM -- one `llm.chat` call per type, never per concept.
 """
 
+import hashlib
+import json
 from collections.abc import Callable, Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from openkos import lint, sensitivity
@@ -92,6 +94,26 @@ class TierSuggestion:
 
 
 @dataclass(frozen=True)
+class ComputedTier:
+    """What a freshly asked type's answer is keyed on, so the caller can persist
+    it and a later run can recognise the same question (#1332)."""
+
+    prompt_digest: str
+    """sha256 over the exact messages sent: the type, its default, the sampled
+    bodies, the rationale language and the rubric. Any change re-asks."""
+    input_refs: tuple[str, ...]
+    """The concept ids whose bodies the prompt carried."""
+
+
+def prompt_digest(messages: list[Message]) -> str:
+    """The identity of one question: a hash of the exact chat messages."""
+    payload = json.dumps(
+        [[m["role"], m["content"]] for m in messages], ensure_ascii=False
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
 class TierSuggestionBatch:
     """Outcome of one `suggest_volatility` run: every completed suggestion
     plus, when the loop was cut short, the failure that stopped it (issue
@@ -128,6 +150,10 @@ class TierSuggestionBatch:
     is not counted). `0` for an unbounded run and for one the bound did not
     cut. A deferred type is simply asked on a later run; nothing is persisted
     for it, so there is nothing to resume from."""
+    computed: dict[str, ComputedTier] = field(default_factory=dict)
+    """One entry per type the model was ASKED this run (a served type is not
+    here), keyed by type name. Includes a degraded answer; the caller persists
+    only the ones with a valid tier."""
 
 
 def _reread_sensitivity_blocked(
@@ -292,6 +318,86 @@ def _parse_reply(raw: object) -> tuple[str | None, str]:
     return tier, rationale
 
 
+_Planned = tuple[
+    int, str, list[lint.LintDoc], list[Message], str, TierSuggestion | None
+]
+
+
+def _plan_questions(
+    bundle_dir: Path,
+    *,
+    include_confidential: bool,
+    local_exemption: bool,
+    rationale_language: str | None,
+    skip_types: Collection[str],
+    served: Callable[[str, str], TierSuggestion | None] | None,
+) -> tuple[list[_Planned], int]:
+    """Every question this run would put to the model, in sorted-type order,
+    each with the answer `served` already holds for it (or `None`), plus the
+    number of types entering the loop. Reads, never asks."""
+    blocked = sensitivity.sensitive_concept_ids(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
+
+    docs, _skip_notices = lint.collect_docs(bundle_dir)
+    docs = [doc for doc in docs if doc.identity not in blocked]
+    sampled_docs = {
+        type_name: type_docs
+        for type_name, type_docs in _sample_docs_by_type(docs).items()
+        if type_name not in skip_types
+    }
+    planned: list[_Planned] = []
+    for type_index, type_name in enumerate(sorted(sampled_docs), start=1):
+        type_docs = [
+            doc
+            for doc in sampled_docs[type_name]
+            if not _reread_sensitivity_blocked(
+                doc,
+                include_confidential=include_confidential,
+                local_exemption=local_exemption,
+            )
+        ]
+        if not type_docs:
+            continue
+        bodies = [doc.body[:M_TRUNCATE_CHARS] for doc in type_docs]
+        current_default = types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, "")
+        messages = _build_messages(
+            type_name,
+            current_default,
+            bodies,
+            rationale_language=rationale_language,
+        )
+        digest = prompt_digest(messages)
+        hit = served(type_name, digest) if served is not None else None
+        planned.append((type_index, type_name, type_docs, messages, digest, hit))
+    return planned, len(sampled_docs)
+
+
+def unanswered_type_count(
+    bundle_dir: Path,
+    *,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
+    rationale_language: str | None = None,
+    skip_types: Collection[str] = (),
+    served: Callable[[str, str], TierSuggestion | None] | None = None,
+) -> int:
+    """How many chat calls a run with these arguments would issue: the types
+    whose exact prompt neither `skip_types` nor `served` already answers. The
+    exact price `curate` quotes before it spends anything."""
+    planned, _count = _plan_questions(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+        rationale_language=rationale_language,
+        skip_types=skip_types,
+        served=served,
+    )
+    return sum(1 for *_rest, hit in planned if hit is None)
+
+
 def suggest_volatility(
     bundle_dir: Path,
     *,
@@ -302,6 +408,7 @@ def suggest_volatility(
     on_progress: Callable[[int, int, TierSuggestion], None] | None = None,
     max_calls: int | None = None,
     skip_types: Collection[str] = (),
+    served: Callable[[str, str], TierSuggestion | None] | None = None,
 ) -> TierSuggestionBatch:
     """Suggest a volatility tier + rationale for every distinct concept TYPE
     present under `bundle_dir`, read-only.
@@ -384,47 +491,37 @@ def suggest_volatility(
 
     `skip_types` names types the caller already holds a suggestion for (a fresh
     pending-work row): they are left out of the sample, cost no call and do not
-    count toward `total`. Empty -- the default -- changes nothing."""
-    blocked = sensitivity.sensitive_concept_ids(
+    count toward `total`. Empty -- the default -- changes nothing.
+
+    `served(type_name, prompt_digest)` (#1332) answers a type whose exact
+    prompt was already answered: a hit lands in `results` like a fresh answer
+    but costs no call, does not spend `max_calls`, does not fire `on_progress`
+    and does not count toward its `total`. `None` -- the default -- asks every
+    type, byte-identical to before."""
+    planned, sampled_count = _plan_questions(
         bundle_dir,
         include_confidential=include_confidential,
         local_exemption=local_exemption,
+        rationale_language=rationale_language,
+        skip_types=skip_types,
+        served=served,
     )
-
-    docs, _skip_notices = lint.collect_docs(bundle_dir)
-    docs = [doc for doc in docs if doc.identity not in blocked]
-    sampled_docs = {
-        type_name: type_docs
-        for type_name, type_docs in _sample_docs_by_type(docs).items()
-        if type_name not in skip_types
-    }
     results: list[TierSuggestion] = []
-    total = len(sampled_docs)
+    computed: dict[str, ComputedTier] = {}
+    # Progress counts the questions to ASK; with no `served` this is the
+    # historical upper bound, `len(sampled_docs)`.
+    total = sampled_count - sum(1 for *_rest, hit in planned if hit is not None)
     calls_issued = 0
     deferred = 0
-    for type_index, type_name in enumerate(sorted(sampled_docs), start=1):
-        type_docs = [
-            doc
-            for doc in sampled_docs[type_name]
-            if not _reread_sensitivity_blocked(
-                doc,
-                include_confidential=include_confidential,
-                local_exemption=local_exemption,
-            )
-        ]
-        if not type_docs:
+    served_so_far = 0
+    for type_index, type_name, type_docs, messages, digest, hit in planned:
+        if hit is not None:
+            results.append(hit)
+            served_so_far += 1
             continue
         if max_calls is not None and calls_issued >= max_calls:
             deferred += 1
             continue
-        bodies = [doc.body[:M_TRUNCATE_CHARS] for doc in type_docs]
-        current_default = types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, "")
-        messages = _build_messages(
-            type_name,
-            current_default,
-            bodies,
-            rationale_language=rationale_language,
-        )
         # Guard ONLY the chat call (#441): a transport/model failure must
         # not discard the completed suggestions, while parse/validate/
         # progress failures keep their own existing contracts untouched.
@@ -433,16 +530,23 @@ def suggest_volatility(
             reply = llm.chat(messages)
         except BackendError as exc:
             return TierSuggestionBatch(
-                results=results, failure=exc, failed_index=type_index
+                results=results,
+                failure=exc,
+                failed_index=type_index,
+                computed=computed,
             )
         suggested_tier, rationale = _parse_reply(reply)
         suggestion = TierSuggestion(
             type_name=type_name,
-            current_default=current_default,
+            current_default=types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, ""),
             suggested_tier=suggested_tier,
             rationale=rationale,
         )
         results.append(suggestion)
+        computed[type_name] = ComputedTier(
+            prompt_digest=digest,
+            input_refs=tuple(doc.identity for doc in type_docs),
+        )
         if on_progress is not None:
-            on_progress(len(results), total, suggestion)
-    return TierSuggestionBatch(results=results, deferred=deferred)
+            on_progress(len(results) - served_so_far, total, suggestion)
+    return TierSuggestionBatch(results=results, deferred=deferred, computed=computed)

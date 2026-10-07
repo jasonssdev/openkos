@@ -45,6 +45,7 @@ from tests.unit.cli.test_curate_lock import (
     _workspace,
     _write,
 )
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
 _SENTINEL_RATIONALE = "SENTINEL-ROW-RATIONALE-4c1e"
 
@@ -564,3 +565,45 @@ def test_a_curate_run_tolerates_an_unreadable_queue_file(
 
     assert result.exit_code in (0, 1), result.stderr
     assert "Traceback" not in result.stderr
+
+
+# --- Metadata: the answered-question cache (#1332) --------------------------
+
+
+class _TierModel:
+    """Replies with the type's own default tier, so nothing earns a queue row:
+    only the cache can stop the next run asking."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, messages: object) -> str:
+        self.calls += 1
+        default = types.TYPE_TO_DEFAULT_VOLATILITY["Concept"]
+        return f'{{"tier": "{default}", "rationale": "keep it"}}'
+
+    def embed(self, texts: "list[str]") -> "list[list[float]]":
+        return [[1.0] + [0.0] * 7 for _ in texts]
+
+
+def test_a_no_change_answer_is_not_asked_again_by_the_next_curate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
+    )
+    model = _TierModel()
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: model)
+    _answer(monkeypatch)
+
+    first = runner.invoke(app, ["curate", "--auto"])
+    asked_first = model.calls
+    second = runner.invoke(app, ["curate", "--auto"])
+
+    assert first.exit_code == 0, first.stderr
+    assert second.exit_code == 0, second.stderr
+    assert asked_first == 1
+    assert model.calls == 1

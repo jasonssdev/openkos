@@ -327,7 +327,9 @@ def _volatility_stage(ctx: StageContext) -> StageResult:
 
     outcome = volatility_service.suggest_volatility_tiers(
         ctx.root,
-        volatility_service.VolatilityRequest(max_calls=ctx.budget.remaining),
+        volatility_service.VolatilityRequest(
+            max_calls=ctx.budget.remaining, use_cache=True
+        ),
         volatility_service.VolatilityPorts(
             chat_client=_counted(
                 ctx, lambda cfg, task: cli_main._chat_client(cfg, task=task)
@@ -338,6 +340,7 @@ def _volatility_stage(ctx: StageContext) -> StageResult:
             suggest_volatility=lambda *a, **k: volatility_typing.suggest_volatility(
                 *a, **k
             ),
+            commit_section=ctx.commit_section,
         ),
         _DaemonVolatilityObserver(),
     )

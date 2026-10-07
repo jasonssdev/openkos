@@ -158,6 +158,7 @@ from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import pending_queue as pending_queue_store
 from openkos.state import reindex as reindex_module
 from openkos.state import revision_findings as revision_findings_store
+from openkos.state import volatility_suggestions as volatility_suggestions_store
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import open_vector_store
 from openkos.vcs import git as vcs_git
@@ -1148,6 +1149,12 @@ def _sweep_findings_for_ids(
             # every field that names a concept (target, input ref including
             # `sources-of:`), not one pair field -- same erasure discipline.
             pending_queue_store.delete_items_referencing(conn, set(purge_ids))
+            # #1332: the volatility answers are the same file's SIXTH tenant;
+            # a type-level rationale can quote a sampled body, and the row
+            # names the concept ids its prompt carried -- same sweep.
+            volatility_suggestions_store.delete_volatility_suggestions_referencing(
+                conn, set(purge_ids)
+            )
         finally:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
