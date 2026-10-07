@@ -26,11 +26,14 @@ a stream swapped after configuration (a test runner, a redirect) is honoured.
 import logging
 import logging.handlers
 import os
+import re
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from openkos import userstate
+from openkos import config, userstate
 from openkos.lock import workspace_digest
 
 Mode = Literal["cli", "daemon", "mcp"]
@@ -72,6 +75,141 @@ class _TypeOnlyFormatter(logging.Formatter):
 def log_path_for(root: Path) -> Path:
     """The daemon's log file for the workspace at `root` (a pure resolution)."""
     return Path(userstate.log_dir()) / f"{workspace_digest(root)}.log"
+
+
+def workspace_record_path_for(root: Path) -> Path:
+    """The sidecar naming the workspace a daemon log belongs to (#1334). The log
+    is named by a hash that cannot be reversed, so without this record nothing
+    can say whether a log's workspace still exists."""
+    return Path(userstate.log_dir()) / f"{workspace_digest(root)}.workspace"
+
+
+def _write_workspace_record(root: Path) -> None:
+    """Atomically record the workspace's resolved path beside its log: the path
+    and nothing else, owner-only, written to a temporary name and renamed."""
+    record = workspace_record_path_for(root)
+    temporary = record.with_name(record.name + ".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(os.path.realpath(root))
+    temporary.replace(record)
+
+
+_GROUP_NAME = re.compile(r"^(?P<digest>[0-9a-f]{64})\.(?:log(?:\.[0-9]+)?|workspace)$")
+"""The ONLY names cleanup ever touches: what `configure_logging` writes -- the
+current log, its numbered rotations and the workspace record. Anything else in
+the directory is somebody else's."""
+
+_MAX_RECORD_BYTES = 4096
+
+
+@dataclass(frozen=True)
+class StaleLog:
+    """One workspace's log files whose recorded workspace no longer exists."""
+
+    digest: str
+    workspace: Path
+    files: tuple[Path, ...]
+    bytes: int
+
+
+@dataclass(frozen=True)
+class LogScan:
+    stale: tuple[StaleLog, ...]
+    """Groups cleanup would remove."""
+    legacy_files: int
+    """Log files nothing attributes to a workspace (no valid record). Never
+    removed automatically."""
+    legacy_bytes: int
+
+
+def _read_record(path: Path, digest: str) -> Path | None:
+    """The workspace a record names, or `None` when it cannot be trusted: not a
+    regular file, unreadable, malformed, not absolute, or a path that does not
+    hash to the name it sits under."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        with path.open("rb") as handle:
+            raw = handle.read(_MAX_RECORD_BYTES + 1)
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if len(raw) > _MAX_RECORD_BYTES or not text or "\x00" in text:
+        return None
+    if not Path(text).is_absolute():
+        return None
+    workspace = Path(text)
+    if workspace_digest(workspace) != digest:
+        return None
+    return workspace
+
+
+def scan_logs(current_root: Path) -> LogScan:
+    """Classify the per-user log directory without changing it. A group is STALE
+    only when it carries a trustworthy record naming a workspace that is gone;
+    the current workspace, a workspace that still exists, a group holding a
+    symlink and every name that is not ours are never stale. A log with no
+    trustworthy record is LEGACY: counted, never removed."""
+    directory = Path(userstate.log_dir())
+    groups: dict[str, list[Path]] = {}
+    try:
+        entries = sorted(os.scandir(directory), key=lambda e: e.name)
+    except OSError:
+        return LogScan((), 0, 0)
+    for entry in entries:
+        match = _GROUP_NAME.match(entry.name)
+        if match is not None:
+            groups.setdefault(match["digest"], []).append(Path(entry.path))
+    current = workspace_digest(current_root)
+    stale: list[StaleLog] = []
+    legacy_files = 0
+    legacy_bytes = 0
+    for digest, paths in sorted(groups.items()):
+        if digest == current:
+            continue
+        logs = [p for p in paths if not p.name.endswith(".workspace")]
+        if any(p.is_symlink() or not p.is_file() for p in paths):
+            continue  # never follow, never half-delete a group
+        record = _read_record(directory / f"{digest}.workspace", digest)
+        if record is None:
+            legacy_files += len(logs)
+            legacy_bytes += sum(p.stat().st_size for p in logs)
+            continue
+        if not config.workspace_absent(record):
+            continue
+        stale.append(
+            StaleLog(
+                digest=digest,
+                workspace=record,
+                files=tuple(paths),
+                bytes=sum(p.stat().st_size for p in paths),
+            )
+        )
+    return LogScan(tuple(stale), legacy_files, legacy_bytes)
+
+
+def remove_stale_logs(current_root: Path, report: Callable[[str], None]) -> int:
+    """Delete every stale group `scan_logs` finds, reporting each file removed
+    through `report` -- a deletion is never silent. Returns the files removed. A
+    file that cannot be removed is reported and left; cleanup never raises."""
+    removed = 0
+    for group in scan_logs(current_root).stale:
+        for path in group.files:
+            try:
+                path.unlink()
+            except OSError as exc:
+                report(
+                    f"openkos daemon: could not remove '{path.name}' "
+                    f"({type(exc).__name__}); leaving it."
+                )
+                continue
+            removed += 1
+            report(
+                f"openkos daemon: removed log '{path.name}' -- its workspace "
+                f"'{group.workspace}' no longer exists."
+            )
+    return removed
 
 
 def is_configured(mode: Mode) -> bool:
@@ -127,6 +265,7 @@ def configure_logging(
         raise ValueError("daemon logging needs the workspace root")
     path = log_path_for(root)
     _private_dir(path.parent)
+    _write_workspace_record(root)
     file_handler = logging.handlers.RotatingFileHandler(
         path, maxBytes=MAX_LOG_BYTES, backupCount=LOG_BACKUPS, encoding="utf-8"
     )

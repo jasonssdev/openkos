@@ -29,6 +29,12 @@ def _private_lock_directory() -> None:
     pin the REAL `userstate.locks_dir`, which that fixture replaces."""
 
 
+@pytest.fixture(autouse=True)
+def _private_log_directory() -> None:
+    """Override the suite-wide autouse fixture of the same name: these tests
+    pin the REAL `userstate.log_dir`, which that fixture replaces."""
+
+
 def test_linux_state_and_locks_dirs() -> None:
     assert userstate.state_dir("linux", home=_HOME) == _HOME / ".local/state/openkos"
     assert (

@@ -1651,3 +1651,73 @@ def test_changing_type_tiers_re_asks_the_type(
         stage.run(ctx)
 
     assert model.calls == 2
+
+
+# -- #1334: the daemon removes the logs of workspaces that are gone -----------------
+
+
+def test_daemon_start_removes_a_stale_log_group_and_says_so(
+    root: Path, tmp_path: Path
+) -> None:
+    import os
+
+    from openkos.lock import workspace_digest
+
+    gone = tmp_path / "long-gone-workspace"
+    digest = workspace_digest(gone)
+    log_dir = tmp_path / "state-logs"
+    log_dir.mkdir(exist_ok=True)
+    stale = log_dir / f"{digest}.log"
+    stale.write_text("old\n", encoding="utf-8")
+    record = log_dir / f"{digest}.workspace"
+    record.write_text(os.path.realpath(gone), encoding="utf-8")
+    legacy = log_dir / ("c" * 64 + ".log")
+    legacy.write_text("unattributable\n", encoding="utf-8")
+
+    result = cli.invoke(app, ["daemon", "--once"])
+
+    assert result.exit_code == 0, result.output
+    assert not stale.exists()
+    assert not record.exists()
+    assert legacy.exists()
+    assert f"openkos daemon: removed log '{digest}.log'" in result.stderr
+    assert str(gone) in result.stderr
+
+
+def test_daemon_start_records_its_workspace_beside_its_log(
+    root: Path, tmp_path: Path
+) -> None:
+    import os
+
+    from openkos.lock import workspace_digest
+
+    assert cli.invoke(app, ["daemon", "--once"]).exit_code == 0
+
+    record = tmp_path / "state-logs" / f"{workspace_digest(root)}.workspace"
+    assert record.read_text(encoding="utf-8") == os.path.realpath(root)
+
+
+def test_daemon_start_leaves_a_live_workspaces_log_alone(
+    root: Path, tmp_path: Path
+) -> None:
+    import os
+
+    from openkos.lock import workspace_digest
+
+    other = tmp_path / "other-workspace"
+    (other / "bundle").mkdir(parents=True)
+    (other / "bundle" / "index.md").write_text("x", encoding="utf-8")
+    (other / "bundle" / "log.md").write_text("x", encoding="utf-8")
+    digest = workspace_digest(other)
+    log_dir = tmp_path / "state-logs"
+    log_dir.mkdir(exist_ok=True)
+    (log_dir / f"{digest}.log").write_text("live\n", encoding="utf-8")
+    (log_dir / f"{digest}.workspace").write_text(
+        os.path.realpath(other), encoding="utf-8"
+    )
+
+    result = cli.invoke(app, ["daemon", "--once"])
+
+    assert result.exit_code == 0, result.output
+    assert (log_dir / f"{digest}.log").exists()
+    assert "removed log" not in result.stderr

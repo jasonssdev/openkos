@@ -870,6 +870,14 @@ def symlink_boundary_reason(path: Path, boundary: Path) -> str | None:
     )
 
 
+def workspace_absent(root: Path) -> bool:
+    """Whether `root` holds no OpenKOS workspace -- the missing-workspace answer
+    of `require_workspace`, and only that one. A workspace that exists but
+    cannot be read is NOT absent: an unreadable answer must never be mistaken
+    for a missing one by a caller that deletes things on it."""
+    return require_workspace(root) == _NO_WORKSPACE_REASON
+
+
 def require_workspace(root: Path) -> str | None:
     """Return `None` if `root` already holds an initialized workspace, else
     the exact refusal reason string every read-only command shares (D1).

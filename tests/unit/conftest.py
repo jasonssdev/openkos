@@ -319,6 +319,19 @@ def _private_lock_directory(
 
 
 @pytest.fixture(autouse=True)
+def _private_log_directory(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point the per-user daemon-log directory at a private per-test path.
+
+    The real one sits under the developer's home, where `daemon` startup now
+    removes the logs of workspaces that no longer exist and `doctor` reports
+    the logs it cannot attribute: a test must never read or delete those."""
+    directory = tmp_path_factory.mktemp("userlogs")
+    monkeypatch.setattr(userstate, "log_dir", lambda *a, **k: directory)
+
+
+@pytest.fixture(autouse=True)
 def _reclaim_cyclic_garbage_for_deterministic_leak_attribution() -> Iterator[None]:
     """Collect generation 0 after every test -- see the module docstring's
     "Unclosed `sqlite3.Connection` gate (#927)" section for why this is

@@ -138,3 +138,18 @@ def test_an_undeletable_log_is_reported_with_its_path_and_the_remedy(
     assert not logs[0].exists()
     assert not logs[2].exists()
     assert str(logs[2]) not in result.output
+
+
+def test_purge_removes_the_workspace_record_that_sits_beside_the_log(
+    tmp_git_repo: TmpGitRepo, log_directory: Path
+) -> None:
+    """The record names the workspace's path; a purged workspace must not leave
+    that behind (#1334)."""
+    _daemon_logs(tmp_git_repo.root)
+    record = logsetup.workspace_record_path_for(tmp_git_repo.root)
+    record.write_text(str(tmp_git_repo.root), encoding="utf-8")
+
+    result = _purge_self(tmp_git_repo.source_id)
+
+    assert result.exit_code == 0, result.output
+    assert not record.exists()

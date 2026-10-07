@@ -662,6 +662,16 @@ def serve(
     previous = _install_stop_handlers(token) if install_signals else {}
     logsetup.configure_logging("daemon", root=root)
     try:
+        # Startup is where the logs are made, and a daemon starts rarely (a
+        # service manager, or `--once`), so this costs a directory listing at
+        # a moment nothing else is waiting. Every file it removes is said so.
+        removed = logsetup.remove_stale_logs(
+            root, lambda line: typer.echo(line, err=True)
+        )
+        if removed:
+            log.info(
+                "removed %d log file(s) of workspaces that no longer exist", removed
+            )
         wired = ports if ports is not None else production_ports(root)
         announcer = _Announcer()
         wired = dataclasses.replace(wired, announce=announcer)

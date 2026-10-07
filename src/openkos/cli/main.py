@@ -33,6 +33,7 @@ from openkos import (
     read_outcome,
     source_date,
     source_title,
+    userstate,
 )
 from openkos import lint as lint_check
 from openkos.application import auto_merge as application_auto_merge
@@ -6091,7 +6092,11 @@ def _purge_delete_daemon_logs(layout: config.WorkspaceLayout) -> list[Path]:
         candidates = sorted(
             p
             for p in live.parent.iterdir()
-            if p.name == live.name or p.name.startswith(live.name + ".")
+            if p.name == live.name
+            or p.name.startswith(live.name + ".")
+            # The record naming the workspace's path (#1334) is the workspace's
+            # own, and a purged workspace must not leave its path behind.
+            or p == logsetup.workspace_record_path_for(layout.root)
         )
     except FileNotFoundError:
         return []
@@ -15012,6 +15017,30 @@ def _render_check(r: application_doctor.CheckResult) -> None:
         output.echo_wrapped(f"  -> {r.remediation}", hanging="     ")
 
 
+def _daemon_log_notes(root: Path) -> list[str]:
+    """Informational notes about the per-user daemon logs (#1334), never a
+    check and never an exit-code input: logs of workspaces that no longer exist
+    (the next `daemon` start removes them) and logs nothing attributes to a
+    workspace (written before a log recorded its owner, so never removed
+    automatically). Read-only; an unreadable log directory says nothing."""
+    scan = logsetup.scan_logs(root)
+    notes: list[str] = []
+    if scan.stale:
+        notes.append(
+            f"Note: {len(scan.stale)} daemon log group(s) belong to a workspace "
+            "that no longer exists; the next `openkos daemon` start removes them."
+        )
+    if scan.legacy_files:
+        notes.append(
+            f"Note: {scan.legacy_files} daemon log file(s) "
+            f"({scan.legacy_bytes / 1024:.1f} KiB) in "
+            f"{userstate.log_dir()} are not recorded against any workspace, so "
+            "no workspace they belong to can be identified and they are never "
+            "removed automatically; remove them by hand if you no longer need them."
+        )
+    return notes
+
+
 @app.command(
     help=(
         "Check this machine's environment: whether the model backend is "
@@ -15183,6 +15212,8 @@ def doctor() -> None:
     n = sum(1 for r in results if r.status == read_outcome.NOT_RUN)
     output.section_break()
     typer.echo(f"{len(results) - n} check(s) completed, {n} did not run.")
+    for note in _daemon_log_notes(root):
+        typer.echo(note)
 
     # Exit rule (ADR-0022, design.md Decision 4): precedence is the whole
     # decision. A critical failure is a known, actionable diagnosis and
