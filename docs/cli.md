@@ -234,8 +234,31 @@ What `query` *does* do is **say so**. Before contacting the model it compares ea
 | `--type <type>` | With `--save`, the type of the filed document. Defaults to `Insight`; the classifiable types remain accepted. |
 | `--auto` | With `--save`, skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. Has no effect without `--save`. Never bypasses the unverified-grounding gate below. |
 | `--allow-unattributed` | With `--save`, file an answer whose citation list is the retrieval fallback (attribution `absent` or `unparsed`) without the gate — the citations become provenance without the model ever accounting for them. The explicit opt-in for backends that never emit the attribution line. |
+| `--json` | Emit one JSON object on stdout instead of the human text — the answer, every context block sent to the model, the retrieval ranks and the prompt hashes (schema below). Read-only: a usage error (exit `2`) together with `--save` or any of `--auto`, `--title`, `--description`, `--type`, `--allow-unattributed`. `--limit` still applies. |
 
 **The unverified-grounding gate.** When the answer never accounted for its own citations (its attribution fell back — `absent` or `unparsed`, the states the notice announces), the citations about to be filed as permanent `provenance` are the retrieval set, not the model's accounting. Measured in `evals/query_entailment/`: on the bundle that produced the fabricated answers, 30 of 30 fabricated answers were `absent` while 44 of 45 grounded answers were `reported` (the one grounded `absent` is the measured false-positive rate, and its cost is this gate's prompt); on the constructed corpus, 63 of 63 grounded or compliant answers were `reported`. So `--save` then asks its own stronger question on a TTY (replacing the ordinary prompt), and off a TTY refuses (exit 1) **even under `--auto` or config `review: false`** — neither skips this gate, because an unattended pipeline filing fabricated provenance is the exact harm the issue documents. `--allow-unattributed` skips this gate explicitly; the preview always disclosed the state with a `! unverified grounding:` line first.
+
+**Machine-readable output (`--json`).** With `--json`, stdout carries exactly one JSON object (`schema_version` `1`) and nothing else; every diagnostic stays on stderr, and exit codes are unchanged (`no_match` and a sufficiency refusal still exit `0`). It is observability only: retrieval, fusion, context assembly, prompts and answer post-processing are not touched, and without the flag the output is byte-identical. It exists so a harness driving `query` as a black box can tell a concept that was never retrieved from one that was retrieved and answered wrongly.
+
+| Field | Content |
+| --- | --- |
+| `schema_version`, `openkos_version`, `question`, `limit` | The contract version, the installed version, and the inputs. |
+| `outcome` | `answered`; `no_match` (every no-match cause except the refusal); `no_answer_in_context` (the sufficiency refusal); or `withheld` (see Sensitivity). |
+| `answer` | The final prose after attribution and scaffold stripping; `null` unless `outcome` is `answered`. |
+| `sufficiency` | `{enabled, invoked, refused, degraded, raw_reply}`. `raw_reply` is the check's reply as received, `null` when it did not run or failed open. |
+| `attribution` | `{status, used_indices}`: `reported`, `none` (the answer drew on none of the blocks), `absent` or `unparsed`, and the 1-based prompt positions it reported. |
+| `context_blocks` | Every block placed in the prompt, in prompt order: `{index, concept_id, title, excerpted, text}`. `text` is exactly what the prompt put after `[index] `, after excerpting. |
+| `omitted` | Concepts the context budget dropped entirely: `{concept_id, title, reason}`, where `reason` is `context_budget` or `context_budget_earlier_version` (an attached earlier version dropped for the same cause). |
+| `retrieved` | The fused top-`limit` list before assembly: `{rank, concept_id, title, fts_rank, dense_rank, rrf_score}`. A rank is the 1-based position in that channel's post-filter list, `null` when the channel did not return the concept. A fused concept that could not be read at assembly time is not listed. |
+| `citations` | `{concept_id, title, excerpted}`, as printed. |
+| `counts` | `{fts_hits, dense_hits, fused, context_blocks}`, the numbers the `retrieval:` summary reports. |
+| `withheld` | How many concepts the object declined to name (a count, never an id). |
+| `llm` | `{backend, model, embedding_model, num_ctx, num_predict, temperature, seed}`: what OpenKOS sends. A value it does not send is `null` — `temperature` and `seed` unless the workspace pins them, and `num_ctx` on the `openai-compatible` backend. |
+| `prompts` | `{system_sha256, user_sha256, sufficiency_sha256}`: the full SHA-256 hex of the content sent (the synthesis system prompt, the user message the check and synthesis share, and the check's system prompt). `null` for a prompt that was not sent. |
+
+Assembling `context_blocks` the way the prompt does — `CONTEXT:`, each `[index] text` joined by a blank line, then `QUESTION:` and the question — reproduces the user message byte for byte, so it hashes to `user_sha256`.
+
+**Sensitivity.** `--json` follows the MCP `query` tool's rule. Without `--include-confidential`, a confidential concept never appears in the object by text, title or id; it is only counted in `withheld`. A local backend lets the human text include confidential concepts without the flag, so when one entered the prompt the machine object reports `outcome: "withheld"` with `answer: null` rather than an answer whose wording may rest on it.
 
 Without `--title`, the filed document's name comes from the first rung of this
 ladder that resolves. The slug of whatever wins becomes the permanent Concept
