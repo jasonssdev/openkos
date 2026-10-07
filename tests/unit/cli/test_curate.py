@@ -3059,6 +3059,100 @@ def test_metadata_accepted_tier_writes_via_extracted_set_volatility_core(
     assert "Metadata: applied 1, skipped 0." in _lines(result.stdout)
 
 
+def _metadata_stub_workspace(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    tier: str,
+) -> None:
+    """A workspace whose Metadata stage proposes `Concept -> <tier>`."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.resolution.volatility_typing import (
+        TierSuggestion,
+        TierSuggestionBatch,
+    )
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+
+    def _fake_suggest_volatility(
+        bundle_dir: Path, **kwargs: object
+    ) -> TierSuggestionBatch:
+        on_progress = kwargs.get("on_progress")
+        suggestion = TierSuggestion(
+            type_name="Concept",
+            current_default="static",
+            suggested_tier=tier,
+            rationale="stub rationale",
+        )
+        if on_progress is not None:
+            on_progress(1, 1, suggestion)  # type: ignore[operator]
+        return TierSuggestionBatch(results=[suggestion])
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_volatility", _fake_suggest_volatility
+    )
+    _simulate_tty(monkeypatch)
+
+
+def _head_sha(tmp_path: Path) -> str:
+    return vcs_git._run(["git", "rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+
+def test_metadata_commits_only_its_own_change_over_an_uncommitted_config_edit(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1330: the Metadata stage must not sweep a hand edit of `openkos.yaml`
+    into its `set-volatility` commit."""
+    _metadata_stub_workspace(tmp_path, tmp_path_factory, monkeypatch, "volatile")
+    config = tmp_path / "openkos.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + "\n# hand edit\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    committed = vcs_git._run(["git", "show", "HEAD:openkos.yaml"], cwd=tmp_path).stdout
+    assert "Concept: volatile" in committed
+    assert "hand edit" not in committed
+    assert "# hand edit" in config.read_text(encoding="utf-8")
+
+
+def test_metadata_reapplying_the_current_tier_commits_nothing_and_does_not_warn(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1330: an accepted tier equal to the current one changes no bytes;
+    there is nothing to commit, so no auto-commit WARNING with an empty
+    reason."""
+    _metadata_stub_workspace(tmp_path, tmp_path_factory, monkeypatch, "volatile")
+    first = runner.invoke(app, ["curate"], input="y\ny\n")
+    assert first.exit_code == 0
+    head = _head_sha(tmp_path)
+
+    second = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert second.exit_code == 0
+    assert "WARNING" not in second.stderr
+    assert _head_sha(tmp_path) == head
+
+
 def test_metadata_sensitivity_gap_reported_never_written(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,

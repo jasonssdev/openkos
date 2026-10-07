@@ -209,9 +209,13 @@ _ANCHOR_RE = re.compile(r"\(id: ([^)]+)\)")
 
 
 def remove_log_entry(log_text: str, concept_id: str) -> tuple[str, int]:
-    """Drop every bullet/tombstone line whose FIRST markdown link resolves
-    to `concept_id`, or whose `(id: <x>)` structured anchor equals
+    """Drop every bullet/tombstone line that has ANY markdown link
+    resolving to `concept_id`, or whose `(id: <x>)` structured anchor equals
     `concept_id`.
+
+    ANY link, not only the first: a `**Relate**`/`**Unrelate**` line names
+    the relation's target as its SECOND link, and a purge that kept it would
+    leave the erased concept's id in `log.md` (#1329).
 
     A twin of `bundle.index.remove_index_entry`'s live-file cleanup, but for
     `log.md`: REUSES (imports, never re-implements) that module's
@@ -232,10 +236,9 @@ def remove_log_entry(log_text: str, concept_id: str) -> tuple[str, int]:
     for line in lines:
         stripped = line.lstrip()
         if stripped.startswith(_BULLET_MARKERS):
-            link_match = _LINK_RE.search(stripped)
-            if (
-                link_match is not None
-                and _link_identity(link_match.group(1)) == concept_id
+            if any(
+                _link_identity(link.group(1)) == concept_id
+                for link in _LINK_RE.finditer(stripped)
             ):
                 removed += 1
                 continue

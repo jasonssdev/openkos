@@ -2274,6 +2274,28 @@ def _parse_type_tiers_block(lines: list[str], header_idx: int) -> list[_TypeTier
     return entries
 
 
+def type_tier_entry(yaml_text: str, concept_type: str) -> str | None:
+    """The value text of `concept_type`'s entry in the `type_tiers:` block of
+    `yaml_text`, or `None` when there is no such entry (no block, or no line
+    for that type). Reads the same text shape `set_type_tier` edits and
+    raises `ValueError` on the same un-editable shapes, so a caller can ask
+    whether two versions of the file disagree about the one line
+    `set_type_tier` would touch."""
+    lines = yaml_text.splitlines(keepends=True)
+    headers = [
+        i
+        for i, line in enumerate(lines)
+        if _split_line_ending(line)[0].startswith(_TYPE_TIERS_HEADER_PREFIX)
+    ]
+    if len(headers) > 1:
+        raise ValueError("openkos.yaml: multiple 'type_tiers:' keys found")
+    if not headers:
+        return None
+    entries = _parse_type_tiers_block(lines, headers[0])
+    existing = next((entry for entry in entries if entry.key == concept_type), None)
+    return None if existing is None else existing.val
+
+
 def set_type_tier(yaml_text: str, concept_type: str, tier: str) -> str:
     """Return `yaml_text` with `type_tiers[concept_type] = tier` set via
     comment-safe text surgery -- never a YAML round-trip, so every other

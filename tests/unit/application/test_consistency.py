@@ -77,14 +77,16 @@ def test_read_consistency_in_flight_and_stale(
     monkeypatch.setattr(
         application_status,
         "stale_derived_stores",
-        lambda bundle_dir, stores: ("fts",),
+        lambda bundle_dir, stores, expected_schema=None: ("fts",),
     )
     stale = consistency.read_consistency(layout, stale_reads=("fts",))
     assert stale.stale_stores == ("fts",)
     assert stale.not_run == ()
 
     # The staleness check itself never raises and never produces a NotRun.
-    def _raising_stale(bundle_dir: Path, stores: object) -> tuple[str, ...]:
+    def _raising_stale(
+        bundle_dir: Path, stores: object, expected_schema: object = None
+    ) -> tuple[str, ...]:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(application_status, "stale_derived_stores", _raising_stale)

@@ -41,7 +41,7 @@ answering core keeps treating whatever handle it is given as fresh.
 
 import hashlib
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -67,6 +67,10 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 _SELECT_META_SQL = "SELECT value FROM meta WHERE key = ?"
+
+SCHEMA_VERSION_KEY = "schema_version"
+"""The `meta` key a store records its layout version under (`fts.db` and
+`graph.db` both use it)."""
 
 _UPSERT_META_SQL = "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)"
 
@@ -221,7 +225,9 @@ def write_manifest_hash(conn: sqlite3.Connection, digest: str) -> None:
 
 
 def stale_derived_stores(
-    bundle_dir: Path, stores: Sequence[tuple[str, Path]]
+    bundle_dir: Path,
+    stores: Sequence[tuple[str, Path]],
+    expected_schema: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
     """Return the names of `stores` whose stored `manifest_hash` no longer
     matches `bundle_dir`'s current one, in the order given (#381).
@@ -239,6 +245,13 @@ def stale_derived_stores(
     - **No stored hash: reported.** A store predating the `manifest_hash`
       key, or created but never written, cannot PROVE it matches. Fail safe
       -- an index of unknown age is exactly what #381 is about.
+    - **Schema version differs: reported (#1333).** `expected_schema` maps a
+      store name to the layout version this code writes. A store recorded
+      under another version was built by older code -- an older tokenizer,
+      say -- and the bundle's manifest hash does not move with that, so the
+      hash comparison alone would call it current forever. A store named
+      there with no recorded version is stale too; a store not named is
+      compared on its manifest hash only.
     - **Unreadable/corrupt store: reported, never raised.** It cannot answer
       the question either, and an advisory must never be what breaks the
       command it advises (mirrors `_open_fts_or_degrade`'s degrade posture).
@@ -257,18 +270,26 @@ def stale_derived_stores(
         return ()
 
     current = bundle_manifest_hash(bundle_dir)
+    wanted = expected_schema or {}
     stale: list[str] = []
     for name, path in present:
         try:
             conn = open_read_only(path)
             try:
                 stored = read_manifest_hash(conn)
+                version = (
+                    conn.execute(_SELECT_META_SQL, (SCHEMA_VERSION_KEY,)).fetchone()
+                    if name in wanted
+                    else None
+                )
             finally:
                 conn.close()
         except Exception:  # noqa: BLE001 -- any unreadable store degrades to "stale"
             stale.append(name)
             continue
-        if stored != current:
+        if stored != current or (
+            name in wanted and (version is None or str(version[0]) != wanted[name])
+        ):
             stale.append(name)
     return tuple(stale)
 

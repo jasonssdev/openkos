@@ -162,6 +162,12 @@ not reproduce the stored `manifest_hash`, when the store's schema version
 differs from the code's, when a forced rebuild is requested, or when any
 part of the per-document update fails.
 
+A store whose schema version differs from the code's MUST NOT be reported
+`unchanged` by the refresh even when the bundle's manifest hash matches, since
+that hash does not change with the code that indexed the bundle; the refresh
+rebuilds it. The staleness advisory read by `query`, `status` and `next` MUST
+report such an `fts.db` as stale.
+
 #### Scenario: One edited document updates one document's rows
 
 - GIVEN a store built from a bundle of many documents
