@@ -52,7 +52,7 @@ _CREATE_TABLE_SQL = """
 CREATE VIRTUAL TABLE docs USING fts5(
     concept_id UNINDEXED,
     title, description, tags, body,
-    tokenize = 'unicode61'
+    tokenize = 'porter unicode61'
 )
 """
 
@@ -61,11 +61,14 @@ _INSERT_SQL = (
     "VALUES (?, ?, ?, ?, ?)"
 )
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 """Layout version of `fts.db`. A store written under a different version is
-rebuilt whole rather than updated per document."""
+rebuilt whole rather than updated per document -- and by `refresh_fts_index`
+even when the bundle is unchanged, so a tokenizer change reaches an existing
+workspace. `"2"`: the `porter unicode61` tokenizer (#1333); `"1"` was plain
+`unicode61`."""
 
-SCHEMA_VERSION_KEY = "schema_version"
+SCHEMA_VERSION_KEY = derived.SCHEMA_VERSION_KEY
 
 _CREATE_DOC_MANIFEST_SQL = """
 CREATE TABLE doc_manifest (
@@ -369,6 +372,14 @@ def _rebuild(
         raise
 
 
+def _schema_is_current(conn: sqlite3.Connection) -> bool:
+    """Whether the store records this code's `SCHEMA_VERSION`."""
+    version = conn.execute(
+        "SELECT value FROM meta WHERE key = ?", (SCHEMA_VERSION_KEY,)
+    ).fetchone()
+    return version is not None and str(version[0]) == SCHEMA_VERSION
+
+
 def _recorded_pairs(conn: sqlite3.Connection) -> dict[str, str] | None:
     """The store's recorded `{concept_id: content_hash}` baseline, or `None`
     when it cannot be trusted to drive a per-document update: no
@@ -481,7 +492,11 @@ def refresh_fts_index(
         digest = derived.manifest_digest(
             (e.concept_id, e.content_hash) for e in entries
         )
-        if not force and stored == digest:
+        # A store recorded under another layout version -- an older tokenizer,
+        # say -- is not "unchanged" however identical the bundle is: the
+        # manifest hash is a property of the documents and does not move with
+        # the code that indexed them (#1333).
+        if not force and stored == digest and _schema_is_current(conn):
             return "unchanged"
         if not force:
             recorded = _recorded_pairs(conn)

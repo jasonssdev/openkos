@@ -81,6 +81,7 @@ from openkos.graph.summary import asserted_relations_exist, graph_edge_summary
 from openkos.model import okf
 from openkos.resolution import find_exact_title_groups
 from openkos.resolution.contradiction import is_high_confidence_finding
+from openkos.state import fts
 from openkos.state.derived import stale_derived_stores
 from openkos.state.vectorstore import vector_store_is_empty
 
@@ -258,7 +259,9 @@ def stale_index_names(
     if not stores:
         return ()
     try:
-        return stale_derived_stores(layout.bundle_dir, stores)
+        return stale_derived_stores(
+            layout.bundle_dir, stores, {"fts": fts.SCHEMA_VERSION}
+        )
     except Exception:  # noqa: BLE001 -- an advisory never breaks its own command
         return ()
 
