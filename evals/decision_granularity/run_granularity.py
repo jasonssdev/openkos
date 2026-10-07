@@ -142,43 +142,31 @@ TREATMENTS: Final[dict[str, tuple[str, str]]] = {
 
 
 # --------------------------------------------------------------------------- #
-# Pipeline treatments: a monkeypatch of one deterministic function, never a
-# prompt edit (#1318). Production is not edited; the patch is undone after
-# the arm. The prompt an arm sends is the shipped one.
+# Pipeline arms: a monkeypatch of one deterministic function, never a prompt
+# edit (#1318). The patch is undone after the arm and the prompt an arm sends
+# is the shipped one.
+#
+# #1318 shipped its treatment (`concept._title_tokens` ignoring date tokens;
+# measured as the `datefold` arm, stored under results/). A shipped treatment
+# turns its own arm into a no-op against the baseline, so the arm that remains
+# is the ABLATION: the pre-#1318 tokens, which reproduces the collapse.
 # --------------------------------------------------------------------------- #
 
-_MONTH_NAMES: Final = frozenset(
-    {
-        "january", "february", "march", "april", "june", "july", "august",
-        "september", "october", "november", "december",
-        "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
-        "agosto", "septiembre", "octubre", "noviembre", "diciembre",
-    }
-)  # fmt: skip
-"""Full month names, English and Spanish. Short forms and `may`/`mar` stay out
-on purpose: they are ordinary words, and dropping one would hide a real token."""
 
-
-def _title_tokens_sans_dates(value: str) -> frozenset[str]:
-    """`concept._title_tokens` minus date tokens: all-digit tokens and full
-    month names. A date-stamped file name (`2026-02-10-architecture-review`)
-    and the title the model gives its object (`Architecture review, 10
-    February`) differ ONLY by date words, which the containment arm of
-    `_restates_source_topic` reads as different topics."""
+def _title_tokens_with_dates(value: str) -> frozenset[str]:
+    """`concept._title_tokens` as it was before #1318: digits and month names
+    are ordinary tokens."""
     return frozenset(
         token
         for token in concept_mod._title_words(value)
         if len(token) >= concept_mod._MIN_TOPIC_TOKEN_LENGTH
-        and not token.isdigit()
-        and token not in _MONTH_NAMES
     )
 
 
 PIPELINE_TREATMENTS: Final[dict[str, str]] = {
-    "datefold": (
-        "`_title_tokens` ignores date tokens (all-digit tokens and full "
-        "English/Spanish month names), so the #584/#642 re-ask trigger sees a "
-        "sole object titled after a date-stamped source as restating it."
+    "undated": (
+        "ABLATION of #1318: `_title_tokens` keeps date tokens again, so the "
+        "re-ask trigger is blind to a date written two ways."
     ),
 }
 
@@ -190,11 +178,11 @@ def pipeline_patch(arm: str) -> Iterator[None]:
         yield
         return
     original = concept_mod._title_tokens
-    concept_mod._title_tokens = _title_tokens_sans_dates  # type: ignore[assignment]
+    concept_mod._title_tokens = _title_tokens_with_dates
     try:
         yield
     finally:
-        concept_mod._title_tokens = original  # type: ignore[assignment]
+        concept_mod._title_tokens = original
 
 
 def treated_prompt(arm: str, shipped: str) -> str:
@@ -682,8 +670,9 @@ def _self_test() -> int:
     else:
         failures.append("a missing anchor must refuse")
 
-    # #1318 pipeline treatment: date tokens are ignored by containment, only
-    # while the patch is active, and the prompt is the shipped one.
+    # #1318: date tokens are ignored by the shipped containment; the
+    # `undated` ablation restores the old blindness only while it is active,
+    # and the prompt is the shipped one.
     sdate = fixture_by_name("en-review-new-engineer")
     collapsed = concept_mod.ExtractionResult(
         type="Event",
@@ -692,26 +681,16 @@ def _self_test() -> int:
         body="b",
     )
     check(
-        "date tokens are dropped",
-        _title_tokens_sans_dates(sdate.title),
-        frozenset({"architecture", "review"}),
-    )
-    check(
-        "a month name is dropped, a content word is kept",
-        _title_tokens_sans_dates("Review of march 2026 budget"),
-        frozenset({"review", "budget"}),
-    )
-    check(
-        "baseline reads the date-stamped twin as a different topic",
+        "shipped containment reads the date-stamped twin as restating",
         concept_mod._restates_source_topic(collapsed, source_title=sdate.title),
-        False,
+        True,
     )
     real_tokens = concept_mod._title_tokens
-    with pipeline_patch("datefold"):
+    with pipeline_patch("undated"):
         check(
-            "datefold reads it as restating",
+            "undated is blind to the date written two ways",
             concept_mod._restates_source_topic(collapsed, source_title=sdate.title),
-            True,
+            False,
         )
     check("pipeline patch restored", concept_mod._title_tokens is real_tokens, True)
     with pipeline_patch("baseline"):
@@ -721,8 +700,8 @@ def _self_test() -> int:
             True,
         )
     check(
-        "datefold sends the shipped prompt",
-        treated_prompt("datefold", shipped),
+        "undated sends the shipped prompt",
+        treated_prompt("undated", shipped),
         shipped,
     )
 
