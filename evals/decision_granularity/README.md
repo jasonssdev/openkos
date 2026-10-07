@@ -110,3 +110,43 @@ done on this model. Run-to-run noise is large: `en-review-3-decisions` split
 pools both baselines.
 
 Stored runs: `results/runs-{baseline,role,attendees,newcomer}-2026100*.json`.
+
+## Third pass: the collapse was a deterministic gap, and it shipped (#1318, 2026-10-07)
+
+Pre-registered in `PREREGISTRATION-1318.md` before any treatment run. The
+diagnosis, from code and live traces, is in that file: both passes return the
+model's single object (model behaviour), the #584/#642 re-ask that exists for
+exactly this shape recovers it when called by hand (5 of 5 on each fixture),
+and it never fired (`reask_runs 0`) because token containment read the file
+stem `2026-02-10-architecture-review` and the object title `Architecture
+review, 10 February` as two topics. `_title_tokens` now drops date tokens
+(all-digit tokens and full English/Spanish month names).
+
+`datefold` arm vs three baseline arms (`qwen3:8b`, 15 runs per arm and
+fixture; the third baseline was run on this branch before the treatment):
+
+| fixture | metric | baseline arms | pooled | `datefold` | one-sided Fisher p vs pool |
+| --- | --- | --- | --- | --- | --- |
+| `en-review-new-engineer` | person hit | 8, 9, 5 of 15 | 22 of 45 | 13 of 15 | 0.0095 (0.043 vs the two-arm pool of the registration) |
+| `en-review-3-decisions` | split | 7, 4, 4 of 15 | 15 of 45 | 13 of 15 | 0.0004 (0.0016 vs the two-arm pool) |
+| `en-review-new-engineer` | runs with `produced = 1` | 6, 6, 10 of 15 | 22 of 45 | 0 of 15 | |
+| `en-review-3-decisions` | runs with `produced = 1` | 6, 8, 7 of 15 | 21 of 45 | 0 of 15 | |
+| `en-note-single-decision` (control) | over-split | 0, 0, 0 of 15 | 0 of 45 | 0 of 15 | |
+
+Guards held: topic recall 1.00 on both targets (pooled 1.00 and 0.90); person
+stubs 0.00; no errored runs; mean latency 1.16x (`en-review-new-engineer`),
+1.40x (`en-review-3-decisions`), 1.01x (control). Both targets met the
+registered bar (13 of 15 and 11 of 15), the first exactly at its edge. The
+control was never at risk: on the stored runs the new trigger flips in 0 of
+104 control runs, and in the treatment arm it spent no re-ask on the control
+(`reask_runs` 0 in 15 of 15), so it confirms the note is left alone and is
+no evidence of safety on other sources.
+
+Shipped, so the arm that remains is the ablation, `undated`, which restores
+the pre-#1318 tokens and reproduces the collapse. Stored runs:
+`results/runs-baseline-20261007T162623Z-qwen3-8b.json`,
+`results/runs-datefold-20261007T163815Z-qwen3-8b.json`.
+
+Not explained by this fix: on `en-review-3-decisions` some single-object runs
+come from the judge keeping one of several candidates, which a trigger read
+before the judge cannot reach.

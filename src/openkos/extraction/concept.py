@@ -891,12 +891,41 @@ def _title_words(value: str) -> list[str]:
     return _TITLE_TOKEN_RE.findall(_normalize_title(value))
 
 
+_DATE_WORDS: Final = frozenset(
+    {
+        "january", "february", "march", "april", "june", "july", "august",
+        "september", "october", "november", "december",
+        "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+        "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+    }
+)  # fmt: skip
+"""Full month names, English and Spanish: the words of a date, for topic
+containment only (#1318).
+
+A meeting note's file stem carries its date as digits
+(`2026-02-10-architecture-review`) while the model writes the same date in
+words in the object's title (`Architecture review, 10 February`), so
+containment read one topic as two and the re-ask (#584/#642) never fired on
+the sole-object collapse it exists for. Short forms are left out, and so are
+`may` and `mar`: they are ordinary words, and dropping one would hide a real
+token."""
+
+
 def _title_tokens(value: str) -> frozenset[str]:
     """Meaningful word tokens of `value` -- `_title_words` with the short
-    ones dropped and the order discarded. Feeds the CONTAINMENT arm of
-    `_restates_source_topic` only."""
+    ones dropped, the date tokens (all-digit tokens and `_DATE_WORDS`)
+    dropped, and the order discarded. Feeds the CONTAINMENT arm of
+    `_restates_source_topic` only.
+
+    A title made only of date tokens comes back EMPTY, and an empty set is
+    never "contained" (`_contains_source_topic` refuses it), so a bare date
+    cannot name a topic."""
     return frozenset(
-        token for token in _title_words(value) if len(token) >= _MIN_TOPIC_TOKEN_LENGTH
+        token
+        for token in _title_words(value)
+        if len(token) >= _MIN_TOPIC_TOKEN_LENGTH
+        and not token.isdigit()
+        and token not in _DATE_WORDS
     )
 
 
