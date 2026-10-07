@@ -248,3 +248,39 @@ def test_watch_backend_must_be_a_string(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="watch_backend"):
         config.read_config(tmp_path)
+
+
+def test_a_tilde_inbox_expands_to_the_home_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    (home / "inbox").mkdir(parents=True)
+    root = tmp_path / "ws"
+    root.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    _inbox(root, "~/inbox")
+
+    assert config.read_config(root).unattended.inbox == (home / "inbox").resolve()
+
+
+def test_a_tilde_inbox_inside_the_engine_trees_is_still_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The expansion happens BEFORE the containment checks: a home that is the
+    workspace itself must not smuggle the engine's own trees in as an inbox."""
+    root = tmp_path / "ws"
+    (root / "raw").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(root))
+    _inbox(root, "~/raw")
+
+    with pytest.raises(ValueError, match=r"unattended\.inbox.*raw/"):
+        config.read_config(root)
+
+
+def test_a_tilde_inbox_for_an_unknown_user_is_a_config_error(
+    tmp_path: Path,
+) -> None:
+    _inbox(tmp_path, "~no-such-user-1334/inbox")
+
+    with pytest.raises(ValueError, match=r"unattended\.inbox"):
+        config.read_config(tmp_path)
