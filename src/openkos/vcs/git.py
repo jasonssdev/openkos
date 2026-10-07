@@ -833,7 +833,15 @@ def _validate_scrub_identities(scrub_identities: Sequence[str]) -> None:
 # duplicated code, not a shared import, because this snippet runs inside
 # `git-filter-repo`'s own subprocess, which cannot import `openkos`.
 _FILE_INFO_CALLBACK_SNIPPET = """\
-if filename not in (b"bundle/index.md", b"bundle/log.md"):
+_is_catalog = filename in (b"bundle/index.md", b"bundle/log.md")
+_is_concept = (
+    os.environ.get("OPENKOS_SCRUB_RELATIONS") == "1"
+    and filename.startswith(b"bundle/")
+    and filename.endswith(b".md")
+    and not filename.startswith(b"bundle/.state/")
+    and not _is_catalog
+)
+if not (_is_catalog or _is_concept):
     return (filename, mode, blob_id)
 ids_path = os.environ.get("OPENKOS_SCRUB_IDS_FILE")
 if not ids_path:
@@ -878,7 +886,62 @@ def _identity(target):
         identity = identity[: -len(b".md")]
     return identity
 
+_target_re = re.compile(rb"^\\s*(?:-\\s+)?target:\\s*(.*?)\\s*$", re.M)
+
+def _scrub_relations(contents, ids):
+    lines = contents.splitlines(keepends=True)
+    if not lines or lines[0].rstrip(b"\\r\\n") != b"---":
+        return contents
+    end = None
+    for index in range(1, len(lines)):
+        if lines[index].rstrip(b"\\r\\n") == b"---":
+            end = index
+            break
+    if end is None:
+        return contents
+    out = [lines[0]]
+    changed = False
+    index = 1
+    while index < end:
+        line = lines[index]
+        if line.rstrip(b" \\t\\r\\n") != b"relations:":
+            out.append(line)
+            index += 1
+            continue
+        stop = index + 1
+        while stop < end and (
+            lines[stop][:1] in (b" ", b"\\t", b"\\r", b"\\n")
+            or lines[stop].startswith(b"-")
+        ):
+            stop += 1
+        items = []
+        for block_line in lines[index + 1 : stop]:
+            if block_line.lstrip().startswith(b"-") or not items:
+                items.append([block_line])
+            else:
+                items[-1].append(block_line)
+        kept = []
+        for item in items:
+            target = _target_re.search(b"".join(item))
+            if target is not None and target.group(1).strip(b"\'\\"") in ids:
+                changed = True
+            else:
+                kept.append(item)
+        if kept:
+            out.append(line)
+            for item in kept:
+                out.extend(item)
+        index = stop
+    if not changed:
+        return contents
+    return b"".join(out) + b"".join(lines[end:])
+
 contents = value.get_contents_by_identifier(blob_id)
+if _is_concept:
+    new_contents = _scrub_relations(contents, scrub_ids)
+    if new_contents == contents:
+        return (filename, mode, blob_id)
+    return (filename, mode, value.insert_file_with_contents(new_contents))
 lines = contents.splitlines(keepends=True)
 kept_lines = []
 changed = False
@@ -887,9 +950,20 @@ for line in lines:
     stripped = line.lstrip()
     dropped = False
     if stripped.startswith(_bullet_markers):
-        link_match = _link_re.search(stripped)
-        if link_match is not None and _identity(link_match.group(1)) in scrub_ids:
-            dropped = True
+        # `index.md` bullets are keyed on their FIRST link (their own
+        # concept); a `log.md` line is dropped when ANY link names a
+        # scrubbed id -- `**Relate**`/`**Unrelate**` name the purged
+        # concept as the relation's target, the SECOND link (#1329). Lockstep
+        # with `openkos.bundle.log.remove_log_entry`.
+        if is_log:
+            matches = list(_link_re.finditer(stripped))
+        else:
+            first_match = _link_re.search(stripped)
+            matches = [] if first_match is None else [first_match]
+        for link_match in matches:
+            if _identity(link_match.group(1)) in scrub_ids:
+                dropped = True
+                break
         if not dropped and is_log:
             anchor_match = _anchor_re.search(stripped)
             if anchor_match is not None and anchor_match.group(1) in scrub_ids:
@@ -907,11 +981,37 @@ return (filename, mode, new_blob_id)
 """
 
 
+# The BODY of a `def message_callback(message, metadata):` function, run by
+# `git filter-repo --message-callback <this-file>` once per commit. Like the
+# file-info snippet it is STATIC with zero subject-data interpolation: the ids
+# arrive only through `OPENKOS_SCRUB_IDS_FILE`. It replaces every occurrence of
+# a purged id with a neutral placeholder -- the rest of the message survives,
+# so a history of `relate a -> b` reads `relate a -> [purged]` rather than
+# losing the commit's meaning. An id matches only on its own boundaries
+# (never inside a longer id such as `concepts/bee-keeper`), and an id with no
+# directory part (which would otherwise match ordinary prose) only as the final
+# segment of a path.
+_MESSAGE_CALLBACK_SNIPPET = """\
+ids_path = os.environ.get("OPENKOS_SCRUB_IDS_FILE")
+if not ids_path:
+    return message
+with open(ids_path, "rb") as ids_handle:
+    raw_ids = ids_handle.read()
+scrub_ids = [line for line in raw_ids.split(b"\\n") if line]
+for scrub_id in sorted(scrub_ids, key=len, reverse=True):
+    lead = rb"(?<![A-Za-z0-9_-])" if b"/" in scrub_id else rb"(?<=/)"
+    pattern = lead + re.escape(scrub_id) + rb"(?![A-Za-z0-9_-])"
+    message = re.sub(pattern, b"[purged]", message)
+return message
+"""
+
+
 def expunge_paths(
     cwd: Path,
     rel_paths: Sequence[str],
     *,
     scrub_identities: Sequence[str] | None = None,
+    scrub_relations: bool = False,
 ) -> None:
     """Rewrite ALL git history under `cwd`, removing every path in
     `rel_paths` from every commit AND the working tree, via `git
@@ -936,6 +1036,16 @@ def expunge_paths(
     the snippet source itself or into argv. When `scrub_identities` is
     `None`/empty, no `--file-info-callback` argv is added at all: behavior is
     byte-identical to calling this function without that parameter.
+
+    The same identities also drive (#1329) a `--message-callback` that
+    replaces each one with `[purged]` in every commit message, and the
+    file-info callback drops a `log.md` line that names one as ANY link, not
+    only its first. With `scrub_relations=True` it additionally removes, from
+    every other `bundle/**.md` blob, the `relations:` entries whose `target`
+    is one of the identities (an emptied list loses its key). That last step
+    is opt-in because it also rewrites the tip: a caller that proceeds past
+    live references (`purge --force`) leaves them dangling on purpose and must
+    not pass it.
 
     IRREVERSIBLE: no backup is taken. Callers MUST have already confirmed
     every fail-closed safety rail (git-root match, clean tree, no published
@@ -965,6 +1075,7 @@ def expunge_paths(
     # (non-sensitive, kept symmetric for the same guarantee).
     paths_file: Path | None = None
     snippet_file: Path | None = None
+    message_file: Path | None = None
     sidecar_file: Path | None = None
     try:
         try:
@@ -996,8 +1107,21 @@ def expunge_paths(
                     sidecar_file = Path(sidecar_handle.name)
                     for identity in scrub_identities:
                         sidecar_handle.write(f"{identity}\n")
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".py", delete=False, encoding="utf-8"
+                ) as message_handle:
+                    message_file = Path(message_handle.name)
+                    message_handle.write(_MESSAGE_CALLBACK_SNIPPET)
                 env = {**os.environ, "OPENKOS_SCRUB_IDS_FILE": str(sidecar_file)}
-                argv = [*argv, "--file-info-callback", str(snippet_file)]
+                if scrub_relations:
+                    env["OPENKOS_SCRUB_RELATIONS"] = "1"
+                argv = [
+                    *argv,
+                    "--file-info-callback",
+                    str(snippet_file),
+                    "--message-callback",
+                    str(message_file),
+                ]
         except OSError as exc:
             # Setup only -- no subprocess has run yet, so this is the safe
             # "the rewrite did NOT happen" case: a plain `GitError`, never
@@ -1021,6 +1145,8 @@ def expunge_paths(
             paths_file.unlink(missing_ok=True)
         if snippet_file is not None:
             snippet_file.unlink(missing_ok=True)
+        if message_file is not None:
+            message_file.unlink(missing_ok=True)
         if sidecar_file is not None:
             sidecar_file.unlink(missing_ok=True)
 

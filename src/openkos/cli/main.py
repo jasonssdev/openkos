@@ -6549,7 +6549,13 @@ def purge(
     )
     try:
         vcs_git.expunge_paths(
-            root, plan.disclosure.expunge_targets, scrub_identities=plan.purge_ids
+            root,
+            plan.disclosure.expunge_targets,
+            scrub_identities=plan.purge_ids,
+            # Scrubbing other concepts' historical `relations:` also rewrites
+            # their tip. `--force` past a live reference promises to leave it
+            # dangling, so it keeps its history untouched too (#1329).
+            scrub_relations=not plan.referrers,
         )
     except vcs_git.GitFinalizeError as exc:
         typer.echo(
@@ -6659,9 +6665,14 @@ def purge(
         except vcs_git.GitError:
             should_commit = True
         if should_commit:
-            commit_message = f"openkos: purge {plan.canonical_id}"
-            if len(plan.purge_ids) > 1:
-                commit_message += f" (+{len(plan.purge_ids) - 1})"
+            # The message must not name what was erased: this commit survives
+            # the purge, and the contract is that no commit carries the id
+            # (#1329). The count is all the history needs to say.
+            commit_message = (
+                "openkos: purge 1 concept"
+                if len(plan.purge_ids) == 1
+                else f"openkos: purge {len(plan.purge_ids)} concepts"
+            )
             _autocommit(root, commit_paths_rel, commit_message)
 
         # No section_break here: the preview already ends with a blank line

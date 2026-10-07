@@ -279,9 +279,7 @@ def test_purge_non_no_op_cleanup_creates_exactly_one_commit(
 
     assert result.exit_code == 0, result.output
     assert _commit_count(tmp_git_repo.root) == before + 1
-    assert _last_commit_subject(tmp_git_repo.root) == (
-        f"openkos: purge {tmp_git_repo.source_id}"
-    )
+    assert _last_commit_subject(tmp_git_repo.root) == "openkos: purge 1 concept"
     # `commit_paths` stages BOTH scoped paths (`git add -- <paths>`), but
     # `git diff-tree` only lists paths that actually CHANGED between this
     # commit and its parent -- `log.md` was untouched here (only
@@ -299,8 +297,8 @@ def test_purge_autocommit_message_includes_cascade_count(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    """`--scope source` with additional cascaded members uses the `(+N)`
-    commit-message form, `N = len(purge_ids) - 1` (design: "Message")."""
+    """`--scope source` names the cascade size in the commit message, never
+    the ids (#1329)."""
     _write_child_concept(
         tmp_git_repo.root,
         "concepts/child-a",
@@ -335,9 +333,7 @@ def test_purge_autocommit_message_includes_cascade_count(
     )
 
     assert result.exit_code == 0, result.output
-    assert _last_commit_subject(tmp_git_repo.root) == (
-        f"openkos: purge {tmp_git_repo.source_id} (+1)"
-    )
+    assert _last_commit_subject(tmp_git_repo.root) == ("openkos: purge 2 concepts")
 
 
 def test_purge_autocommit_failure_is_non_fatal(
@@ -767,13 +763,22 @@ def test_purge_all_rails_pass_rewrite_proceeds(
     real_expunge = vcs_git.expunge_paths
 
     def _spy(
-        root: Path, rel_paths: list[str], *, scrub_identities: list[str] | None = None
+        root: Path,
+        rel_paths: list[str],
+        *,
+        scrub_identities: list[str] | None = None,
+        scrub_relations: bool = False,
     ) -> None:
         called["rel_paths"] = list(rel_paths)
         called["scrub_identities"] = (
             list(scrub_identities) if scrub_identities is not None else None
         )
-        real_expunge(root, rel_paths, scrub_identities=scrub_identities)
+        real_expunge(
+            root,
+            rel_paths,
+            scrub_identities=scrub_identities,
+            scrub_relations=scrub_relations,
+        )
 
     monkeypatch.setattr(vcs_git, "expunge_paths", _spy)
 
@@ -1151,7 +1156,11 @@ def test_purge_finalize_error_surfaces_recoverability_warning(
     manual git-level follow-up is needed."""
 
     def _raise_finalize_error(
-        root: Path, rel_paths: list[str], *, scrub_identities: list[str] | None = None
+        root: Path,
+        rel_paths: list[str],
+        *,
+        scrub_identities: list[str] | None = None,
+        scrub_relations: bool = False,
     ) -> None:
         raise vcs_git.GitFinalizeError(
             "git gc failed after a successful rewrite: boom\n"
@@ -1187,7 +1196,11 @@ def test_purge_phase_a_writes_nothing_before_phase_b(
     untouched."""
 
     def _boom(
-        root: Path, rel_paths: list[str], *, scrub_identities: list[str] | None = None
+        root: Path,
+        rel_paths: list[str],
+        *,
+        scrub_identities: list[str] | None = None,
+        scrub_relations: bool = False,
     ) -> None:
         raise AssertionError("expunge_paths must be the ONLY write trigger")
 
@@ -1268,7 +1281,11 @@ def test_purge_finalize_error_still_cleans_live_log_tombstone(
     _git(["commit", "-m", "Add prior tombstone"], cwd=tmp_git_repo.root)
 
     def _raise_finalize_error(
-        root: Path, rel_paths: list[str], *, scrub_identities: list[str] | None = None
+        root: Path,
+        rel_paths: list[str],
+        *,
+        scrub_identities: list[str] | None = None,
+        scrub_relations: bool = False,
     ) -> None:
         raise vcs_git.GitFinalizeError("boom -- may still be recoverable")
 
@@ -2572,3 +2589,174 @@ def test_purge_still_refuses_a_superseding_source_and_rewrites_nothing(
     assert "~ bundle/" not in result.output
     assert changed_paths(before, snapshot_with_mtime(root)) == set()
     assert _blob_history_contains(root, f"bundle/{source_id}.md")
+
+
+# --- #1329: no trace of the purged id in the log, history or messages -------
+
+
+_PURGED = "concepts/bee"
+_PEER = "concepts/ant"
+_OTHER = "concepts/cat"
+
+
+def _commit_all(root: Path, message: str) -> None:
+    _git(["add", "-A"], cwd=root)
+    _git(["commit", "-m", message], cwd=root)
+
+
+def _write_ant(root: Path, relations: list[tuple[str, str]]) -> None:
+    lines = ["---", "type: Concept", "title: Ant"]
+    if relations:
+        lines.append("relations:")
+        for target, rel_type in relations:
+            lines += [f"- target: {target}", f"  type: {rel_type}"]
+    lines += ["---", "", "# Ant", "", "Body.", ""]
+    path = root / "bundle" / f"{_PEER}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _log_line(root: Path, entry: str) -> None:
+    from datetime import date
+
+    from openkos.bundle import log as bundle_log
+
+    log_path = root / "bundle" / "log.md"
+    log_path.write_text(
+        bundle_log.insert_log_entry(
+            log_path.read_text(encoding="utf-8"), date(2026, 7, 1), entry
+        ),
+        encoding="utf-8",
+    )
+
+
+def _relation_history_repo(root: Path) -> None:
+    """Concept `ant` relates to `bee` (and `cat`), then unrelates -- the exact
+    sequence a user is forced through by purge's reference-aware refusal --
+    leaving the id in log lines, commit messages and historical frontmatter."""
+    _write_plain_concept(root, _PURGED, title="Bee")
+    _write_plain_concept(root, _OTHER, title="Cat")
+    _write_ant(root, [(_PURGED, "depends_on"), (_OTHER, "relates_to")])
+    _log_line(
+        root,
+        f"**Relate**: Added a 'depends_on' relation from [{_PEER}](/{_PEER}.md) "
+        f"to [{_PURGED}](/{_PURGED}.md).",
+    )
+    _commit_all(root, f"relate {_PEER} -> {_PURGED} (depends_on)")
+    _write_ant(root, [(_PURGED, "depends_on")])
+    _commit_all(root, "drop the cat relation")
+    _write_ant(root, [])
+    _log_line(
+        root,
+        f"**Unrelate**: Removed a 'depends_on' relation from "
+        f"[{_PEER}](/{_PEER}.md) to [{_PURGED}](/{_PURGED}.md).",
+    )
+    _commit_all(root, f"unrelate {_PEER} -> {_PURGED} (depends_on)")
+
+
+def _full_history(root: Path) -> str:
+    result = vcs_git._run(["git", "log", "--all", "-p"], cwd=root)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_purge_leaves_no_trace_of_the_id_in_log_history_or_messages(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """#1329: the id survived in live `log.md` Relate/Unrelate lines, in every
+    historical `log.md`, in older versions of the referrer's frontmatter and
+    in commit messages -- against the documented complete erasure."""
+    _relation_history_repo(tmp_git_repo.root)
+    assert _PURGED in _full_history(tmp_git_repo.root)  # precondition
+
+    result = runner.invoke(
+        app, ["purge", _PURGED, "--confirm-phrase", f"purge {_PURGED}"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _PURGED not in _full_history(tmp_git_repo.root)
+    assert _PURGED not in (tmp_git_repo.root / "bundle" / "log.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_purge_history_scrub_keeps_unrelated_relations_and_valid_frontmatter(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """The historical `relations:` scrub drops only the purged target's
+    entry: an unrelated relation survives, an emptied list loses its key,
+    and every rewritten version still parses."""
+    from openkos.model import okf
+
+    _relation_history_repo(tmp_git_repo.root)
+    revisions = vcs_git._run(
+        ["git", "rev-list", "--reverse", "HEAD", "--", f"bundle/{_PEER}.md"],
+        cwd=tmp_git_repo.root,
+    ).stdout.split()
+    assert len(revisions) == 3
+
+    result = runner.invoke(
+        app, ["purge", _PURGED, "--confirm-phrase", f"purge {_PURGED}"]
+    )
+    assert result.exit_code == 0, result.output
+
+    revisions = vcs_git._run(
+        ["git", "rev-list", "--reverse", "HEAD", "--", f"bundle/{_PEER}.md"],
+        cwd=tmp_git_repo.root,
+    ).stdout.split()
+    relations_per_revision = []
+    for revision in revisions:
+        text = vcs_git._run(
+            ["git", "show", f"{revision}:bundle/{_PEER}.md"], cwd=tmp_git_repo.root
+        ).stdout
+        metadata, body = okf.load_frontmatter(text)
+        assert "# Ant" in body
+        relations_per_revision.append(
+            [(r.target, r.type) for r in okf.decode_relations(metadata)]
+        )
+    # The unrelate commit is empty once scrubbed, so the rewrite drops it.
+    assert relations_per_revision == [[(_OTHER, "relates_to")], []]
+
+
+def test_purge_force_keeps_the_dangling_relation_it_documents(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """`--force` leaves references dangling by contract: the history scrub of
+    other concepts' `relations:` must not silently rewrite the live one."""
+    _write_plain_concept(tmp_git_repo.root, _PURGED, title="Bee")
+    _write_ant(tmp_git_repo.root, [(_PURGED, "depends_on")])
+    _commit_all(tmp_git_repo.root, "ant depends on bee")
+
+    result = runner.invoke(
+        app,
+        ["purge", _PURGED, "--force", "--confirm-phrase", f"purge {_PURGED}"],
+    )
+
+    assert result.exit_code == 0, result.output
+    ant = (tmp_git_repo.root / "bundle" / f"{_PEER}.md").read_text(encoding="utf-8")
+    assert f"target: {_PURGED}" in ant
+
+
+def test_purge_commit_message_redaction_respects_id_boundaries(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """A message naming a DIFFERENT id that merely starts or ends with the
+    purged one is not touched."""
+    _write_plain_concept(tmp_git_repo.root, _PURGED, title="Bee")
+    _commit_all(tmp_git_repo.root, f"add {_PURGED}")
+    _write_plain_concept(tmp_git_repo.root, f"{_PURGED}-keeper", title="Keeper")
+    _commit_all(tmp_git_repo.root, f"note {_PURGED}-keeper")
+    _write_plain_concept(tmp_git_repo.root, f"my{_PURGED}", title="Prefixed")
+    _commit_all(tmp_git_repo.root, f"note my{_PURGED}")
+
+    result = runner.invoke(
+        app, ["purge", _PURGED, "--confirm-phrase", f"purge {_PURGED}"]
+    )
+
+    assert result.exit_code == 0, result.output
+    subjects = vcs_git._run(
+        ["git", "log", "--all", "--format=%s"], cwd=tmp_git_repo.root
+    ).stdout
+    assert f"note {_PURGED}-keeper" in subjects
+    assert f"note my{_PURGED}\n" in subjects
+    assert f"add {_PURGED}\n" not in subjects

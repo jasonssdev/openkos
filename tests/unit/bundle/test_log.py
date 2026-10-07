@@ -329,23 +329,32 @@ def test_remove_log_entry_prose_mention_and_sibling_survive_untouched() -> None:
     assert result == log_text
 
 
-def test_remove_log_entry_does_not_match_non_first_link_on_the_line() -> None:
-    """Only the FIRST markdown link on a bullet line is the match
-    candidate -- a bullet whose description mentions another concept must
-    not be dropped when that OTHER concept is the target."""
+def test_remove_log_entry_drops_a_bullet_naming_the_target_as_a_later_link() -> None:
+    """A `**Relate**`/`**Unrelate**` line names the purged concept as its
+    SECOND link (the relation's target); keeping it leaves the id in the
+    log after a purge (#1329). ANY link on the line resolving to the id
+    drops the whole bullet; a sibling bullet is untouched."""
+    relate = (
+        "* **Relate**: Added a 'depends_on' relation from "
+        "[concepts/a](/concepts/a.md) to [concepts/b](/concepts/b.md).\n"
+    )
+    unrelate = (
+        "* **Unrelate**: Removed a 'depends_on' relation from "
+        "[concepts/a](/concepts/a.md) to [concepts/b](/concepts/b.md).\n"
+    )
+    sibling = "* [Sibling](/concepts/sibling.md) - Still here.\n"
     log_text = (
-        "# Directory Update Log\n"
-        "\n"
-        "## 2026-07-16\n"
-        "\n"
-        "* [Stoicism](/concepts/stoicism.md) - See also "
-        "[Epictetus](/people/epictetus.md).\n"
+        "# Directory Update Log\n\n## 2026-07-16\n\n" + unrelate + sibling + relate
     )
 
-    result, removed = remove_log_entry(log_text, "people/epictetus")
+    result, removed = remove_log_entry(log_text, "concepts/b")
 
-    assert removed == 0
-    assert result == log_text
+    assert removed == 2
+    assert result == "# Directory Update Log\n\n## 2026-07-16\n\n" + sibling
+    # An id never matches by prefix.
+    untouched, none_removed = remove_log_entry(log_text, "concepts/bb")
+    assert none_removed == 0
+    assert untouched == log_text
 
 
 def test_remove_log_entry_reuses_bundle_index_matcher_not_a_fork() -> None:

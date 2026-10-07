@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Fixed
+
+- `openkos purge` now leaves no trace of the purged id in `log.md` (a `Relate` or `Unrelate` line names it as a later link), in older versions of other concepts' `relations:`, or in commit messages, which now read `[purged]` where the id was; its own commit no longer names the concept (#1329). The reference-aware refusal also names the concept that holds each reference (#1334).
+
 ## [0.5.2] - 2026-10-06
 
 The second half of MVP 5. `openkos import` adopts an OKF bundle produced by another tool, or by another OpenKOS workspace's export, as written, under its own namespace: labels only rise, nothing calls a model, and whatever it shares with your own knowledge is left for you to reconcile. Nothing changes unless you use the new verb.
