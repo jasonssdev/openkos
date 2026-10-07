@@ -386,6 +386,8 @@ def test_a_config_already_crlf_at_rest_is_not_drift(
     _init_workspace(tmp_path, monkeypatch)
     config_path = tmp_path / "openkos.yaml"
     config_path.write_bytes(config_path.read_bytes().replace(b"\n", b"\r\n"))
+    # At rest means committed: an uncommitted edit is refused (#1330).
+    vcs_git.commit_paths(tmp_path, ["openkos.yaml"], "chore: crlf config")
 
     result = runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
 
@@ -506,3 +508,170 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     assert changed_paths(before, snapshot_with_mtime(tmp_path)) == {
         Path("openkos.yaml")
     }
+
+
+# -- #1330: the commit carries only set-volatility's own change --------------
+
+
+def _head(tmp_path: Path) -> str:
+    return vcs_git._run(["git", "rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+
+def _git(tmp_path: Path, *args: str) -> str:
+    return vcs_git._run(["git", *args], cwd=tmp_path).stdout
+
+
+_USER_EDIT = "\nunattended:\n  quiet_seconds: 5\n"
+
+
+def _dirty_config(tmp_path: Path, extra: str = _USER_EDIT) -> None:
+    config = tmp_path / "openkos.yaml"
+    config.write_text(config.read_text(encoding="utf-8") + extra, encoding="utf-8")
+
+
+def test_the_commit_holds_only_the_tier_change_not_the_users_config_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1330: the commit is the change applied to the committed file; the
+    user's uncommitted edit stays in the working tree, uncommitted."""
+    _init_workspace(tmp_path, monkeypatch)
+    head_text = _git(tmp_path, "show", "HEAD:openkos.yaml")
+    _dirty_config(tmp_path)
+
+    result = runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
+
+    assert result.exit_code == 0
+    from openkos import config as config_module
+
+    committed = _git(tmp_path, "show", "HEAD:openkos.yaml")
+    assert committed == config_module.set_type_tier(head_text, "Person", "volatile")
+    assert "quiet_seconds: 5" not in committed
+    on_disk = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert on_disk == config_module.set_type_tier(
+        head_text + _USER_EDIT, "Person", "volatile"
+    )
+    assert (
+        _last_commit_message(tmp_path) == "openkos: set-volatility Person -> volatile"
+    )
+
+
+def test_the_index_shows_no_staged_revert_and_the_edit_stays_unstaged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _dirty_config(tmp_path)
+
+    runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
+
+    assert _git(tmp_path, "diff", "--cached", "--name-only") == ""
+    diff = _git(tmp_path, "diff", "--", "openkos.yaml")
+    assert "+  quiet_seconds: 5" in diff
+    assert not [ln for ln in diff.splitlines() if ln[:1] in "+-" and "volatile" in ln]
+
+
+def test_reverting_the_commit_undoes_only_the_tier_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    before = _git(tmp_path, "show", "HEAD:openkos.yaml")
+    _dirty_config(tmp_path)
+    runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
+    # Park the user's edit so the revert has a clean tree to run in.
+    (tmp_path / "openkos.yaml").write_text(
+        _git(tmp_path, "show", "HEAD:openkos.yaml"), encoding="utf-8"
+    )
+
+    _git(tmp_path, "revert", "--no-edit", "HEAD")
+
+    assert _git(tmp_path, "show", "HEAD:openkos.yaml") == before
+
+
+def test_a_user_staged_file_is_not_swept_in_when_the_config_is_dirty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _dirty_config(tmp_path)
+    (tmp_path / "notes.txt").write_text("mine\n", encoding="utf-8")
+    _git(tmp_path, "add", "notes.txt")
+
+    runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
+
+    committed = _git(tmp_path, "show", "--name-only", "--format=", "HEAD").split()
+    assert committed == ["openkos.yaml"]
+    assert _git(tmp_path, "diff", "--cached", "--name-only").split() == ["notes.txt"]
+
+
+def test_a_staged_config_edit_stays_staged_without_our_change_reverted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _dirty_config(tmp_path)
+    _git(tmp_path, "add", "openkos.yaml")
+
+    result = runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
+
+    assert result.exit_code == 0
+    assert "quiet_seconds: 5" not in _git(tmp_path, "show", "HEAD:openkos.yaml")
+    staged = _git(tmp_path, "diff", "--cached", "--", "openkos.yaml")
+    assert "+  quiet_seconds: 5" in staged
+    assert not [ln for ln in staged.splitlines() if ln[:1] in "+-" and "volatile" in ln]
+
+
+def test_the_commit_honours_a_pre_commit_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    hook = tmp_path / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\ntouch hook-ran\n", encoding="utf-8")
+    hook.chmod(0o755)
+    _dirty_config(tmp_path)
+
+    runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
+
+    assert (tmp_path / "hook-ran").exists()
+
+
+def test_a_user_edit_of_the_same_tier_entry_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one refusal: the user already changed the entry this verb edits,
+    so the change cannot be applied cleanly to the committed file."""
+    _init_workspace(tmp_path, monkeypatch)
+    assert (
+        runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"]).exit_code
+        == 0
+    )
+    config = tmp_path / "openkos.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "Person: volatile", "Person: static"
+        ),
+        encoding="utf-8",
+    )
+    before = _config_bytes(tmp_path)
+    head = _head(tmp_path)
+
+    result = runner.invoke(app, ["set-volatility", "Person", "slow", "--auto"])
+
+    assert result.exit_code == 1
+    assert "openkos.yaml" in result.stderr
+    assert "uncommitted" in result.stderr
+    assert _config_bytes(tmp_path) == before
+    assert _head(tmp_path) == head
+
+
+def test_unrelated_dirty_file_does_not_block_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard is scoped to `openkos.yaml`: dirt elsewhere is not its
+    business and is still left out of the commit."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("scratch", encoding="utf-8")
+
+    result = runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
+
+    assert result.exit_code == 0
+    files = vcs_git._run(
+        ["git", "show", "--name-only", "--format=", "HEAD"], cwd=tmp_path
+    ).stdout.split()
+    assert files == ["openkos.yaml"]
