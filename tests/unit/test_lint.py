@@ -506,6 +506,7 @@ def _doc(
     extraction_notice: str = "",
     extraction_notices: tuple[str, ...] = (),
     resource: str = "",
+    provenance: tuple[str, ...] = (),
 ) -> lint.LintDoc:
     """`extraction_notice` (singular) is kept as a convenience for the many
     call sites that pin a doc carrying exactly ONE token; #884 made the
@@ -527,6 +528,7 @@ def _doc(
             extraction_notices or ((extraction_notice,) if extraction_notice else ())
         ),
         resource=resource,
+        provenance=provenance,
     )
 
 
@@ -1387,6 +1389,66 @@ def test_check_unevidenced_detail_says_what_is_wrong_and_what_to_do() -> None:
     assert detail.startswith("one or more derived objects were stored")
     assert "they cannot support a citation" in detail
     assert "--re-extract" in detail
+
+
+_SOURCE_LINE = "Priya owns the schema migration plan for Project Helios."
+
+
+def test_check_unevidenced_names_the_derived_objects_that_quote_nothing() -> None:
+    """#1334 item 1: the finding names the derived object(s) lacking a quoted
+    line, so the reader need not open every object derived from the Source.
+    An object that DOES quote the source is not named."""
+    docs = [
+        _doc(
+            "sources/notes",
+            f"## Source content\n\n{_SOURCE_LINE}\n",
+            extraction_notice="objects-without-evidence",
+        ),
+        _doc(
+            "concepts/helios",
+            f"{_SOURCE_LINE}\n",
+            provenance=("sources/notes",),
+        ),
+        _doc(
+            "concepts/agentic-systems",
+            "A vague restatement in entirely different wording.\n",
+            provenance=("sources/notes",),
+        ),
+        _doc(
+            "concepts/unrelated",
+            "Another vague restatement in other wording entirely.\n",
+            provenance=("sources/other",),
+        ),
+    ]
+
+    detail = lint.check_unevidenced(docs)[0].detail
+
+    assert "concepts/agentic-systems" in detail
+    assert "concepts/helios" not in detail
+    assert "concepts/unrelated" not in detail
+
+
+def test_check_unevidenced_caps_the_named_objects() -> None:
+    docs = [
+        _doc(
+            "sources/notes",
+            f"{_SOURCE_LINE}\n",
+            extraction_notice="objects-without-evidence",
+        )
+    ] + [
+        _doc(
+            f"concepts/obj-{n}",
+            "Totally different words with no overlap at all.\n",
+            provenance=("sources/notes",),
+        )
+        for n in range(8)
+    ]
+
+    detail = lint.check_unevidenced(docs)[0].detail
+
+    assert "concepts/obj-0" in detail
+    assert "concepts/obj-7" not in detail
+    assert "(+3 more)" in detail
 
 
 def test_check_unevidenced_names_no_bare_reingest_command() -> None:

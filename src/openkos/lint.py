@@ -23,6 +23,7 @@ from typing import Final
 
 from openkos import config, fsio, lifecycle, read_outcome
 from openkos.bundle import provenance as bundle_provenance
+from openkos.extraction import evidence as evidence_mod
 from openkos.model import okf, types
 from openkos.model import relations as relation_vocabulary
 
@@ -1225,10 +1226,47 @@ def check_unevidenced(docs: list[LintDoc]) -> list[LintFinding]:
                     "quoted from this source — they cannot support a citation; check the "
                     "derived objects against the source, and re-ingest with "
                     "--re-extract to redo extraction"
+                    f"{_unevidenced_objects_clause(doc, docs)}"
                 ),
             )
         )
     return findings
+
+
+_UNEVIDENCED_NAMED_LIMIT: Final = 5
+"""How many derived objects the finding names before summarising the rest
+(`+N more`), the cap `ingest`'s attended notice applies to the same list."""
+
+
+def _unevidenced_objects_clause(source: LintDoc, docs: list[LintDoc]) -> str:
+    """Name the derived objects of `source` that quote none of its lines
+    (#1334 item 1), or `""` when none can be named.
+
+    The marker on the Source records only THAT some object lacked evidence;
+    the titles were never persisted. So the set is recomputed from what is
+    on disk with the SAME predicate ingest used (`evidence.evidence_line`):
+    every doc whose `provenance:` cites the Source, checked against the
+    Source's embedded body. A recompute can disagree with ingest after a
+    hand edit or a merge, so an empty result falls back to the generic
+    detail rather than claiming the defect is gone. Ids, not titles: the
+    concept id is the thing `lint` users open and `purge`/`unrelate` take.
+    """
+    names = [
+        candidate.identity
+        for candidate in docs
+        if candidate.identity != source.identity
+        and source.identity in candidate.provenance
+        and candidate.body.strip()
+        and evidence_mod.evidence_line(candidate.body.strip(), source.body) is None
+    ]
+    if not names:
+        return ""
+    shown = names[:_UNEVIDENCED_NAMED_LIMIT]
+    listed = ", ".join(shown)
+    remainder = len(names) - len(shown)
+    if remainder > 0:
+        listed = f"{listed} (+{remainder} more)"
+    return f" -- no quoted line found in: {listed}"
 
 
 _STAGING_DROP_NOTICE: Final = "candidates-dropped-in-staging"

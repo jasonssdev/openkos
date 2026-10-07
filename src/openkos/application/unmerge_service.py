@@ -69,15 +69,21 @@ class UnmergePolicy:
     """#1110: proceed even though the survivor's current bytes no longer match
     what the merge wrote. Independent of `auto`; it bypasses ONLY that one
     refusal."""
+    keep_distinct: bool = False
+    """#1334 item 9: after each step, record the permanent keep-distinct
+    ruling for the pair that step restored (through `ports.record_distinct`),
+    so the judge stops proposing it again. Opt-in: whether an unmerge MEANS
+    "these are distinct" is the operator's call."""
 
 
 @dataclass(frozen=True)
 class UnmergePorts:
     """The effects the service sequences but does not own."""
 
-    autocommit: Callable[[Path, Sequence[str], str], object]
+    autocommit: Callable[[Path, Sequence[str], str], str | None]
     """Best-effort commit of the listed workspace-relative paths; must never
-    raise for a git failure (it degrades to a warning)."""
+    raise for a git failure (it degrades to a warning). Returns the commit's
+    sha, or `None` when there is no commit to name (#1334 item 3)."""
 
     clock: Callable[[], datetime] = _utc_now
 
@@ -85,6 +91,11 @@ class UnmergePorts:
     """Entered around each step's commit phase only (ADR-0036): never around
     the confirmation question. The CLI hands it a section that takes the
     workspace lock; the default holds nothing."""
+
+    record_distinct: Callable[[Path, str, str], None] = lambda _root, _a, _b: None
+    """Records the keep-distinct ruling for `(survivor, absorbed)`; runs only
+    under `policy.keep_distinct`, after the step's unmerge commit. It owns its
+    own failure handling: a failure must never undo the completed unmerge."""
 
     after_commit: Callable[[], None] = commit_phase.no_after_commit
     """Runs inside the commit section after each step's auto-commit: the
@@ -190,6 +201,11 @@ class UnmergeObserver:
 
     def restored(self, summary: UnmergeSummary) -> None:
         """One step's Phase B finished, before the commit."""
+
+    def committed(self, sha: str) -> None:
+        """One step's auto-commit landed as `sha`; never called when the
+        commit degraded, so an observer never names a commit that does not
+        exist."""
 
     def unwind_planned(self, plan: UnwindPlan) -> None:
         """The whole `--to` plan, shown before its single confirmation."""
@@ -547,7 +563,11 @@ def _unmerge_step(
             )
         )
 
-        ports.autocommit(
+        sha = ports.autocommit(
             root, result.committed_paths, f"openkos: unmerge {absorbed_canonical}"
         )
+        if sha is not None:
+            obs.committed(sha)
+        if policy.keep_distinct:
+            ports.record_distinct(root, survivor_canonical, absorbed_canonical)
         ports.after_commit()

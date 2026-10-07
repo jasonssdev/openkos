@@ -227,7 +227,7 @@ missing, blank, or unparseable `sensitivity` — MUST NOT emit the notice.
 
 ### Requirement: Commit Disclosure For The Recovery-Critical Verbs
 
-`forget`, `merge`, `import`, and `curate` MUST each print one line naming the commit
+`forget`, `merge`, `unmerge`, `import`, and `curate` MUST each print one line naming the commit
 `_autocommit` just wrote and the `git revert` that undoes it. `curate` has
 four commit points — the Identity automatic pass (one commit for the run's
 automatic merges), Identity (per accepted merge), Structure (per accepted
@@ -243,8 +243,11 @@ and leaves the bundle unparseable mid-revert; the line therefore states that
 `import`, whose re-import is refused, that revert followed by a new import is
 the documented way to start over.
 
-The scope is exactly those four verbs. Every other mutating verb —
-`ingest`, `relate`, `unmerge`, `reconcile`, `set-volatility`,
+`unmerge` commits once per step, so a `--to` chain prints one line per
+step, each after that step's own `restored` line.
+
+The scope is exactly those verbs. Every other mutating verb —
+`ingest`, `relate`, `reconcile`, `set-volatility`,
 `set-sensitivity`, `adjudicate`'s merge walks — MUST keep its output
 unchanged: these are the verbs whose writes a human most often wants back,
 and a line on all of them is noise that stops being read.
@@ -270,6 +273,14 @@ non-fatal WARNING remains the whole report in that case.
 - WHEN `openkos merge <survivor> <absorbed>` completes Phase B successfully
 - THEN stdout carries one line naming the new commit's short sha and the
   `git revert <sha>` that undoes it
+
+#### Scenario: `unmerge` names the commit it wrote
+
+- GIVEN a git-backed workspace with configured identity
+- WHEN `openkos unmerge <survivor> <absorbed>` completes Phase B successfully
+- THEN stdout carries one line naming the new commit's short sha and the
+  `git revert <sha>` that undoes it only while it is the latest commit,
+  after the `restored` line
 
 #### Scenario: `import` names the commit it wrote
 

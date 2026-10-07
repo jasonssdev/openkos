@@ -328,6 +328,20 @@ altering its exit code.
   non-fatal warning is printed to stderr naming it off-allowlist, and
   init exits 0
 
+### Requirement: Init Discloses The Judge Model
+
+A successful `init` MUST print one informational stderr note naming the
+packaged judge model that the `adjudication` and `contradiction` tasks run
+on (`config.DEFAULT_TASK_MODELS`) and the `ollama pull` that fetches it,
+unless that model is the one just chosen for the workspace. The note MUST
+NOT prompt and MUST NOT change the exit code.
+
+#### Scenario: A default init names the judge model
+
+- GIVEN a directory that can become a workspace
+- WHEN `openkos init` completes
+- THEN stderr names the judge model and the `ollama pull` for it
+
 ### Requirement: Sticky Re-Embed Warning On Every Successful Init
 
 Every successful `init` MUST print, unconditionally, a warning stating
