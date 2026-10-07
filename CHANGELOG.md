@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-10-07
+
+One addition: `openkos query --json`, a machine-readable report of how an answer was built, for callers that treat `query` as a black box and need to tell what was retrieved from what the model did with it. Nothing about how answers are produced changes, and without the flag the output is identical to 0.5.3.
+
 ### Added
 
 - `openkos query --json` emits one machine-readable object on stdout (`schema_version` 1): the answer, every context block sent to the model with the exact text, the fused retrieval list with per-channel ranks and RRF scores, the concepts the context budget dropped, the sampling parameters OpenKOS sends, and the SHA-256 of the prompts. It is observability only — retrieval, prompts and answer post-processing are unchanged, and without the flag the output is byte-identical. Confidential concepts follow the MCP rule and are only counted; `--json` with `--save` (or a save-only flag) is a usage error (#1345).
@@ -3624,7 +3628,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/jasonssdev/openkos/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/jasonssdev/openkos/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/jasonssdev/openkos/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/jasonssdev/openkos/compare/v0.5.0...v0.5.1
