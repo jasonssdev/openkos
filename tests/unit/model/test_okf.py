@@ -1148,7 +1148,9 @@ def test_extraction_notice_vocabulary_constants() -> None:
         "objects-without-evidence",
         "candidates-dropped-in-staging",
         "chunk-extraction-partial",
+        "extraction-capped",
     )
+    assert okf.EXTRACTION_NOTICE_CAPPED == "extraction-capped"
     assert okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES == "sole-object-restates-source"
     # #772: the two judge-degrade tokens quarantine an unjudged extraction.
     # Two tokens, not one, for the same reason #754 split the terminal

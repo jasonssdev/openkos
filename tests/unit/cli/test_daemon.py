@@ -1399,3 +1399,90 @@ def test_the_unattended_engine_does_not_import_the_auto_merge_pass(
     assert not {name for name in imported if name.endswith("auto_merge")}, (
         f"{module} imports the auto-merge pass"
     )
+
+
+# -- #1331: the daemon import renders what an attended ingest tells the operator --
+
+
+def _staged_with_report(**report_fields: Any) -> Any:
+    from openkos.application import ingest as application_ingest
+    from openkos.extraction import concept as concept_mod
+
+    return application_ingest.StagedDerivedObjects(
+        plans=(),
+        skip_reason=None,
+        notices=(),
+        report=concept_mod.ExtractionReport(**report_fields),
+        drops=(),
+        lost_in_staging=0,
+    )
+
+
+def test_watch_ports_name_the_cap_truncation_and_what_was_discarded() -> None:
+    ports = daemon_module.watch_ports()
+    staged = _staged_with_report(
+        produced=22, retained=20, discarded_titles=("Alpha", "Beta")
+    )
+
+    lines = ports.staged_notices(staged)
+
+    assert lines == [
+        "20 of 22 extracted object(s) kept (cap reached); discarded: Alpha, Beta"
+    ]
+
+
+def test_watch_ports_carry_the_unevidenced_advisory_with_its_titles() -> None:
+    ports = daemon_module.watch_ports()
+    staged = _staged_with_report(
+        produced=1, retained=1, unevidenced_titles=("Agentic Systems",)
+    )
+
+    (line,) = ports.staged_notices(staged)
+
+    assert "carry no line quoted from the source" in line
+    assert "Agentic Systems" in line
+
+
+def test_watch_ports_have_nothing_to_say_for_a_clean_extraction() -> None:
+    ports = daemon_module.watch_ports()
+
+    assert ports.staged_notices(_staged_with_report(produced=3, retained=3)) == []
+
+
+def test_watch_ports_summarise_torn_classifications_per_import() -> None:
+    from openkos.application import ingest_service as svc
+
+    ports = daemon_module.watch_ports()
+    outcome = svc.IngestWritten(
+        regenerated=False,
+        extraction_degraded=False,
+        derived_count=3,
+        alternative_pairs=(("Concept", "Entity"), ("Concept", "Entity")),
+    )
+
+    assert ports.outcome_notices(outcome) == [
+        "2 of 3 derived object(s) recorded a type_alternative on the document "
+        "(all: Concept/Entity)."
+    ]
+
+
+def test_the_extraction_phase_hook_is_silent_off_a_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("sys.stderr", io.StringIO())
+
+    assert daemon_module.watch_ports().phase_hook("a.md") is None
+
+
+def test_the_extraction_phase_hook_names_the_file_on_a_tty(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True, raising=False)
+    hook = daemon_module.watch_ports().phase_hook("a.md")
+    assert hook is not None
+
+    hook("extracting window 2/5")
+
+    assert (
+        "openkos daemon: extracting window 2/5 ('a.md')..." in capsys.readouterr().err
+    )

@@ -3797,6 +3797,49 @@ def _render_staging_drop(drop: application_ingest.StagingDrop) -> None:
         )
 
 
+def _report_notice_texts(report: ExtractionReport) -> list[str]:
+    """The advisory texts one extraction report earns, in the documented
+    order, without any verb prefix. The attended `ingest` and the unattended
+    daemon import both render from this one list (#1331), so the two surfaces
+    cannot drift."""
+    candidates = (
+        _chunk_skip_notice(report),
+        _wrong_language_notice(report),
+        _recombined_title_notice(report),
+        _bounded_prompt_notice(report),
+        _reask_notice(report),
+        _optional_call_failure_notice(report),
+        _pre_judge_ceiling_notice(report),
+        (_judge_failure_notice(report) or _judge_selection_notice(report)),
+        _unfiltered_source_notice(report),
+        _participant_unreadmitted_notice(report),
+        _participant_ungrounded_notice(report),
+        _unevidenced_notice(report),
+        _extraction_cap_notice(report),
+        _sole_object_notice(report),
+    )
+    return [text for text in candidates if text is not None]
+
+
+def staged_advisory_lines(staged: application_ingest.StagedDerivedObjects) -> list[str]:
+    """What an unattended import says about one file's staging (#1331): the
+    extraction-report advisories an attended `ingest` prints, plus the
+    no-concept and lost-candidate notes. No prefix; the caller names the file."""
+    if staged.report is None:
+        return []
+    lines = _report_notice_texts(staged.report)
+    if staged.skip_reason == "no-concepts-found":
+        lines.append("no concept extracted from this source; keeping the Source only.")
+        return lines
+    if staged.lost_in_staging:
+        lines.append(
+            f"{staged.lost_in_staging} extracted candidate(s) could not be "
+            "staged and were dropped; marking the Source (extraction_notice: "
+            f"{okf.EXTRACTION_NOTICE_CANDIDATES_DROPPED})."
+        )
+    return lines
+
+
 def _render_staged_derived_objects(
     staged: application_ingest.StagedDerivedObjects,
 ) -> None:
@@ -3836,24 +3879,8 @@ def _render_staged_derived_objects(
         return
 
     report = staged.report
-    for notice_text in (
-        _chunk_skip_notice(report),
-        _wrong_language_notice(report),
-        _recombined_title_notice(report),
-        _bounded_prompt_notice(report),
-        _reask_notice(report),
-        _optional_call_failure_notice(report),
-        _pre_judge_ceiling_notice(report),
-        (_judge_failure_notice(report) or _judge_selection_notice(report)),
-        _unfiltered_source_notice(report),
-        _participant_unreadmitted_notice(report),
-        _participant_ungrounded_notice(report),
-        _unevidenced_notice(report),
-        _extraction_cap_notice(report),
-        _sole_object_notice(report),
-    ):
-        if notice_text is not None:
-            output.notice(f"openkos ingest: {notice_text}", verb="ingest")
+    for notice_text in _report_notice_texts(report):
+        output.notice(f"openkos ingest: {notice_text}", verb="ingest")
 
     if staged.skip_reason == "no-concepts-found":
         output.notice(
@@ -4312,58 +4339,87 @@ def _echo_event_date_preview_line(
         typer.echo(f"    event date {value} (kept from the existing Source)")
 
 
-def _echo_type_alternative_summary(
+def type_alternative_summary_line(
     derived_count: int, pairs: Sequence[tuple[str, str]]
-) -> None:
-    """Emit the ONE aggregate disclosure line for torn classifications
-    (#566): `{n} of {m} derived object(s) recorded a type_alternative`,
-    naming the most common `{type}/{alternative}` pair. Silent when no
-    object recorded one -- an advisory that fires on the healthy path is
-    noise. stderr, like every other ingest notice, so the stdout batch
-    contract (#349) is untouched."""
+) -> str | None:
+    """The ONE aggregate disclosure line for torn classifications (#566),
+    without a verb prefix: `{n} of {m} derived object(s) recorded a
+    type_alternative`, naming the most common `{type}/{alternative}` pair.
+    `None` when no object recorded one -- an advisory that fires on the
+    healthy path is noise."""
     if not pairs:
-        return
+        return None
     counts = Counter(pairs)
     (primary, alternative), _ = counts.most_common(1)[0]
     qualifier = "all" if len(counts) == 1 else "most common"
-    typer.echo(
-        f"openkos ingest: {len(pairs)} of {derived_count} derived object(s) "
+    return (
+        f"{len(pairs)} of {derived_count} derived object(s) "
         f"recorded a type_alternative on the document "
-        f"({qualifier}: {primary}/{alternative}).",
-        err=True,
+        f"({qualifier}: {primary}/{alternative})."
     )
+
+
+def _echo_type_alternative_summary(
+    derived_count: int, pairs: Sequence[tuple[str, str]]
+) -> None:
+    """Emit `type_alternative_summary_line` on stderr, like every other
+    ingest notice, so the stdout batch contract (#349) is untouched."""
+    line = type_alternative_summary_line(derived_count, pairs)
+    if line is not None:
+        typer.echo(f"openkos ingest: {line}", err=True)
+
+
+def type_floor_summary_lines(
+    derived_count: int, pairs: Sequence[tuple[str, str]]
+) -> list[str]:
+    """The born-above-floor disclosure (issue #669, design D4) without a verb
+    prefix: ONE aggregate line, and, only when at least one raised object
+    landed on `confidential`, the #569 retrieval-exclusion consequence line.
+    Empty when `pairs` is empty (an advisory that fires on the healthy path is
+    noise); names the most common `{type} -> {level}` pair when more than one
+    distinct pair is present."""
+    if not pairs:
+        return []
+    counts = Counter(pairs)
+    (primary_type, primary_level), _ = counts.most_common(1)[0]
+    qualifier = "all" if len(counts) == 1 else "most common"
+    lines = [
+        f"{len(pairs)} of {derived_count} derived object(s) "
+        f"were born above the workspace sensitivity floor by type default "
+        f"({qualifier}: {primary_type} -> {primary_level})."
+    ]
+    if any(level == "confidential" for _type, level in pairs):
+        lines.append(
+            "confidential objects are excluded from query, "
+            "contradictions, and suggest-relations against a non-local "
+            "backend."
+        )
+    return lines
+
+
+def outcome_advisory_lines(outcome: ingest_service.IngestOutcome) -> list[str]:
+    """What an unattended import says about one landed file (#1331): the
+    torn-classification and born-above-floor summaries an attended `ingest`
+    prints after its run. No prefix; the caller names the file."""
+    lines: list[str] = []
+    alt = type_alternative_summary_line(
+        outcome.derived_count, outcome.alternative_pairs
+    )
+    if alt is not None:
+        lines.append(alt)
+    lines.extend(
+        type_floor_summary_lines(outcome.derived_count, outcome.type_floor_pairs)
+    )
+    return lines
 
 
 def _echo_type_floor_summary(
     derived_count: int, pairs: Sequence[tuple[str, str]]
 ) -> None:
-    """Emit the ONE aggregate born-above-floor disclosure line (issue #669,
-    design D4), and, only when at least one raised object landed on
-    `confidential`, the #569 retrieval-exclusion consequence line.
-
-    Mirrors `_echo_type_alternative_summary`'s shape exactly: silent when
-    `pairs` is empty (an advisory that fires on the healthy path is
-    noise), stderr like every other ingest notice so the stdout batch
-    contract (#349) stays untouched, naming the most common `{type} ->
-    {level}` pair when more than one distinct pair is present."""
-    if not pairs:
-        return
-    counts = Counter(pairs)
-    (primary_type, primary_level), _ = counts.most_common(1)[0]
-    qualifier = "all" if len(counts) == 1 else "most common"
-    typer.echo(
-        f"openkos ingest: {len(pairs)} of {derived_count} derived object(s) "
-        f"were born above the workspace sensitivity floor by type default "
-        f"({qualifier}: {primary_type} -> {primary_level}).",
-        err=True,
-    )
-    if any(level == "confidential" for _type, level in pairs):
-        typer.echo(
-            "openkos ingest: confidential objects are excluded from query, "
-            "contradictions, and suggest-relations against a non-local "
-            "backend.",
-            err=True,
-        )
+    """Emit `type_floor_summary_lines` on stderr like every other ingest
+    notice, so the stdout batch contract (#349) stays untouched."""
+    for line in type_floor_summary_lines(derived_count, pairs):
+        typer.echo(f"openkos ingest: {line}", err=True)
 
 
 _GLOB_MAGIC_CHARS = frozenset("*?[")
