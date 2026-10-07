@@ -881,6 +881,29 @@ def test_unmerge_names_the_commit_and_the_way_back(
     )
 
 
+def test_unmerge_says_how_to_stop_the_judge_proposing_the_pair_again(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1334 item 9 (the safe half): `unmerge` records no ruling, so the next
+    `curate` can propose the same pair again. It does not decide that for the
+    user; it names the one command that records the keep-distinct ruling."""
+    _init_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    spec = _mk_unmerge(tmp_path)
+
+    result = runner.invoke(app, spec.success_args)
+
+    assert result.exit_code == 0, result.stderr
+    assert (
+        "openkos duplicates --keep-distinct concepts/survivor "
+        "--keep-distinct concepts/absorbed" in result.stdout
+    )
+    assert result.stdout.index("openkos unmerge: restored") < result.stdout.index(
+        "--keep-distinct"
+    )
+
+
 def test_forget_commit_line_lands_after_its_success_line(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,

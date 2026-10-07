@@ -9476,6 +9476,16 @@ class _CliUnmergeObserver(unmerge_service.UnmergeObserver):
             f"from '{summary.survivor_canonical}' "
             f"({summary.index_name}, {summary.log_name} updated)."
         )
+        # #1334 item 9: an unmerge records no ruling, so the judge can propose
+        # the same pair again. Whether the unmerge MEANS "these are distinct"
+        # is the operator's call (a merge may be undone for other reasons), so
+        # this names the command rather than running it.
+        typer.echo(
+            "openkos unmerge: to stop the judge proposing this pair again, "
+            "record that they are distinct: `openkos duplicates --keep-distinct "
+            f"{shlex.quote(summary.survivor_canonical)} --keep-distinct "
+            f"{shlex.quote(summary.absorbed_canonical)}`."
+        )
 
     def committed(self, sha: str) -> None:
         _echo_commit_disclosure(sha, prefix="openkos unmerge: ")
