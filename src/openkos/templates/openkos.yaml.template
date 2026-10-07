@@ -136,7 +136,8 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
 #   maintenance_interval_seconds: 86400  # runs are never limited. Interval >= 300.
 #   quiet_seconds: 30       # a watched file must be unchanged this long (>= 1)
 #   inbox: ../inbox         # folder to watch for new sources; unset = watch off.
-                            # Must be an existing directory, never raw/, bundle/,
+                            # Relative to the workspace root; a leading ~ is your
+                            # home directory. Must be an existing directory, never raw/, bundle/,
                             # .openkos/ or the workspace root. Read-only to openkos.
 #   watch_backend: poll     # poll (default) | native. native adds an OS
                             # file-notification wake-up to the daemon's idle wait

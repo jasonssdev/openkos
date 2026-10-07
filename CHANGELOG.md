@@ -16,9 +16,33 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Upgrading from 0.5.2
+
+- **Run `openkos reindex` once per existing workspace.** The lexical index now stems, so the stored `fts.db` was built under an older layout version. Until it is rebuilt, `openkos status`, `openkos next` and `openkos query` report the lexical index as stale, and `reindex` rebuilds it even though the bundle has not changed. The rebuild is free and local (no model call) and leaves the embeddings alone. New workspaces need nothing.
+
+### Added
+
+- `openkos unmerge --keep-distinct` also records the permanent keep-distinct ruling for each pair it restores, the same ruling `openkos duplicates --keep-distinct` writes, so `curate` and `adjudicate` stop proposing the merge. It is opt-in and its own revertable commit, because an unmerge can mean "wrong survivor" rather than "distinct"; if recording fails the unmerge stands and the manual command is printed. Without the flag, `unmerge` names the flag and the `duplicates --keep-distinct` command, and every step now prints the `committed as <sha> -- git revert <sha>` line `merge`, `curate`, `relate` and `unrelate` print (#1341).
+- A sufficiency refusal from `openkos query` now lists a `Retrieved:` section, the concepts the check judged in the same row shape as `Citations:`, so a bundle that lacks the answer can be told from a retrieval that missed it (#1337).
+- `openkos init` names the separate judge model that `adjudicate` and contradiction detection run on, with the `ollama pull` that fetches it (#1341).
+- `openkos daemon` inbox imports print the advisories an attended `ingest` prints, and a progress label on a terminal while the model works (#1331, #1338). A source whose extraction hit the per-source object cap now carries `extraction_notice: extraction-capped`, so an unattended import still records that the stored set is a truncation.
+- `openkos doctor` reports, after its checks and without changing its exit code, per-user daemon logs that no workspace can be attributed to, and the groups the next daemon start will remove (#1338).
+
+### Changed
+
+- The lexical index stems (`porter unicode61`), so a singular question matches plural text; this was the deterministic cause of a wording-dependent refusal, where the lexical channel matched one phrasing and not the other. The stemmer is English; other languages match on exact words as before. A store built under another layout version is now stale however identical the bundle is, which is why upgrading needs `openkos reindex` (see above). The decision is recorded in [ADR-0051](docs/adr/0051-lexical-channel-stems-and-a-tokenizer-change-is-a-schema-bump.md) (#1333, #1337).
+- The MCP `query` tool counts the confidential concepts retrieval excluded in `withheld` (a count, never an id), as `get` and `navigate` already do (#1334, #1337).
+- `suggest-volatility` answers are cached in `findings.db` by exact prompt and model, so an unchanged bundle costs no model call in the daemon's maintenance pass or in `curate`; a "keep the current tier" answer is cached and never queued, and `forget` sweeps the cache. Suggestions are judged against the workspace's effective tier (the `type_tiers` entry, else the registry default), so a tier you already applied is no longer proposed again. The standalone `suggest-volatility` verb stays read-only (#1332, #1338).
+- `openkos pending` no longer lists a job outcome once a later job of the same kind finished cleanly, and an identity row whose members declare different OKF types names `openkos merge --include-cross-type` instead of `adjudicate --apply`, which cannot act on it (#1338, #1341).
+- `openkos lint` names the derived objects behind an "Unevidenced objects" finding (up to five, then `+N more`), recomputed with the evidence test `ingest` uses (#1341).
+- `unattended.inbox` expands a leading `~` to your home directory (#1338).
+- The daemon records which workspace each of its logs belongs to (a `<sha256>.workspace` file) and, at startup, removes the logs of workspaces that no longer exist, reporting each removal; logs with no record are never removed automatically. `purge` removes the record with the logs (#1338).
+
 ### Fixed
 
-- `openkos purge` now leaves no trace of the purged id in `log.md` (a `Relate` or `Unrelate` line names it as a later link), in older versions of other concepts' `relations:`, or in commit messages, which now read `[purged]` where the id was; its own commit no longer names the concept (#1329). `purge` also scrubs the purged concept's title and its remaining references in other concepts, live and historical: provenance and sources entries, body links and prose, and the title in commit messages. A title that is a single word, shorter than 8 characters or shared with a surviving concept is left, and `purge` says so; the concepts it rewrote are listed. The reference-aware refusal also names the concept that holds each reference (#1334).
+- `openkos purge` now leaves no trace of the purged id in `log.md` (a `Relate` or `Unrelate` line names it as a later link), in older versions of other concepts' `relations:`, or in commit messages, which now read `[purged]` where the id was; its own commit no longer names the concept (#1329). `purge` also scrubs the purged concept's title and its remaining references in other concepts, live and historical: provenance and sources entries, body links and prose, and the title in commit messages. A title that is a single word, shorter than 8 characters or shared with a surviving concept is left, and `purge` says so; the concepts it rewrote are listed. The reference-aware refusal also names the concept that holds each reference (#1334, #1335).
+- `openkos set-volatility` commits only its own change to `openkos.yaml`: edits you had not committed stay in the working tree, and the commit's revert undoes only the tier change. It refuses, writing nothing, when those edits touch the same `type_tiers` entry (#1336).
+- The sole-object re-ask in extraction now fires when the stored object's title differs from the Source's only by a date (#1342).
 
 ## [0.5.2] - 2026-10-06
 
