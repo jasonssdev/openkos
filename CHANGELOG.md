@@ -18,7 +18,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
-- `openkos purge` now leaves no trace of the purged id in `log.md` (a `Relate` or `Unrelate` line names it as a later link), in older versions of other concepts' `relations:`, or in commit messages, which now read `[purged]` where the id was; its own commit no longer names the concept (#1329). The reference-aware refusal also names the concept that holds each reference (#1334).
+- `openkos purge` now leaves no trace of the purged id in `log.md` (a `Relate` or `Unrelate` line names it as a later link), in older versions of other concepts' `relations:`, or in commit messages, which now read `[purged]` where the id was; its own commit no longer names the concept (#1329). `purge` also scrubs the purged concept's title and its remaining references in other concepts, live and historical: provenance and sources entries, body links and prose, and the title in commit messages. A title that is a single word, shorter than 8 characters or shared with a surviving concept is left, and `purge` says so; the concepts it rewrote are listed. The reference-aware refusal also names the concept that holds each reference (#1334).
 
 ## [0.5.2] - 2026-10-06
 

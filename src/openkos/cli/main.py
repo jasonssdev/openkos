@@ -4,6 +4,7 @@ import contextvars
 import dataclasses
 import functools
 import glob
+import hashlib
 import inspect
 import json
 import os
@@ -5858,6 +5859,33 @@ def _purge_clean_live_index(
         )
 
 
+def _purge_report_rewritten(
+    layout: config.WorkspaceLayout, plan: application_lifecycle.PurgePlan
+) -> None:
+    """Name every surviving concept the history rewrite changed (#1329).
+
+    These edits are consequential and the operator did not type them, so they
+    are listed. They have no commit of their own: the rewrite changes the tip
+    in place, and a commit holding the diff would itself contain the erased
+    text. The survivors are compared by digest against what Phase A read."""
+    changed: list[str] = []
+    for concept_id, digest in sorted(plan.survivor_digests.items()):
+        path = layout.bundle_dir / f"{concept_id}.md"
+        try:
+            now = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        if now != digest:
+            changed.append(concept_id)
+    if changed:
+        typer.echo(
+            f"openkos purge: rewrote {len(changed)} surviving concept(s): "
+            f"{', '.join(changed)} -- every version, live and historical, lost "
+            "its reference to the purged concept (part of the single rewrite; "
+            "there is no separate commit)."
+        )
+
+
 def _purge_referrer_detail(
     plan: application_lifecycle.PurgePlan,
     *,
@@ -6365,6 +6393,16 @@ def purge(
         )
     if plan.disclosure.cascade_total is not None:
         typer.echo(f"  Total: {plan.disclosure.cascade_total} concept(s) to purge.")
+    for skipped_title, reason in plan.skipped_titles:
+        typer.echo(
+            f"  ! title '{skipped_title}' was NOT scrubbed -- {reason}; the "
+            "id is still removed everywhere"
+        )
+    for orphan in plan.orphaned_provenance:
+        typer.echo(
+            f"  ! {orphan} now cites no source once the purged entry is "
+            "removed (--scope source would purge it too)"
+        )
     typer.echo()
 
     # Rail 1: reference-aware refusal, unless --force (spec req 2, rail 1).
@@ -6556,6 +6594,11 @@ def purge(
             # their tip. `--force` past a live reference promises to leave it
             # dangling, so it keeps its history untouched too (#1329).
             scrub_relations=not plan.referrers,
+            # The rest of the trace in surviving concepts (#1329): provenance,
+            # body links and prose, rewritten in the SAME pass so live and
+            # history end consistent -- and so no commit ever holds the diff.
+            scrub_concepts=True,
+            scrub_titles=plan.scrub_titles,
         )
     except vcs_git.GitFinalizeError as exc:
         typer.echo(
@@ -6677,6 +6720,7 @@ def purge(
 
         # No section_break here: the preview already ends with a blank line
         # on every stream, which is the section separator.
+        _purge_report_rewritten(layout, plan)
         if scope == "source":
             typer.echo(
                 f"openkos purge: permanently expunged {len(plan.purge_ids)} "

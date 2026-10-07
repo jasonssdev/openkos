@@ -768,6 +768,8 @@ def test_purge_all_rails_pass_rewrite_proceeds(
         *,
         scrub_identities: list[str] | None = None,
         scrub_relations: bool = False,
+        scrub_concepts: bool = False,
+        scrub_titles: tuple[str, ...] = (),
     ) -> None:
         called["rel_paths"] = list(rel_paths)
         called["scrub_identities"] = (
@@ -778,6 +780,8 @@ def test_purge_all_rails_pass_rewrite_proceeds(
             rel_paths,
             scrub_identities=scrub_identities,
             scrub_relations=scrub_relations,
+            scrub_concepts=scrub_concepts,
+            scrub_titles=scrub_titles,
         )
 
     monkeypatch.setattr(vcs_git, "expunge_paths", _spy)
@@ -1161,6 +1165,8 @@ def test_purge_finalize_error_surfaces_recoverability_warning(
         *,
         scrub_identities: list[str] | None = None,
         scrub_relations: bool = False,
+        scrub_concepts: bool = False,
+        scrub_titles: tuple[str, ...] = (),
     ) -> None:
         raise vcs_git.GitFinalizeError(
             "git gc failed after a successful rewrite: boom\n"
@@ -1201,6 +1207,8 @@ def test_purge_phase_a_writes_nothing_before_phase_b(
         *,
         scrub_identities: list[str] | None = None,
         scrub_relations: bool = False,
+        scrub_concepts: bool = False,
+        scrub_titles: tuple[str, ...] = (),
     ) -> None:
         raise AssertionError("expunge_paths must be the ONLY write trigger")
 
@@ -1286,6 +1294,8 @@ def test_purge_finalize_error_still_cleans_live_log_tombstone(
         *,
         scrub_identities: list[str] | None = None,
         scrub_relations: bool = False,
+        scrub_concepts: bool = False,
+        scrub_titles: tuple[str, ...] = (),
     ) -> None:
         raise vcs_git.GitFinalizeError("boom -- may still be recoverable")
 
@@ -2760,3 +2770,194 @@ def test_purge_commit_message_redaction_respects_id_boundaries(
     assert f"note {_PURGED}-keeper" in subjects
     assert f"note my{_PURGED}\n" in subjects
     assert f"add {_PURGED}\n" not in subjects
+
+
+# --- #1329 (title, prose, provenance): the rest of the trace ----------------
+
+_TITLE = "Bee Keeping Guild"
+
+
+def _write_text(root: Path, rel: str, text: str) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _ant(*, provenance: list[str], body: str) -> str:
+    from openkos.model import okf
+
+    metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": "Ant",
+        "provenance": provenance,
+    }
+    projected = okf.project_sources(provenance)
+    if projected is not None:
+        metadata["sources"] = projected
+    return okf.dump_frontmatter(metadata, body)
+
+
+_LINKED_BODY = (
+    "\n# Ant\n\n## Related\n\n"
+    f"- [{_TITLE}](/{_PURGED}.md) -- a rival crew that outranks us\n"
+    f"- we also keep [the guild](/{_PURGED}.md) in mind\n\n"
+    f"Ant trains with the {_TITLE} daily; see {_PURGED} for details. "
+    f"Cited: [{_TITLE}](/{_PURGED}.md).\n"
+)
+_PROSE_BODY = (
+    f"\n# Ant\n\nAnt trains with the {_TITLE} daily; see {_PURGED} for details.\n"
+)
+
+
+def _prose_history_repo(
+    root: Path, *, title: str = _TITLE, head_body: str = _PROSE_BODY
+) -> None:
+    _write_plain_concept(root, _PURGED, title=title)
+    _write_text(
+        root,
+        f"bundle/{_PEER}.md",
+        _ant(provenance=[_PURGED, "sources/notes"], body=_LINKED_BODY),
+    )
+    _commit_all(root, f"ingest {title} notes")
+    _write_text(
+        root,
+        f"bundle/{_PEER}.md",
+        _ant(provenance=[_PURGED, "sources/notes"], body=head_body),
+    )
+    _commit_all(root, "tidy ant")
+
+
+def _purge_bee(*extra: str) -> Result:
+    return runner.invoke(
+        app, ["purge", _PURGED, "--confirm-phrase", f"purge {_PURGED}", *extra]
+    )
+
+
+def test_purge_scrubs_title_prose_ids_and_provenance_live_and_historical(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    from openkos.model import okf
+
+    _prose_history_repo(tmp_git_repo.root)
+    history = _full_history(tmp_git_repo.root)
+    assert _TITLE in history  # precondition
+    assert _PURGED in history
+
+    result = _purge_bee()
+
+    assert result.exit_code == 0, result.output
+    history = _full_history(tmp_git_repo.root)
+    assert _TITLE not in history
+    assert _PURGED not in history
+    assert "bee.md" not in history
+    live = (tmp_git_repo.root / "bundle" / f"{_PEER}.md").read_text(encoding="utf-8")
+    metadata, body = okf.load_frontmatter(live)
+    assert metadata["provenance"] == ["sources/notes"]
+    assert metadata["sources"] == okf.project_sources(metadata["provenance"])
+    assert "Ant trains with the [purged] daily; see [purged] for details." in body
+
+
+def test_purge_scrubs_body_links_by_the_documented_rule(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """A bullet that opens with a link to the purged concept is dropped; a
+    link whose text is the title loses link and text; any other link keeps
+    its text and loses the link. Live (under --force) and historical agree."""
+    _prose_history_repo(tmp_git_repo.root, head_body=_LINKED_BODY + "\nExtra.\n")
+
+    result = _purge_bee("--force")
+
+    assert result.exit_code == 0, result.output
+    live = (tmp_git_repo.root / "bundle" / f"{_PEER}.md").read_text(encoding="utf-8")
+    assert "rival crew" not in live
+    assert "- we also keep the guild in mind" in live
+    assert "Cited: ." in live
+    assert "](/concepts/bee.md)" not in _full_history(tmp_git_repo.root)
+    assert _TITLE not in _full_history(tmp_git_repo.root)
+
+
+def test_purge_commit_messages_lose_the_title(tmp_git_repo: TmpGitRepo) -> None:
+    _prose_history_repo(tmp_git_repo.root)
+
+    assert _purge_bee().exit_code == 0
+
+    subjects = vcs_git._run(
+        ["git", "log", "--all", "--format=%s"], cwd=tmp_git_repo.root
+    ).stdout
+    assert "ingest [purged] notes" in subjects
+
+
+def test_purge_lists_the_surviving_concepts_it_rewrote(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    _prose_history_repo(tmp_git_repo.root)
+
+    result = _purge_bee()
+
+    assert result.exit_code == 0, result.output
+    assert f"rewrote 1 surviving concept(s): {_PEER}" in result.output
+
+
+@pytest.mark.parametrize(
+    ("title", "reason"),
+    [("Bee", "a single word"), ("Bee Co", "shorter than 8 characters")],
+)
+def test_purge_says_when_a_generic_title_is_not_scrubbed(
+    tmp_git_repo: TmpGitRepo, title: str, reason: str
+) -> None:
+    _prose_history_repo(
+        tmp_git_repo.root,
+        title=title,
+        head_body=f"\n# Ant\n\nAnt likes the {title} a lot.\n",
+    )
+
+    result = _purge_bee()
+
+    assert result.exit_code == 0, result.output
+    assert f"title '{title}' was NOT scrubbed -- {reason}" in result.output
+    live = (tmp_git_repo.root / "bundle" / f"{_PEER}.md").read_text(encoding="utf-8")
+    assert f"Ant likes the {title} a lot." in live
+
+
+def test_purge_does_not_scrub_a_title_a_surviving_concept_also_has(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    _prose_history_repo(
+        tmp_git_repo.root, head_body=f"\n# Ant\n\nAnt trains with the {_TITLE}.\n"
+    )
+    _write_plain_concept(tmp_git_repo.root, "concepts/twin", title=_TITLE)
+    _commit_all(tmp_git_repo.root, "add twin")
+
+    result = _purge_bee()
+
+    assert result.exit_code == 0, result.output
+    assert (
+        f"title '{_TITLE}' was NOT scrubbed -- also the title of surviving "
+        "concept 'concepts/twin'"
+    ) in result.output
+    live = (tmp_git_repo.root / "bundle" / f"{_PEER}.md").read_text(encoding="utf-8")
+    assert f"the {_TITLE}." in live
+
+
+def test_purge_warns_when_a_survivor_is_left_without_provenance(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    from openkos.model import okf
+
+    _write_plain_concept(tmp_git_repo.root, _PURGED, title=_TITLE)
+    _write_text(
+        tmp_git_repo.root,
+        f"bundle/{_PEER}.md",
+        _ant(provenance=[_PURGED], body="\n# Ant\n\nBody.\n"),
+    )
+    _commit_all(tmp_git_repo.root, "ant cites only bee")
+
+    result = _purge_bee()
+
+    assert result.exit_code == 0, result.output
+    assert f"{_PEER} now cites no source" in result.output
+    metadata, _ = okf.load_frontmatter(
+        (tmp_git_repo.root / "bundle" / f"{_PEER}.md").read_text(encoding="utf-8")
+    )
+    assert "provenance" not in metadata
+    assert "sources" not in metadata
