@@ -1768,6 +1768,27 @@ def init(
             "workspace's openkos.yaml later forces a full corpus re-embed the "
             "next time `openkos reindex` runs.",
         )
+    # #1334 item 7: the two judge roles ship their own, larger chat model
+    # (`config.DEFAULT_TASK_MODELS`, ADR-0047), which neither picker above
+    # asks about and which must be pulled separately. Informational only: no
+    # prompt, and `models:` in openkos.yaml overrides it. `init` writes the
+    # `ollama` backend, the only one the packaged defaults apply to.
+    judge_models = [
+        tag
+        for task in ("adjudication", "contradiction")
+        if (tag := config.DEFAULT_TASK_MODELS.get(task)) is not None
+        and tag != resolved_model
+    ]
+    if judge_models:
+        distinct_judges = list(dict.fromkeys(judge_models))
+        pulls = " and ".join(f"`ollama pull {tag}`" for tag in distinct_judges)
+        _advisory(
+            "init",
+            "openkos init: note -- `adjudicate` and contradiction detection run "
+            f"on a separate, larger model ({', '.join(distinct_judges)}), not on "
+            f"'{resolved_model}'; Ollama swaps it in by stage. Pull it before "
+            f"you first need it: {pulls}.",
+        )
     # Best-effort git setup (Slice 1, git-lifecycle): runs strictly AFTER
     # Phase B's last write (`openkos.yaml`, just above), so any git failure
     # happens only once the workspace is already valid -- mirroring the

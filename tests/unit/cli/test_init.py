@@ -980,6 +980,23 @@ def test_sticky_reembed_warning_does_not_blame_another_workspace(
     assert "different workspace" not in result.stderr
 
 
+def test_init_discloses_the_judge_model_the_judge_roles_run_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1334 item 7: `init` asks for the chat and embedding models only, so
+    the larger judge model that `adjudication` and `contradiction` run on
+    (and that must be pulled) would otherwise surface only in `doctor`."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert config.DEFAULT_JUDGE_MODEL in result.stderr
+    assert "adjudicate" in result.stderr
+    assert "contradiction" in result.stderr
+    assert f"ollama pull {config.DEFAULT_JUDGE_MODEL}" in result.stderr
+
+
 def test_embedding_picker_unreachable_ollama_falls_back_to_default_silently(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
