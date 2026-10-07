@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- `openkos query --json` emits one machine-readable object on stdout (`schema_version` 1): the answer, every context block sent to the model with the exact text, the fused retrieval list with per-channel ranks and RRF scores, the concepts the context budget dropped, the sampling parameters OpenKOS sends, and the SHA-256 of the prompts. It is observability only — retrieval, prompts and answer post-processing are unchanged, and without the flag the output is byte-identical. Confidential concepts follow the MCP rule and are only counted; `--json` with `--save` (or a save-only flag) is a usage error (#1345).
+
 ## [0.5.3] - 2026-10-07
 
 A maintenance release from the 0.5.2 end-to-end run. `purge` now erases the purged concept everywhere it can be named, `set-volatility` stops committing your own `openkos.yaml` edits, the lexical index matches singular and plural forms, meeting-style sources stop collapsing into a single Event, and the daemon reports what an attended `ingest` reports without re-paying for answers it already has. Run `openkos reindex` once per workspace after upgrading.

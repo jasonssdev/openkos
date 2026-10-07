@@ -1020,3 +1020,119 @@ changed (`workspace-lock`).
   prompt, having computed the insight's level from cited concept `<id>`
 - WHEN another process changes `<id>`'s sensitivity and the user confirms
 - THEN the save exits `3` and files nothing
+
+### Requirement: `--json` Emits One Machine-Readable Object
+
+`openkos query` MUST accept `--json`. With it, stdout MUST carry exactly one
+JSON object (schema version `1`) and nothing else; every diagnostic MUST stay
+on stderr, exactly as without the flag. Exit codes MUST be unchanged: a
+`no_match` and a sufficiency refusal exit `0`, a workspace, configuration or
+backend failure exits `1` with an empty stdout. Without `--json`, stdout,
+stderr and exit codes MUST be byte-identical to a build without the flag.
+`--limit` is supported and echoed. The flag is observability only: it MUST NOT
+change retrieval, fusion, context assembly, prompts, the sufficiency check,
+attribution or answer post-processing.
+
+`--json` together with `--save`, `--auto`, `--title`, `--description`,
+`--type` or `--allow-unattributed` MUST be a usage error: exit `2`, a message
+naming the conflicting flags on stderr, nothing on stdout, and no workspace,
+index or model access.
+
+The object's fields, in order:
+
+- `schema_version` (`1`), `openkos_version`, `question`, `limit`.
+- `outcome`, one of `answered`, `no_match` (every no-match cause except the
+  sufficiency refusal), `no_answer_in_context` (the sufficiency refusal) or
+  `withheld` (see sensitivity below).
+- `answer`: the final prose after attribution and scaffold stripping, or
+  `null` unless `outcome` is `answered`.
+- `sufficiency`: `{enabled, invoked, refused, degraded, raw_reply}`.
+  `raw_reply` is the check's reply as received, `null` when the check did not
+  run, failed open, or a concept was withheld.
+- `attribution`: `{status, used_indices}`; `status` is `reported` (the answer
+  named at least one block), `none` (it reported drawing on none of them),
+  `absent` (no attribution line) or `unparsed` (a line naming nothing usable).
+  `used_indices` holds the 1-based prompt positions the answer reported, `[]`
+  for every status but `reported`.
+- `context_blocks`: every block placed in the synthesis (or sufficiency)
+  prompt, in prompt order, each `{index, concept_id, title, excerpted, text}`.
+  `index` is the block's 1-based position in the prompt and `text` is exactly
+  the block string the prompt placed after `[index] `, after the excerpting
+  and elision rule. Assembling the blocks as the prompt does (`CONTEXT:`, the
+  `[index] text` blocks joined by a blank line, `QUESTION:`, the question)
+  reproduces the user message byte for byte.
+- `omitted`: retrieved concepts the context budget dropped entirely, each
+  `{concept_id, title, reason}`. `reason` is a closed enumeration:
+  `context_budget` (a retrieved concept the budget left no room for) or
+  `context_budget_earlier_version` (an attached earlier version, a
+  `supersedes` or `revises` predecessor, dropped for the same cause). `title`
+  is the concept's own title, never a display suffix.
+- `retrieved`: the fused top-`limit` list before context assembly, each
+  `{rank, concept_id, title, fts_rank, dense_rank, rrf_score}`. The ranks are
+  1-based positions in the post-filter list of each channel and `null` when
+  the channel did not return the concept; `rrf_score` is the score fusion
+  ranked by. A fused concept that could not be read at assembly time is not
+  listed.
+- `citations`: `{concept_id, title, excerpted}` per citation, as printed.
+- `counts`: `{fts_hits, dense_hits, fused, context_blocks}`.
+- `withheld`: the number of distinct concepts the object refused to name,
+  plus those retrieval excluded as confidential before fusion. A count, never
+  an id.
+- `llm`: `{backend, model, embedding_model, num_ctx, num_predict,
+  temperature, seed}`, the values OpenKOS sends; one it does not send is
+  `null` (`num_ctx` is always `null` on the `openai-compatible` backend, and
+  `temperature` and `seed` are `null` unless the workspace pins them).
+- `prompts`: `{system_sha256, user_sha256, sufficiency_sha256}`, the full
+  SHA-256 hex of the UTF-8 text of the content sent: the synthesis system
+  prompt, the user message (shared by the sufficiency check and synthesis),
+  and the sufficiency system prompt. Each is `null` when that prompt was not
+  sent.
+
+Sensitivity: the object MUST follow the same disclosure rule as the MCP
+`query` tool. Without `--include-confidential`, a concept that is not
+disclosable MUST NOT appear by text, title or id anywhere in the object, and
+is only counted in `withheld`. When such a concept's block entered the prompt
+(for example through the local-backend exemption), `outcome` MUST be
+`withheld` and `answer` `null`, whether or not the answer cited it.
+
+#### Scenario: An answered query
+
+- GIVEN a workspace whose bundle answers the question
+- WHEN `openkos query "<question>" --json` runs
+- THEN stdout parses as one JSON object with `outcome` `answered`, the
+  `answer` text, every context block sent, and `prompts.user_sha256` equal to
+  the SHA-256 of the user message reassembled from `context_blocks`
+- AND the human `Citations:` text is not printed
+
+#### Scenario: A no-match and a sufficiency refusal keep their exit codes
+
+- GIVEN a question nothing in the bundle matches, and one the sufficiency
+  check refuses
+- WHEN each runs with `--json`
+- THEN each exits `0`, with `outcome` `no_match` and `no_answer_in_context`
+  respectively and `answer` `null`
+- AND the refusal still lists the judged blocks in `context_blocks`
+
+#### Scenario: `--json` with a save flag is a usage error
+
+- GIVEN any of `--save`, `--auto`, `--title`, `--description`, `--type`,
+  `--allow-unattributed`
+- WHEN it is passed with `--json`
+- THEN the command exits `2` with the conflict named on stderr, empty stdout,
+  and no client constructed
+
+#### Scenario: A confidential concept is never named
+
+- GIVEN a confidential concept matching the question and no
+  `--include-confidential`
+- WHEN `openkos query "<question>" --json` runs
+- THEN no text, title or id of the concept appears in stdout
+- AND `withheld` counts it, and if its block entered the prompt `outcome` is
+  `withheld` with `answer` `null`
+
+#### Scenario: Without the flag nothing changes
+
+- GIVEN any query that succeeds, matches nothing, or is refused
+- WHEN it runs without `--json`
+- THEN stdout, stderr and the exit code are byte-identical to a build without
+  the flag

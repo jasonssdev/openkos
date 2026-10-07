@@ -79,6 +79,30 @@ def _accumulate[Hit: (FtsHit, VecHit)](
         scores[concept_id] = scores.get(concept_id, 0.0) + 1.0 / (K_RRF + rank)
 
 
+def rrf_scores(fts_hits: list[FtsHit], vec_hits: list[VecHit]) -> dict[str, float]:
+    """The fused RRF score of every `concept_id` in either list.
+
+    The single place the score is computed: `fuse` ranks by it and
+    `AnswerTrace` reports it, so the number a caller reads is the number the
+    ranking used. Includes the `insights/` down-weight (issue #649)."""
+    scores: dict[str, float] = {}
+    _accumulate(scores, fts_hits)
+    _accumulate(scores, vec_hits)
+    for concept_id in scores:
+        if concept_id.startswith(INSIGHT_ID_PREFIX):
+            scores[concept_id] *= INSIGHT_FUSION_PENALTY
+    return scores
+
+
+def first_ranks[Hit: (FtsHit, VecHit)](hits: list[Hit]) -> dict[str, int]:
+    """Each `concept_id`'s 1-based position of its FIRST occurrence in `hits`
+    -- the rank `_accumulate` scores it at."""
+    ranks: dict[str, int] = {}
+    for rank, hit in enumerate(hits, start=1):
+        ranks.setdefault(hit.concept_id, rank)
+    return ranks
+
+
 def fuse(fts_hits: list[FtsHit], vec_hits: list[VecHit]) -> list[str]:
     """Fuse `fts_hits` and `vec_hits` into one ordered `concept_id` list.
 
@@ -97,12 +121,7 @@ def fuse(fts_hits: list[FtsHit], vec_hits: list[VecHit]) -> list[str]:
     `INSIGHT_FUSION_PENALTY` (issue #649) -- part of the ranking function
     itself, not a layer, so purity/determinism are unchanged.
     """
-    scores: dict[str, float] = {}
-    _accumulate(scores, fts_hits)
-    _accumulate(scores, vec_hits)
-    for concept_id in scores:
-        if concept_id.startswith(INSIGHT_ID_PREFIX):
-            scores[concept_id] *= INSIGHT_FUSION_PENALTY
+    scores = rrf_scores(fts_hits, vec_hits)
     return sorted(scores, key=lambda concept_id: (-scores[concept_id], concept_id))
 
 
