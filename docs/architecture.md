@@ -145,7 +145,7 @@ To *read* the knowledge in an editor it is **`bundle/`** that opens, not the wor
     ├── fts.db            # lexical index
     ├── graph.db          # node-edge projection
     ├── vectors.db        # dense index
-    ├── findings.db       # contradiction + adjudication verdicts (NOT an index)
+    ├── findings.db       # verdicts + suggestions (NOT an index)
     ├── insight_questions.db   # cached question embeddings for `query --save`
     └── jobs.db           # OPERATIONAL: the unattended runner's job outcomes
 ```
@@ -266,7 +266,7 @@ reconstruction costs:
 
 | Store | Written by | Rebuild cost | Posture |
 | --- | --- | --- | --- |
-| `fts.db` | `reindex`, and every bundle-writing verb | free, local | manifest-hash gated, refreshed per document with a whole rebuild as the fallback; `purge` rebuilds it in line |
+| `fts.db` | `reindex`, and every bundle-writing verb | free, local | manifest-hash gated and layout-versioned (a store built under an older tokenizer is stale and rebuilds whole), refreshed per document with a whole rebuild as the fallback; `purge` rebuilds it in line |
 | `graph.db` | `reindex`, and every bundle-writing verb | free, local | manifest-hash gated, refreshed per document with a whole rebuild as the fallback; `purge` rebuilds it in line |
 | `vectors.db` | `reindex`, and every bundle-writing verb | embedding calls | `purge` deletes without rebuilding; re-derived lazily |
 | `findings.db` | `contradictions`, `curate`, `adjudicate` | **LLM calls** | per-row input digests, not manifest-gated; never rebuilt in line |
@@ -275,9 +275,9 @@ reconstruction costs:
 `findings.db` is the one that most repays understanding. It is not an index: a
 finding is a *verdict*, not a projection, so a whole-store rebuild cannot
 produce one. It carries per-row input digests and decides its own staleness
-instead of riding the shared manifest-hash gate, and it holds two tenants in one
-file — contradiction verdicts and adjudication verdicts — deliberately, so a
-second tenant inherits `purge`'s erasure and `forget`'s sweep instead of opening
+instead of riding the shared manifest-hash gate, and it holds several tenants in one
+file — contradiction and adjudication verdicts, edge and volatility suggestions — deliberately, so a
+further tenant inherits `purge`'s erasure and `forget`'s sweep instead of opening
 a new privacy surface.
 
 **The pending-work queue is a tenant of `findings.db`.** It holds the proposals
