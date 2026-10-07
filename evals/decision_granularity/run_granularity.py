@@ -61,12 +61,14 @@ Anything else records the result and ships nothing prompt-level.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import sys
 import tempfile
 import time
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from statistics import mean
@@ -139,11 +141,68 @@ TREATMENTS: Final[dict[str, tuple[str, str]]] = {
 }
 
 
+# --------------------------------------------------------------------------- #
+# Pipeline treatments: a monkeypatch of one deterministic function, never a
+# prompt edit (#1318). Production is not edited; the patch is undone after
+# the arm. The prompt an arm sends is the shipped one.
+# --------------------------------------------------------------------------- #
+
+_MONTH_NAMES: Final = frozenset(
+    {
+        "january", "february", "march", "april", "june", "july", "august",
+        "september", "october", "november", "december",
+        "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+        "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+    }
+)  # fmt: skip
+"""Full month names, English and Spanish. Short forms and `may`/`mar` stay out
+on purpose: they are ordinary words, and dropping one would hide a real token."""
+
+
+def _title_tokens_sans_dates(value: str) -> frozenset[str]:
+    """`concept._title_tokens` minus date tokens: all-digit tokens and full
+    month names. A date-stamped file name (`2026-02-10-architecture-review`)
+    and the title the model gives its object (`Architecture review, 10
+    February`) differ ONLY by date words, which the containment arm of
+    `_restates_source_topic` reads as different topics."""
+    return frozenset(
+        token
+        for token in concept_mod._title_words(value)
+        if len(token) >= concept_mod._MIN_TOPIC_TOKEN_LENGTH
+        and not token.isdigit()
+        and token not in _MONTH_NAMES
+    )
+
+
+PIPELINE_TREATMENTS: Final[dict[str, str]] = {
+    "datefold": (
+        "`_title_tokens` ignores date tokens (all-digit tokens and full "
+        "English/Spanish month names), so the #584/#642 re-ask trigger sees a "
+        "sole object titled after a date-stamped source as restating it."
+    ),
+}
+
+
+@contextlib.contextmanager
+def pipeline_patch(arm: str) -> Iterator[None]:
+    """Apply `arm`'s pipeline treatment for the duration of the block."""
+    if arm not in PIPELINE_TREATMENTS:
+        yield
+        return
+    original = concept_mod._title_tokens
+    concept_mod._title_tokens = _title_tokens_sans_dates  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        concept_mod._title_tokens = original  # type: ignore[assignment]
+
+
 def treated_prompt(arm: str, shipped: str) -> str:
-    """The shipped prompt with `arm`'s edit applied; `baseline` is
-    unchanged. Raises when the anchor is missing or ambiguous -- a no-op
-    treatment would silently compare the baseline against itself."""
-    if arm == "baseline":
+    """The shipped prompt with `arm`'s edit applied; `baseline` and the
+    pipeline arms are unchanged. Raises when the anchor is missing or
+    ambiguous -- a no-op treatment would silently compare the baseline
+    against itself."""
+    if arm == "baseline" or arm in PIPELINE_TREATMENTS:
         return shipped
     anchor, replacement = TREATMENTS[arm]
     if shipped.count(anchor) != 1:
@@ -182,6 +241,10 @@ class RunRecord:
     latency_s: float
     objects: list[ObjectRecord] = field(default_factory=list)
     error: str | None = None
+    # #1318: which optional calls the run spent. Absent (None) on stored
+    # runs from before they were recorded.
+    reask_runs: int | None = None
+    participant_capture_runs: int | None = None
 
 
 def fold(text: str) -> str:
@@ -345,6 +408,13 @@ def exposure(records: list[dict[str, Any]], arm: str = "baseline") -> str:
 def run_combo(
     fixture: Fixture, arm: str, llm: Any, runs: int, model: str
 ) -> list[RunRecord]:
+    with pipeline_patch(arm):
+        return _run_combo(fixture, arm, llm, runs, model)
+
+
+def _run_combo(
+    fixture: Fixture, arm: str, llm: Any, runs: int, model: str
+) -> list[RunRecord]:
     original = concept_mod._SYSTEM_PROMPT
     concept_mod._SYSTEM_PROMPT = treated_prompt(arm, original)
     records: list[RunRecord] = []
@@ -387,6 +457,8 @@ def run_combo(
                     outcome.report.retained,
                     latency,
                     objects,
+                    reask_runs=outcome.report.reask_runs,
+                    participant_capture_runs=(outcome.report.participant_capture_runs),
                 )
             )
             kinds = ",".join(o.type[0] for o in outcome.objects)
@@ -408,7 +480,7 @@ def arm_prompts(arm: str) -> dict[str, str]:
     `run_combo` has already restored by the time results are written."""
     return extraction_prompts(
         system=treated_prompt(arm, concept_mod._SYSTEM_PROMPT),
-        arm=None if arm == "baseline" else arm,
+        arm=None if arm == "baseline" or arm in PIPELINE_TREATMENTS else arm,
     )
 
 
@@ -424,6 +496,7 @@ def write_results(records: list[RunRecord], arm: str, model: str) -> Path:
                 "max_generation_tokens": DEFAULT_MAX_GENERATION_TOKENS,
                 "context_window": DEFAULT_CONTEXT_WINDOW,
                 "generated_at": stamp,
+                "pipeline_treatment": PIPELINE_TREATMENTS.get(arm),
                 # #1277: the exact prompt text this arm sent, with the model
                 # and harness identity.
                 "stamp": build_stamp(model=model, prompts=arm_prompts(arm)),
@@ -609,6 +682,50 @@ def _self_test() -> int:
     else:
         failures.append("a missing anchor must refuse")
 
+    # #1318 pipeline treatment: date tokens are ignored by containment, only
+    # while the patch is active, and the prompt is the shipped one.
+    sdate = fixture_by_name("en-review-new-engineer")
+    collapsed = concept_mod.ExtractionResult(
+        type="Event",
+        title="Architecture review, 10 February",
+        description="d",
+        body="b",
+    )
+    check(
+        "date tokens are dropped",
+        _title_tokens_sans_dates(sdate.title),
+        frozenset({"architecture", "review"}),
+    )
+    check(
+        "a month name is dropped, a content word is kept",
+        _title_tokens_sans_dates("Review of march 2026 budget"),
+        frozenset({"review", "budget"}),
+    )
+    check(
+        "baseline reads the date-stamped twin as a different topic",
+        concept_mod._restates_source_topic(collapsed, source_title=sdate.title),
+        False,
+    )
+    real_tokens = concept_mod._title_tokens
+    with pipeline_patch("datefold"):
+        check(
+            "datefold reads it as restating",
+            concept_mod._restates_source_topic(collapsed, source_title=sdate.title),
+            True,
+        )
+    check("pipeline patch restored", concept_mod._title_tokens is real_tokens, True)
+    with pipeline_patch("baseline"):
+        check(
+            "baseline leaves the pipeline alone",
+            concept_mod._title_tokens is real_tokens,
+            True,
+        )
+    check(
+        "datefold sends the shipped prompt",
+        treated_prompt("datefold", shipped),
+        shipped,
+    )
+
     # #1277: a stored result names the text each arm sent. The write goes to a
     # scratch dir; the Ollama digest lookup fails fast under the sweep's
     # poisoned host and is recorded, never raised.
@@ -669,7 +786,9 @@ def _self_test() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--arm", choices=["baseline", *TREATMENTS])
+    parser.add_argument(
+        "--arm", choices=["baseline", *TREATMENTS, *PIPELINE_TREATMENTS]
+    )
     parser.add_argument("--runs", type=int, default=15)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
