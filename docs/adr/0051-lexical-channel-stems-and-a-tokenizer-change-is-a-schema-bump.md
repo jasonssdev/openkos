@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0051: The lexical channel stems with the porter tokenizer, and a tokenizer change is a schema bump that reaches existing workspaces"
 description: The FTS5 lexical index tokenizes with `porter unicode61` so a singular question matches a plural concept, and the store's schema version, not only the bundle's manifest hash, decides whether an existing index is current.
-status: Proposed
+status: Accepted
 date: 2026-10-06
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0051: The lexical channel stems with the porter tokenizer, and a tokenizer change is a schema bump that reaches existing workspaces
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-06
 
 ## Context
