@@ -5858,6 +5858,34 @@ def _purge_clean_live_index(
         )
 
 
+def _purge_referrer_detail(
+    plan: application_lifecycle.PurgePlan,
+    *,
+    verified: bool,
+    scope: str,
+) -> str:
+    """` (concepts/a (depends_on relation), concepts/b (link))` -- WHO holds
+    each reference rail 1 refused over (#1334), so the operator knows which
+    concept to `unrelate` or edit. Under `--scope source` each entry also
+    names the purge-set member it points at, since the target is then one of
+    several. Empty when no referrer matches."""
+    entries: list[str] = []
+    for ref in plan.referrers:
+        if (ref.kind != "unverifiable") != verified:
+            continue
+        if ref.kind == "relation":
+            what = f"{ref.relation_type} relation"
+        elif ref.kind == "link":
+            what = "link"
+        else:
+            what = "unparseable frontmatter"
+        entry = f"{ref.referrer_id} ({what})"
+        if scope == "source":
+            entry += f" -> {ref.target}"
+        entries.append(entry)
+    return f" ({', '.join(entries)})" if entries else ""
+
+
 def _purge_clean_live_log(layout: config.WorkspaceLayout, purge_ids: list[str]) -> None:
     """After the (already irreversible) history rewrite has succeeded,
     remove any LIVE `log.md` `forget` tombstone entry for EVERY purge-set
@@ -6354,11 +6382,13 @@ def purge(
         if plan.verified_refs:
             messages.append(
                 f"{plan.verified_refs} inbound reference(s) to {target_desc} found"
+                + _purge_referrer_detail(plan, verified=True, scope=scope)
             )
         if plan.unverifiable_refs:
             messages.append(
                 f"could not verify {plan.unverifiable_refs} referrer(s) "
                 f"that may reference {target_desc}"
+                + _purge_referrer_detail(plan, verified=False, scope=scope)
             )
         typer.echo(
             "openkos purge: refusing to purge -- "

@@ -428,6 +428,43 @@ def test_purge_reference_aware_refuses_without_force(
     )
 
 
+def test_purge_refusal_names_the_referring_link(tmp_git_repo: TmpGitRepo) -> None:
+    """The rail-1 refusal says WHICH concept holds each reference (#1334),
+    so the operator need not search the bundle before running `unrelate`."""
+    referrer_path = tmp_git_repo.root / "bundle" / "concepts" / "referrer.md"
+    referrer_path.parent.mkdir(parents=True, exist_ok=True)
+    referrer_path.write_text(
+        "---\ntype: Concept\ntitle: Referrer\n---\n\n"
+        f"# Referrer\n\nSee [source](/{tmp_git_repo.source_id}.md).\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
+
+    assert result.exit_code == 1
+    assert "concepts/referrer (link)" in result.output
+
+
+def test_purge_refusal_names_the_referring_relation_and_its_type(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    referrer_path = tmp_git_repo.root / "bundle" / "concepts" / "referrer.md"
+    referrer_path.parent.mkdir(parents=True, exist_ok=True)
+    referrer_path.write_text(
+        "---\ntype: Concept\ntitle: Referrer\n"
+        "relations:\n"
+        f"  - target: {tmp_git_repo.source_id}\n"
+        "    type: depends_on\n"
+        "---\n\n# Referrer\n\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
+
+    assert result.exit_code == 1
+    assert "concepts/referrer (depends_on relation)" in result.output
+
+
 def test_purge_force_leaves_dangling_reference_detected_by_lint_and_status(
     tmp_git_repo: TmpGitRepo,
 ) -> None:

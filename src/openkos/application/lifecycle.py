@@ -2397,6 +2397,23 @@ class PurgeDisclosure:
 
 
 @dataclass(frozen=True)
+class PurgeReferrer:
+    """One surviving inbound reference to a purge-set member, named."""
+
+    target: str
+    """The purge-set member the reference points at."""
+
+    referrer_id: str
+    """The concept id holding the reference."""
+
+    kind: Literal["link", "relation", "unverifiable"]
+    """Same vocabulary as `bundle.references.InboundReference.kind`."""
+
+    relation_type: str | None
+    """The relation's type when `kind == "relation"`, else `None`."""
+
+
+@dataclass(frozen=True)
 class PurgePlan:
     """Pure Phase-A result of `prepare_purge`: everything `purge`'s
     preview and all six rails need, built in memory without writing,
@@ -2440,6 +2457,11 @@ class PurgePlan:
     `privacy-purge` spec: 'Purge Withdraws The Deprecated-Status Export Of
     Resurrected Targets') -- WITHDRAW or DROP-MARKER only, never a target
     still superseded by a surviving concept."""
+    referrers: tuple[PurgeReferrer, ...] = ()
+    """Every surviving inbound reference rail 1 counts, with WHO holds it
+    (#1334): `verified_refs`/`unverifiable_refs` stay the plain counts the
+    gate reads, and this is the same references named, so the refusal can
+    say which concept to `unrelate` or edit instead of leaving a search."""
 
 
 def purge_confirm_phrase(
@@ -2749,6 +2771,15 @@ def prepare_purge(
         confirmation=confirmation,
         drift_targets=drift_targets,
         status_withdrawals=tuple(status_withdrawals),
+        referrers=tuple(
+            PurgeReferrer(
+                target=member,
+                referrer_id=ref.referrer_id,
+                kind=ref.kind,
+                relation_type=ref.relation_type,
+            )
+            for member, ref in all_refs
+        ),
     )
 
 
