@@ -997,22 +997,39 @@ def _validate_scrub_identities(scrub_identities: Sequence[str]) -> None:
 # `tests/unit/vcs/test_scrub_snippet_parity.py`); this is intentionally
 # duplicated code, not a shared import, because this snippet runs inside
 # `git-filter-repo`'s own subprocess, which cannot import `openkos`.
-_FILE_INFO_CALLBACK_SNIPPET = """\
-if filename not in (b"bundle/index.md", b"bundle/log.md"):
+_FILE_INFO_CALLBACK_SNIPPET = r"""
+_is_catalog = filename in (b"bundle/index.md", b"bundle/log.md")
+_is_concept = (
+    os.environ.get("OPENKOS_SCRUB_CONCEPTS") == "1"
+    and filename.startswith(b"bundle/")
+    and filename.endswith(b".md")
+    and not filename.startswith(b"bundle/.state/")
+    and not _is_catalog
+)
+if not (_is_catalog or _is_concept):
     return (filename, mode, blob_id)
 ids_path = os.environ.get("OPENKOS_SCRUB_IDS_FILE")
 if not ids_path:
     return (filename, mode, blob_id)
 with open(ids_path, "rb") as ids_handle:
     raw_ids = ids_handle.read()
-scrub_ids = {line for line in raw_ids.split(b"\\n") if line}
+scrub_ids = {line for line in raw_ids.split(b"\n") if line}
 if not scrub_ids:
     return (filename, mode, blob_id)
+scrub_titles = []
+titles_path = os.environ.get("OPENKOS_SCRUB_TITLES_FILE")
+if titles_path:
+    with open(titles_path, "rb") as titles_handle:
+        scrub_titles = [
+            line.decode("utf-8", "surrogateescape")
+            for line in titles_handle.read().split(b"\n")
+            if line
+        ]
 
 _bullet_markers = (b"* ", b"- ")
-_link_re = re.compile(rb"\\[[^\\]]*\\]\\(([^)]+)\\)")
-_anchor_re = re.compile(rb"\\(id: ([^)]+)\\)")
-_scheme_re = re.compile(rb"\\A[A-Za-z][A-Za-z0-9+.-]*:")
+_link_re = re.compile(rb"\[[^\]]*\]\(([^)]+)\)")
+_anchor_re = re.compile(rb"\(id: ([^)]+)\)")
+_scheme_re = re.compile(rb"\A[A-Za-z][A-Za-z0-9+.-]*:")
 
 def _identity(target):
     target = target.split(b"#", 1)[0].strip()
@@ -1043,7 +1060,129 @@ def _identity(target):
         identity = identity[: -len(b".md")]
     return identity
 
+_text_link_re = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+_bullet_link_re = re.compile(r"[*-]\s+\[[^\]]*\]\(([^)]+)\)")
+_target_re = re.compile(r"^\s*(?:-\s+)?target:\s*(.*?)\s*$", re.M)
+_id_field_re = re.compile(r"^\s*(?:-\s+)?id:\s*(.*?)\s*$", re.M)
+_plain_item_re = re.compile(r"^\s*-\s+(.*?)\s*$", re.M)
+
+def _norm_entry(raw):
+    raw = raw.strip().strip("'\"")
+    if raw.startswith("/"):
+        raw = raw[1:]
+    if raw.endswith(".md"):
+        raw = raw[: -len(".md")]
+    return raw
+
+def _drop_list_items(lines, key, item_re, ids, flow):
+    out = []
+    changed = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        bare = line.rstrip(" \t\r\n")
+        if bare == key + ":":
+            stop = index + 1
+            while stop < len(lines) and (
+                lines[stop][:1] in (" ", "\t", "\r", "\n")
+                or lines[stop].startswith("-")
+            ):
+                stop += 1
+            items = []
+            for block_line in lines[index + 1 : stop]:
+                if block_line.lstrip().startswith("-") or not items:
+                    items.append([block_line])
+                else:
+                    items[-1].append(block_line)
+            kept = []
+            for item in items:
+                found = item_re.search("".join(item))
+                if found is not None and _norm_entry(found.group(1)) in ids:
+                    changed = True
+                else:
+                    kept.append(item)
+            if kept:
+                out.append(line)
+                for item in kept:
+                    out.extend(item)
+            index = stop
+            continue
+        if flow and bare.startswith(key + ":") and bare.endswith("]"):
+            inner = bare[len(key) + 1 :].strip()
+            if inner.startswith("["):
+                entries = [e for e in inner[1:-1].split(",") if e.strip()]
+                kept_entries = [e for e in entries if _norm_entry(e) not in ids]
+                if len(kept_entries) != len(entries):
+                    changed = True
+                    if kept_entries:
+                        ending = line[len(bare) :]
+                        out.append(
+                            key + ": [" + ", ".join(e.strip() for e in kept_entries) + "]" + ending
+                        )
+                    index += 1
+                    continue
+        out.append(line)
+        index += 1
+    return out, changed
+
+def _scrub_prose(line, ids_b, id_strs, titles):
+    def _link(match):
+        identity = _identity(match.group(2).encode("utf-8", "surrogateescape"))
+        if identity is None or identity not in ids_b:
+            return match.group(0)
+        return "" if match.group(1) in titles else match.group(1)
+
+    line = _text_link_re.sub(_link, line)
+    for id_str in sorted(id_strs, key=len, reverse=True):
+        lead = r"(?<![A-Za-z0-9_-])" if "/" in id_str else r"(?<=/)"
+        line = re.sub(lead + re.escape(id_str) + r"(?![A-Za-z0-9_-])", "[purged]", line)
+    for title in sorted(titles, key=len, reverse=True):
+        line = re.sub(r"(?<!\w)" + re.escape(title) + r"(?!\w)", "[purged]", line)
+    return line
+
+def _scrub_concept(contents, ids_b, titles, with_relations):
+    text = contents.decode("utf-8", "surrogateescape")
+    id_strs = {i.decode("utf-8", "surrogateescape") for i in ids_b}
+    lines = text.splitlines(keepends=True)
+    end = None
+    if lines and lines[0].rstrip("\r\n") == "---":
+        for index in range(1, len(lines)):
+            if lines[index].rstrip("\r\n") == "---":
+                end = index
+                break
+    if end is None:
+        head, front, body = [], [], lines
+    else:
+        head, front, body = [lines[0]], lines[1:end], lines[end:]
+    if front:
+        if with_relations:
+            front, _ = _drop_list_items(front, "relations", _target_re, id_strs, False)
+        front, _ = _drop_list_items(front, "provenance", _plain_item_re, id_strs, True)
+        front, _ = _drop_list_items(front, "sources", _id_field_re, id_strs, False)
+    kept_body = []
+    for line in body:
+        bullet = _bullet_link_re.match(line.lstrip())
+        if bullet is not None:
+            identity = _identity(bullet.group(1).encode("utf-8", "surrogateescape"))
+            if identity is not None and identity in ids_b:
+                continue
+        kept_body.append(_scrub_prose(line, ids_b, id_strs, titles))
+    result = "".join(head + front + kept_body)
+    if result == text:
+        return contents
+    return result.encode("utf-8", "surrogateescape")
+
 contents = value.get_contents_by_identifier(blob_id)
+if _is_concept:
+    new_contents = _scrub_concept(
+        contents,
+        scrub_ids,
+        scrub_titles,
+        os.environ.get("OPENKOS_SCRUB_RELATIONS") == "1",
+    )
+    if new_contents == contents:
+        return (filename, mode, blob_id)
+    return (filename, mode, value.insert_file_with_contents(new_contents))
 lines = contents.splitlines(keepends=True)
 kept_lines = []
 changed = False
@@ -1052,9 +1191,20 @@ for line in lines:
     stripped = line.lstrip()
     dropped = False
     if stripped.startswith(_bullet_markers):
-        link_match = _link_re.search(stripped)
-        if link_match is not None and _identity(link_match.group(1)) in scrub_ids:
-            dropped = True
+        # `index.md` bullets are keyed on their FIRST link (their own
+        # concept); a `log.md` line is dropped when ANY link names a
+        # scrubbed id -- `**Relate**`/`**Unrelate**` name the purged
+        # concept as the relation's target, the SECOND link (#1329). Lockstep
+        # with `openkos.bundle.log.remove_log_entry`.
+        if is_log:
+            matches = list(_link_re.finditer(stripped))
+        else:
+            first_match = _link_re.search(stripped)
+            matches = [] if first_match is None else [first_match]
+        for link_match in matches:
+            if _identity(link_match.group(1)) in scrub_ids:
+                dropped = True
+                break
         if not dropped and is_log:
             anchor_match = _anchor_re.search(stripped)
             if anchor_match is not None and anchor_match.group(1) in scrub_ids:
@@ -1072,11 +1222,54 @@ return (filename, mode, new_blob_id)
 """
 
 
+# The BODY of a `def message_callback(message, metadata):` function, run by
+# `git filter-repo --message-callback <this-file>` once per commit. Like the
+# file-info snippet it is STATIC with zero subject-data interpolation: the ids
+# arrive only through `OPENKOS_SCRUB_IDS_FILE`. It replaces every occurrence of
+# a purged id with a neutral placeholder -- the rest of the message survives,
+# so a history of `relate a -> b` reads `relate a -> [purged]` rather than
+# losing the commit's meaning. An id matches only on its own boundaries
+# (never inside a longer id such as `concepts/bee-keeper`), and an id with no
+# directory part (which would otherwise match ordinary prose) only as the final
+# segment of a path.
+_MESSAGE_CALLBACK_SNIPPET = r"""
+ids_path = os.environ.get("OPENKOS_SCRUB_IDS_FILE")
+if not ids_path:
+    return message
+with open(ids_path, "rb") as ids_handle:
+    raw_ids = ids_handle.read()
+scrub_ids = [
+    line.decode("utf-8", "surrogateescape")
+    for line in raw_ids.split(b"\n")
+    if line
+]
+scrub_titles = []
+titles_path = os.environ.get("OPENKOS_SCRUB_TITLES_FILE")
+if titles_path:
+    with open(titles_path, "rb") as titles_handle:
+        scrub_titles = [
+            line.decode("utf-8", "surrogateescape")
+            for line in titles_handle.read().split(b"\n")
+            if line
+        ]
+text = message.decode("utf-8", "surrogateescape")
+for scrub_id in sorted(scrub_ids, key=len, reverse=True):
+    lead = r"(?<![A-Za-z0-9_-])" if "/" in scrub_id else r"(?<=/)"
+    text = re.sub(lead + re.escape(scrub_id) + r"(?![A-Za-z0-9_-])", "[purged]", text)
+for title in sorted(scrub_titles, key=len, reverse=True):
+    text = re.sub(r"(?<!\w)" + re.escape(title) + r"(?!\w)", "[purged]", text)
+return text.encode("utf-8", "surrogateescape")
+"""
+
+
 def expunge_paths(
     cwd: Path,
     rel_paths: Sequence[str],
     *,
     scrub_identities: Sequence[str] | None = None,
+    scrub_relations: bool = False,
+    scrub_concepts: bool = False,
+    scrub_titles: Sequence[str] | None = None,
 ) -> None:
     """Rewrite ALL git history under `cwd`, removing every path in
     `rel_paths` from every commit AND the working tree, via `git
@@ -1102,6 +1295,27 @@ def expunge_paths(
     `None`/empty, no `--file-info-callback` argv is added at all: behavior is
     byte-identical to calling this function without that parameter.
 
+    The same identities also drive (#1329) a `--message-callback` that
+    replaces each one with `[purged]` in every commit message, and the
+    file-info callback drops a `log.md` line that names one as ANY link, not
+    only its first. With `scrub_relations=True` it additionally removes, from
+    every other `bundle/**.md` blob, the `relations:` entries whose `target`
+    is one of the identities (an emptied list loses its key). That last step
+    is opt-in because it also rewrites the tip: a caller that proceeds past
+    live references (`purge --force`) leaves them dangling on purpose and must
+    not pass it.
+
+    With `scrub_concepts=True` every other `bundle/**.md` blob (never
+    `bundle/.state/`) is rewritten in the same pass, tip included, so history
+    and the working tree end consistent: the identities are removed from its
+    `provenance`/`sources` entries (an emptied list loses its key), a body
+    bullet that opens with a link to an identity is dropped, every other body
+    link to one loses the link (and its text when the text is a scrubbed
+    title), and a bare identity or a scrubbed title in the body becomes
+    `[purged]`. `scrub_titles` are matched exactly, case-sensitively, on word
+    boundaries, here and in commit messages. The caller decides which titles
+    are safe to scrub; this function applies them verbatim.
+
     IRREVERSIBLE: no backup is taken. Callers MUST have already confirmed
     every fail-closed safety rail (git-root match, clean tree, no published
     commits, typed confirmation) before calling this -- this function
@@ -1116,6 +1330,8 @@ def expunge_paths(
     _validate_rel_paths(rel_paths)
     if scrub_identities:
         _validate_scrub_identities(scrub_identities)
+    if scrub_titles:
+        _validate_scrub_identities(scrub_titles)
 
     # Every temp file's `Path` is assigned to its tracking variable
     # IMMEDIATELY after `NamedTemporaryFile` creates it -- BEFORE its write
@@ -1130,7 +1346,9 @@ def expunge_paths(
     # (non-sensitive, kept symmetric for the same guarantee).
     paths_file: Path | None = None
     snippet_file: Path | None = None
+    message_file: Path | None = None
     sidecar_file: Path | None = None
+    titles_file: Path | None = None
     try:
         try:
             with tempfile.NamedTemporaryFile(
@@ -1161,8 +1379,31 @@ def expunge_paths(
                     sidecar_file = Path(sidecar_handle.name)
                     for identity in scrub_identities:
                         sidecar_handle.write(f"{identity}\n")
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".py", delete=False, encoding="utf-8"
+                ) as message_handle:
+                    message_file = Path(message_handle.name)
+                    message_handle.write(_MESSAGE_CALLBACK_SNIPPET)
                 env = {**os.environ, "OPENKOS_SCRUB_IDS_FILE": str(sidecar_file)}
-                argv = [*argv, "--file-info-callback", str(snippet_file)]
+                if scrub_relations:
+                    env["OPENKOS_SCRUB_RELATIONS"] = "1"
+                if scrub_concepts:
+                    env["OPENKOS_SCRUB_CONCEPTS"] = "1"
+                if scrub_titles:
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+                    ) as titles_handle:
+                        titles_file = Path(titles_handle.name)
+                        for title in scrub_titles:
+                            titles_handle.write(f"{title}\n")
+                    env["OPENKOS_SCRUB_TITLES_FILE"] = str(titles_file)
+                argv = [
+                    *argv,
+                    "--file-info-callback",
+                    str(snippet_file),
+                    "--message-callback",
+                    str(message_file),
+                ]
         except OSError as exc:
             # Setup only -- no subprocess has run yet, so this is the safe
             # "the rewrite did NOT happen" case: a plain `GitError`, never
@@ -1186,8 +1427,12 @@ def expunge_paths(
             paths_file.unlink(missing_ok=True)
         if snippet_file is not None:
             snippet_file.unlink(missing_ok=True)
+        if message_file is not None:
+            message_file.unlink(missing_ok=True)
         if sidecar_file is not None:
             sidecar_file.unlink(missing_ok=True)
+        if titles_file is not None:
+            titles_file.unlink(missing_ok=True)
 
     _finalize(cwd)
 
