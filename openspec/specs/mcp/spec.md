@@ -327,6 +327,13 @@ notices, which name documents an underlying service could not read, MUST
 be reported as a separate `skipped_documents` count and MUST NOT be added
 to `withheld`.
 
+`query` is the one tool whose retrieval removes a confidential concept before
+any channel exists to hold it. `query`'s `withheld` MUST therefore also
+include the number of distinct confidential concepts retrieval excluded from
+this call's candidates, so a client can tell the answer was computed without
+a withheld object. That count MUST NOT identify the concept, and MUST be zero
+when confidential exposure lifts the filter.
+
 #### Scenario: A withheld object appearing in two channels is counted twice
 
 - GIVEN a confidential concept that is both a filtered relation and a
@@ -334,6 +341,14 @@ to `withheld`.
 - WHEN `get` returns
 - THEN `withheld` is incremented once for the removed relation and once for
   the removed provenance ancestor, for a total of two
+
+#### Scenario: A confidential concept excluded by retrieval is counted by query
+
+- GIVEN `--expose-confidential` is off and a confidential concept matches the
+  question
+- WHEN `query` returns
+- THEN `withheld` is at least one, and no field of the result names the
+  concept
 
 #### Scenario: Skip notices are reported separately from withheld
 

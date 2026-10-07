@@ -632,6 +632,7 @@ def _answer_result(
     context_ids: list[str] | None = None,
     context_block_count: int | None = None,
     skip_notices: tuple[str, ...] = (),
+    confidential_excluded_count: int = 0,
 ) -> AnswerResult:
     resolved_context_ids = context_ids if context_ids is not None else []
     return AnswerResult(
@@ -652,6 +653,7 @@ def _answer_result(
             history_truncated_ids if history_truncated_ids is not None else []
         ),
         context_ids=resolved_context_ids,
+        confidential_excluded_count=confidential_excluded_count,
         context_block_count=(
             context_block_count
             if context_block_count is not None
@@ -743,6 +745,27 @@ def test_disclose_query_one_withheld_citation_withholds_the_whole_answer() -> No
             "history": None,
         }
     ]
+
+
+def test_disclose_query_counts_a_confidential_concept_retrieval_excluded() -> None:
+    """`answer()` filters a confidential concept out BEFORE fusion, so no
+    citation, title or context id ever names it. The count it reports is the
+    only trace, and the tool must carry it as `withheld` (#1334) -- never the
+    concept's id or title."""
+    result = _answer_result(
+        citations=[Citation(concept_id="concepts/allowed", title="Allowed")],
+        context_ids=["concepts/allowed"],
+        confidential_excluded_count=2,
+    )
+    outcome = _outcome(result)
+    snapshot = _snapshot(frozenset({"concepts/allowed"}))
+
+    rendered = gate.disclose_query(outcome, snapshot)
+
+    assert rendered["withheld"] == 2
+    # The answer itself was computed from disclosable objects only.
+    assert rendered["answer_withheld"] is False
+    assert "concepts/secret" not in repr(rendered)
 
 
 def test_disclose_query_uncited_context_object_withholds_the_answer() -> None:

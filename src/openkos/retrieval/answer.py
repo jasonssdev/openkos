@@ -549,6 +549,18 @@ class AnswerResult:
     list pairs: fail closed. Defaults empty via `default_factory`, so
     every short-circuit return above (and every existing caller that never
     reads this field) stays valid."""
+    confidential_excluded_count: int = 0
+    """How many DISTINCT confidential concepts the sensitivity filter removed
+    from this call's retrieval candidates (#1334).
+
+    A confidential concept is dropped before fusion, so it appears in no
+    citation, title or context id -- without this count a caller cannot tell
+    that the answer was computed without a withheld object. It is a count and
+    never an id, so it may cross a disclosure boundary where the concept may
+    not. A concept hit by both channels counts once; a deprecated or
+    superseded exclusion is not counted, since that is lifecycle, not
+    disclosure. `0` when `include_confidential` or the local exemption lifts
+    the filter, and on every short-circuit return above the filter."""
     retrieved: list[Citation] = field(default_factory=list)
     """The concepts whose blocks entered the prompt, in fused-rank order, on a
     sufficiency REFUSAL only (#1333); `[]` on every other result.
@@ -1408,6 +1420,9 @@ def answer(
         local_exemption=local_exemption,
     )
     excluded = deprecated | confidential
+    confidential_excluded_count = len(
+        confidential & ({h.concept_id for h in hits} | {v.concept_id for v in vec_hits})
+    )
     hits = lifecycle.filter_hits(hits, excluded)
     vec_hits = lifecycle.filter_hits(vec_hits, excluded)
 
@@ -1480,6 +1495,7 @@ def answer(
             dense_hit_count=len(vec_hits),
             fused_count=len(fused_ids),
             dense_degraded=dense_degraded,
+            confidential_excluded_count=confidential_excluded_count,
             excerpted_titles=excerpted_titles,
             omitted_titles=omitted_titles,
             history_truncated_titles=history_truncated_titles,
@@ -1519,6 +1535,7 @@ def answer(
             dense_hit_count=len(vec_hits),
             fused_count=len(fused_ids),
             dense_degraded=dense_degraded,
+            confidential_excluded_count=confidential_excluded_count,
             sufficiency_degraded=sufficiency_degraded,
             context_block_count=len(context_blocks),
             retrieved=list(citations),
@@ -1572,6 +1589,7 @@ def answer(
         dense_hit_count=len(vec_hits),
         fused_count=len(fused_ids),
         dense_degraded=dense_degraded,
+        confidential_excluded_count=confidential_excluded_count,
         sufficiency_degraded=sufficiency_degraded,
         context_block_count=len(context_blocks),
         attribution=attribution,

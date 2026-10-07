@@ -609,6 +609,9 @@ def disclose_query(raw: object, snapshot: Snapshot) -> dict[str, object]:
         result.history_truncated_titles, result.history_truncated_ids, snapshot
     )
     withheld += removed
+    # #1334: retrieval dropped these before fusion, so no channel above names
+    # them. Counted, never identified.
+    withheld += result.confidential_excluded_count
 
     any_context_object_withheld = len(
         result.context_ids
