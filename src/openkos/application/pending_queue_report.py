@@ -224,8 +224,19 @@ def _read_attention(path: Path) -> tuple[tuple[jobs.JobRecord, ...], bool]:
         return (), True
     finally:
         conn.close()
-    needing = tuple(j for j in recent if j.outcome in ATTENTION_OUTCOMES)
-    return needing[:ATTENTION_LIMIT], False
+    # `recent` is newest first. A job that needed attention is superseded once
+    # a LATER job of the same kind finished cleanly: the deferral or failure it
+    # reported was picked up by that run, and listing it would keep reporting
+    # work that is already done (`status` reads only the last job, so the two
+    # surfaces agree).
+    cleaned: set[str] = set()
+    needing: list[jobs.JobRecord] = []
+    for job in recent:
+        if job.outcome == "completed":
+            cleaned.add(job.kind)
+        elif job.outcome in ATTENTION_OUTCOMES and job.kind not in cleaned:
+            needing.append(job)
+    return tuple(needing[:ATTENTION_LIMIT]), False
 
 
 def read_report(layout: WorkspaceLayout) -> PendingReport:
