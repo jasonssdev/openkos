@@ -947,3 +947,157 @@ def test_local_exemption_defaults_to_false_on_suggest_volatility(
 
     assert volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results == []
     assert llm.calls == []
+
+
+# ---------------------------------------------------------------------------
+# `served` / `computed`: an answered question is never asked twice (#1332)
+# ---------------------------------------------------------------------------
+
+
+def test_every_asked_type_reports_the_prompt_it_answered(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    _write_doc(tmp_path / "b.md", doc_type="Person", title="B")
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    batch = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+
+    computed = batch.computed["Person"]
+    assert len(computed.prompt_digest) == 64
+    assert computed.input_refs == ("a", "b")
+
+
+def test_the_prompt_digest_follows_the_sampled_bodies(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Person", body="one")
+    first = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=_FakeLLM(replies=[_valid_reply()])
+    ).computed["Person"]
+    _write_doc(tmp_path / "a.md", doc_type="Person", body="one")
+    same = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=_FakeLLM(replies=[_valid_reply()])
+    ).computed["Person"]
+    _write_doc(tmp_path / "a.md", doc_type="Person", body="two")
+    changed = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=_FakeLLM(replies=[_valid_reply()])
+    ).computed["Person"]
+
+    assert first.prompt_digest == same.prompt_digest
+    assert first.prompt_digest != changed.prompt_digest
+
+
+def test_a_served_type_costs_no_call_and_still_lands_in_the_results(
+    tmp_path: Path,
+) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    _write_doc(tmp_path / "b.md", doc_type="Project", title="B")
+    held = volatility_typing_mod.TierSuggestion(
+        type_name="Person",
+        current_default="slow",
+        suggested_tier="slow",
+        rationale="held",
+    )
+    llm = _FakeLLM(replies=[_valid_reply("volatile", "projects churn")])
+
+    batch = volatility_typing_mod.suggest_volatility(
+        tmp_path,
+        llm=llm,
+        served=lambda type_name, digest: held if type_name == "Person" else None,
+    )
+
+    assert [s.type_name for s in batch.results] == ["Person", "Project"]
+    assert batch.results[0] is held
+    assert len(llm.calls) == 1
+    assert set(batch.computed) == {"Project"}
+
+
+def test_a_served_type_does_not_spend_the_call_bound(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    _write_doc(tmp_path / "b.md", doc_type="Project", title="B")
+    held = volatility_typing_mod.TierSuggestion("Person", "slow", "slow", "held")
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    batch = volatility_typing_mod.suggest_volatility(
+        tmp_path,
+        llm=llm,
+        max_calls=1,
+        served=lambda t, d: held if t == "Person" else None,
+    )
+
+    assert batch.deferred == 0
+    assert len(batch.results) == 2
+
+
+def test_progress_counts_only_the_types_actually_asked(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    _write_doc(tmp_path / "b.md", doc_type="Project", title="B")
+    held = volatility_typing_mod.TierSuggestion("Person", "slow", "slow", "held")
+    seen: list[tuple[int, int]] = []
+
+    volatility_typing_mod.suggest_volatility(
+        tmp_path,
+        llm=_FakeLLM(replies=[_valid_reply()]),
+        served=lambda t, d: held if t == "Person" else None,
+        on_progress=lambda index, total, s: seen.append((index, total)),
+    )
+
+    assert seen == [(1, 1)]
+
+
+def test_unanswered_type_count_is_the_exact_call_price(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    _write_doc(tmp_path / "b.md", doc_type="Project", title="B")
+    _write_doc(tmp_path / "c.md", doc_type="Event", title="C")
+    held = volatility_typing_mod.TierSuggestion("Person", "slow", "slow", "held")
+
+    assert volatility_typing_mod.unanswered_type_count(tmp_path) == 3
+    assert (
+        volatility_typing_mod.unanswered_type_count(
+            tmp_path, served=lambda t, d: held if t == "Person" else None
+        )
+        == 2
+    )
+    assert (
+        volatility_typing_mod.unanswered_type_count(
+            tmp_path, skip_types={"Project"}, served=lambda t, d: held
+        )
+        == 0
+    )
+
+
+def test_the_effective_tier_replaces_the_registry_default(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Event", title="A")
+    llm = _FakeLLM(replies=[_valid_reply("slow")])
+
+    batch = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=llm, type_tiers={"Event": "slow"}
+    )
+
+    assert batch.results[0].current_default == "slow"
+    assert "slow" in llm.calls[0][1]["content"]
+
+
+def test_the_effective_tier_is_part_of_the_cache_key(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Event", title="A")
+    plain = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=_FakeLLM(replies=[_valid_reply()])
+    ).computed["Event"]
+    applied = volatility_typing_mod.suggest_volatility(
+        tmp_path,
+        llm=_FakeLLM(replies=[_valid_reply()]),
+        type_tiers={"Event": "slow"},
+    ).computed["Event"]
+
+    assert plain.prompt_digest != applied.prompt_digest
+
+
+def test_an_invalid_override_falls_back_to_the_registry_default(
+    tmp_path: Path,
+) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Event", title="A")
+
+    batch = volatility_typing_mod.suggest_volatility(
+        tmp_path,
+        llm=_FakeLLM(replies=[_valid_reply()]),
+        type_tiers={"Event": "not-a-tier"},
+    )
+
+    assert batch.results[0].current_default == types.TYPE_TO_DEFAULT_VOLATILITY["Event"]

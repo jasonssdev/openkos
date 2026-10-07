@@ -127,6 +127,36 @@ because a message can carry a path or a person's words.
 - WHEN it has exited
 - THEN no file under `bundle/` was created by logging
 
+### Requirement: Logs Of Workspaces That No Longer Exist Are Removed
+
+The daemon MUST record the workspace each of its log files belongs to in a
+`<sha256>.workspace` file beside the log, holding only that workspace's
+resolved path and written atomically. At startup the daemon MUST remove the
+`<sha256>.log`, `<sha256>.log.N` and `<sha256>.workspace` files of a group
+whose record is trustworthy (a regular file naming an absolute path that
+hashes to the group's name) and whose recorded path no longer holds an OpenKOS
+workspace, and MUST report every file it removes on stderr. It MUST NOT remove
+the current workspace's files, the files of a workspace that still exists
+(including one that merely cannot be read), a group containing a symlink or a
+non-regular file, a log with no trustworthy record, or any file whose name is
+not one of those three forms. `doctor` MUST report, read-only, the groups
+awaiting removal and the count and size of logs that cannot be attributed,
+which are removed by hand. `purge` MUST remove the workspace's record along
+with its logs.
+
+#### Scenario: A vanished workspace's log is removed at startup
+
+- GIVEN a log group whose record names a path that holds no workspace
+- WHEN `openkos daemon` starts
+- THEN each file of the group is removed and named on stderr
+
+#### Scenario: A log nothing attributes is kept
+
+- GIVEN a `<sha256>.log` with no `<sha256>.workspace` record
+- WHEN `openkos daemon` starts
+- THEN the file remains
+- AND `openkos doctor` reports it by count and size
+
 ### Requirement: A Foreground Daemon Says What It Is Doing
 
 While a job runs, `openkos daemon` MUST give a person watching it the same

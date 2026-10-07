@@ -2949,3 +2949,48 @@ def test_history_targets_include_a_sidecar_referenced_only_by_identity(
     )
 
     assert targets == ["bundle/.state/decisions/concepts/host.decisions.okf"]
+
+
+def test_forget_scrubs_a_volatility_suggestion_whose_prompt_carried_the_concept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A type-level volatility answer can quote a sampled body in its rationale
+    and has no target, so the sweep keys on the concept ids its prompt carried
+    (#1332). An unrelated type's answer survives."""
+    from openkos.state import derived
+    from openkos.state import volatility_suggestions as volatility_store
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/target", title="Target")
+    db_path = tmp_path / ".openkos" / "findings.db"
+    conn = derived.open_derived_connection(db_path)
+    try:
+        volatility_store.record_volatility_suggestions(
+            conn,
+            [
+                volatility_store.PersistedVolatilitySuggestion(
+                    "Concept",
+                    "m",
+                    "d1",
+                    "slow",
+                    "SECRET-TIER-RATIONALE",
+                    ("concepts/target",),
+                ),
+                volatility_store.PersistedVolatilitySuggestion(
+                    "Event", "m", "d2", "slow", "unrelated survives", ("events/x",)
+                ),
+            ],
+        )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    conn = derived.open_derived_connection(db_path)
+    try:
+        (survivor,) = volatility_store.open_volatility_suggestions(conn)
+    finally:
+        conn.close()
+    assert survivor.type_name == "Event"
+    assert b"SECRET-TIER-RATIONALE" not in db_path.read_bytes()

@@ -375,6 +375,7 @@ def _fake_extractor(
     sole_object_restates_source: bool = False,
     unevidenced_titles: tuple[str, ...] = (),
     skipped_chunks: tuple[int, ...] = (),
+    produced: int | None = None,
 ) -> object:
     """Monkeypatch stand-in for `extract_concept`/`extract_concept_union`,
     mirroring `tests/unit/cli/test_ingest.py::_capturing_extractor` -- lets a
@@ -383,7 +384,7 @@ def _fake_extractor(
     fields (judge status, sole-object-restates, unevidenced titles, skipped
     chunks) are reachable without an LLM call."""
     report = concept_mod.ExtractionReport(
-        produced=len(objects),
+        produced=len(objects) if produced is None else produced,
         retained=len(objects),
         judge_status=judge_status,
         sole_object_restates_source=sole_object_restates_source,
@@ -442,6 +443,36 @@ def test_stage_derived_objects_carries_chunk_partial_notice(
         **_stage_kwargs(tmp_path)  # type: ignore[arg-type]
     )
     assert okf.EXTRACTION_NOTICE_CHUNK_PARTIAL in outcome.notices
+
+
+def test_stage_derived_objects_records_a_cap_truncation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1331: `report.produced > report.retained` (the union backstop or the
+    legacy cap bound) is durable on the Source, not only on a terminal."""
+    result = concept_mod.ExtractionResult(
+        type="Concept", title="Stoic Practice", description="desc", body="body"
+    )
+    monkeypatch.setattr(
+        ingest_service, "extract_concept", _fake_extractor([result], produced=21)
+    )
+    outcome = ingest_service.stage_derived_objects(
+        **_stage_kwargs(tmp_path)  # type: ignore[arg-type]
+    )
+    assert okf.EXTRACTION_NOTICE_CAPPED in outcome.notices
+
+
+def test_stage_derived_objects_records_no_cap_notice_when_nothing_was_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = concept_mod.ExtractionResult(
+        type="Concept", title="Stoic Practice", description="desc", body="body"
+    )
+    monkeypatch.setattr(ingest_service, "extract_concept", _fake_extractor([result]))
+    outcome = ingest_service.stage_derived_objects(
+        **_stage_kwargs(tmp_path)  # type: ignore[arg-type]
+    )
+    assert "extraction-capped" not in outcome.notices
 
 
 def test_stage_derived_objects_carries_sole_object_and_unevidenced_notices(

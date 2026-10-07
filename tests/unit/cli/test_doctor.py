@@ -1907,3 +1907,79 @@ def test_doctor_exits_one_when_not_run_coexists_with_a_critical_failure(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 1
+
+
+# -- #1334: daemon logs nothing can attribute to a workspace ----------------------
+
+
+def _healthy_doctor_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
+    (openkos_dir / "fts.db").write_bytes(b"")
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, JUDGE_MODEL]
+        ),
+    )
+    monkeypatch.setattr("openkos.application.doctor.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+
+def test_doctor_is_silent_about_logs_when_there_is_nothing_to_say(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _healthy_doctor_env(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "daemon log" not in result.stdout
+
+
+def test_doctor_reports_unattributable_daemon_logs_without_touching_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos import userstate
+
+    _healthy_doctor_env(tmp_path, monkeypatch)
+    log_dir = Path(userstate.log_dir())
+    legacy = log_dir / ("a" * 64 + ".log")
+    legacy.write_text("x" * 2048, encoding="utf-8")
+    (log_dir / ("b" * 64 + ".log.1")).write_text("y" * 1024, encoding="utf-8")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "2 daemon log file(s) (3.0 KiB)" in result.stdout
+    assert "no workspace they belong to can be identified" in result.stdout
+    assert "remove them by hand" in result.stdout
+    assert legacy.exists()
+
+
+def test_doctor_says_stale_logs_go_at_the_next_daemon_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from openkos import userstate
+    from openkos.lock import workspace_digest
+
+    _healthy_doctor_env(tmp_path, monkeypatch)
+    gone = tmp_path / "gone-workspace"
+    digest = workspace_digest(gone)
+    log_dir = Path(userstate.log_dir())
+    (log_dir / f"{digest}.log").write_text("x", encoding="utf-8")
+    (log_dir / f"{digest}.workspace").write_text(
+        os.path.realpath(gone), encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "1 daemon log group(s) belong to a workspace that no longer exists" in (
+        result.stdout
+    )
+    assert "next `openkos daemon` start removes" in result.stdout
+    assert (log_dir / f"{digest}.log").exists()

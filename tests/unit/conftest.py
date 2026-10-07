@@ -110,6 +110,7 @@ import gc
 import socket
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -300,9 +301,20 @@ def _no_network_by_default(
         monkeypatch.setattr(socket, function, _refusal(request, function, bound=False))
 
 
+@pytest.fixture
+def _private_userstate_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """One private per-test directory shared by the per-user state redirects.
+
+    `tmp_path_factory.mktemp` scans every directory it has already numbered to
+    pick the next name, so its cost grows with the run; every extra call per
+    test adds a full scan to all ~11k tests. The lock and log redirects below
+    therefore share a single `mktemp` instead of taking one each."""
+    return tmp_path_factory.mktemp("userstate")
+
+
 @pytest.fixture(autouse=True)
 def _private_lock_directory(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    _private_userstate_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Point the workspace lock's state directory at a private per-test path
     (ADR-0036).
@@ -314,8 +326,22 @@ def _private_lock_directory(
     prove nothing and move nothing. Tests that spawn a second process pass the
     directory on explicitly (see `tests/unit/test_lock.py`).
     """
-    directory = tmp_path_factory.mktemp("userstate") / "locks"
+    directory = _private_userstate_root / "locks"
     monkeypatch.setattr(userstate, "locks_dir", lambda *a, **k: directory)
+
+
+@pytest.fixture(autouse=True)
+def _private_log_directory(
+    _private_userstate_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point the per-user daemon-log directory at a private per-test path.
+
+    The real one sits under the developer's home, where `daemon` startup now
+    removes the logs of workspaces that no longer exist and `doctor` reports
+    the logs it cannot attribute: a test must never read or delete those."""
+    directory = _private_userstate_root / "logs"
+    directory.mkdir()
+    monkeypatch.setattr(userstate, "log_dir", lambda *a, **k: directory)
 
 
 @pytest.fixture(autouse=True)

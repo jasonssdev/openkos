@@ -21,13 +21,17 @@ raises outside `llm.chat`'s guarded seam.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import contextlib
+import logging
+import sqlite3
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
-from openkos import config
+from openkos import config, lock
 from openkos.application import backends as application_backends
+from openkos.application.lock_wait import CommitSection
 from openkos.application.suggest_relations_service import (
     DOCTOR_HINT,
     BackendFailed,
@@ -43,10 +47,15 @@ from openkos.llm.base import (
     BackendUnavailable,
     LLMBackend,
 )
+from openkos.model import types
 from openkos.resolution import volatility_typing
 from openkos.resolution.volatility_typing import TierSuggestion, TierSuggestionBatch
+from openkos.state import derived
+from openkos.state import volatility_suggestions as volatility_store
 
 _VERB = "suggest-volatility"
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -56,6 +65,10 @@ class VolatilityRequest:
     """The most chat calls this run may issue (a budgeted, runner-started run
     passes what it has left). `None` is unbounded: the only value a CLI run
     passes, and byte-identical to a run that never had the bound."""
+    use_cache: bool = False
+    """Serve a type whose exact prompt was already answered from `findings.db`
+    and persist every fresh answer (#1332). Off for the read-only CLI verb,
+    which writes nothing under the workspace."""
 
 
 class VolatilityObserver(Protocol):
@@ -80,6 +93,85 @@ class VolatilityPorts:
     suggest_volatility: Callable[..., TierSuggestionBatch] = (
         volatility_typing.suggest_volatility
     )
+    commit_section: CommitSection = contextlib.nullcontext
+    """Entered around the persist of fresh answers (`use_cache` only)."""
+
+
+def cached_answers(
+    layout: config.WorkspaceLayout,
+    model: str,
+    type_tiers: Mapping[str, str] | None = None,
+) -> Callable[[str, str], TierSuggestion | None]:
+    """The `served` lookup over `findings.db`: the answer already held for
+    `(type, prompt digest)` under `model`, or `None`. Fail-open: a missing or
+    unreadable store serves nothing, so every type is asked."""
+    rows: tuple[volatility_store.PersistedVolatilitySuggestion, ...] = ()
+    if layout.findings_db_path.exists():
+        try:
+            conn = derived.open_derived_connection(layout.findings_db_path)
+            try:
+                rows = volatility_store.open_volatility_suggestions(conn)
+            finally:
+                conn.close()
+        except (OSError, sqlite3.Error) as exc:
+            log.warning("persisted volatility suggestions unreadable (%s)", exc)
+    held = {
+        (row.type_name, row.prompt_digest): row
+        for row in rows
+        if row.model == model and row.suggested_tier in types.VOLATILITY_TIERS
+    }
+
+    def lookup(type_name: str, digest: str) -> TierSuggestion | None:
+        row = held.get((type_name, digest))
+        if row is None:
+            return None
+        return TierSuggestion(
+            type_name=type_name,
+            current_default=volatility_typing.effective_tier(type_name, type_tiers),
+            suggested_tier=row.suggested_tier,
+            rationale=row.rationale,
+        )
+
+    return lookup
+
+
+def record_answers(
+    layout: config.WorkspaceLayout,
+    model: str,
+    batch: TierSuggestionBatch,
+    *,
+    commit_section: CommitSection = contextlib.nullcontext,
+) -> None:
+    """Persist every non-degraded answer the run just paid for, fail-open: a
+    failed persist costs a log line and a later re-ask, never the run. A
+    degrade is a failure, not a verdict, and is never stored."""
+    answers = {s.type_name: s for s in batch.results}
+    rows: list[volatility_store.PersistedVolatilitySuggestion] = []
+    for type_name, computed in batch.computed.items():
+        answer = answers.get(type_name)
+        if answer is None or answer.suggested_tier is None:
+            continue
+        rows.append(
+            volatility_store.PersistedVolatilitySuggestion(
+                type_name=type_name,
+                model=model,
+                prompt_digest=computed.prompt_digest,
+                suggested_tier=answer.suggested_tier,
+                rationale=answer.rationale,
+                input_refs=computed.input_refs,
+            )
+        )
+    if not rows:
+        return
+    try:
+        with commit_section():
+            conn = derived.open_derived_connection(layout.findings_db_path)
+            try:
+                volatility_store.record_volatility_suggestions(conn, rows)
+            finally:
+                conn.close()
+    except (OSError, sqlite3.Error, lock.WorkspaceBusyError) as exc:
+        log.warning("volatility suggestions not persisted (%s)", exc)
 
 
 @dataclass(frozen=True)
@@ -149,7 +241,16 @@ def suggest_volatility_tiers(
     )
     # The bound is forwarded only when one was set, so every unbounded (CLI)
     # call reaches the port with exactly the arguments it always had.
-    bound = {} if request.max_calls is None else {"max_calls": request.max_calls}
+    bound: dict[str, object] = (
+        {} if request.max_calls is None else {"max_calls": request.max_calls}
+    )
+    if cfg.type_tiers:
+        # Forwarded only when the workspace overrides a tier, so a workspace
+        # without overrides reaches the port with exactly the arguments it
+        # always had.
+        bound["type_tiers"] = cfg.type_tiers
+    if request.use_cache:
+        bound["served"] = cached_answers(layout, task_model, cfg.type_tiers)
     try:
         batch = ports.suggest_volatility(
             layout.bundle_dir,
@@ -179,4 +280,6 @@ def suggest_volatility_tiers(
     except BackendError as exc:
         raise BackendFailed(f"openkos {_VERB}: failed -- {exc}.") from exc
 
+    if request.use_cache:
+        record_answers(layout, task_model, batch, commit_section=ports.commit_section)
     return VolatilityOutcome(batch=batch, model=task_model, cfg=cfg)

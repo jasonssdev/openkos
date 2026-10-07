@@ -614,3 +614,68 @@ def test_pending_prints_no_waiting_line_when_no_suggestion_waits(
     result = runner.invoke(app, ["pending"])
 
     assert "relation suggestion" not in result.output
+
+
+def _finish(
+    jconn: sqlite3.Connection,
+    kind: str,
+    outcome: str,
+    day: int,
+    *,
+    deferred: int = 0,
+) -> None:
+    job = jobs.start_job(jconn, kind, f"2026-01-{day:02d}T00:00:00+00:00")
+    jobs.finish_job(
+        jconn,
+        job,
+        outcome=outcome,
+        ended_at=f"2026-01-{day:02d}T00:01:00+00:00",
+        chat_calls=0,
+        units_done=0,
+        units_deferred=deferred,
+    )
+
+
+def test_a_later_completed_job_of_the_same_kind_supersedes_earlier_attention(
+    workspace: WorkspaceLayout,
+) -> None:
+    """The deferral a job reported was picked up by a later job that finished
+    cleanly, so listing it keeps telling the operator about resolved work."""
+    jconn = jobs.open_jobs(workspace.openkos_dir / "jobs.db")
+    _finish(jconn, "watch", "budget_exhausted", 1, deferred=12)
+    _finish(jconn, "watch", "budget_exhausted", 2, deferred=2)
+    _finish(jconn, "watch", "completed", 3)
+    jconn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert "Needs attention" not in result.output
+    assert "budget_exhausted" not in result.output
+
+
+def test_attention_after_the_clean_job_is_still_listed(
+    workspace: WorkspaceLayout,
+) -> None:
+    jconn = jobs.open_jobs(workspace.openkos_dir / "jobs.db")
+    _finish(jconn, "watch", "budget_exhausted", 1, deferred=3)
+    _finish(jconn, "watch", "completed", 2)
+    _finish(jconn, "watch", "failed", 3)
+    jconn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert "watch job 3: failed" in result.output
+    assert "watch job 1" not in result.output
+
+
+def test_a_clean_job_of_another_kind_does_not_supersede_attention(
+    workspace: WorkspaceLayout,
+) -> None:
+    jconn = jobs.open_jobs(workspace.openkos_dir / "jobs.db")
+    _finish(jconn, "watch", "budget_exhausted", 1, deferred=3)
+    _finish(jconn, "maintenance", "completed", 2)
+    jconn.close()
+
+    result = runner.invoke(app, ["pending"])
+
+    assert "watch job 1: budget_exhausted" in result.output

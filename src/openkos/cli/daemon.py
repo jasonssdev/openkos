@@ -327,7 +327,9 @@ def _volatility_stage(ctx: StageContext) -> StageResult:
 
     outcome = volatility_service.suggest_volatility_tiers(
         ctx.root,
-        volatility_service.VolatilityRequest(max_calls=ctx.budget.remaining),
+        volatility_service.VolatilityRequest(
+            max_calls=ctx.budget.remaining, use_cache=True
+        ),
         volatility_service.VolatilityPorts(
             chat_client=_counted(
                 ctx, lambda cfg, task: cli_main._chat_client(cfg, task=task)
@@ -338,6 +340,7 @@ def _volatility_stage(ctx: StageContext) -> StageResult:
             suggest_volatility=lambda *a, **k: volatility_typing.suggest_volatility(
                 *a, **k
             ),
+            commit_section=ctx.commit_section,
         ),
         _DaemonVolatilityObserver(),
     )
@@ -462,8 +465,35 @@ def _notify_stderr(message: str) -> None:
     typer.echo(message, err=True)
 
 
+def _staged_notices(staged: Any) -> Sequence[str]:
+    from openkos.cli import main as cli_main
+
+    return cli_main.staged_advisory_lines(staged)
+
+
+def _outcome_notices(outcome: Any) -> Sequence[str]:
+    from openkos.cli import main as cli_main
+
+    return cli_main.outcome_advisory_lines(outcome)
+
+
+def _phase_hook(name: str) -> Callable[[str], None] | None:
+    """The extraction phase labels (`reading window 2/5`, `judging`...) as
+    stderr lines naming the file, on a TTY only -- the same gate the
+    maintenance progress uses, so a launchd log stays line-per-event (#1331)."""
+    return observability.phase_callback(
+        "daemon", lambda label: _notify_stderr(f"{label[:-3]} ('{name}')...")
+    )
+
+
 def watch_ports() -> WatchPorts:
-    return WatchPorts(ingest_ports=_ingest_ports, notify=_notify_stderr)
+    return WatchPorts(
+        ingest_ports=_ingest_ports,
+        notify=_notify_stderr,
+        staged_notices=_staged_notices,
+        outcome_notices=_outcome_notices,
+        phase_hook=_phase_hook,
+    )
 
 
 def production_ports(root: Path) -> RunnerPorts:
@@ -632,6 +662,16 @@ def serve(
     previous = _install_stop_handlers(token) if install_signals else {}
     logsetup.configure_logging("daemon", root=root)
     try:
+        # Startup is where the logs are made, and a daemon starts rarely (a
+        # service manager, or `--once`), so this costs a directory listing at
+        # a moment nothing else is waiting. Every file it removes is said so.
+        removed = logsetup.remove_stale_logs(
+            root, lambda line: typer.echo(line, err=True)
+        )
+        if removed:
+            log.info(
+                "removed %d log file(s) of workspaces that no longer exist", removed
+            )
         wired = ports if ports is not None else production_ports(root)
         announcer = _Announcer()
         wired = dataclasses.replace(wired, announce=announcer)

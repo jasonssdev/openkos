@@ -823,7 +823,8 @@ retrieval (`deprecated-status-export`).
 `openkos purge` MUST delete `.openkos/jobs.db` with the other stores it
 deletes and name it among them, and MUST delete the workspace's daemon log
 files in the per-user log directory (the files named by the sha256 of the
-workspace's real path, including rotated ones). A log file it cannot delete
+workspace's real path, including rotated ones, and the `.workspace` record
+naming the workspace's path). A log file it cannot delete
 MUST be named in the incomplete-erasure report with its path and the manual
 remedy, as for a store.
 

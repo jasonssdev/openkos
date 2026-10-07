@@ -1399,3 +1399,325 @@ def test_the_unattended_engine_does_not_import_the_auto_merge_pass(
     assert not {name for name in imported if name.endswith("auto_merge")}, (
         f"{module} imports the auto-merge pass"
     )
+
+
+# -- #1331: the daemon import renders what an attended ingest tells the operator --
+
+
+def _staged_with_report(**report_fields: Any) -> Any:
+    from openkos.application import ingest as application_ingest
+    from openkos.extraction import concept as concept_mod
+
+    return application_ingest.StagedDerivedObjects(
+        plans=(),
+        skip_reason=None,
+        notices=(),
+        report=concept_mod.ExtractionReport(**report_fields),
+        drops=(),
+        lost_in_staging=0,
+    )
+
+
+def test_watch_ports_name_the_cap_truncation_and_what_was_discarded() -> None:
+    ports = daemon_module.watch_ports()
+    staged = _staged_with_report(
+        produced=22, retained=20, discarded_titles=("Alpha", "Beta")
+    )
+
+    lines = ports.staged_notices(staged)
+
+    assert lines == [
+        "20 of 22 extracted object(s) kept (cap reached); discarded: Alpha, Beta"
+    ]
+
+
+def test_watch_ports_carry_the_unevidenced_advisory_with_its_titles() -> None:
+    ports = daemon_module.watch_ports()
+    staged = _staged_with_report(
+        produced=1, retained=1, unevidenced_titles=("Agentic Systems",)
+    )
+
+    (line,) = ports.staged_notices(staged)
+
+    assert "carry no line quoted from the source" in line
+    assert "Agentic Systems" in line
+
+
+def test_watch_ports_have_nothing_to_say_for_a_clean_extraction() -> None:
+    ports = daemon_module.watch_ports()
+
+    assert ports.staged_notices(_staged_with_report(produced=3, retained=3)) == []
+
+
+def test_watch_ports_summarise_torn_classifications_per_import() -> None:
+    from openkos.application import ingest_service as svc
+
+    ports = daemon_module.watch_ports()
+    outcome = svc.IngestWritten(
+        regenerated=False,
+        extraction_degraded=False,
+        derived_count=3,
+        alternative_pairs=(("Concept", "Entity"), ("Concept", "Entity")),
+    )
+
+    assert ports.outcome_notices(outcome) == [
+        "2 of 3 derived object(s) recorded a type_alternative on the document "
+        "(all: Concept/Entity)."
+    ]
+
+
+def test_the_extraction_phase_hook_is_silent_off_a_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("sys.stderr", io.StringIO())
+
+    assert daemon_module.watch_ports().phase_hook("a.md") is None
+
+
+def test_the_extraction_phase_hook_names_the_file_on_a_tty(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True, raising=False)
+    hook = daemon_module.watch_ports().phase_hook("a.md")
+    assert hook is not None
+
+    hook("extracting window 2/5")
+
+    assert (
+        "openkos daemon: extracting window 2/5 ('a.md')..." in capsys.readouterr().err
+    )
+
+
+# -- #1332: an unchanged bundle costs the volatility stage nothing ------------------
+
+
+class _CountingModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, messages: Sequence[Any]) -> str:
+        self.calls += 1
+        return '{"tier": "slow", "rationale": "changes occasionally"}'
+
+
+@contextlib.contextmanager
+def _volatility_ctx(root: Path) -> Iterator[runner.StageContext]:
+    from openkos.application import budget as budget_module
+    from openkos.application.lock_wait import locked_commit_section
+    from openkos.application.runtime import UnattendedPolicy
+    from openkos.state import derived
+
+    layout = config.WorkspaceLayout(root)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    pq.ensure_schema(conn)
+    try:
+        yield runner.StageContext(
+            root=root,
+            layout=layout,
+            budget=budget_module.start_budgeted_run(
+                layout, config.read_config(root).unattended, _NOW
+            ),
+            policy=UnattendedPolicy(),
+            commit_section=locked_commit_section(root, wait_seconds=0),
+            queue=lambda: conn,
+        )
+    finally:
+        conn.close()
+
+
+def test_the_volatility_stage_does_not_re_ask_an_unchanged_bundle(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_doc(
+        root, "concepts/a", {"type": "Concept", "title": "A", "sensitivity": "private"}
+    )
+    write_doc(
+        root, "events/b", {"type": "Event", "title": "B", "sensitivity": "private"}
+    )
+    model = _CountingModel()
+    monkeypatch.setattr("openkos.cli.main._chat_client", lambda cfg, task=None: model)
+    monkeypatch.setattr(
+        "openkos.cli.main._resolve_local_exemption", lambda client, cfg: True
+    )
+    stage = next(
+        s for s in daemon_module.production_stages() if s.name == "suggest-volatility"
+    )
+
+    with _volatility_ctx(root) as ctx:
+        stage.run(ctx)
+    first_pass_calls = model.calls
+    with _volatility_ctx(root) as ctx:
+        stage.run(ctx)
+
+    assert first_pass_calls == 2
+    assert model.calls == first_pass_calls
+
+
+def test_the_volatility_stage_still_queues_what_it_served(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A served answer must stay in the published set: a complete run retires
+    every row it does not republish."""
+    write_doc(
+        root,
+        "projects/p",
+        {"type": "Project", "title": "P", "sensitivity": "private"},
+    )
+    model = _CountingModel()  # "slow" differs from Project's default
+    monkeypatch.setattr("openkos.cli.main._chat_client", lambda cfg, task=None: model)
+    monkeypatch.setattr(
+        "openkos.cli.main._resolve_local_exemption", lambda client, cfg: True
+    )
+    stage = next(
+        s for s in daemon_module.production_stages() if s.name == "suggest-volatility"
+    )
+
+    for _ in range(2):
+        with _volatility_ctx(root) as ctx:
+            stage.run(ctx)
+
+    conn = sqlite3.connect(config.WorkspaceLayout(root).findings_db_path)
+    try:
+        kinds = [i.kind for i in pq.open_items(conn)]
+    finally:
+        conn.close()
+    assert model.calls == 1
+    assert kinds == ["volatility"]
+
+
+# -- #1332: a tier the user already applied is never re-proposed ------------------
+
+
+def _apply_event_slow(root: Path) -> None:
+    cfg_path = root / "openkos.yaml"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8") + "\ntype_tiers:\n  Event: slow\n",
+        encoding="utf-8",
+    )
+
+
+def test_the_volatility_stage_does_not_propose_the_tier_already_applied(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Event's registry default is `static`; the workspace maps it to `slow`
+    and the model answers `slow`: nothing differs from the EFFECTIVE tier, so
+    no pending row exists."""
+    _apply_event_slow(root)
+    write_doc(
+        root, "events/b", {"type": "Event", "title": "B", "sensitivity": "private"}
+    )
+    model = _CountingModel()  # always answers "slow"
+    monkeypatch.setattr("openkos.cli.main._chat_client", lambda cfg, task=None: model)
+    monkeypatch.setattr(
+        "openkos.cli.main._resolve_local_exemption", lambda client, cfg: True
+    )
+    stage = next(
+        s for s in daemon_module.production_stages() if s.name == "suggest-volatility"
+    )
+
+    with _volatility_ctx(root) as ctx:
+        stage.run(ctx)
+
+    conn = sqlite3.connect(config.WorkspaceLayout(root).findings_db_path)
+    try:
+        kinds = [i.kind for i in pq.open_items(conn)]
+    finally:
+        conn.close()
+    assert model.calls == 1
+    assert kinds == []
+
+
+def test_changing_type_tiers_re_asks_the_type(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The effective tier is part of the prompt, so the cached answer to the
+    old question is not served for the new one."""
+    write_doc(
+        root, "events/b", {"type": "Event", "title": "B", "sensitivity": "private"}
+    )
+    model = _CountingModel()
+    monkeypatch.setattr("openkos.cli.main._chat_client", lambda cfg, task=None: model)
+    monkeypatch.setattr(
+        "openkos.cli.main._resolve_local_exemption", lambda client, cfg: True
+    )
+    stage = next(
+        s for s in daemon_module.production_stages() if s.name == "suggest-volatility"
+    )
+    with _volatility_ctx(root) as ctx:
+        stage.run(ctx)
+    _apply_event_slow(root)
+
+    with _volatility_ctx(root) as ctx:
+        stage.run(ctx)
+
+    assert model.calls == 2
+
+
+# -- #1334: the daemon removes the logs of workspaces that are gone -----------------
+
+
+def test_daemon_start_removes_a_stale_log_group_and_says_so(
+    root: Path, tmp_path: Path
+) -> None:
+    import os
+
+    from openkos.lock import workspace_digest
+
+    gone = tmp_path / "long-gone-workspace"
+    digest = workspace_digest(gone)
+    log_dir = tmp_path / "state-logs"
+    log_dir.mkdir(exist_ok=True)
+    stale = log_dir / f"{digest}.log"
+    stale.write_text("old\n", encoding="utf-8")
+    record = log_dir / f"{digest}.workspace"
+    record.write_text(os.path.realpath(gone), encoding="utf-8")
+    legacy = log_dir / ("c" * 64 + ".log")
+    legacy.write_text("unattributable\n", encoding="utf-8")
+
+    result = cli.invoke(app, ["daemon", "--once"])
+
+    assert result.exit_code == 0, result.output
+    assert not stale.exists()
+    assert not record.exists()
+    assert legacy.exists()
+    assert f"openkos daemon: removed log '{digest}.log'" in result.stderr
+    assert str(gone) in result.stderr
+
+
+def test_daemon_start_records_its_workspace_beside_its_log(
+    root: Path, tmp_path: Path
+) -> None:
+    import os
+
+    from openkos.lock import workspace_digest
+
+    assert cli.invoke(app, ["daemon", "--once"]).exit_code == 0
+
+    record = tmp_path / "state-logs" / f"{workspace_digest(root)}.workspace"
+    assert record.read_text(encoding="utf-8") == os.path.realpath(root)
+
+
+def test_daemon_start_leaves_a_live_workspaces_log_alone(
+    root: Path, tmp_path: Path
+) -> None:
+    import os
+
+    from openkos.lock import workspace_digest
+
+    other = tmp_path / "other-workspace"
+    (other / "bundle").mkdir(parents=True)
+    (other / "bundle" / "index.md").write_text("x", encoding="utf-8")
+    (other / "bundle" / "log.md").write_text("x", encoding="utf-8")
+    digest = workspace_digest(other)
+    log_dir = tmp_path / "state-logs"
+    log_dir.mkdir(exist_ok=True)
+    (log_dir / f"{digest}.log").write_text("live\n", encoding="utf-8")
+    (log_dir / f"{digest}.workspace").write_text(
+        os.path.realpath(other), encoding="utf-8"
+    )
+
+    result = cli.invoke(app, ["daemon", "--once"])
+
+    assert result.exit_code == 0, result.output
+    assert (log_dir / f"{digest}.log").exists()
+    assert "removed log" not in result.stderr

@@ -774,6 +774,8 @@ def stage_derived_objects(
         notices.append(okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES)
     if report.unevidenced_titles:
         notices.append(okf.EXTRACTION_NOTICE_OBJECTS_WITHOUT_EVIDENCE)
+    if report.produced > report.retained:
+        notices.append(okf.EXTRACTION_NOTICE_CAPPED)
 
     if not extractions:
         return StagedDerivedObjects(

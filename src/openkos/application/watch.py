@@ -189,16 +189,29 @@ def _outcome_line(name: str, outcome: svc.IngestOutcome) -> str:
 
 class _WatchObserver(svc.IngestObserver):
     """Surfaces what an unattended import would otherwise swallow (#1224): a
-    legacy-encoding read and a source that ended with no extractable text."""
+    legacy-encoding read, a source that ended with no extractable text, the
+    advisories an attended ingest prints from its extraction report, and a
+    sign of life while the model works (#1331)."""
 
-    def __init__(self, name: str, notify: Callable[[str], None]) -> None:
+    def __init__(self, name: str, watch: WatchPorts) -> None:
         self._name = name
-        self._notify = notify
+        self._watch = watch
+        self._notify = watch.notify
 
     def notice(self, message: str) -> None:
         if message == svc.UNCHANGED_NOTICE:
             return  # `_outcome_line` words it, without a hint that is not the daemon's
         self._notify(_daemon_line(self._name, message))
+
+    def extraction_starting(self) -> None:
+        self._notify(
+            f"{_PREFIX}'{self._name}': extracting derived objects "
+            "(waiting on the LLM)..."
+        )
+
+    @contextlib.contextmanager
+    def extraction_progress(self) -> Iterator[svc.PhaseHook | None]:
+        yield self._watch.phase_hook(self._name)
 
     def staged(self, staged: application_ingest.StagedDerivedObjects) -> None:
         if staged.report is None and staged.skip_reason == "no-extractable-text":
@@ -207,6 +220,8 @@ class _WatchObserver(svc.IngestObserver):
                 "(binary, or not decodable as text); its Source was kept "
                 "without concepts."
             )
+        for line in self._watch.staged_notices(staged):
+            self._notify(f"{_PREFIX}'{self._name}': {line}")
 
 
 @dataclass(frozen=True)
@@ -222,6 +237,19 @@ class WatchPorts:
     estimate_calls: Callable[[Path], int] = _estimate_calls
     notify: Callable[[str], None] = _log_notice
     """Where an import's advisory lines go (the daemon verb wires stderr)."""
+    staged_notices: Callable[
+        [application_ingest.StagedDerivedObjects], Sequence[str]
+    ] = lambda staged: ()
+    """The advisory lines (no prefix) an attended ingest prints from one file's
+    extraction report; the daemon verb wires the CLI's wording so the two
+    surfaces cannot drift (#1331)."""
+    outcome_notices: Callable[[svc.IngestOutcome], Sequence[str]] = lambda outcome: ()
+    """The run-level summary lines (no prefix) an attended ingest prints after
+    a file lands, e.g. the torn-classification count (#1331)."""
+    phase_hook: Callable[[str], svc.PhaseHook | None] = lambda name: None
+    """Builds the extraction phase-label hook for the named file, or `None`
+    for none (the daemon verb gates it on a TTY, like its maintenance
+    progress)."""
 
 
 class _NotSettled(Exception):
@@ -526,7 +554,7 @@ def _import_one(
         ports=dataclasses.replace(
             ingest_ports, autocommit=ledger.wrap(ingest_ports.autocommit)
         ),
-        observer=_WatchObserver(cand.path.name, watch.notify),
+        observer=_WatchObserver(cand.path.name, watch),
         confirm=None,
     )
 
@@ -629,6 +657,8 @@ def _run_candidates(
             _queue_supersessions(queue, outcome, base_section)
             _record(conn, cand, digest=digest, outcome=IMPORTED)
             watch.notify(_outcome_line(cand.path.name, outcome))
+            for line in watch.outcome_notices(outcome):
+                watch.notify(f"{_PREFIX}'{cand.path.name}': {line}")
             tally.done += 1
             tally.imported += 1
             if isinstance(outcome, svc.IngestUnchanged):

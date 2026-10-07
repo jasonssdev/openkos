@@ -63,6 +63,7 @@ class _Env:
         self.on_commit: Callable[[], None] | None = None
         self.refreshes: list[Path] = []
         self.refresh_error: Exception | None = None
+        self.watch_extra: dict[str, Any] = {}
 
     def ingest_ports(
         self, section: CommitSection, run_budget: budget.BudgetedRun
@@ -93,7 +94,9 @@ class _Env:
             jitter=lambda low, high: high,
             wait_cap_seconds=0,
             watch=watch.WatchPorts(
-                ingest_ports=self.ingest_ports, notify=self.notices.append
+                ingest_ports=self.ingest_ports,
+                notify=self.notices.append,
+                **self.watch_extra,
             ),
         )
 
@@ -701,8 +704,10 @@ def test_an_import_is_reported_by_name_and_outcome(env: _Env) -> None:
 
     env.job()
 
-    assert len(env.notices) == 1
-    assert env.notices[0].startswith(f"{_PREFIX}'a.md' imported -- ")
+    # The wait line precedes the outcome line (#1331); the outcome closes it.
+    assert len(env.notices) == 2
+    assert "extracting" in env.notices[0]
+    assert env.notices[1].startswith(f"{_PREFIX}'a.md' imported -- ")
 
 
 def test_a_new_version_is_reported_as_such(env: _Env) -> None:
@@ -771,3 +776,54 @@ def test_a_changed_file_over_the_call_budget_is_still_refused(env: _Env) -> None
     env.job(max_calls_per_pass=1)
 
     assert env.observation("a.md").outcome == watch.EXCEEDS_BUDGET
+
+
+# -- #1331: the daemon import keeps what an attended ingest tells the operator --
+
+
+def test_staged_advisories_reach_the_daemon_under_its_prefix(env: _Env) -> None:
+    env.watch_extra["staged_notices"] = lambda staged: ["2 things need a look: A, B."]
+    env.drop("a.md")
+    env.job()  # first sight
+    env.settle()
+    env.job()
+
+    assert "openkos daemon: watch: 'a.md': 2 things need a look: A, B." in env.notices
+
+
+def test_outcome_summaries_reach_the_daemon_under_its_prefix(env: _Env) -> None:
+    env.watch_extra["outcome_notices"] = lambda outcome: ["1 of 1 recorded a thing."]
+    env.drop("a.md")
+    env.job()
+    env.settle()
+    env.job()
+
+    assert "openkos daemon: watch: 'a.md': 1 of 1 recorded a thing." in env.notices
+
+
+def test_an_import_announces_its_extraction_wait(env: _Env) -> None:
+    env.drop("a.md")
+    env.job()
+    env.settle()
+    env.job()
+
+    assert any(
+        n.startswith("openkos daemon: watch: 'a.md': extracting") for n in env.notices
+    )
+
+
+def test_the_phase_hook_is_wired_into_the_extraction(env: _Env) -> None:
+    seen: list[str] = []
+    observer = watch._WatchObserver(
+        "a.md",
+        watch.WatchPorts(
+            ingest_ports=env.ingest_ports,
+            phase_hook=lambda name: lambda phase: seen.append(f"{name}:{phase}"),
+        ),
+    )
+
+    with observer.extraction_progress() as hook:
+        assert hook is not None
+        hook("reading window 1/2")
+
+    assert seen == ["a.md:reading window 1/2"]

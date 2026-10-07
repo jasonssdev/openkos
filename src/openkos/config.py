@@ -870,6 +870,14 @@ def symlink_boundary_reason(path: Path, boundary: Path) -> str | None:
     )
 
 
+def workspace_absent(root: Path) -> bool:
+    """Whether `root` holds no OpenKOS workspace -- the missing-workspace answer
+    of `require_workspace`, and only that one. A workspace that exists but
+    cannot be read is NOT absent: an unreadable answer must never be mistaken
+    for a missing one by a caller that deletes things on it."""
+    return require_workspace(root) == _NO_WORKSPACE_REASON
+
+
 def require_workspace(root: Path) -> str | None:
     """Return `None` if `root` already holds an initialized workspace, else
     the exact refusal reason string every read-only command shares (D1).
@@ -1124,7 +1132,17 @@ def _validate_unattended_inbox(root: Path, value: object, prefix: str) -> Path:
             f"got {value!r}"
         )
     resolved_root = root.resolve()
-    inbox = (resolved_root / value.strip()).resolve()
+    try:
+        # A leading `~` names a home directory, never a folder called `~`
+        # under the workspace. Expanded BEFORE the containment checks below,
+        # so a home that is (or holds) the workspace cannot bypass them.
+        expanded = Path(value.strip()).expanduser()
+    except RuntimeError as exc:  # no resolvable home for `~` or `~user`
+        raise ValueError(
+            f"{prefix}: 'unattended.inbox' starts with '~' but that home "
+            f"directory cannot be determined, got {value!r}"
+        ) from exc
+    inbox = (resolved_root / expanded).resolve()
     layout = WorkspaceLayout(resolved_root)
     forbidden = (
         ("raw/", layout.raw_dir),

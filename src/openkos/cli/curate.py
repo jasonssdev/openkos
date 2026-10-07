@@ -62,6 +62,7 @@ from openkos.application import curate_queue, merge_service, pending_queue_repor
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
+from openkos.application import suggest_volatility_service as volatility_service
 from openkos.application.lock_wait import CommitSection
 from openkos.cli import observability, output
 from openkos.graph.base import Edge
@@ -99,7 +100,11 @@ from openkos.resolution.edge_typing import (
     suggest_edge_types,
 )
 from openkos.resolution.normalize import is_suffix_family
-from openkos.resolution.volatility_typing import TierSuggestion, suggest_volatility
+from openkos.resolution.volatility_typing import (
+    TierSuggestion,
+    suggest_volatility,
+    unanswered_type_count,
+)
 from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
 from openkos.state import edge_suggestions as edge_suggestions_store
@@ -2355,6 +2360,17 @@ def _volatility_rows_for(
     }
 
 
+def _volatility_cache(
+    ctx: CurateContext,
+) -> Callable[[str, str], TierSuggestion | None]:
+    """The answers already held for this run's exact prompts (#1332)."""
+    return volatility_service.cached_answers(
+        ctx.layout,
+        config.resolve_task_model(ctx.cfg, "volatility_typing"),
+        ctx.cfg.type_tiers,
+    )
+
+
 def _metadata_probe(ctx: CurateContext) -> StageProbe:
     """`lint.collect_docs` + `cfg.type_tiers` (design D4): the queue is
     every distinct concept TYPE `suggest_volatility` would sample -- one
@@ -2383,10 +2399,22 @@ def _metadata_probe(ctx: CurateContext) -> StageProbe:
                 "`openkos set-sensitivity`."
             )
     row_served = _volatility_rows_for(ctx, type_names)
+    # What the model would really be asked: neither a fresh queue row nor an
+    # answer already held for the exact prompt (#1332) costs a call.
+    llm_calls = unanswered_type_count(
+        ctx.layout.bundle_dir,
+        include_confidential=ctx.include_confidential,
+        local_exemption=ctx.local_exemption,
+        rationale_language=ctx.cfg.rationale_language,
+        skip_types=frozenset(row_served),
+        served=_volatility_cache(ctx),
+        type_tiers=ctx.cfg.type_tiers,
+    )
+    llm_calls = min(llm_calls, len(type_names) - len(row_served))
     return StageProbe(
         items=tuple(type_names),
-        llm_calls=len(type_names) - len(row_served),
-        served=len(row_served),
+        llm_calls=llm_calls,
+        served=len(type_names) - llm_calls,
         empty_message=empty_message,
     )
 
@@ -2433,14 +2461,29 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         ctx.layout.bundle_dir,
         llm=llm,
         skip_types=frozenset(row_served),
+        served=_volatility_cache(ctx),
+        type_tiers=ctx.cfg.type_tiers,
         include_confidential=ctx.include_confidential,
         local_exemption=ctx.local_exemption,
         # #812, the other half of the pair -- see `_structure_run`'s note.
         rationale_language=ctx.cfg.rationale_language,
         on_progress=observability.progress_callback("curate", "concept type"),
     )
+    volatility_service.record_answers(
+        ctx.layout,
+        config.resolve_task_model(ctx.cfg, "volatility_typing"),
+        batch,
+        commit_section=cli_main._commit_section_for(ctx.root),
+    )
+    # A suggestion equal to the tier the type is already on is settled, not a
+    # proposal (#1332): accepting it would rewrite nothing.
     results: Sequence[TierSuggestion] = sorted(
-        [*row_served.values(), *batch.results], key=lambda r: r.type_name
+        (
+            r
+            for r in [*row_served.values(), *batch.results]
+            if r.suggested_tier is None or r.suggested_tier != r.current_default
+        ),
+        key=lambda r: r.type_name,
     )
     curate_queue.enqueue_volatility(
         ctx.layout,

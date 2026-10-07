@@ -395,6 +395,7 @@ ExtractionNotice = Literal[
     "objects-without-evidence",
     "candidates-dropped-in-staging",
     "chunk-extraction-partial",
+    "extraction-capped",
 ]
 """The closed vocabulary for `EXTRACTION_NOTICE_KEY`.
 
@@ -452,7 +453,15 @@ bytes, so a plain re-ingest genuinely can answer differently. Named
 answers yet another different question -- not "was this set quality
 selected" (the judge pair), not "did the stored text quote its source"
 (#801), not "did staging lose a candidate extraction already produced"
-(#843), but "did extraction itself see the whole source"."""
+(#843), but "did extraction itself see the whole source".
+
+The seventh token is #1331's: the per-source object cap (the union backstop
+or the legacy single-run cap) cut the extraction -- `report.produced >
+report.retained`. The cut is positional, so which subjects it cost is not
+recoverable from the stored objects; before this token only the attended
+terminal named the discarded titles, and an unattended import left no trace
+that the cap had bound. Not retryable debt (a re-run re-applies the same
+cap) and not a defect: it discloses that the stored set is a prefix."""
 
 EXTRACTION_NOTICE_VALUES: Final[tuple[ExtractionNotice, ...]] = get_args(
     ExtractionNotice
@@ -547,6 +556,12 @@ after the terminal has scrolled. NOT retryable debt (`objects-without-
 evidence`'s grounds exactly): a plain re-ingest re-runs the same prompt
 over the same bytes and is promised to fix nothing about the sample that
 failed staging, so the named redo is `--re-extract`."""
+
+EXTRACTION_NOTICE_CAPPED: Final[ExtractionNotice] = "extraction-capped"
+"""#1331's disclosure token: the per-source object cap discarded at least one
+extracted object (`extraction.concept.ExtractionReport.produced` exceeds
+`retained`). Durable on the Source so an unattended import, which prints no
+terminal notice, still records that the stored set is truncated."""
 
 EXTRACTION_NOTICE_CHUNK_PARTIAL: Final[ExtractionNotice] = "chunk-extraction-partial"
 """#1053's disclosure token: at least one `_chunk_lines` window's
