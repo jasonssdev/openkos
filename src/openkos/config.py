@@ -416,6 +416,16 @@ turning it off restores the pre-#760 path byte-for-byte. The `USED:`
 attribution still strips citations off an ungrounded answer either way, so
 `False` is degraded, never unguarded."""
 
+DEFAULT_TRANSCRIPT_DECISIONS = False
+"""Packaged default for `transcript_decisions` (#1348): whether ingest runs
+the dedicated decision pass over a meeting-shaped source, one extra model call
+per chunk window (one call for a short transcript), and lets the Decisions it
+verifies replace the general pass's topic-bundle Decisions for that source.
+
+`False`, and deliberately so: the pass ships with NO measurement yet -- no
+harness has scored its per-decision recall or its cost on real transcripts --
+so it stays off, and off restores the pre-pass path byte-for-byte."""
+
 DEFAULT_REVISION_HISTORY = False
 """Packaged default for `revision_history` (#1014 piece b): whether `query`
 attaches each retrieved concept's earlier versions -- reached through its
@@ -1492,6 +1502,13 @@ class Config:
     `DEFAULT_ATTACH_AT_INGEST` when the key is absent or explicitly null. Added
     LAST and DEFAULTED, like `revision_history`, so a positional or partial
     `Config(...)` construction elsewhere is unchanged."""
+    transcript_decisions: bool = DEFAULT_TRANSCRIPT_DECISIONS
+    """Whether ingest runs the transcript decision pass on a meeting-shaped
+    source (#1348), defaulting to `DEFAULT_TRANSCRIPT_DECISIONS` (`False`)
+    when the key is absent or explicitly null. Honoured by the union
+    extractor only (`union_judge`, the default). Added LAST and DEFAULTED,
+    like `attach_at_ingest`, so a positional or partial `Config(...)`
+    construction elsewhere is unchanged."""
 
 
 def read_config(root: Path) -> Config:
@@ -1557,6 +1574,7 @@ def read_config(root: Path) -> Config:
     type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
     rationale_language = raw.get("rationale_language")
     revision_history = raw.get("revision_history")
+    transcript_decisions = raw.get("transcript_decisions")
     attach_at_ingest = raw.get("attach_at_ingest")
     backend = raw.get("backend")
     base_url = raw.get("base_url")
@@ -1842,6 +1860,15 @@ def read_config(root: Path) -> Config:
             f"{layout.config_path.name}: 'revision_history' must be a "
             f"boolean, got {type(revision_history).__name__}"
         )
+    if transcript_decisions is not None and not isinstance(transcript_decisions, bool):
+        # Same narrow `isinstance(x, bool)` guard as `revision_history`: YAML
+        # resolves `1` to `int`, and this key gates an extra model call per
+        # window, so a value that looks like a count must not be silently
+        # truthy-coerced into spending it.
+        raise ValueError(
+            f"{layout.config_path.name}: 'transcript_decisions' must be a "
+            f"boolean, got {type(transcript_decisions).__name__}"
+        )
     if rationale_language is not None and (
         not isinstance(rationale_language, str)
         or not rationale_language.strip()
@@ -2035,6 +2062,11 @@ def read_config(root: Path) -> Config:
         base_url=resolved_base_url,
         embedding_base_url=resolved_embedding_base_url,
         unattended=_read_unattended(root, unattended, layout.config_path.name),
+        transcript_decisions=(
+            transcript_decisions
+            if transcript_decisions is not None
+            else DEFAULT_TRANSCRIPT_DECISIONS
+        ),
     )
 
 

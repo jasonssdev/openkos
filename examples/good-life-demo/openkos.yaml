@@ -95,6 +95,15 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # concept (Event and Person excepted), ingest adds
                           # the source to that concept instead of writing a
                           # `-2` copy. `false` restores the copies.
+# transcript_decisions: true  # on a meeting-shaped source, ask each chunk window
+                          # (the whole text when short) one extra question --
+                          # which decisions were actually reached -- and let the
+                          # Decisions whose quoted evidence is found verbatim
+                          # replace the general pass's Decisions for that source
+                          # (default OFF). Costs one extra model call per window
+                          # and applies only to the union extractor
+                          # (`union_judge`). UNMEASURED -- experimental, no
+                          # harness has scored its recall yet.
 # concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one
                           # by one (default OFF). Chunked sources only; below
                           # the chunk threshold there are no windows to
