@@ -9,7 +9,7 @@ these tests exercise it directly.
 """
 
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime
 
 from openkos.event_dates import ResolvedEventDate
 from openkos.retrieval import history
@@ -242,3 +242,27 @@ def test_date_phrase_and_label_note_strings() -> None:
         " (earlier version, refined by concept_id: H; event date 2026-07-14; "
         "no longer current)"
     )
+
+
+def test_date_phrase_keeps_the_stored_precision() -> None:
+    """#1349: a date-time renders with its time, and a range orders its
+    endpoints without inventing a time for a date-only one."""
+    dated = ResolvedEventDate(
+        state="dated",
+        earliest=datetime(2026, 7, 14, 10, 0),
+        latest=datetime(2026, 7, 14, 10, 0),
+    )
+    seconds = ResolvedEventDate(
+        state="dated",
+        earliest=datetime(2026, 7, 14, 10, 0, 30),
+        latest=datetime(2026, 7, 14, 10, 0, 30),
+    )
+    multiple = ResolvedEventDate(
+        state="multiple",
+        earliest=date(2026, 7, 14),
+        latest=datetime(2026, 7, 14, 15, 34),
+    )
+
+    assert history.date_phrase(dated) == "event date 2026-07-14T10:00"
+    assert history.date_phrase(seconds) == "event date 2026-07-14T10:00:30"
+    assert history.date_phrase(multiple) == "event dates 2026-07-14 to 2026-07-14T15:34"

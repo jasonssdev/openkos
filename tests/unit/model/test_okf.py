@@ -4625,3 +4625,147 @@ def test_bundle_dot_directory_rejects_a_path_outside_the_bundle(
 
     with pytest.raises(ValueError, match=r"note\.md"):
         okf.bundle_dot_directory(outside, bundle_dir)
+
+
+# -- #1349: event_date may carry a naive local time (ADR-0052) --
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (date(2026, 7, 14), "2026-07-14"),
+        (datetime(2026, 7, 14, 10, 0), "2026-07-14T10:00"),
+        (datetime(2026, 7, 14, 10, 0, 0), "2026-07-14T10:00"),
+        (datetime(2026, 7, 14, 10, 0, 30), "2026-07-14T10:00:30"),
+        (datetime(2026, 7, 14, 0, 0), "2026-07-14T00:00"),
+        (datetime(2026, 7, 14, 23, 59, 59), "2026-07-14T23:59:59"),
+    ],
+)
+def test_format_and_parse_event_when_round_trip_byte_identically(
+    value: date, text: str
+) -> None:
+    assert okf.format_event_when(value) == text
+    parsed = okf.parse_event_when(text)
+    assert parsed == value
+    assert parsed is not None
+    assert okf.format_event_when(parsed) == text
+
+
+def test_parse_event_when_keeps_precision_explicit() -> None:
+    assert not isinstance(okf.parse_event_when("2026-07-14"), datetime)
+    assert isinstance(okf.parse_event_when("2026-07-14T10:00"), datetime)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "2026-07-14T10:00Z",
+        "2026-07-14T10:00:00+02:00",
+        "2026-07-14T10:00:00.5",
+        "2026-07-14 10:00",
+        "2026-07-14T24:00",
+        "2026-07-14T10:00:60",
+        "2026-02-30T10:00",
+        "2026-07-14\n",
+        "2026-07-14T10:00\n",
+        "14/07/2026",
+    ],
+)
+def test_parse_event_when_refuses_everything_else(text: str) -> None:
+    assert okf.parse_event_when(text) is None
+
+
+def test_build_source_concept_emits_a_quoted_date_time_without_seconds() -> None:
+    """`T10:00` is not a YAML 1.1 timestamp, so a plain dump would leave it
+    bare; ADR-0023 requires a quoted string so every parser reads one text."""
+    text = _build_call_source(event_date=datetime(2026, 7, 14, 10, 0))
+
+    assert "event_date: '2026-07-14T10:00'\n" in text
+    metadata, _ = okf.load_frontmatter(text)
+    assert metadata["event_date"] == "2026-07-14T10:00"
+
+
+def test_build_source_concept_emits_seconds_only_when_non_zero() -> None:
+    with_seconds = _build_call_source(event_date=datetime(2026, 7, 14, 10, 0, 30))
+    zero_seconds = _build_call_source(event_date=datetime(2026, 7, 14, 10, 0, 0))
+
+    assert "event_date: '2026-07-14T10:00:30'\n" in with_seconds
+    assert "event_date: '2026-07-14T10:00'\n" in zero_seconds
+
+
+def test_build_source_concept_date_only_bytes_are_unchanged() -> None:
+    text = _build_call_source(event_date=date(2026, 7, 14))
+
+    assert "event_date: '2026-07-14'\n" in text
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        datetime(2026, 7, 14, 10, 0, tzinfo=UTC),
+        datetime(2026, 7, 14, 10, 0, 0, 500),
+    ],
+)
+def test_build_source_concept_still_raises_on_a_zoned_or_fractional_datetime(
+    value: datetime,
+) -> None:
+    with pytest.raises(TypeError):
+        _build_call_source(event_date=value)
+
+
+def test_date_time_round_trips_through_the_reader() -> None:
+    text = _build_call_source(event_date=datetime(2026, 7, 14, 10, 0, 30))
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert okf.read_event_date(metadata) == okf.StoredEventDate(
+        value=datetime(2026, 7, 14, 10, 0, 30),
+        malformed=False,
+        raw="2026-07-14T10:00:30",
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "value"),
+    [
+        ("2026-07-14T10:00", datetime(2026, 7, 14, 10, 0)),
+        ("2026-07-14T10:00:30", datetime(2026, 7, 14, 10, 0, 30)),
+        # A hand-typed unquoted `2026-07-14T10:00:30` is a naive PyYAML datetime.
+        (datetime(2026, 7, 14, 10, 0, 30), datetime(2026, 7, 14, 10, 0, 30)),
+    ],
+)
+def test_read_event_date_accepts_a_naive_local_date_time(
+    raw: object, value: datetime
+) -> None:
+    result = okf.read_event_date({"event_date": raw})
+
+    assert result == okf.StoredEventDate(value=value, malformed=False, raw=raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "2026-07-14T10:00Z",
+        "2026-07-14T10:00:00+02:00",
+        "2026-07-14T10:00:00.5",
+        "2026-07-14 10:00",
+        datetime(2026, 7, 14, 10, 0, tzinfo=UTC),
+        datetime(2026, 7, 14, 10, 0, 0, 500),
+    ],
+)
+def test_read_event_date_treats_an_offset_or_fraction_as_malformed(
+    raw: object,
+) -> None:
+    assert okf.read_event_date({"event_date": raw}) == okf.StoredEventDate(
+        value=None, malformed=True, raw=raw
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["2026-07-14T10:00", "2026-07-14T10:00:30", datetime(2026, 7, 14, 10, 0, 30)],
+)
+def test_incoming_date_key_stays_date_only(raw: object) -> None:
+    """The `date:` lift is untrusted input and is not widened (ADR-0052)."""
+    assert okf.read_incoming_date({"date": raw}) is None

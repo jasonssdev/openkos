@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
@@ -4452,12 +4452,12 @@ def _echo_event_date_preview_line(
     (`previous is None`) both print the plain form."""
     if resolution.value is None:
         return
-    value = resolution.value.isoformat()
+    value = okf.format_event_when(resolution.value)
     if resolution.origin == "flag":
         if resolution.changed and resolution.previous is not None:
             typer.echo(
                 f"    event date {value} (from --event-date, replacing "
-                f"{resolution.previous.isoformat()})"
+                f"{okf.format_event_when(resolution.previous)})"
             )
         else:
             typer.echo(f"    event date {value} (from --event-date)")
@@ -5114,12 +5114,13 @@ def ingest(
     event_date: str | None = typer.Option(
         None,
         "--event-date",
-        metavar="YYYY-MM-DD",
+        metavar="YYYY-MM-DD[THH:MM[:SS]]",
         # Traceability (issue #1014c, ADR-0023) stays here in source, never
         # in the published `help=` text below (#389).
         help=(
-            "The recorded Source's event_date -- a calendar date naming "
-            "when the recorded event happened, distinct from the ingest "
+            "The recorded Source's event_date -- a calendar date, "
+            "optionally with a local time (no zone), naming when the "
+            "recorded event happened, distinct from the ingest "
             "timestamp. Precedence on re-ingest: this flag, then the "
             "stored value, then the file name, then unset. Applies to a "
             "single file only -- refused with a directory or glob src."
@@ -5170,13 +5171,15 @@ def ingest(
     including exactly one -- decided by the input's SHAPE, not its match
     count) both refuse with no write of any kind.
     """
-    parsed_event_date: date | None = None
+    parsed_event_date: okf.EventWhen | None = None
     if event_date is not None:
         parsed_event_date = source_date.parse_event_date(event_date)
         if parsed_event_date is None:
             typer.echo(
                 "openkos ingest: --event-date must be a calendar date "
-                f"written YYYY-MM-DD, got {event_date!r}.",
+                "written YYYY-MM-DD, optionally with a local time "
+                "(YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS), "
+                f"got {event_date!r}.",
                 err=True,
             )
             raise typer.Exit(code=2)
@@ -5409,7 +5412,7 @@ def _ingest_single(
     include_confidential: bool,
     warn_nonlocal_embed_host: bool = True,
     re_extract: bool = False,
-    event_date: date | None = None,
+    event_date: okf.EventWhen | None = None,
 ) -> ingest_service.IngestOutcome:
     """The `ingest` verb's single-file adapter over
     `application.ingest_service.ingest_source` (issue #1138; the full Phase
@@ -10181,11 +10184,11 @@ def _revision_verdict_from_finding(
     already uses to render the `revisions` verb's own report -- never a
     second, independently-typed direction check."""
     date_0 = DecisionDate(
-        value=date.fromisoformat(finding.dates[0]) if finding.dates[0] else None,
+        value=okf.parse_event_when(finding.dates[0]) if finding.dates[0] else None,
         state=finding.date_states[0],  # type: ignore[arg-type]
     )
     date_1 = DecisionDate(
-        value=date.fromisoformat(finding.dates[1]) if finding.dates[1] else None,
+        value=okf.parse_event_when(finding.dates[1]) if finding.dates[1] else None,
         state=finding.date_states[1],  # type: ignore[arg-type]
     )
     return RevisionVerdict(

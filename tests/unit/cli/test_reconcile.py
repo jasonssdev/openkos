@@ -8,6 +8,7 @@ verbatim -- only the write target (TWO existing concepts, a symmetric or
 """
 
 import os
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -2134,3 +2135,40 @@ def test_summary_counts_both_walks_and_lists_revision_declines(
         rel.target == "decisions/w" and rel.type == "supersedes"
         for rel in _relations_of(tmp_path, "decisions/x")
     )
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        # A row written before date-times existed stays readable.
+        ("2026-04-01", date(2026, 4, 1)),
+        ("2026-04-01T15:34", datetime(2026, 4, 1, 15, 34)),
+        ("2026-04-01T15:34:05", datetime(2026, 4, 1, 15, 34, 5)),
+        (None, None),
+    ],
+)
+def test_findings_readback_accepts_both_shapes(
+    stored: str | None, expected: date | None
+) -> None:
+    """#1349 (ADR-0052): `reconcile --from-findings` rebuilds a verdict's
+    dates from stored TEXT, which now holds a date or a date-time."""
+    from openkos.cli import main as cli_main
+    from openkos.state import revision_findings
+
+    finding = revision_findings.RevisionFinding(
+        pair_ids=("decisions/a", "decisions/b"),
+        verdict="reverses",
+        confidence=0.9,
+        rationale="r",
+        quotes=("qa", "qb"),
+        dates=(stored, stored),
+        date_states=("dated" if stored else "missing",) * 2,
+        include_confidential=False,
+        prompt_version="v",
+        input_digests=(),
+    )
+
+    verdict = cli_main._revision_verdict_from_finding(finding)
+
+    assert verdict.dates[0].value == expected
+    assert verdict.dates[1].value == expected

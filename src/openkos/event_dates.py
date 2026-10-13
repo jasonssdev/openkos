@@ -24,7 +24,7 @@ the caller.
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Final, Literal
 
@@ -45,11 +45,42 @@ entry)."""
 class ResolvedEventDate:
     """The result of resolving a member's event date (design.md Decision 1).
     `earliest`/`latest` are set for `"dated"` (where they are equal) and
-    for `"multiple"`; both are `None` for `"missing"`/`"none-reached"`."""
+    for `"multiple"`; both are `None` for `"missing"`/`"none-reached"`.
+
+    A value is a `date` or, since ADR-0052, a naive local `datetime`; the
+    bounds of a `"multiple"` are ordered by `_order_key`, which puts a
+    date-only value before any date-time on the same day."""
 
     state: DateState
-    earliest: date | None
-    latest: date | None
+    earliest: okf.EventWhen | None
+    latest: okf.EventWhen | None
+
+
+def at_common_precision(
+    left: okf.EventWhen, right: okf.EventWhen
+) -> tuple[date, date] | tuple[datetime, datetime]:
+    """Reduce two event dates to the finest precision BOTH carry (ADR-0052):
+    two date-times stay date-times, and when either is date-only both become
+    plain dates, so the same day compares `equal`. A time is never assumed
+    for a date-only value. The result is always comparable with `==`/`<`,
+    which a raw `date`/`datetime` pair is not (it raises)."""
+    if isinstance(left, datetime) and isinstance(right, datetime):
+        return left, right
+    return _day_of(left), _day_of(right)
+
+
+def _day_of(value: okf.EventWhen) -> date:
+    """The calendar day of a value, as a plain `date`. `datetime` is a
+    `date` subclass, so `isinstance(value, date)` cannot be the test."""
+    return value.date() if isinstance(value, datetime) else value
+
+
+def _order_key(value: okf.EventWhen) -> tuple[date, int, time]:
+    """A total order over mixed values for picking `earliest`/`latest`:
+    by day, then date-only before date-time, then by the time itself."""
+    if isinstance(value, datetime):
+        return (value.date(), 1, value.time())
+    return (value, 0, time.min)
 
 
 _SOURCES_PREFIX: Final = "sources/"
@@ -99,7 +130,7 @@ def _resolve_source_date(
     bundle_dir: Path,
     source_id: str,
     admit: _AdmitFn | None,
-) -> date | None:
+) -> okf.EventWhen | None:
     """Resolve one Source's own `event_date`, or `None` on any guarded-read
     failure or a malformed/absent stored date (design.md Decision 1 step
     2/4) -- both cases make the Source's own date unusable, so
@@ -131,7 +162,7 @@ def resolve_event_date(
     detector's local-only use, which needs no sensitivity gate at all."""
     reached_any_source = False
     any_source_unusable = False
-    dates: set[date] = set()
+    dates: set[okf.EventWhen] = set()
 
     def _resolve_and_record(source_id: str) -> None:
         nonlocal reached_any_source, any_source_unusable
@@ -165,7 +196,9 @@ def resolve_event_date(
         return ResolvedEventDate(state="missing", earliest=None, latest=None)
     if len(dates) > 1:
         return ResolvedEventDate(
-            state="multiple", earliest=min(dates), latest=max(dates)
+            state="multiple",
+            earliest=min(dates, key=_order_key),
+            latest=max(dates, key=_order_key),
         )
     (only,) = dates
     return ResolvedEventDate(state="dated", earliest=only, latest=only)

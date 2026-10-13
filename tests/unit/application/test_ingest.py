@@ -16,7 +16,7 @@ module's behavior is reachable without driving a CLI command.
 import dataclasses
 import json
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -1900,3 +1900,36 @@ def test_compose_catalog_update_a_create_plan_still_logs_extraction() -> None:
 
     assert "**Attach**" not in update.new_log_text
     assert "Extracted [" in update.new_log_text
+
+
+def test_compose_source_document_carries_a_stored_date_time_forward() -> None:
+    """#1349 (ADR-0052): a stored date-time is read back and kept like a date."""
+    prior = _prior_concept_text(event_date=datetime(2026, 7, 10, 10, 0))
+    plan = _source_plan(concept_text=prior)
+
+    assert plan.event_date.previous == datetime(2026, 7, 10, 10, 0)
+    assert plan.event_date.origin == "kept"
+    assert plan.event_date.value == datetime(2026, 7, 10, 10, 0)
+    assert plan.event_date.changed is False
+
+
+def test_restating_the_same_instant_is_not_a_change() -> None:
+    """`T10:00` and `T10:00:00` are one instant: no rewrite is triggered."""
+    prior = _prior_concept_text(event_date=datetime(2026, 7, 10, 10, 0))
+    plan = _source_plan(
+        concept_text=prior, event_date_flag=datetime(2026, 7, 10, 10, 0, 0)
+    )
+
+    assert plan.event_date.origin == "flag"
+    assert plan.event_date.changed is False
+
+
+def test_a_flag_that_adds_a_time_to_a_stored_date_is_a_change() -> None:
+    prior = _prior_concept_text(event_date=date(2026, 7, 10))
+    plan = _source_plan(
+        concept_text=prior, event_date_flag=datetime(2026, 7, 10, 10, 0)
+    )
+
+    assert plan.event_date.value == datetime(2026, 7, 10, 10, 0)
+    assert plan.event_date.previous == date(2026, 7, 10)
+    assert plan.event_date.changed is True

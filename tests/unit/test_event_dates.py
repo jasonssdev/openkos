@@ -9,7 +9,7 @@ hand-written bundle of Source/intermediate `.md` files.
 """
 
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -255,3 +255,71 @@ def test_leaf_imports_are_bounded() -> None:
         assert top_level in sys.stdlib_module_names, (
             f"event_dates.py imports non-stdlib target {target!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# #1349: event dates may carry a naive local time (ADR-0052)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_event_date_dated_keeps_the_time(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "sources" / "s1.md", event_date="'2026-07-14T10:00'")
+    metadata: dict[str, object] = {"provenance": ["sources/s1"]}
+
+    result = event_dates.resolve_event_date(bundle_dir, metadata)
+
+    assert result.state == "dated"
+    assert result.earliest == datetime(2026, 7, 14, 10, 0)
+    assert result.latest == datetime(2026, 7, 14, 10, 0)
+
+
+def test_two_times_on_one_day_are_multiple_with_ordered_bounds(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "sources" / "s1.md", event_date="'2026-07-14T15:34'")
+    _write_doc(bundle_dir / "sources" / "s2.md", event_date="'2026-07-14T11:03'")
+    metadata: dict[str, object] = {"provenance": ["sources/s1", "sources/s2"]}
+
+    result = event_dates.resolve_event_date(bundle_dir, metadata)
+
+    assert result.state == "multiple"
+    assert result.earliest == datetime(2026, 7, 14, 11, 3)
+    assert result.latest == datetime(2026, 7, 14, 15, 34)
+
+
+def test_a_date_and_a_date_time_on_one_day_are_multiple(tmp_path: Path) -> None:
+    """The conservative reading: two distinct values are never assumed to
+    describe one event. The bounds order the date-only value first."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "sources" / "s1.md", event_date="'2026-07-14T10:00'")
+    _write_doc(bundle_dir / "sources" / "s2.md", event_date="'2026-07-14'")
+    metadata: dict[str, object] = {"provenance": ["sources/s1", "sources/s2"]}
+
+    result = event_dates.resolve_event_date(bundle_dir, metadata)
+
+    assert result.state == "multiple"
+    assert result.earliest == date(2026, 7, 14)
+    assert result.latest == datetime(2026, 7, 14, 10, 0)
+
+
+def test_the_same_instant_at_two_precisions_of_seconds_is_dated(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "sources" / "s1.md", event_date="'2026-07-14T10:00'")
+    _write_doc(bundle_dir / "sources" / "s2.md", event_date="'2026-07-14T10:00:00'")
+    metadata: dict[str, object] = {"provenance": ["sources/s1", "sources/s2"]}
+
+    result = event_dates.resolve_event_date(bundle_dir, metadata)
+
+    assert result.state == "dated"
+
+
+def test_an_offset_makes_the_source_missing(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "sources" / "s1.md", event_date="'2026-07-14T10:00Z'")
+    metadata: dict[str, object] = {"provenance": ["sources/s1"]}
+
+    assert event_dates.resolve_event_date(bundle_dir, metadata).state == "missing"

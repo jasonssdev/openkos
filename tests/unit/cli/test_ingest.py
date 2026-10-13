@@ -2626,7 +2626,8 @@ def test_ingest_rejects_invalid_event_date_flag_before_any_write(
     assert result.exit_code == 2
     assert (
         "openkos ingest: --event-date must be a calendar date written "
-        "YYYY-MM-DD, got '2026-13-01'." in result.stderr
+        "YYYY-MM-DD, optionally with a local time (YYYY-MM-DDTHH:MM or "
+        "YYYY-MM-DDTHH:MM:SS), got '2026-13-01'." in result.stderr
     )
     assert _snapshot(tmp_path) == before
 
@@ -2635,8 +2636,34 @@ def test_ingest_rejects_invalid_event_date_flag_before_any_write(
     assert result.exit_code == 2
     assert (
         "openkos ingest: --event-date must be a calendar date written "
-        "YYYY-MM-DD, got 'not-a-date'." in result.stderr
+        "YYYY-MM-DD, optionally with a local time (YYYY-MM-DDTHH:MM or "
+        "YYYY-MM-DDTHH:MM:SS), got 'not-a-date'." in result.stderr
     )
+    assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-07-14T10:00Z",
+        "2026-07-14T10:00:00+02:00",
+        "2026-07-14T10:00:00.5",
+        "2026-07-14 10:00",
+    ],
+)
+def test_ingest_refuses_an_offset_or_fractional_event_date_before_any_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """#1349 (ADR-0052): only a naive local time is accepted."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--event-date", value])
+
+    assert result.exit_code == 2
+    assert "YYYY-MM-DDTHH:MM:SS" in result.stderr
     assert _snapshot(tmp_path) == before
 
 

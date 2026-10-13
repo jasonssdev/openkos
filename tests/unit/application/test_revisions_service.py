@@ -18,7 +18,7 @@ module-local `_ScriptedLLM`/`_RaisingLLM` double (byte-identical shape to
 import hashlib
 import json
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -1349,3 +1349,47 @@ def test_judge_revisions_a_bound_of_zero_makes_no_call_and_defers_everything(
     assert llm.calls == []
     assert outcome.results == ()
     assert outcome.deferred_by_bound == 4
+
+
+def test_resolve_decision_dates_reads_date_times_and_compares_after_parsing(
+    tmp_path: Path,
+) -> None:
+    """#1349 (ADR-0052): a date-time resolves as one value; two times on one
+    day, or a date and a date-time, are `multiple`; the same instant written
+    at two precisions of seconds is one `dated` value."""
+    layout = _workspace(tmp_path)
+    bundle = layout.bundle_dir
+    _write_doc(
+        bundle / "sources" / "t1.md", type_="Source", event_date="'2026-07-14T10:00'"
+    )
+    _write_doc(
+        bundle / "sources" / "t2.md", type_="Source", event_date="'2026-07-14T15:34'"
+    )
+    _write_doc(
+        bundle / "sources" / "t3.md", type_="Source", event_date="'2026-07-14T10:00:00'"
+    )
+    _write_doc(bundle / "sources" / "d1.md", type_="Source", event_date="2026-07-14")
+    _write_doc(
+        bundle / "sources" / "z1.md", type_="Source", event_date="'2026-07-14T10:00Z'"
+    )
+    cases = {
+        "decisions/one": ["sources/t1"],
+        "decisions/times": ["sources/t1", "sources/t2"],
+        "decisions/same": ["sources/t1", "sources/t3"],
+        "decisions/mixed": ["sources/t1", "sources/d1"],
+        "decisions/offset": ["sources/z1"],
+    }
+    for decision_id, provenance in cases.items():
+        _write_doc(bundle / f"{decision_id}.md", provenance=provenance)
+
+    result = revisions.resolve_decision_dates(layout, list(cases))
+
+    assert result["decisions/one"] == DecisionDate(
+        value=datetime(2026, 7, 14, 10, 0), state="dated"
+    )
+    assert result["decisions/times"] == DecisionDate(value=None, state="multiple")
+    assert result["decisions/same"] == DecisionDate(
+        value=datetime(2026, 7, 14, 10, 0), state="dated"
+    )
+    assert result["decisions/mixed"] == DecisionDate(value=None, state="multiple")
+    assert result["decisions/offset"] == DecisionDate(value=None, state="missing")

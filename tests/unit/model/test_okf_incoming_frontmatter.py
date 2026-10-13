@@ -268,7 +268,7 @@ class TestParseRoundTripGate:
             "d": date(2026, 7, 14),
             # naive on purpose: an unquoted `dt:` scalar resolves to a
             # naive `datetime` via PyYAML's implicit timestamp resolver.
-            "dt": datetime(2026, 7, 14, 10, 0),  # noqa: DTZ001
+            "dt": datetime(2026, 7, 14, 10, 0),
             "nested": {"k": "v"},
             "unicode": "héllo wörld 日本語",
         }

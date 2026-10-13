@@ -22,7 +22,6 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from datetime import date
 from typing import Final, Literal, cast
 
 from openkos.event_dates import ResolvedEventDate
@@ -168,12 +167,13 @@ def date_phrase(resolved: ResolvedEventDate) -> str:
     `"event date <D>"` for `dated`, `"event dates <earliest> to <latest>"`
     (ISO, earliest-to-latest) for `multiple`, and `"event date unknown"`
     for `missing`/`none-reached` — never the ingest/retrieval time, only a
-    resolved event date or an explicit unknown."""
+    resolved event date or an explicit unknown. A date-time keeps its time
+    (ADR-0052); a date-only value renders exactly as before."""
     if resolved.state == "dated":
-        return f"event date {cast(date, resolved.earliest).isoformat()}"
+        return f"event date {okf.format_event_when(cast(okf.EventWhen, resolved.earliest))}"
     if resolved.state == "multiple":
-        earliest = cast(date, resolved.earliest).isoformat()
-        latest = cast(date, resolved.latest).isoformat()
+        earliest = okf.format_event_when(cast(okf.EventWhen, resolved.earliest))
+        latest = okf.format_event_when(cast(okf.EventWhen, resolved.latest))
         return f"event dates {earliest} to {latest}"
     return "event date unknown"
 

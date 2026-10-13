@@ -39,7 +39,6 @@ import hashlib
 import sqlite3
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
@@ -227,7 +226,7 @@ def _resolve_one_decision_date(
     if not source_ids:
         return DecisionDate(value=None, state="none-reached")
 
-    values: set[date] = set()
+    values: set[okf.EventWhen] = set()
     for source_id in source_ids:
         text = files.get(f"{source_id}.md")
         if text is None:
@@ -709,8 +708,8 @@ def _revision_finding_from_verdict(
     defensively regardless."""
     date_0, date_1 = verdict.dates
     dates: tuple[str | None, str | None] = (
-        date_0.value.isoformat() if date_0.value is not None else None,
-        date_1.value.isoformat() if date_1.value is not None else None,
+        okf.format_event_when(date_0.value) if date_0.value is not None else None,
+        okf.format_event_when(date_1.value) if date_1.value is not None else None,
     )
     date_states = (date_0.state, date_1.state)
     return revision_findings.RevisionFinding(

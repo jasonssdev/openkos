@@ -26,10 +26,10 @@ directly, unchanged.
 argument rather than read off `plan`."""
 
 from collections import defaultdict
-from datetime import date
 from typing import Final, cast
 
 from openkos.application import revisions
+from openkos.model import okf
 from openkos.resolution import decision_revision
 from openkos.resolution.decision_revision import DecisionDate, RevisionVerdict
 from openkos.state.revision_findings import RevisionFinding
@@ -147,11 +147,11 @@ def _view_from_finding(finding: RevisionFinding) -> _FindingView:
     `RevisionVerdict.direction` delegates to (ADR-0025), so a served finding
     and a freshly judged one render identically."""
     date_a = DecisionDate(
-        value=date.fromisoformat(finding.dates[0]) if finding.dates[0] else None,
+        value=okf.parse_event_when(finding.dates[0]) if finding.dates[0] else None,
         state=finding.date_states[0],  # type: ignore[arg-type]
     )
     date_b = DecisionDate(
-        value=date.fromisoformat(finding.dates[1]) if finding.dates[1] else None,
+        value=okf.parse_event_when(finding.dates[1]) if finding.dates[1] else None,
         state=finding.date_states[1],  # type: ignore[arg-type]
     )
     direction = decision_revision.pair_direction(
@@ -171,10 +171,10 @@ def _view_from_finding(finding: RevisionFinding) -> _FindingView:
 
 def _view_from_verdict(verdict: RevisionVerdict) -> _FindingView:
     dates: tuple[str | None, str | None] = (
-        verdict.dates[0].value.isoformat()
+        okf.format_event_when(verdict.dates[0].value)
         if verdict.dates[0].value is not None
         else None,
-        verdict.dates[1].value.isoformat()
+        okf.format_event_when(verdict.dates[1].value)
         if verdict.dates[1].value is not None
         else None,
     )
