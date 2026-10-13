@@ -2013,7 +2013,11 @@ class ExtractionCallEstimate:
 
 
 def estimate_extraction_calls(
-    source_text: str, *, source_title: str, union_judge: bool = True
+    source_text: str,
+    *,
+    source_title: str,
+    union_judge: bool = True,
+    transcript_decisions: bool = False,
 ) -> ExtractionCallEstimate:
     """Estimate the ordinary-path model-call cost of extracting one source
     (#775): the answer `ingest`'s batch cost gate announces BEFORE any model
@@ -2031,7 +2035,14 @@ def estimate_extraction_calls(
         return ExtractionCallEstimate(calls=windows if chunked else 1, windows=windows)
     passes = windows if chunked else 2
     participant = 1 if meeting_shaped else 0
-    return ExtractionCallEstimate(calls=passes + participant + 1, windows=windows)
+    # #1348: the decision pass asks once per window (once for a short
+    # transcript), on the union path and a meeting-shaped source only.
+    decisions = (
+        (windows if chunked else 1) if transcript_decisions and meeting_shaped else 0
+    )
+    return ExtractionCallEstimate(
+        calls=passes + participant + decisions + 1, windows=windows
+    )
 
 
 ProgressHook = Callable[[str], None]
@@ -2471,7 +2482,8 @@ def _dedup_merged(results: list[ExtractionResult]) -> list[ExtractionResult]:
 
 OPTIONAL_CALL_REASK: Final = "reask"
 OPTIONAL_CALL_PARTICIPANT_CAPTURE: Final = "participant_capture"
-"""Stable identifiers for the two OPTIONAL extraction calls, named after the
+OPTIONAL_CALL_DECISION_PASS: Final = "decision_pass"  # noqa: S105 -- a call name, not a credential
+"""Stable identifiers for the OPTIONAL extraction calls, named after the
 pass each one is (#828), and the prefix of every entry those calls
 contribute to `ExtractionReport.optional_call_failures`.
 
@@ -3157,6 +3169,15 @@ class ExtractionReport:
     field reports the COST and the cost is the same either way. Since #828
     the two are told apart in `optional_call_failures`, not here -- see
     `reask_runs` for why that half of the earlier choice was reversed."""
+    decision_pass_added_titles: tuple[str, ...] = ()
+    """Titles of the Decisions the transcript decision pass (#1348) admitted
+    for this source, in admission order -- `()` when the key is off, the
+    source is not meeting-shaped, or the pass yielded nothing. When non-empty
+    these REPLACED the general pass's Decisions, and they are appended after
+    the judge and the backstop (they are already verified against their
+    window and bounded by `decision_pass.MAX_PASS_DECISIONS`), so a title
+    here is always among the retained objects. A failed pass is named in
+    `optional_call_failures`, not here."""
     participant_capture_added_titles: tuple[str, ...] = ()
     """Titles the scoped participant-capture pass (#668 design D6)
     CONTRIBUTED, in the pass's own reply order -- always `()` when the pass
@@ -3646,6 +3667,37 @@ def _select_with_progress(
     )
 
 
+def _run_decision_pass(
+    source_text: str,
+    *,
+    source_title: str,
+    enabled: bool,
+    meeting_shaped: bool,
+    llm: LLMBackend,
+    on_progress: ProgressHook | None,
+) -> "tuple[list[ExtractionResult], str | None]":
+    """The transcript decision pass (#1348) for one source: `([], None)` when
+    the key is off or the source is not meeting-shaped, else the verified pass
+    Decisions plus the first failure cause, if any.
+
+    Runs over the SAME windows the chunked extraction uses, or the whole text
+    when the source does not fan out. Imported lazily: `decision_pass`
+    imports this module for `ExtractionResult`, so a top-level import here
+    would be a cycle."""
+    if not (enabled and meeting_shaped):
+        return [], None
+    from openkos.extraction import decision_pass
+
+    windows = (
+        _chunk_lines(source_text)
+        if fans_out(source_text, source_title=source_title)
+        else [source_text]
+    )
+    _report(on_progress, "extracting decisions")
+    outcome = decision_pass.run_decision_pass(windows, llm)
+    return outcome.results, outcome.failure
+
+
 def extract_concept_union(
     source_text: str,
     *,
@@ -3653,6 +3705,7 @@ def extract_concept_union(
     llm: LLMBackend,
     on_progress: ProgressHook | None = None,
     concurrent: bool = False,
+    transcript_decisions: bool = False,
 ) -> ExtractionOutcome:
     """Union-of-runs + selector-judge orchestrator (design D1, #456): a
     SIBLING to `extract_concept` in this same module, replacing the blind
@@ -3743,6 +3796,16 @@ def extract_concept_union(
     failure contract both unchanged. Both entry points take it because
     `cli/main.py` picks between them on `union_judge`, so a lever wired into
     one only would leave whether it is active depending on that setting.
+
+    `transcript_decisions` (#1348, the config key of that name, off by
+    default) adds the transcript decision pass on a meeting-shaped source.
+    Its verified Decisions replace the general pass's Decisions for the
+    source and are appended AFTER the judge and the backstop: they are
+    already checked against their own window and bounded by their own cap, so
+    the judge (a title-only selector) does not re-select them and the
+    positional backstop cannot cut them. With no pass Decision -- the pass
+    off, empty, or failed -- the general pass's Decisions flow through
+    unchanged. The legacy `extract_concept` path does not take it.
     """
     # Computed ONCE for the whole union path (#673): the same single
     # `_is_meeting_shaped` verdict feeds framing-object enforcement here,
@@ -3900,6 +3963,21 @@ def extract_concept_union(
         provenance.setdefault(id(result), provenance_groups)
     provenance_groups += 1
 
+    # #1348: after every general-pass source of candidates (re-ask and
+    # participant capture included, so a Decision either added is replaced
+    # too) and before the judge. The pass's own Decisions are held out of
+    # `merged` and rejoin the retained list below.
+    pass_decisions, decision_pass_failure = _run_decision_pass(
+        source_text,
+        source_title=source_title,
+        enabled=transcript_decisions,
+        meeting_shaped=meeting_shaped,
+        llm=llm,
+        on_progress=on_progress,
+    )
+    if pass_decisions:
+        merged = [result for result in merged if result.type != "Decision"]
+
     # #828: both optional calls have now been spent-or-skipped, so their
     # causes are complete here -- ahead of the judge, and ahead of BOTH
     # return sites below, including the empty-union early return that also
@@ -3909,7 +3987,11 @@ def extract_concept_union(
     # severity to rank -- each entry is one bonus call that added nothing.
     optional_call_failures = tuple(
         failure
-        for failure in (reask_failure, participant_capture_failure)
+        for failure in (
+            reask_failure,
+            participant_capture_failure,
+            decision_pass_failure,
+        )
         if failure is not None
     )
 
@@ -3935,10 +4017,10 @@ def extract_concept_union(
         # least one" meaning. Skip the call; the report defaults already
         # say it all (`judge_status="skipped"` means "judge not run").
         return ExtractionOutcome(
-            objects=[],
+            objects=pass_decisions,
             report=ExtractionReport(
-                produced=0,
-                retained=0,
+                produced=len(pass_decisions),
+                retained=len(pass_decisions),
                 chunks=chunk_count,
                 skipped_chunks=skipped_chunks,
                 runs=run_count,
@@ -3946,6 +4028,7 @@ def extract_concept_union(
                 reask_added_titles=reask_added_titles,
                 wrong_language_dropped_titles=wrong_language_dropped,
                 recombined_dropped_titles=recombined_dropped,
+                decision_pass_added_titles=tuple(r.title for r in pass_decisions),
                 participant_capture_runs=participant_capture_runs,
                 participant_capture_added_titles=participant_capture_added_titles,
                 optional_call_failures=optional_call_failures,
@@ -4112,11 +4195,14 @@ def extract_concept_union(
     # and named no candidate -- a legible verdict, unlike an unusable reply --
     # and widening the skip to cover it is a separate decision.
     cap_applies = judge_status != "failed"
-    retained = kept[:_UNION_BACKSTOP] if cap_applies else kept
+    # #1348: the pass's Decisions join AFTER the backstop, so the positional
+    # cut never silently drops a verified Decision; they are bounded by their
+    # own cap and named in `decision_pass_added_titles`.
+    retained = (kept[:_UNION_BACKSTOP] if cap_applies else kept) + pass_decisions
     return ExtractionOutcome(
         objects=retained,
         report=ExtractionReport(
-            produced=len(kept),
+            produced=len(kept) + len(pass_decisions),
             retained=len(retained),
             discarded_titles=(
                 tuple(result.title for result in kept[_UNION_BACKSTOP:])
@@ -4128,6 +4214,7 @@ def extract_concept_union(
             runs=run_count,
             judge_status=judge_status,
             judged_out_titles=judged_out_titles,
+            decision_pass_added_titles=tuple(r.title for r in pass_decisions),
             pre_judge_dropped=pre_judge_dropped,
             pre_judge_dropped_titles=pre_judge_dropped_titles,
             reask_runs=reask_runs,

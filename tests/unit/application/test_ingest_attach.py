@@ -361,3 +361,94 @@ def test_builder_matches_only_the_same_type(tmp_path: Path) -> None:
     assert lookup.find("Concept", "Atlas") == ("concepts/atlas",)
     assert lookup.find("Project", "Atlas") == ()
     assert lookup.find("Place", "Atlas") == ()
+
+
+# --- transcript decision pass titles (#1348 T3, step 0) ----------------------
+
+
+def test_two_pass_decisions_on_one_subject_stay_two_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cross-meeting pair `openkos revisions` needs must survive staging:
+    an earlier meeting's Decision about the subject is NOT attached to by a
+    later meeting's DIFFERENT decision about it."""
+    from openkos.extraction import decision_pass as dp
+
+    earlier = dp.to_result(dp.DecisionItem("battery", "Use a solar cell.", "q"))
+    later = dp.to_result(dp.DecisionItem("battery", "Use a lithium cell.", "q"))
+    bundle = tmp_path / "bundle"
+    texts = {
+        "decisions/use-a-solar-cell": _existing_text(
+            type_="Decision", title=earlier.title, provenance=("sources/a",)
+        )
+    }
+    lookup = _lookup(
+        bundle,
+        texts,
+        ("Decision", normalize_key(earlier.title), "decisions/use-a-solar-cell"),
+    )
+
+    staged = _stage(tmp_path, monkeypatch, [later], lookup)
+
+    (plan,) = staged.plans
+    assert plan.attach_to is None
+    assert plan.slug != "use-a-solar-cell"
+
+
+def test_the_same_pass_decision_from_the_same_source_is_a_no_op(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.extraction import decision_pass as dp
+
+    item = dp.to_result(dp.DecisionItem("battery", "Use a solar cell.", "q"))
+    bundle = tmp_path / "bundle"
+    texts = {
+        "decisions/use-a-solar-cell": _existing_text(
+            type_="Decision", title=item.title, provenance=("sources/b",)
+        )
+    }
+    lookup = _lookup(
+        bundle,
+        texts,
+        ("Decision", normalize_key(item.title), "decisions/use-a-solar-cell"),
+    )
+
+    staged = _stage(tmp_path, monkeypatch, [item], lookup)
+
+    assert staged.plans == ()
+    assert [d.kind for d in staged.drops] == ["already-exists"]
+
+
+def test_the_key_reaches_the_union_extractor_and_only_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def spy(*args: Any, **kwargs: Any) -> concept_mod.ExtractionOutcome:
+        seen.append(kwargs)
+        return _extractor()(*args, **kwargs)
+
+    def legacy(*args: Any, **kwargs: Any) -> concept_mod.ExtractionOutcome:
+        assert "transcript_decisions" not in kwargs
+        return _extractor()(*args, **kwargs)
+
+    monkeypatch.setattr(application_ingest, "extract_concept_union", spy)
+    monkeypatch.setattr(application_ingest, "extract_concept", legacy)
+    (tmp_path / "openkos.yaml").write_text(
+        "model: x\ntranscript_decisions: true\n", encoding="utf-8"
+    )
+    for union_judge in (True, False):
+        application_ingest.stage_derived_objects(
+            raw_content="Some notes.",
+            source_title="Notes",
+            source_slug="b",
+            workspace_floor="private",
+            stamp_sensitivity="public",
+            timestamp="2026-02-01T00:00:00Z",
+            bundle_dir=tmp_path / "bundle",
+            llm=_NoLLM(),
+            cfg=config.read_config(tmp_path),
+            union_judge=union_judge,
+        )
+
+    assert [kw["transcript_decisions"] for kw in seen] == [True]

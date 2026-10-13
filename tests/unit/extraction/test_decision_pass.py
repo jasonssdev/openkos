@@ -1,5 +1,5 @@
 """The transcript decision pass core (#1348): pure admission rules plus one
-LLM-backed function. Inert -- nothing in `concept.py` calls it yet."""
+LLM-backed function."""
 
 from collections.abc import Sequence
 
@@ -8,6 +8,7 @@ import pytest
 from openkos.extraction import decision_pass as dp
 from openkos.llm.base import BackendUnavailable, Message
 from openkos.resolution.decision_subject import quoted_verbatim
+from openkos.resolution.normalize import normalize_key
 
 WINDOW_A = (
     "Alice: Which chip should we use?\n"
@@ -48,8 +49,8 @@ def test_valid_item_is_admitted_as_a_decision() -> None:
     result = dp.run_decision_pass([WINDOW_A], _FakeLLM([reply]))
     assert result.failure is None
     assert [r.type for r in result.results] == ["Decision"]
-    assert result.results[0].title == "chip"
-    assert result.results[0].description == "Use the regular chip."
+    assert result.results[0].title == "Use the regular chip"
+    assert result.results[0].description == "chip: Use the regular chip."
 
 
 def test_non_verbatim_evidence_is_dropped() -> None:
@@ -97,7 +98,7 @@ def test_one_failed_window_does_not_lose_the_others() -> None:
     good = "[" + _item("case", "Plastic case.", "the case will be plastic") + "]"
     llm = _FakeLLM([BackendUnavailable("x"), good])
     result = dp.run_decision_pass([WINDOW_A, WINDOW_B], llm)
-    assert [r.title for r in result.results] == ["case"]
+    assert [r.title for r in result.results] == ["Plastic case"]
     assert result.failure == "decision_pass: BackendUnavailable"
 
 
@@ -107,7 +108,7 @@ def test_dedup_by_normalized_subject_first_wins_across_windows() -> None:
     )
     second = "[" + _item("remote case", "Plastic.", "the case will be plastic") + "]"
     result = dp.run_decision_pass([WINDOW_A, WINDOW_B], _FakeLLM([first, second]))
-    assert [r.description for r in result.results] == ["Wood."]
+    assert [r.description for r in result.results] == ["Remote Case: Wood."]
 
 
 def test_cap_bounds_pass_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,7 +118,7 @@ def test_cap_bounds_pass_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
         for n in range(5)
     )
     result = dp.run_decision_pass([WINDOW_A], _FakeLLM([f"[{items}]"]))
-    assert [r.title for r in result.results] == ["topic 0", "topic 1"]
+    assert [r.title for r in result.results] == ["Value 0", "Value 1"]
 
 
 def test_body_is_value_plus_quoted_evidence_and_nothing_else() -> None:
@@ -159,3 +160,31 @@ def test_each_call_carries_only_its_own_window() -> None:
 )
 def test_verbatim_matches_resolution_quoted_verbatim(quote: str, text: str) -> None:
     assert dp.quoted_verbatim(quote, text) == quoted_verbatim(quote, text)
+
+
+def test_two_decisions_on_one_subject_get_distinct_titles() -> None:
+    """Step 0 of T3: ingest's attach step merges two Decisions whose
+    normalized titles match, which would erase the cross-meeting pair
+    `openkos revisions` needs. The title therefore carries the VALUE."""
+    first = dp.to_result(dp.DecisionItem("battery", "Use a solar cell.", "q"))
+    later = dp.to_result(dp.DecisionItem("battery", "Use a lithium cell.", "q"))
+    assert normalize_key(first.title) != normalize_key(later.title)
+
+
+def test_the_same_decision_keeps_the_same_title_across_runs() -> None:
+    one = dp.to_result(dp.DecisionItem("battery", "Use a solar cell.", "q"))
+    two = dp.to_result(dp.DecisionItem("Battery", "Use a solar cell!", "q"))
+    assert normalize_key(one.title) == normalize_key(two.title)
+
+
+def test_the_title_is_bounded_at_a_word_boundary() -> None:
+    value = "Adopt " + "very " * 60 + "long wording."
+    title = dp.to_result(dp.DecisionItem("s", value, "q")).title
+    assert len(title) <= dp.MAX_TITLE_CHARS
+    assert value.startswith(title)
+    assert not title.endswith(" ")
+
+
+def test_the_subject_stays_available_in_the_description() -> None:
+    result = dp.to_result(dp.DecisionItem("battery type", "Use solar.", "q"))
+    assert result.description.startswith("battery type")

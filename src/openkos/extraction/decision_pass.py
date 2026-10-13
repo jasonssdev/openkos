@@ -9,8 +9,9 @@ decided, plus one verbatim evidence line) instead.
 
 Shaped like the participant capture (`concept._capture_further_participants`):
 an optional extra call whose own failure degrades to "found nothing" and is
-reported, never raised. The core here is INERT -- no extraction path calls it
-yet; wiring and the `transcript_decisions` config key land separately.
+reported, never raised. `concept.extract_concept_union` calls it, lazily,
+when the `transcript_decisions` config key is on and the source is
+meeting-shaped.
 
 Admission is fail-closed and deterministic: an item survives only with a
 non-empty subject, value and evidence AND evidence quoted verbatim in the
@@ -25,13 +26,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
-from openkos.extraction.concept import ExtractionResult
+from openkos.extraction.concept import OPTIONAL_CALL_DECISION_PASS, ExtractionResult
 from openkos.llm import parsing
 from openkos.llm.base import BackendError, LLMBackend, Message
 from openkos.llm.prompts import load_prompt
 
-CALL_NAME: Final = "decision_pass"
+CALL_NAME: Final = OPTIONAL_CALL_DECISION_PASS
 """The name this pass reports its outcome under."""
+
+MAX_TITLE_CHARS: Final = 100
+"""Bound on a Decision title, cut at a word boundary: the title becomes the
+file name, and a value is a sentence the model may let run on."""
 
 MAX_PASS_DECISIONS: int = 25
 """Per-source bound on pass Decisions, applied after deduplication. UNMEASURED
@@ -146,12 +151,33 @@ def compose_body(item: DecisionItem) -> str:
     return f"{item.value}\n\n> {item.evidence}"
 
 
+def compose_title(item: DecisionItem) -> str:
+    """The value as a short statement, without its closing punctuation.
+
+    The title is the identity, not a label. Ingest attaches a candidate to an
+    existing concept of the same type and normalized title, and the file
+    name is derived from it. A title carrying only the SUBJECT would give two
+    different decisions about one subject -- say two meetings that settle the
+    battery differently -- the same identity, so the later one would be
+    merged into the earlier and the pair `openkos revisions` pairs would
+    never exist. The value distinguishes them; the same decision stated again
+    keeps its title and stays idempotent."""
+    title = item.value.rstrip(_NEEDLE_TRAILING_PUNCTUATION + " ")
+    if len(title) > MAX_TITLE_CHARS:
+        cut = title[:MAX_TITLE_CHARS]
+        # Cut at the last space when one exists past the first word.
+        title = (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip()
+    return title or item.subject
+
+
 def to_result(item: DecisionItem) -> ExtractionResult:
-    """A `Decision` candidate: title from the subject, description the value."""
+    """A `Decision` candidate: title from the value, description
+    `<subject>: <value>`, so the subject stays available to readers and to
+    retrieval without being the identity."""
     return ExtractionResult(
         type="Decision",
-        title=item.subject,
-        description=item.value,
+        title=compose_title(item),
+        description=f"{item.subject}: {item.value}",
         body=compose_body(item),
     )
 

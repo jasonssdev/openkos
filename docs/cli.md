@@ -1012,6 +1012,8 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # labelled history (default off, unmeasured)
 # attach_at_ingest: false # turn OFF revising an existing concept at ingest
                           # (default on); false restores `-2` copies
+# transcript_decisions: true  # on a meeting-shaped source, add a decision pass
+                          # (default off, unmeasured, experimental)
 # concurrent_extraction: true  # send chunk windows 2-at-a-time (default off);
                           # needs OLLAMA_NUM_PARALLEL>=2 on the server
 # type_sensitivity_defaults:  # per-type birth floor: offset above default_sensitivity
@@ -1151,6 +1153,14 @@ A value that is absent or explicitly null falls back to the default. A non-boole
 ### `attach_at_ingest`
 
 Whether `ingest` revises an existing concept when a new candidate has the same type and normalized title (`Event` and `Person` excepted), instead of writing a numeric-suffixed copy. Default `true`, on every ingest path including the unattended `daemon` watch. Set it to `false` to restore the copies; nothing already on disk changes, and an attach already made is undone by reverting the ingest commit that carries it. The behavior is described under `ingest` above. Absent or explicitly null falls back to the default; a non-boolean value is refused when the config is read, on the same strict boolean check `union_judge` uses.
+
+### `transcript_decisions`
+
+Whether `ingest` runs a dedicated decision pass over a meeting-shaped source. Default `false`, **experimental and unmeasured**: no harness has yet scored its recall or its cost on real transcripts, so it is not recommended for enabling.
+
+The general extraction pass tends to return a few topic-bundle Decisions on a raw transcript. With the key on, each chunk window of a meeting-shaped source (the whole text when it is short) is also asked one narrow question: which decisions the participants actually reached. An answer is `{subject, value, evidence}`, and it survives only when its evidence is found verbatim in the window that produced it. A surviving item becomes a `Decision` whose title is the value (so two different decisions about the same subject stay two objects), whose description names the subject, and whose body is the value plus the quoted evidence. When the pass yields at least one Decision for a source, those replace the general pass's Decisions for that source; otherwise the general pass's Decisions are kept. A failed pass is reported as an optional-call failure and never aborts the ingest.
+
+It costs one extra model call per window and applies to the union extractor only (`union_judge`). Off restores the previous path byte-for-byte. Absent or explicitly null falls back to the default; a non-boolean value is refused when the config is read, on the same strict boolean check `union_judge` uses.
 
 ### `concurrent_extraction`
 

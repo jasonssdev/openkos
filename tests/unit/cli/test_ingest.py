@@ -10,6 +10,7 @@ transactional -- there is no rollback across the sequence (D5 retreat);
 recovery from a partial write is via git, not an in-process undo.
 """
 
+import dataclasses
 import json
 import os
 from collections.abc import Sequence
@@ -1549,6 +1550,28 @@ def test_estimate_bills_an_unreadable_file_at_the_unchunked_cost(
 
     assert estimate.calls == 3
     assert estimate.skipped_files == 0
+
+
+def test_batch_cost_gate_bills_the_decision_pass_only_when_the_key_is_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1348: one extra call for a short meeting-shaped transcript when
+    `transcript_decisions` is on, and not one call otherwise."""
+    _init_workspace(tmp_path, monkeypatch)
+    transcript = tmp_path / "weekly meeting.txt"
+    transcript.write_text(
+        "Ana: hello team\nBeto: hi\nCaro: hey\n" * 6, encoding="utf-8"
+    )
+    layout = config.WorkspaceLayout(tmp_path)
+    cfg = config.read_config(tmp_path)
+    on = dataclasses.replace(cfg, transcript_decisions=True)
+
+    def calls(c: config.Config) -> int:
+        return main._estimate_batch_calls(
+            [transcript], layout, c, include_confidential=False, re_extract=False
+        ).calls
+
+    assert calls(on) == calls(cfg) + 1
 
 
 def test_batch_cost_gate_decline_writes_nothing(
