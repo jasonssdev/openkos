@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0052: A Source's event_date may carry a naive local time, and direction compares at the finest precision both sides carry"
 description: The event_date key widens from a calendar date to a calendar date or a naive local date-time, so two Decisions made on one day can be directed; an older engine reads a date-time as malformed.
-status: Proposed
+status: Accepted
 date: 2026-10-13
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0052: A Source's event_date may carry a naive local time, and direction compares at the finest precision both sides carry
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-13
 
 ## Context
