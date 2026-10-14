@@ -27,9 +27,20 @@ from pathlib import Path
 from typing import Literal
 
 from openkos import config
-from openkos.application import commit_phase, duplicates_service
+from openkos.application import (
+    catalog_delta,
+    commit_phase,
+    curate_queue,
+    duplicates_service,
+    merge_service,
+)
+from openkos.application import drift as application_drift
+from openkos.application import lifecycle as application_lifecycle
 from openkos.application.lock_wait import CommitSection
+from openkos.application.write_gate import DriftDetected, WriteFailed
 from openkos.model import okf
+from openkos.resolution.adjudication import Verdict
+from openkos.resolution.candidates import CandidateGroup
 from openkos.state import pending_queue as pq
 
 
@@ -120,6 +131,13 @@ def _write_identity_ruling(
     )
 
 
+def _keep_prepared(
+    root: Path, prepared: application_lifecycle.PreparedMerge
+) -> application_lifecycle.PreparedMerge:
+    """The default reconciliation port: leave the plan as previewed."""
+    return prepared
+
+
 @dataclass(frozen=True)
 class DecisionPorts:
     """The effects the service sequences but does not own."""
@@ -141,6 +159,13 @@ class DecisionPorts:
     """Writes the keep-distinct ruling and returns its workspace-relative
     path. A port, not a direct call, so an adapter that already routes this
     write through its own seam keeps doing so."""
+
+    reconcile: Callable[
+        [Path, application_lifecycle.PreparedMerge], application_lifecycle.PreparedMerge
+    ] = _keep_prepared
+    """The body-reconciliation pass of an identity merge: the only place a
+    model may be reached. Called only when the preview reports one planned,
+    after the caller chose to commit and before the commit section opens."""
 
 
 class DecisionObserver:
@@ -226,3 +251,270 @@ def commit_keep_distinct(
         if isinstance(outcome, NotApplied):
             observer.keep_distinct_unrecorded(members, outcome.detail or "")
         return outcome
+
+
+# -- identity merge -------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class MergeDecisionPreview:
+    """What committing one identity merge would do, computed without writing.
+
+    `prepared` is the pure plan and the drift baselines; `reconcile_planned`
+    says whether the commit would call the reconciliation port (the one
+    predicate, `lifecycle.reconcile_planned`). `group`, `no_reconcile` and
+    `reconcile` are how this preview was made, kept so a token commit can
+    re-preview from current bytes under the same inputs."""
+
+    prepared: application_lifecycle.PreparedMerge
+    member_ids: tuple[str, ...]
+    decision_key: str
+    reconcile_planned: bool
+    cross_source_same_pair: bool
+    cross_type_concern: str | None
+    survivor_criterion: str
+    group: CandidateGroup
+    no_reconcile: bool
+    reconcile: bool
+
+
+def preview_merge(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    group: CandidateGroup,
+    *,
+    verdict: Verdict | None,
+    ordered_pair: tuple[str, str],
+    survivor_criterion: str | None = None,
+    no_reconcile: bool,
+    reconcile: bool,
+) -> MergeDecisionPreview | NotApplied:
+    """Preview merging `group`'s pair, survivor first as pinned by `ordered_pair`.
+
+    Writes nothing and calls no model. Only a persisted SAME judgment is
+    mergeable: `verdict` of `None`, DIFFERENT or UNCERTAIN is the RETURNED
+    `NotApplied("not_mergeable")`, never a raise. A member that no longer
+    resolves is `NotApplied("member_missing")`; a plan that cannot be built
+    raises `WriteFailed`. `survivor_criterion` is the caller's, when it already
+    stated one; otherwise it is derived."""
+    if verdict is not Verdict.SAME:
+        return NotApplied(Action.MERGE, "not_mergeable")
+    survivor_id, absorbed_id = ordered_pair
+    try:
+        prepared = application_lifecycle.prepare_one_merge(
+            root,
+            layout,
+            layout.bundle_dir / "index.md",
+            layout.bundle_dir / "log.md",
+            group,
+            ordered_pair=ordered_pair,
+        )
+    except (OSError, ValueError) as exc:
+        raise WriteFailed("merge", (survivor_id, absorbed_id), str(exc)) from exc
+    if prepared is None:
+        return NotApplied(Action.MERGE, "member_missing")
+    if survivor_criterion is None:
+        survivor_criterion = application_lifecycle.ordered_merge_pair(
+            layout.bundle_dir, group.member_ids
+        )[2]
+    return MergeDecisionPreview(
+        prepared=prepared,
+        member_ids=tuple(group.member_ids),
+        decision_key=identity_decision_key(group.member_ids),
+        reconcile_planned=application_lifecycle.reconcile_planned(
+            prepared, no_reconcile=no_reconcile, reconcile=reconcile
+        ),
+        cross_source_same_pair=application_lifecycle.cross_source_same_pair(
+            layout.bundle_dir, group.member_ids
+        ),
+        cross_type_concern=application_lifecycle.cross_type_concern(
+            layout.bundle_dir,
+            (prepared.survivor_canonical, prepared.absorbed_canonical),
+        ),
+        survivor_criterion=survivor_criterion,
+        group=group,
+        no_reconcile=no_reconcile,
+        reconcile=reconcile,
+    )
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _relative(layout: config.WorkspaceLayout, path: Path) -> str:
+    """`path` relative to the bundle, or as given when it lies outside it."""
+    try:
+        return path.relative_to(layout.bundle_dir).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _merge_content_lines(
+    layout: config.WorkspaceLayout, prepared: application_lifecycle.PreparedMerge
+) -> list[str]:
+    """One `"<role>\t<path>\t<sha256>"` line per document the plan rests on:
+    every write target (the absorbed file as `delete`), every document the
+    scan only read, and the name of every document the scan could see (so a
+    document appearing or vanishing moves the digest too)."""
+    absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+    lines = [
+        f"{'delete' if path == absorbed_path else 'write'}\t"
+        f"{_relative(layout, path)}\t{_sha256(data)}"
+        for path, data in application_lifecycle.merge_drift_targets(
+            layout, prepared, include_catalog=False
+        ).items()
+    ]
+    dependencies = prepared.read_dependencies
+    lines.extend(
+        f"read\t{_relative(layout, path)}\t{_sha256(data)}"
+        for path, data in dependencies.present.items()
+    )
+    lines.extend(
+        f"document\t{_relative(layout, path)}\t-"
+        for path in dependencies.documents or ()
+    )
+    return sorted(lines)
+
+
+def version_of(
+    preview: MergeDecisionPreview,
+    *,
+    layout: config.WorkspaceLayout,
+    payload_digest: str | None,
+) -> DecisionVersion:
+    """The version a stateless caller commits `preview` against.
+
+    `payload_digest` is the open queue row's, or `None` when no row backs the
+    item. The CLI never calls this, so its walk pays no hashing cost."""
+    content = "\n".join(_merge_content_lines(layout, preview.prepared))
+    return DecisionVersion(
+        decision_key=preview.decision_key,
+        payload_digest=payload_digest,
+        content_digest=_sha256(content.encode("utf-8")),
+    )
+
+
+def _repreview(
+    root: Path, layout: config.WorkspaceLayout, preview: MergeDecisionPreview
+) -> MergeDecisionPreview | NotApplied:
+    """The same merge, re-planned from the bytes on disk now."""
+    return preview_merge(
+        root,
+        layout,
+        preview.group,
+        verdict=Verdict.SAME,
+        ordered_pair=(
+            preview.prepared.survivor_canonical,
+            preview.prepared.absorbed_canonical,
+        ),
+        survivor_criterion=preview.survivor_criterion,
+        no_reconcile=preview.no_reconcile,
+        reconcile=preview.reconcile,
+    )
+
+
+def _stale_row(
+    layout: config.WorkspaceLayout, expected: DecisionVersion
+) -> Stale | None:
+    """Whether the queue row `expected` was issued for is still the open one.
+    Called INSIDE the commit section, where every queue writer also enters,
+    so the check and the write cannot interleave with a producer."""
+    row = (
+        None
+        if expected.payload_digest is None
+        else curate_queue.open_row_by_key(layout, expected.decision_key)
+    )
+    if row is None:
+        return Stale(expected.decision_key, "row_resolved")
+    if row.item.payload_digest != expected.payload_digest:
+        return Stale(expected.decision_key, "row_superseded")
+    return None
+
+
+def commit_merge_decision(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    preview: MergeDecisionPreview,
+    *,
+    ports: DecisionPorts,
+    observer: DecisionObserver,
+    surface: str,
+    expected: DecisionVersion | None = None,
+) -> ApplyOutcome:
+    """Commit one previewed identity merge.
+
+    With `expected=None` (the CLI) the drift guard compares against the
+    baselines read at preview, so nothing is re-previewed. With a token, the
+    merge is re-previewed from current bytes first; a changed
+    `content_digest` returns `Stale("content_changed")` before any model call
+    or section, and inside the section the open row is re-read by
+    `decision_key` (`row_resolved`, `row_superseded`).
+
+    Order: the reconciliation port (only when planned), then the commit
+    section, inside which -- in `curate`'s order, not `merge_concepts'` --
+    members present, target drift, catalog recompose, read drift, then the
+    write and its auto-commit. A vanished member is RETURNED
+    (`NotApplied("member_missing")`, announced through the observer inside the
+    section); a drift of any kind is RAISED as `DriftDetected`, whose message
+    names the check and carries `surface`; a failing write is `WriteFailed`.
+    Every failed check writes nothing."""
+    if expected is not None:
+        refreshed = _repreview(root, layout, preview)
+        if isinstance(refreshed, NotApplied):
+            return refreshed
+        if (
+            version_of(refreshed, layout=layout, payload_digest=None).content_digest
+            != expected.content_digest
+        ):
+            return Stale(expected.decision_key, "content_changed")
+        preview = refreshed
+
+    prepared = preview.prepared
+    if preview.reconcile_planned:
+        prepared = ports.reconcile(root, prepared)
+
+    absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+    survivor_path = layout.bundle_dir / f"{prepared.survivor_canonical}.md"
+    with ports.commit_section():
+        if expected is not None and (stale := _stale_row(layout, expected)):
+            return stale
+        if not (survivor_path.exists() and absorbed_path.exists()):
+            observer.merge_member_missing(
+                prepared.survivor_canonical, prepared.absorbed_canonical
+            )
+            return NotApplied(Action.MERGE, "member_missing")
+        # `index.md`/`log.md` are re-composed over their current bytes below,
+        # not guarded: every verb appends to them.
+        drift = application_drift.describe_drift(
+            layout,
+            application_lifecycle.merge_drift_targets(
+                layout, prepared, include_catalog=False
+            ),
+            surface,
+            deletes=frozenset({absorbed_path}),
+        )
+        if drift is not None:
+            raise DriftDetected(drift)
+        try:
+            prepared = application_lifecycle.recompose_merge_catalog(
+                layout, prepared, verb=surface
+            )
+        except catalog_delta.CatalogRecomposeError as exc:
+            raise DriftDetected(str(exc)) from exc
+        read_drift = commit_phase.describe_read_drift(
+            layout, prepared.read_dependencies, surface
+        )
+        if read_drift is not None:
+            raise DriftDetected(read_drift)
+        try:
+            commit_sha = merge_service.commit_merge(
+                root, layout, prepared, autocommit=ports.autocommit
+            )
+        except (OSError, ValueError) as exc:
+            raise WriteFailed(
+                "merge",
+                (prepared.survivor_canonical, prepared.absorbed_canonical),
+                str(exc),
+            ) from exc
+    return Applied(preview.decision_key, Action.MERGE, commit_sha)

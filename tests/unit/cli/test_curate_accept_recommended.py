@@ -13,8 +13,8 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from openkos.application import auto_merge
-from openkos.cli import curate
+from openkos.application import auto_merge, curate_decisions
+from openkos.application import lifecycle as application_lifecycle
 from openkos.cli.main import app
 from openkos.llm.base import InstalledModel
 from openkos.resolution.adjudication import Verdict
@@ -66,13 +66,15 @@ def test_the_walk_writes_each_accepted_item_through_the_shared_helper(
 ) -> None:
     root, _judge = _walk_only_workspace(tmp_path, monkeypatch)
     calls: list[tuple[str, str]] = []
-    real = curate._identity_write_one
+    real = curate_decisions.commit_merge_decision
 
-    def _spy(ctx: curate.CurateContext, prepared: Any) -> bool:
-        calls.append((prepared.survivor_canonical, prepared.absorbed_canonical))
-        return real(ctx, prepared)
+    def _spy(root: Path, layout: Any, preview: Any, **kwargs: Any) -> Any:
+        calls.append(
+            (preview.prepared.survivor_canonical, preview.prepared.absorbed_canonical)
+        )
+        return real(root, layout, preview, **kwargs)
 
-    monkeypatch.setattr(curate, "_identity_write_one", _spy)
+    monkeypatch.setattr(curate_decisions, "commit_merge_decision", _spy)
     monkeypatch.setattr("typer.prompt", lambda *a, **k: "y")
     before = _git(root, "rev-list", "--count", "HEAD").strip()
 
@@ -225,6 +227,63 @@ def test_yes_accepts_every_listed_item_with_one_commit_per_merge(
     ]
     assert len(committed) == 2
     assert "Identity: applied 2, skipped 0." in result.stdout.splitlines()
+
+
+def test_a_plan_that_cannot_be_built_stops_the_run_with_the_merge_failure_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _judge = _two_workspace(tmp_path, monkeypatch)
+    _script(monkeypatch, ["y"])
+
+    def _no_plan(*args: object, **kwargs: object) -> object:
+        raise ValueError("no plan")
+
+    monkeypatch.setattr("openkos.application.lifecycle.prepare_one_merge", _no_plan)
+    before = _commit_count(root)
+
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 1
+    failed = [
+        line
+        for line in result.stderr.splitlines()
+        if line.startswith("openkos curate: Identity: failed while merging ")
+    ]
+    assert failed == [
+        "openkos curate: Identity: failed while merging concepts/foo-2 into "
+        "concepts/foo -- no plan."
+    ]
+    assert _present(root, "concepts/foo-2")
+    assert _present(root, "concepts/bar-2")
+    assert _commit_count(root) == before
+
+
+def test_a_member_that_no_longer_resolves_is_left_for_the_walk_to_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _judge = _two_workspace(tmp_path, monkeypatch)
+    asked = _script(monkeypatch, ["y", "s"])
+    real = application_lifecycle.prepare_one_merge
+    calls: list[tuple[str, ...]] = []
+
+    def _first_unresolved(*args: Any, **kwargs: Any) -> Any:
+        calls.append(tuple(args[4].member_ids))
+        return None if len(calls) == 1 else real(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "openkos.application.lifecycle.prepare_one_merge", _first_unresolved
+    )
+    before = _commit_count(root)
+
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 0, result.stderr
+    assert calls[0] == _FOO.member_ids  # the first offered item is skipped...
+    assert _present(root, "concepts/foo-2")
+    assert not _present(root, "concepts/bar-2")  # ...the next one still merges
+    assert _commit_count(root) == before + 1
+    # The skipped group was not covered by the bulk answer: the walk offers it.
+    assert _walk_prompts(asked) == ["Merge concepts/foo-2 into concepts/foo"]
 
 
 @pytest.mark.parametrize("answer", ["n", "N", "no", ""])
