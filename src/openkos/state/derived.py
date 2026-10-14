@@ -83,7 +83,7 @@ def is_lock_contention(exc: sqlite3.OperationalError) -> bool:
     differently (reindex-lock-handling design, decision 1).
 
     `sqlite_errorcode` is populated by the `sqlite3` module on the errors IT
-    raises; on Python 3.13 it is also reliably settable on a manually
+    raises; on Python 3.14 it is also reliably settable on a manually
     constructed `OperationalError` (confirmed by
     `tests/unit/state/test_derived.py`'s spike test), which is how tests
     inject a lock-contention failure at any write surface without a real

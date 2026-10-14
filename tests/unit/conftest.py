@@ -10,7 +10,7 @@ OperationalError` instances shaped like real SQLite failures, for injecting
 at any write surface (store open, `upsert_many`/commit, `BEGIN IMMEDIATE`)
 without needing a genuine concurrent second connection holding a lock.
 Manual `sqlite_errorcode` assignment is confirmed reliable on this
-interpreter (Python 3.13) by
+interpreter (Python 3.14) by
 `tests/unit/state/test_derived.py::test_sqlite_operational_error_supports_manual_errorcode_assignment`
 (task 1.1's decision test) -- if that assumption ever regresses on a future
 interpreter, the documented fallback is a real 2nd-connection `BEGIN
