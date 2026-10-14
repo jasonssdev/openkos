@@ -90,3 +90,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0049](0049-structural-identity-class-merges-under-measured-constants.md) | The structural base/-N Identity class merges without prior consent under measured constants, one commit per run | Accepted | 2026-10-05 |
 | [0050](0050-okf-import-adopts-a-foreign-bundle-under-its-own-namespace.md) | OKF import adopts a foreign bundle under its own namespace, labelled fail-closed, anchored per label, and outside automatic identity | Accepted | 2026-10-05 |
 | [0051](0051-lexical-channel-stems-and-a-tokenizer-change-is-a-schema-bump.md) | The lexical channel stems with the porter tokenizer, and a tokenizer change is a schema bump that reaches existing workspaces | Accepted | 2026-10-06 |
+| [0052](0052-event-date-accepts-a-local-time.md) | A Source's event_date may carry a naive local time, and direction compares at the finest precision both sides carry | Proposed | 2026-10-13 |
