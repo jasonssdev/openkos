@@ -21,7 +21,7 @@ from datetime import date, datetime
 from typing import Final
 
 _FLAG_DATE_RE: Final = re.compile(
-    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}(?::[0-9]{2})?)?"
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?)?"
 )
 """The `--event-date` flag's shape prefilter: `YYYY-MM-DD`, optionally
 followed by `THH:MM` or `THH:MM:SS` (ADR-0052). ASCII `[0-9]` only -- never
@@ -29,7 +29,9 @@ followed by `THH:MM` or `THH:MM:SS` (ADR-0052). ASCII `[0-9]` only -- never
 because since Python 3.11 `date.fromisoformat` and `datetime.fromisoformat`
 also accept ISO-8601 Basic format (`20260714`), week dates (`2026-W28-2`),
 offsets, fractional seconds and a space separator, none of which this flag's
-contract allows."""
+contract allows. The time ranges are bounded here (hour 00-23, minute and
+second 00-59) because Python 3.14's `datetime.fromisoformat` also accepts
+`T24:00` as the next day's midnight."""
 
 _NAME_TOKEN_RE: Final = re.compile(r"(?<!\d)([0-9]{4}-[0-9]{2}-[0-9]{2})(?!\d)")
 """A `YYYY-MM-DD`-shaped token in a file name, bounded on both sides by a

@@ -305,13 +305,15 @@ every precision test in the engine is `isinstance(x, datetime)`, and a
 other. Callers that need an order go through `event_dates.at_common_precision`."""
 
 _EVENT_WHEN_RE: Final = re.compile(
-    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}(?::[0-9]{2})?)?"
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?)?"
 )
 """The strict `event_date` text shape: `YYYY-MM-DD`, optionally followed by
 `THH:MM` or `THH:MM:SS`. ASCII `[0-9]` only, and a prefilter for the same
 reason `source_date`'s is: `date.fromisoformat` / `datetime.fromisoformat`
 alone also accept Basic format, week dates, offsets, fractions and a space
-separator, none of which this key allows."""
+separator, none of which this key allows. The time ranges are bounded here
+(hour 00-23, minute and second 00-59) because Python 3.14's
+`datetime.fromisoformat` also accepts `T24:00` as the next day's midnight."""
 
 
 def parse_event_when(text: str) -> EventWhen | None:
