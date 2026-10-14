@@ -16,6 +16,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-10-14
+
+Two additions for meeting transcripts. A Source's `event_date` can now carry a local time of day, so `revisions` can order two Decisions made on the same day. And an opt-in decision pass, `transcript_decisions`, extracts one Decision per decision actually reached in a meeting, each with a verbatim evidence line. With the new key left off and every `event_date` date-only, ingest output is identical to 0.5.4.
+
+### Added
+
+- `event_date` accepts a naive local date-time (`YYYY-MM-DDTHH:MM[:SS]`) as well as a date, through `ingest --event-date` and a stored Source value. When both sides of a pair carry a time, `revisions` directs same-day Decisions by it; when either side is date-only, dates are compared exactly as before. An offset or `Z` is refused (exit `2`), and an older engine reads a value with a time as malformed and treats that Source as undated (ADR-0052, #1349).
+- `transcript_decisions` (default `false`): on a meeting-shaped source, each chunk window is asked which decisions the participants reached; an answer survives only when its evidence is quoted verbatim in that window, and the surviving Decisions replace the general pass's topic-bundle Decisions for that source. It costs one extra model call per window and applies to `union_judge` only. A pre-registered measurement on AMI meeting transcripts (`evals/transcript_decisions/`) found it recovers about three times as many hand-annotated decisions at high precision, short of the bar for turning it on by default (#1348).
+- A decision-pass window whose reply is unusable, or whose call fails for any reason other than an unreachable backend, is asked once more; a failure is reported only when the retry also fails. In the registered run this cut window failures from 12 to 1 in 60 meeting-runs (#1361).
+
 ## [0.5.4] - 2026-10-07
 
 One addition: `openkos query --json`, a machine-readable report of how an answer was built, for callers that treat `query` as a black box and need to tell what was retrieved from what the model did with it. Nothing about how answers are produced changes, and without the flag the output is identical to 0.5.3.
@@ -3628,7 +3638,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/jasonssdev/openkos/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/jasonssdev/openkos/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/jasonssdev/openkos/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/jasonssdev/openkos/compare/v0.5.1...v0.5.2
