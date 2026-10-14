@@ -12,8 +12,11 @@ thesis's held-out data on a tuning decision. Anything not on the list --
 including a meeting id that does not parse -- is refused.
 
 THE MATCHING RULE. A produced Decision points at a gold dialogue act when the
-two share a contiguous run of word tokens, one containing the other, and the
-SHORTER side has at least `MIN_MATCH_TOKENS` tokens. Tokens are casefolded
+two share a contiguous run of word tokens that is at least `MIN_MATCH_TOKENS`
+long AND covers at least `MIN_MATCH_COVERAGE` of the SHORTER side. AMI's
+dialogue-act segmentation and the rendered transcript's turn segmentation cut
+the same words differently, so neither side need contain the other; full
+containment is the special case of 100% coverage. Tokens are casefolded
 alphanumeric words (apostrophes kept inside a word), so AMI's tokenised text
 ("it 's a remote control .", with `<gap>` markers) and the rendered transcript
 ("it's a remote control.") compare equal. This is `decision_pass`'s own
@@ -42,6 +45,12 @@ that still names a position ("we 'll use rubber"), and every decision act in
 the ES2015 gold is longer; an act shorter than the floor can therefore never
 be recalled, which is stated rather than hidden -- it costs recall, never
 precision, which is the safe direction for a harness deciding whether to ship."""
+
+MIN_MATCH_COVERAGE: Final = 0.6
+"""Share of the SHORTER side's tokens the longest common run must cover. The
+run floor alone would let four shared words of a long line count; coverage
+ties the match to the act or evidence line being the same utterance cut
+differently, not merely sharing a phrase."""
 
 PARTIAL_STAMP: Final = "PARTIAL -- NOT THE PRE-REGISTERED RESULT"
 
@@ -99,11 +108,20 @@ def act_tokens(text: str) -> tuple[str, ...]:
     return tuple(_TOKEN_RE.findall(text.casefold()))
 
 
-def _contiguous(needle: tuple[str, ...], haystack: tuple[str, ...]) -> bool:
-    size = len(needle)
-    return any(
-        haystack[i : i + size] == needle for i in range(len(haystack) - size + 1)
-    )
+def _longest_common_run(left: Sequence[str], right: Sequence[str]) -> int:
+    """Length of the longest contiguous token run common to both sequences
+    (longest common substring; O(len(left) * len(right)) time, O(len(right))
+    memory)."""
+    best = 0
+    previous = [0] * (len(right) + 1)
+    for a in left:
+        current = [0] * (len(right) + 1)
+        for j, b in enumerate(right, start=1):
+            if a == b:
+                current[j] = previous[j - 1] + 1
+                best = max(best, current[j])
+        previous = current
+    return best
 
 
 def evidence_matches(evidence: str, act: str) -> bool:
@@ -116,10 +134,33 @@ def evidence_matches(evidence: str, act: str) -> bool:
 
 
 def _tokens_match(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
-    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
-    if len(shorter) < MIN_MATCH_TOKENS:
+    shorter = min(len(left), len(right))
+    if shorter < MIN_MATCH_TOKENS:
         return False
-    return _contiguous(shorter, longer)
+    run = _longest_common_run(left, right)
+    return run >= MIN_MATCH_TOKENS and run >= MIN_MATCH_COVERAGE * shorter
+
+
+def rematch_records(
+    records: Sequence[Mapping[str, Any]], rows: Sequence[GoldRow]
+) -> tuple[list[dict[str, Any]], int]:
+    """Copies of stored `records` with `matched_ids` recomputed under the
+    CURRENT matching rule, plus how many items could not be: an item stored
+    without its evidence (a baseline body is never persisted) keeps the match
+    it was stored with, which may come from an older rule."""
+    out: list[dict[str, Any]] = []
+    kept = 0
+    for record in records:
+        items = []
+        for item in record["items"]:
+            evidence = item.get("evidence") or []
+            if evidence:
+                item = {**item, "matched_ids": match_item(evidence, rows)}
+            else:
+                kept += 1
+            items.append(item)
+        out.append({**record, "items": items})
+    return out, kept
 
 
 def load_gold(paths: Sequence[Path]) -> list[GoldRow]:

@@ -286,7 +286,15 @@ def main(argv: list[str] | None = None) -> int:
         paths = args.rescore or sorted(RESULTS_DIR.glob("runs-*.json"))
         if not paths:
             raise SystemExit(f"no stored runs in {RESULTS_DIR}")
-        records = load_records(paths)
+        records, kept = scoring.rematch_records(load_records(paths), rows)
+        if kept:
+            print(
+                f"NOTE: {kept} stored item(s) carry no evidence (baseline bodies are "
+                "not persisted); their matches were NOT recomputed and come from the "
+                "rule in force when they were run. Re-run that arm to apply the "
+                "current matching rule.",
+                file=sys.stderr,
+            )
         print(scoring.render_report(records, rows, meetings))
         return 0
 
@@ -479,6 +487,108 @@ def _self_test() -> int:
             "unrelated text does not match",
             scoring.evidence_matches("The weather is lovely today ok", long_act),
             False,
+        )
+
+        # longest-common-run rule (segmentation differs between gold and render)
+        def match(left: str, right: str) -> bool:
+            return scoring.evidence_matches(left, right)
+
+        check(
+            "partial overlap: run 5 covering 5/6 of the shorter side matches",
+            match(
+                "we've decided on kinetic right okay so that's good",
+                "A: energy we've decided on kinetic right",
+            ),
+            True,
+        )
+        check(
+            "run of 4 covering under 60% of the shorter side does not match",
+            match(
+                "one two three four x1 x2 x3 x4 x5 x6",
+                "y1 one two three four y2 y3 y4 y5 y6 y7",
+            ),
+            False,
+        )
+        check(
+            "run of 4 covering exactly 4/6 of the shorter side matches",
+            match("one two three four x1 x2", "y1 one two three four y2 y3 y4"),
+            True,
+        )
+        check(
+            "run of 4 covering 4/7 of the shorter side does not match",
+            match("one two three four x1 x2 x3", "y1 one two three four y2 y3 y4"),
+            False,
+        )
+        check(
+            "a run of 3 never matches, even at full coverage of a short side",
+            match("one two three", "y1 one two three y2 y3"),
+            False,
+        )
+        check(
+            "a run of 3 never matches inside long sides",
+            match("one two three x1 x2 x3", "y1 one two three y2 y3 y4"),
+            False,
+        )
+        check(
+            "runs of 3 and 3 split by a gap do not add up",
+            match("one two three x1 four five six", "one two three y1 four five six"),
+            False,
+        )
+        check(
+            "full containment is still a match",
+            match("go with rubber for the casing", long_act),
+            True,
+        )
+        gold_rows = [
+            scoring.GoldRow(
+                "g1",
+                "ES2015a",
+                "decision",
+                (scoring.act_tokens("energy we've decided on kinetic right"),),
+            )
+        ]
+        check(
+            "pass-arm style evidence line matches through match_item",
+            scoring.match_item(["PM: we've decided on kinetic right okay"], gold_rows),
+            ["g1"],
+        )
+        check(
+            "baseline-arm style multi-line body matches through match_item",
+            scoring.match_item(
+                ["Some title\nA: so we've decided on kinetic\nB: right okay"],
+                gold_rows,
+            ),
+            ["g1"],
+        )
+        stale: list[dict[str, Any]] = [
+            {
+                "arm": "pass",
+                "items": [
+                    {
+                        "title": "t",
+                        "evidence": ["we've decided on kinetic right"],
+                        "matched_ids": [],
+                    },
+                    {"title": "b", "evidence": [], "matched_ids": ["old"]},
+                ],
+            }
+        ]
+        refreshed, kept_stale = scoring.rematch_records(stale, gold_rows)
+        check(
+            "rescore re-matches stored evidence",
+            refreshed[0]["items"][0]["matched_ids"],
+            ["g1"],
+        )
+        check(
+            "rescore keeps matches without stored evidence",
+            refreshed[0]["items"][1]["matched_ids"],
+            ["old"],
+        )
+        check("rescore counts items it could not re-match", kept_stale, 1)
+        check(
+            "rescore does not mutate its input",
+            stale[0]["items"][0]["matched_ids"],
+            [],
         )
 
         # allowlist

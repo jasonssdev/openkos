@@ -52,15 +52,26 @@ as an upper bound.
 
 ## Matching rule
 
-A Decision matches a gold dialogue act when one contains the other as a
-contiguous run of word tokens and the **shorter side has at least 4 tokens**
-(`MIN_MATCH_TOKENS`). Tokens are casefolded words with speaker labels and
-`<gap>` tags removed, so AMI's tokenised text ("it's a remote control .") equals
-the rendered transcript ("it's a remote control."). The floor exists because
-AMI acts include "yeah" and "okay": contained in countless lines, they prove
-nothing. The cost is that a decision whose every act is shorter than 4 tokens
-cannot be recalled; those are counted in the denominator and reported
-(`unrecallable`), so the floor costs recall, never precision.
+A Decision matches a gold dialogue act when the two share a contiguous run of
+word tokens that is **at least 4 tokens long** (`MIN_MATCH_TOKENS`) **and covers
+at least 60% of the shorter side** (`MIN_MATCH_COVERAGE`). The rule is the
+longest common contiguous run, not containment: AMI's dialogue acts and the
+rendered transcript's turns cut the same words at different places, so neither
+need contain the other. Full containment is the special case of 100% coverage.
+It applies identically to both arms (a pass evidence line, a baseline body).
+Tokens are casefolded words with speaker labels and `<gap>` tags removed, so
+AMI's tokenised text ("it's a remote control .") equals the rendered transcript
+("it's a remote control."). The 4-token floor exists because AMI acts include
+"yeah" and "okay": shared by countless lines, they prove nothing; the coverage
+condition stops four shared words of a long line from counting. The cost is that
+a decision whose every act is shorter than 4 tokens cannot be recalled; those
+are counted in the denominator and reported (`unrecallable`), so the floor costs
+recall, never precision.
+
+`--rescore` recomputes matches under the current rule from the stored evidence.
+Baseline bodies are not persisted, so a stored baseline run keeps the matches it
+was run with (a note on stderr says so); re-run the baseline arm to apply a
+changed rule to it.
 
 ## Metrics (per series, mean and min-max over `--runs`)
 

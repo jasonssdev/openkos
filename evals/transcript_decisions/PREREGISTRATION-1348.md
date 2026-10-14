@@ -91,6 +91,29 @@ Adopt the pass (consider flipping the default in a later PR) only if ALL hold:
 Anything short of that records the result and ships nothing. `unannotated` is
 reported and never gates.
 
+## Matching-rule change (PROPOSED, pending maintainer approval of this registration)
+
+The matching rule was changed AFTER inspecting one smoke run per arm on the
+DEVELOPMENT series ES2015, so it is disclosed here rather than presented as
+fixed in advance. Under the original rule (one token sequence must contain the
+other, shorter side at least 4 tokens) that smoke run scored pass recall 0.185
+against baseline recall 0.222.
+
+Why: the smoke run showed real hits missed because AMI dialogue acts and
+rendered transcript turns are segmented differently. Example, paraphrased: a
+gold act ending "... decided on kinetic right" and a produced evidence line
+beginning "we've decided on kinetic right okay ..." share a five-token run, yet
+neither contains the other.
+
+New rule: a produced stream matches a gold act when their longest common
+contiguous token run is at least 4 tokens (`MIN_MATCH_TOKENS`, unchanged) AND
+covers at least 60% of the shorter side's tokens (`MIN_MATCH_COVERAGE`).
+Containment stays a special case. Tokenisation, the `unrecallable` definition
+(no act of 4 or more tokens) and the shared-evidence recall cap are unchanged.
+It applies identically to BOTH arms. The 60% value is a judgement made after
+seeing the smoke run, not derived from data. Until the maintainer approves it,
+any number scored under this rule is a development number.
+
 ## Not in this registration
 
 Tuning `MAX_PASS_DECISIONS` (an unmeasured placeholder of 25; the produced
