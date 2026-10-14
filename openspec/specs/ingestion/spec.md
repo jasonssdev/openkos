@@ -2624,7 +2624,8 @@ line, with no article that a count above one contradicts.
 ### Requirement: Source Event Date Frontmatter Key
 
 `ingest` MUST support an optional Source frontmatter key, `event_date`,
-holding a strict `YYYY-MM-DD` calendar date naming when the recorded event
+holding a strict `YYYY-MM-DD` calendar date, or a naive local date-time
+`YYYY-MM-DDTHH:MM` or `YYYY-MM-DDTHH:MM:SS`, naming when the recorded event
 happened — distinct from `generated.at` (or a legacy `timestamp` on a
 pre-v0.2 or unmigrated document), which continues to record when the
 Source's content was last generated, unconditionally set at ingest time.
@@ -2636,8 +2637,13 @@ the same document as if `event_date` were not a supported key.
 `event_date` MUST NEVER be defaulted to ingest time or any other derived
 value — "no evidence" and "unknown" MUST be represented by the key's
 absence, never by a stand-in value. WHEN `ingest` writes the key, it MUST
-emit a quoted ISO-8601 date string (`event_date:
-'2026-07-14'`), never a bare, unquoted date scalar.
+emit a quoted ISO-8601 string (`event_date: '2026-07-14'` or
+`event_date: '2026-07-14T10:00'`), never a bare, unquoted date scalar. A
+date-time MUST be written as `YYYY-MM-DDTHH:MM`, with `:SS` appended only
+when the seconds are non-zero, so one instant has exactly one text. A
+date-only value MUST be written exactly as before. A date-time carries no
+offset: it is the local wall-clock time of the event, and an offset, `Z`,
+fractional seconds, or a space separator MUST NOT be accepted.
 
 #### Scenario: No flag and no dated file name omits the key
 
@@ -2664,13 +2670,32 @@ emit a quoted ISO-8601 date string (`event_date:
 - THEN none of them carry an `event_date` key; the value exists only on
   the Source concept, reachable from a derived object through its
   `provenance`
+
+#### Scenario: A date-time is written in its canonical form
+
+- GIVEN an initialized workspace and a plain file at `<path>`
+- WHEN `openkos ingest <path> --event-date 2026-07-14T10:00:00` completes
+- THEN the generated Source concept's frontmatter carries
+  `event_date: '2026-07-14T10:00'`
+
+#### Scenario: Non-zero seconds are kept
+
+- GIVEN an initialized workspace and a plain file at `<path>`
+- WHEN `openkos ingest <path> --event-date 2026-07-14T10:00:30` completes
+- THEN the generated Source concept's frontmatter carries
+  `event_date: '2026-07-14T10:00:30'`
+
 ### Requirement: Explicit `--event-date` Ingest Flag
 
-`openkos ingest <path>` MUST accept an optional `--event-date YYYY-MM-DD`
-flag. The value MUST be validated as a strict ISO-8601 calendar date (a
-real calendar date in `YYYY-MM-DD` form). WHEN the value fails that
+`openkos ingest <path>` MUST accept an optional `--event-date` flag whose
+value is `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DDTHH:MM:SS`. The
+value MUST be validated as a strict ISO-8601 calendar date or naive local
+date-time (a real calendar date, and a real time of day — hour `00`-`23`, minute and
+second `00`-`59`, so `T24:00` is refused — with no offset). An
+offset or `Z`, fractional seconds, a space separator, and week or ordinal
+dates MUST be refused. WHEN the value fails that
 validation, `ingest` MUST refuse with exit code `2`, a clear error on
-stderr, and MUST perform no write of any kind — no raw copy, no concept
+stderr naming the accepted shapes, and MUST perform no write of any kind — no raw copy, no concept
 document, no catalog or log change — before this validation runs.
 
 #### Scenario: A valid flag value is accepted
@@ -2692,6 +2717,21 @@ document, no catalog or log change — before this validation runs.
 - GIVEN an initialized workspace and a plain file at `<path>`
 - WHEN `openkos ingest <path> --event-date not-a-date` runs
 - THEN it exits with code `2` and writes nothing
+
+#### Scenario: A naive date-time is accepted
+
+- GIVEN an initialized workspace and a plain file at `<path>`
+- WHEN `openkos ingest <path> --event-date 2026-07-14T10:00` completes
+- THEN the generated Source concept's frontmatter carries
+  `event_date: '2026-07-14T10:00'`
+
+#### Scenario: An offset is refused before any write
+
+- GIVEN an initialized workspace and a plain file at `<path>`
+- WHEN `openkos ingest <path> --event-date 2026-07-14T10:00Z` runs, or with
+  `+02:00`, a fractional second, or a space instead of `T`
+- THEN it exits with code `2`, the error names the accepted shapes, and
+  nothing is written
 
 ### Requirement: `--event-date` Is Refused For Directory Or Glob Input
 
@@ -2854,7 +2894,7 @@ be consulted for this precedence. A re-ingest with no flag MUST NEVER
 clobber a stored `event_date` with a different or absent value, and MUST
 NEVER invent one from ingest time. WHEN the on-disk stored value was
 written as an unquoted YAML date scalar and is read back as a native date
-object rather than a string, `ingest` MUST recognize it as the same
+or naive date-time object rather than a string, `ingest` MUST recognize it as the same
 stored value the precedence chain compares against, exactly as if it had
 been read back as a string.
 
@@ -2862,8 +2902,8 @@ WHEN an explicit `--event-date` flag differs from the currently stored
 value, `ingest` MUST overwrite the stored value with the flag's value.
 
 WHEN the stored `event_date` value cannot be read as a valid calendar date
-— for example a hand-edited value, a `datetime` instead of a `date`, or any
-other malformed value — `ingest` MUST treat it as absent for the
+or naive local date-time — for example a hand-edited value, a date-time with
+an offset or fractional seconds, or any other malformed value — `ingest` MUST treat it as absent for the
 precedence chain above: it MUST NEVER be carried forward as-is. `ingest`
 MUST print exactly one warning to stderr naming the malformed value and
 the Source it was found in, and MUST NOT fail the run.
@@ -2931,7 +2971,8 @@ the Source it was found in, and MUST NOT fail the run.
 #### Scenario: A malformed stored value is not carried forward and warns
 
 - GIVEN a Source whose on-disk `event_date` value is malformed — for
-  example a `datetime` value, or a string that is not a real calendar date
+  example a date-time with an offset, or a string that is not a real
+  calendar date
 - WHEN `openkos ingest <path>` re-ingests the same source with no
   `--event-date` flag and no dated file name
 - THEN the malformed value is not carried forward, exactly one warning is
@@ -2946,6 +2987,20 @@ the Source it was found in, and MUST NOT fail the run.
 - THEN the malformed value is treated as absent, the resolved value (the
   flag's or the inferred one) fills the gap, and the same stderr warning is
   printed
+
+#### Scenario: A stored date-time is carried forward
+
+- GIVEN a Source previously ingested with `event_date: '2026-07-14T10:00'`
+- WHEN `openkos ingest <path>` re-ingests the same source with no
+  `--event-date` flag
+- THEN the regenerated Source's `event_date` remains `2026-07-14T10:00`
+
+#### Scenario: Restating the same instant at another precision is not a change
+
+- GIVEN a Source previously ingested with `event_date: '2026-07-14T10:00'`
+- WHEN `openkos ingest <path> --event-date 2026-07-14T10:00:00` re-ingests it
+- THEN the resolved value is unchanged and the Source is not rewritten for
+  it
 
 ### Requirement: Converged Re-Ingest Source-Only Rewrite
 

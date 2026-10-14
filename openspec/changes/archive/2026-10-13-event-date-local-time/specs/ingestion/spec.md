@@ -71,7 +71,8 @@ fractional seconds, or a space separator MUST NOT be accepted.
 `openkos ingest <path>` MUST accept an optional `--event-date` flag whose
 value is `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DDTHH:MM:SS`. The
 value MUST be validated as a strict ISO-8601 calendar date or naive local
-date-time (a real calendar date, and a time of day with no offset). An
+date-time (a real calendar date, and a real time of day — hour `00`-`23`, minute and
+second `00`-`59`, so `T24:00` is refused — with no offset). An
 offset or `Z`, fractional seconds, a space separator, and week or ordinal
 dates MUST be refused. WHEN the value fails that
 validation, `ingest` MUST refuse with exit code `2`, a clear error on
