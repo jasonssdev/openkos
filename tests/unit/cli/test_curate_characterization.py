@@ -1,6 +1,6 @@
 """Byte-identity characterization goldens for `openkos curate`'s Identity
-walk and `adjudicate --apply`'s keep-distinct answer (the
-`curate-decisions-as-data` change, slice S0a).
+walk, `adjudicate --apply`'s keep-distinct answer, and the Structure and
+Metadata walks (the `curate-decisions-as-data` change, slices S0a and S0b).
 
 Recorded on the tree BEFORE the per-item write sequences move into an
 application service: each scenario pins stdout, stderr, the exit code, the
@@ -24,6 +24,7 @@ from openkos import config
 from openkos.application import catalog_delta, curate_queue
 from openkos.cli import observability
 from openkos.cli.main import app
+from openkos.graph.base import Edge
 from openkos.llm.base import BackendUnavailable
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
@@ -31,6 +32,8 @@ from openkos.resolution.adjudication import (
     Verdict,
 )
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport
+from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+from openkos.resolution.volatility_typing import TierSuggestion, TierSuggestionBatch
 from openkos.state import derived
 from openkos.state import pending_queue as pq
 from tests.unit.cli.golden_support import Goldens, normalise, normalise_shas
@@ -513,6 +516,318 @@ def test_adjudicate_apply_d_records_the_ruling_without_a_commit_section(
     _settle("adjudicate_apply_d", actual)
 
 
+# --------------------------------------------------------------------------- #
+# Structure, the per-item walk (slice S0b)
+# --------------------------------------------------------------------------- #
+
+_FOO_BAR = ("concepts/foo", "concepts/bar")
+_FOO_BAR2 = ("concepts/foo", "concepts/bar-2")
+_FOO2_BAR = ("concepts/foo-2", "concepts/bar")
+
+
+def _structure_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plan: list[tuple[tuple[str, str], str]],
+) -> Path:
+    """A workspace whose Structure stage proposes `plan` -- (edge, relation
+    type) pairs -- and whose other stages are empty. No model is reached."""
+    root, _judge = _workspace(
+        tmp_path,
+        monkeypatch,
+        [_FOO, _BAR],
+        {_FOO.member_ids: _SAME, _BAR.member_ids: _SAME},
+    )
+    edges = [Edge(source_id=s, target_id=t) for (s, t), _ in plan]
+    suggestions = [
+        EdgeSuggestion(edge=edge, suggested_type=kind, rationale="stub rationale")
+        for edge, (_, kind) in zip(edges, plan, strict=True)
+    ]
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: edges)
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_edge_types",
+        lambda to_type, **k: EdgeSuggestionBatch(results=suggestions),
+    )
+    _simulate_tty(monkeypatch)
+    return root
+
+
+def test_structure_y_writes_the_relation_and_applies_the_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _structure_workspace(tmp_path, monkeypatch, [(_FOO_BAR, "references")])
+    before = _head(root)
+
+    actual = _observe(
+        root, ["curate", "--auto", "--structure"], since=before, input="y\n"
+    )
+
+    _settle("structure_y", actual)
+
+
+def test_structure_n_lists_the_decline_and_s_does_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _structure_workspace(
+        tmp_path,
+        monkeypatch,
+        [(_FOO_BAR, "references"), (_FOO2_BAR, "references")],
+    )
+    _answers(monkeypatch, "n", "s")
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto", "--structure"], since=before)
+
+    _settle("structure_n_and_s", actual)
+
+
+def test_structure_accept_remaining_and_reversed_direction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--accept structure` on an asymmetric type: `r` relates the reversed
+    edge, `a` accepts that item and every remaining one of the same type."""
+    root = _structure_workspace(
+        tmp_path,
+        monkeypatch,
+        [
+            (_FOO_BAR, "depends_on"),
+            (_FOO_BAR2, "depends_on"),
+            (_FOO2_BAR, "depends_on"),
+        ],
+    )
+    _answers(monkeypatch, "r", "a")
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto", "--accept", "structure"], since=before)
+
+    _settle("structure_accept_remaining_and_reverse", actual)
+
+
+def test_structure_endpoint_deleted_while_the_prompt_waited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _structure_workspace(tmp_path, monkeypatch, [(_FOO_BAR, "references")])
+
+    def _forget_then_accept(*args: object, **kwargs: object) -> str:
+        (root / "bundle" / "concepts" / "bar.md").unlink()
+        return "y"
+
+    monkeypatch.setattr("typer.prompt", _forget_then_accept)
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto", "--structure"], since=before)
+
+    _settle("structure_endpoint_dropped_before_prepare", actual)
+
+
+def test_structure_endpoint_deleted_between_prepare_and_the_commit_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _structure_workspace(tmp_path, monkeypatch, [(_FOO_BAR, "references")])
+    real = __import__(
+        "openkos.application.lifecycle", fromlist=["prepare_relate"]
+    ).prepare_relate
+
+    def _prepare_then_forget(*args: Any, **kwargs: Any) -> Any:
+        prepared = real(*args, **kwargs)
+        (root / "bundle" / "concepts" / "bar.md").unlink()
+        return prepared
+
+    monkeypatch.setattr(
+        "openkos.application.lifecycle.prepare_relate", _prepare_then_forget
+    )
+    _answers(monkeypatch, "y")
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto", "--structure"], since=before)
+
+    _settle("structure_endpoint_dropped_in_section", actual)
+
+
+def test_structure_drift_exits_three_with_nothing_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _structure_workspace(
+        tmp_path,
+        monkeypatch,
+        [(_FOO_BAR, "references"), (_FOO2_BAR, "references")],
+    )
+
+    # The relate plan is read AFTER the prompt, so the edit must land after
+    # `prepare_relate` -- inside the window the drift guard exists for.
+    real = __import__(
+        "openkos.application.lifecycle", fromlist=["prepare_relate"]
+    ).prepare_relate
+
+    def _prepare_then_edit(*args: Any, **kwargs: Any) -> Any:
+        prepared = real(*args, **kwargs)
+        _edit(root, "concepts/foo")
+        return prepared
+
+    monkeypatch.setattr(
+        "openkos.application.lifecycle.prepare_relate", _prepare_then_edit
+    )
+    _answers(monkeypatch, "y", "y")
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto", "--structure"], since=before)
+
+    _settle("structure_drift_exit_three", actual)
+
+
+def test_structure_failure_at_prepare_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _structure_workspace(tmp_path, monkeypatch, [(_FOO_BAR, "references")])
+
+    def _fail(*args: object, **kwargs: object) -> object:
+        raise ValueError("no plan")
+
+    monkeypatch.setattr("openkos.application.lifecycle.prepare_relate", _fail)
+    _answers(monkeypatch, "y")
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto", "--structure"], since=before)
+
+    _settle("structure_write_failure_at_prepare", actual)
+
+
+def test_structure_failure_at_the_relate_write_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _structure_workspace(tmp_path, monkeypatch, [(_FOO_BAR, "references")])
+
+    def _fail(*args: object, **kwargs: object) -> object:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("openkos.application.lifecycle.relate_core", _fail)
+    _answers(monkeypatch, "y")
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto", "--structure"], since=before)
+
+    _settle("structure_write_failure_at_relate", actual)
+
+
+# --------------------------------------------------------------------------- #
+# Metadata, the per-type walk (slice S0b)
+# --------------------------------------------------------------------------- #
+
+
+def _metadata_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tiers: dict[str, str],
+) -> Path:
+    """A workspace whose Metadata stage proposes `tiers` (type -> tier, every
+    type currently `static`) and whose other stages are empty."""
+    root, _judge = _workspace(tmp_path, monkeypatch, [_FOO], {_FOO.member_ids: _SAME})
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names", lambda *a, **k: list(tiers)
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_volatility",
+        lambda bundle_dir, **k: TierSuggestionBatch(
+            results=[
+                TierSuggestion(
+                    type_name=name,
+                    current_default="static",
+                    suggested_tier=tier,
+                    rationale="stub rationale",
+                )
+                for name, tier in tiers.items()
+            ]
+        ),
+    )
+    _simulate_tty(monkeypatch)
+    return root
+
+
+def test_metadata_y_writes_the_tier_and_applies_the_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _metadata_workspace(tmp_path, monkeypatch, {"Concept": "volatile"})
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto"], since=before, input="y\n")
+
+    _settle("metadata_y", actual)
+    assert "Concept: volatile" in (root / "openkos.yaml").read_text(encoding="utf-8")
+
+
+def test_metadata_n_writes_nothing_and_a_accepts_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _metadata_workspace(
+        tmp_path,
+        monkeypatch,
+        {"Concept": "volatile", "Entity": "slow", "Event": "volatile"},
+    )
+    _answers(monkeypatch, "n", "a")
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto"], since=before)
+
+    _settle("metadata_n_then_a", actual)
+    written = (root / "openkos.yaml").read_text(encoding="utf-8")
+    assert "Concept:" not in written.split("type_tiers:")[-1]
+    assert "Entity: slow" in written
+    assert "Event: volatile" in written
+
+
+def test_metadata_drift_exits_three_with_nothing_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _metadata_workspace(tmp_path, monkeypatch, {"Concept": "volatile"})
+
+    real = __import__(
+        "openkos.application.lifecycle", fromlist=["prepare_set_volatility"]
+    ).prepare_set_volatility
+
+    def _prepare_then_edit_config(*args: Any, **kwargs: Any) -> Any:
+        prepared = real(*args, **kwargs)
+        path = root / "openkos.yaml"
+        path.write_text(
+            path.read_text(encoding="utf-8") + "# hand edit\n", encoding="utf-8"
+        )
+        return prepared
+
+    monkeypatch.setattr(
+        "openkos.application.lifecycle.prepare_set_volatility",
+        _prepare_then_edit_config,
+    )
+    _answers(monkeypatch, "y")
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto"], since=before)
+
+    _settle("metadata_drift_exit_three", actual)
+
+
+def test_metadata_refuses_when_the_config_has_a_dirty_entry_for_the_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _metadata_workspace(tmp_path, monkeypatch, {"Concept": "volatile"})
+    path = root / "openkos.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8") + "type_tiers:\n  Concept: slow\n",
+        encoding="utf-8",
+    )
+    before = _head(root)
+
+    actual = _observe(root, ["curate", "--auto"], since=before, input="y\n")
+
+    _settle("metadata_dirty_config_refusal", actual)
+
+
 def test_every_recorded_scenario_has_a_test() -> None:
     if _RECORD:
         return
@@ -532,4 +847,16 @@ def test_every_recorded_scenario_has_a_test() -> None:
         "non_tty_refusal",
         "partial_availability",
         "adjudicate_apply_d",
+        "structure_y",
+        "structure_n_and_s",
+        "structure_accept_remaining_and_reverse",
+        "structure_endpoint_dropped_before_prepare",
+        "structure_endpoint_dropped_in_section",
+        "structure_drift_exit_three",
+        "structure_write_failure_at_prepare",
+        "structure_write_failure_at_relate",
+        "metadata_y",
+        "metadata_n_then_a",
+        "metadata_drift_exit_three",
+        "metadata_dirty_config_refusal",
     }
