@@ -11,8 +11,13 @@ import textwrap
 
 import pytest
 
+from openkos.application import (
+    curate_decisions,
+    merge_service,
+    reconcile_service,
+    unmerge_service,
+)
 from openkos.application import lifecycle as application_lifecycle
-from openkos.application import merge_service, reconcile_service, unmerge_service
 from openkos.cli import curate as cli_curate
 from openkos.cli import main as cli_main
 
@@ -94,6 +99,10 @@ def test_the_verbs_are_thin_adapters_that_delegate_to_the_services(
 
 
 def test_curate_drives_the_identity_merge_through_the_service() -> None:
+    """`curate` commits through the decision surface, which delegates the
+    write to `merge_service.commit_merge`; the walk holds no write of its own."""
     source = inspect.getsource(cli_curate)
-    assert "merge_service.commit_merge(" in source
+    assert "curate_decisions.commit_merge_decision(" in source
+    assert "merge_service.commit_merge(" not in source
     assert "_commit_one_merge" not in source
+    assert "merge_service.commit_merge(" in inspect.getsource(curate_decisions)

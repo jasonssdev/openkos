@@ -105,6 +105,25 @@ def read_open_rows(layout: config.WorkspaceLayout, kind: str) -> tuple[OpenRow, 
         conn.close()
 
 
+def open_row_by_key(
+    layout: config.WorkspaceLayout, decision_key: str
+) -> OpenRow | None:
+    """The open row whose stored `decision_key` is `decision_key`, or `None`.
+
+    Read-only, like `read_open_rows`: a resolved or retired row is never
+    returned, and an absent queue reads as no row without creating one. The
+    key is `"<kind>:<body>"`, so only that kind's open rows are read."""
+    kind = decision_key.partition(":")[0]
+    return next(
+        (
+            row
+            for row in read_open_rows(layout, kind)
+            if row.item.decision_key == decision_key
+        ),
+        None,
+    )
+
+
 def _fresh(
     row: OpenRow,
     current_digest: Callable[[str], str | None],

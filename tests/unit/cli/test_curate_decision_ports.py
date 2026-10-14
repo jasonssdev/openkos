@@ -17,19 +17,24 @@ import pytest
 
 from openkos import config
 from openkos.application import commit_phase
+from openkos.application import lifecycle as application_lifecycle
 from openkos.application.curate_decisions import DecisionPorts
 from openkos.application.lock_wait import CommitSection
 from openkos.cli import curate
 from openkos.cli import main as cli_main
 
 
-def _ports(tmp_path: Path) -> DecisionPorts:
-    ctx = curate.CurateContext(
+def _context(tmp_path: Path, *, reconcile: bool = False) -> curate.CurateContext:
+    return curate.CurateContext(
         root=tmp_path,
         layout=config.WorkspaceLayout(tmp_path),
         cfg=cast(config.Config, None),
+        reconcile=reconcile,
     )
-    return curate._decision_ports(ctx)
+
+
+def _ports(tmp_path: Path) -> DecisionPorts:
+    return curate._decision_ports(_context(tmp_path))
 
 
 def test_autocommit_reads_the_cli_main_attribute_on_every_call(
@@ -104,3 +109,28 @@ def test_the_warning_sink_is_the_cli_warning_echo(
     assert captured.err == "a note\n"
     assert captured.out == ""
     assert callable(cli_main._echo_warning)
+
+
+def test_the_reconciliation_reads_the_cli_main_helper_on_every_call_with_the_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ports = curate._decision_ports(_context(tmp_path, reconcile=True))
+    seen: list[tuple[Path, object, bool, bool, str]] = []
+    reconciled = cast(application_lifecycle.PreparedMerge, object())
+
+    def _patched(
+        root: Path,
+        prepared: object,
+        *,
+        no_reconcile: bool,
+        verb: str,
+        reconcile: bool = False,
+    ) -> application_lifecycle.PreparedMerge:
+        seen.append((root, prepared, no_reconcile, reconcile, verb))
+        return reconciled
+
+    monkeypatch.setattr("openkos.cli.main._apply_reconciliation", _patched)
+    plan = cast(application_lifecycle.PreparedMerge, object())
+
+    assert ports.reconcile(tmp_path, plan) is reconciled
+    assert seen == [(tmp_path, plan, False, True, "curate")]
