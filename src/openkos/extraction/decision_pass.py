@@ -9,7 +9,9 @@ decided, plus one verbatim evidence line) instead.
 
 Shaped like the participant capture (`concept._capture_further_participants`):
 an optional extra call whose own failure degrades to "found nothing" and is
-reported, never raised. `concept.extract_concept_union` calls it, lazily,
+reported, never raised. A window that fails (unparseable reply, or a backend
+error other than `BackendUnavailable`) is asked once more before it counts as
+failed (#1361). `concept.extract_concept_union` calls it, lazily,
 when the `transcript_decisions` config key is on and the source is
 meeting-shaped.
 
@@ -28,7 +30,7 @@ from typing import Any, Final
 
 from openkos.extraction.concept import OPTIONAL_CALL_DECISION_PASS, ExtractionResult
 from openkos.llm import parsing
-from openkos.llm.base import BackendError, LLMBackend, Message
+from openkos.llm.base import BackendError, BackendUnavailable, LLMBackend, Message
 from openkos.llm.prompts import load_prompt
 
 CALL_NAME: Final = OPTIONAL_CALL_DECISION_PASS
@@ -191,23 +193,44 @@ def to_result(item: DecisionItem) -> ExtractionResult:
     )
 
 
+def _ask_window(
+    window: str, llm: LLMBackend
+) -> tuple[list[dict[str, Any]] | None, str | None, bool]:
+    """One call for one window: `(items, None, False)` on a usable reply,
+    else `(None, cause, retryable)`. The cause is the type name only, never
+    the message; `BackendUnavailable` is the one cause not worth a re-ask."""
+    try:
+        reply = llm.chat(build_messages(window))
+    except BackendUnavailable:
+        return None, f"{CALL_NAME}: BackendUnavailable", False
+    except BackendError as exc:
+        return None, f"{CALL_NAME}: {type(exc).__name__}", True
+    parsed = parse_reply(reply)
+    if parsed is None:
+        return None, f"{CALL_NAME}: unparseable reply", True
+    return parsed, None, False
+
+
 def run_decision_pass(windows: Sequence[str], llm: LLMBackend) -> DecisionPassResult:
     """Ask each window which decisions it reached; admit what verifies.
 
-    Never raises on a backend failure or an unusable reply: that window
-    contributes nothing, the first such cause is reported on `failure`
-    (type name only, never the message), and the other windows still count."""
+    Never raises on a backend failure or an unusable reply. A window whose
+    call raised a `BackendError` other than `BackendUnavailable`, or whose
+    reply is unparseable, is asked exactly once more (sampling is not
+    deterministic, so a re-ask can succeed; an unreachable backend will not
+    answer a second time, the same exclusion as the main pass's #1053 retry).
+    Only when the retry also fails does that window contribute nothing, and
+    the first such cause -- the retry's -- is reported on `failure` (type name
+    only, never the message); the other windows still count. A valid `[]`, or
+    a parsed reply with no verbatim items, is an answer and is never retried."""
     admitted: list[DecisionItem] = []
     failure: str | None = None
     for window in windows:
-        try:
-            reply = llm.chat(build_messages(window))
-        except BackendError as exc:
-            failure = failure or f"{CALL_NAME}: {type(exc).__name__}"
-            continue
-        parsed = parse_reply(reply)
+        parsed, cause, retryable = _ask_window(window, llm)
+        if retryable:
+            parsed, cause, _ = _ask_window(window, llm)
         if parsed is None:
-            failure = failure or f"{CALL_NAME}: unparseable reply"
+            failure = failure or cause
             continue
         valid = [item for data in parsed if (item := validate_item(data))]
         admitted.extend(verbatim_items(valid, window))

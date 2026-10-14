@@ -6,7 +6,7 @@ from collections.abc import Sequence
 import pytest
 
 from openkos.extraction import decision_pass as dp
-from openkos.llm.base import BackendUnavailable, Message
+from openkos.llm.base import BackendGenerationCapped, BackendUnavailable, Message
 from openkos.resolution.decision_subject import quoted_verbatim
 from openkos.resolution.normalize import normalize_key
 
@@ -73,7 +73,8 @@ def test_evidence_must_come_from_its_own_window() -> None:
 
 
 def test_malformed_json_is_a_failure_not_a_raise() -> None:
-    result = dp.run_decision_pass([WINDOW_A], _FakeLLM(["I think they chose a chip."]))
+    llm = _FakeLLM(["I think they chose a chip.", "Still prose."])
+    result = dp.run_decision_pass([WINDOW_A], llm)
     assert result.results == []
     assert result.failure == "decision_pass: unparseable reply"
 
@@ -94,6 +95,61 @@ def test_empty_array_is_zero_items_not_a_failure() -> None:
 def test_fenced_empty_array_is_not_a_failure() -> None:
     result = dp.run_decision_pass([WINDOW_A], _FakeLLM(["```json\n[]\n```"]))
     assert result.failure is None
+
+
+_CHIP = (
+    "[" + _item("chip", "Use the regular chip.", "we'll go with the regular chip") + "]"
+)
+
+
+def test_unparseable_window_is_asked_once_more() -> None:
+    llm = _FakeLLM(["prose, no json", _CHIP])
+    result = dp.run_decision_pass([WINDOW_A], llm)
+    assert [r.title for r in result.results] == ["Use the regular chip"]
+    assert result.failure is None
+    assert len(llm.calls) == 2
+    assert llm.calls[0] == llm.calls[1]
+
+
+def test_generation_error_window_is_asked_once_more() -> None:
+    llm = _FakeLLM([BackendGenerationCapped("cap"), _CHIP])
+    result = dp.run_decision_pass([WINDOW_A], llm)
+    assert len(result.results) == 1
+    assert result.failure is None
+    assert len(llm.calls) == 2
+
+
+def test_failed_retry_reports_the_retrys_cause_and_keeps_other_windows() -> None:
+    good = "[" + _item("case", "The case is plastic.", "the case will be plastic") + "]"
+    llm = _FakeLLM(["prose", BackendGenerationCapped("cap"), good])
+    result = dp.run_decision_pass([WINDOW_A, WINDOW_B], llm)
+    assert [r.title for r in result.results] == ["The case is plastic"]
+    assert result.failure == "decision_pass: BackendGenerationCapped"
+    assert len(llm.calls) == 3
+
+
+def test_unavailable_backend_is_not_retried() -> None:
+    llm = _FakeLLM([BackendUnavailable("down"), _CHIP])
+    result = dp.run_decision_pass([WINDOW_A], llm)
+    assert result.failure == "decision_pass: BackendUnavailable"
+    assert len(llm.calls) == 1
+
+
+def test_valid_empty_reply_is_not_retried() -> None:
+    llm = _FakeLLM(["[]", _CHIP])
+    result = dp.run_decision_pass([WINDOW_A], llm)
+    assert result.results == []
+    assert result.failure is None
+    assert len(llm.calls) == 1
+
+
+def test_parsed_reply_with_no_verbatim_items_is_not_retried() -> None:
+    bad = "[" + _item("chip", "Use the regular chip.", "they never said this") + "]"
+    llm = _FakeLLM([bad, _CHIP])
+    result = dp.run_decision_pass([WINDOW_A], llm)
+    assert result.results == []
+    assert result.failure is None
+    assert len(llm.calls) == 1
 
 
 def test_one_failed_window_does_not_lose_the_others() -> None:
