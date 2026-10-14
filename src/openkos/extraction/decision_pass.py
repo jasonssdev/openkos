@@ -43,6 +43,12 @@ MAX_PASS_DECISIONS: int = 25
 placeholder sized above the densest hand-annotated meeting seen (29 decision
 sentences across FOUR meetings); the measurement harness may revise it."""
 
+MIN_VALUE_WORDS: int = 3
+"""Fewest whitespace-separated words a `value` may have. UNMEASURED
+placeholder: a bare answer to a question the window does not restate ("two",
+"Yes we did") is not a self-contained statement of a decision; the
+measurement harness may revise it."""
+
 _SYSTEM_PROMPT: Final = load_prompt("extraction/decision_pass")
 
 _NEEDLE_TRAILING_PUNCTUATION: Final = ".,;:!?"
@@ -119,13 +125,16 @@ def parse_reply(reply: object) -> list[dict[str, Any]] | None:
 
 
 def validate_item(data: dict[str, Any]) -> DecisionItem | None:
-    """`None` unless subject, value and evidence are non-blank strings."""
+    """`None` unless subject, value and evidence are non-blank strings and the
+    value has at least `MIN_VALUE_WORDS` words."""
     fields: list[str] = []
     for key in ("subject", "value", "evidence"):
         raw = data.get(key)
         if not isinstance(raw, str) or not raw.strip():
             return None
         fields.append(" ".join(raw.split()))
+    if len(fields[1].split()) < MIN_VALUE_WORDS:
+        return None
     return DecisionItem(*fields)
 
 

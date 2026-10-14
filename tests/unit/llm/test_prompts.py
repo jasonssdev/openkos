@@ -23,7 +23,7 @@ PINNED: dict[str, str] = {
     "decision_revision/judge": "d8238af6410ac31d",
     "decision_subject/system": "b105cbe9f130b62d",
     "edge_typing/system": "accabf7c5bcafb6b",
-    "extraction/decision_pass": "0df77cb3a90e677c",
+    "extraction/decision_pass": "6d3962b0dd75650c",
     "extraction/judge": "6bb30c750944f78e",
     "extraction/language_anchor": "165db5afd66cf667",
     "extraction/participant_capture": "be7e5009a40ede2d",
