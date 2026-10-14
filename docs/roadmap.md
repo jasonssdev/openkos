@@ -217,19 +217,41 @@ Where the community can contribute: interop adapters and OKF conformance fixture
 
 *Goal: a non-technical user can use OpenKOS without a terminal.*
 
-**Status: not started.**
+**Status: not started.** The arc is split into ordered stages because its deliverables carry independent risks, and the riskiest one, packaging, has no precedent to lean on: no open-source desktop app found ships a frozen Python engine as a sidecar.
 
 Reading knowledge already needs no new interface: the bundle is plain markdown, and Obsidian or any editor is its viewer. What a terminal still gates is installing the engine, dropping sources in, asking, and deciding the pending queue, where "the human curates, the engine maintains" currently means `[y/N]` prompts.
 
-Deliverables:
+The engine is unevenly ready for a non-terminal client. Asking, ingesting and reading the pending queue already return typed data and accept progress callbacks. Curating does not: deciding a queue item is reachable only through the interactive `curate` walk, whose orchestration, consent gates and per-item prompts live in the CLI adapter rather than in `application/`. A desktop app built on today's engine would have to reimplement that walk, which breaks the rule that every UI is a thin adapter.
 
-- **A desktop application.** One installer and an icon; internally a local web UI on `localhost` wrapped in a native shell, so the user never starts a server by hand. Nothing leaves the machine
-- **Packaging as a core deliverable, not an extra.** The main barrier for a non-technical user is installation: Python, `uv`, a local model runtime, multi-GB models and `openkos.yaml`. The app ships or guides the engine and model setup
-- **A local API** the app talks to. This promotes the Horizon item for a local REST API: the desktop app is the consumer MCP cannot serve
-- **A stable Python API** over the application services, versioned and declared public, with the desktop app as its first client, so the API is shaped by a real consumer rather than designed in a vacuum
-- **A minimum app scope that maps onto shipped verbs:** drop files (the inbox watch), ask (`query`), and review the pending-decision queue (`pending`, `curate`), which is the heart of the app
+Deliverables, in dependency order:
 
-The shell technology (Tauri, Electron, or another; each needs the Python engine as a sidecar process) is not decided here. It gets its own ADR when this arc starts. Every UI remains a thin adapter over the same local engine; adding it never touches the core.
+- **A packaging spike, thrown away afterwards.** It answers the one question that can invalidate the rest of the arc, with pass/fail checks on Apple Silicon: an unsigned installer, opened past the Gatekeeper warning, launches the shell, which starts the frozen engine with `sqlite-vec` loaded and answers a query against a local model; cold start to first request stays under a fixed bar; an update replaces the engine binary; quitting, including a force-quit, leaves no orphaned engine process; a multi-GB model download shows progress and survives a dropped connection
+- **Curate decisions as data.** The pending queue's decisions become an `application/` surface: list the open decisions, and apply one chosen action to one item, with the same consent rules the CLI enforces today (spend is consented in bulk, identity merges never are). The CLI `curate` walk becomes a client of that surface instead of its owner. This is engine work with no UI dependency, and it can proceed alongside the spike
+- **Judging as an application service.** Curate decisions as data lists and applies decisions; it does not compute them. Judging a duplicate, typing an edge or proposing a tier is a model call behind a cost gate, and that orchestration still lives in the CLI's `curate` stages. The app's review screen needs it — an identity item the model has not judged is listed as pending evaluation and cannot be merged, so without a way to start the judge from the app those items never become decidable. Judging and its cost consent therefore move into `application/` as their own change, after decisions as data and before the app's review screen
+- **A stable Python API** over the application services, versioned and declared public, with the desktop app as its first client, so the API is shaped by a real consumer rather than designed in a vacuum ([ADR-0039](adr/0039-the-stable-python-api-ships-with-a-desktop-app-as-its-first-client.md))
+- **A local API** the app talks to. This promotes the Horizon item for a local REST API: the desktop app is the consumer MCP cannot serve. It reuses the MCP adapter's one-worker-per-operation model and its sensitivity disclosure gate, and adds what MCP never needed: write operations, cancellation, and a mapping of a busy workspace to "try again" rather than an error. A local server is reachable from any web page the user opens, so it binds to loopback only and authenticates every request with a per-launch secret, checking `Host` and `Origin` against DNS rebinding — the class of attack Ollama itself shipped a fix for
+- **A desktop application.** One installer and an icon; internally a local web UI on `localhost` wrapped in a native shell, so the user never starts a server by hand. The shell starts, supervises and stops the engine. Nothing leaves the machine
+- **A minimum app scope that maps onto shipped verbs:** drop files (the inbox watch), ask (`query`), and review the pending-decision queue (`pending`, `curate`), which is the heart of the app. How a decision is worded for someone who has never heard the word "merge" is a product question, settled in a design brief before the screens are built
+- **Guided setup, as a core deliverable rather than an extra.** The main barrier for a non-technical user is installation: Python, `uv`, a local model runtime, multi-GB models and `openkos.yaml`. Today the engine detects a missing runtime or model and prints a terminal remedy; the app instead detects, explains in plain language, and walks the user through it, including a machine that cannot run the default model. Two installs are acceptable, the app and the model runtime, provided the app presents them as one sequence of steps: it detects the missing runtime, sends the user to its official download, notices when it is installed, and pulls the models with visible progress
+
+Decisions this arc owes, each as its own ADR when its stage starts rather than here:
+
+- **The shell** (Tauri, Electron, or another; each runs the engine as a sidecar process). The tradeoff is installer size and a built-in signed updater against the maturity of the signing path for a bundled binary
+- **How the engine is frozen** (a one-directory freeze, or a relocatable standalone Python tree), judged on native extensions, notarization, antivirus false positives and cold start. A first-run download of the engine is excluded: it breaks the offline promise at the first launch
+- **The model runtime:** guide the user to install Ollama, bundle a runtime, or embed a `llama.cpp` server behind the existing `openai-compatible` backend. Each moves model download and GPU support onto a different owner
+- **The local API's transport and authentication**
+- **Where a remote backend's API key is kept.** The key is read only from `OPENKOS_OPENAI_API_KEY` today, which a non-technical user cannot set. Keeping it in the operating system's keychain honors the rule's intent, since it is never a file in the workspace, but widens its letter, and that is a decision of its own
+
+Product constraints the arc builds to:
+
+- **macOS on Apple Silicon first**, on the memory floor [ADR-0047](adr/0047-the-contradiction-and-identity-judges-default-to-gemma4-26b-a4b-and-the-engine-runs-one-chat-model-at-a-time.md) already measured: 32 GB of unified memory. Windows and Linux follow later, as their own work. Unified memory is what lets the 32 GB floor run the judge models, and the first platform is the one the project can test on
+- **Unsigned at first.** The project ships without an Apple Developer ID, so the first launch meets the Gatekeeper warning, which on current macOS is passed only from Privacy & Security, not from the Finder. The download page walks the user through it before the download starts. The app's own updates are signed with the project's updater key, which needs no paid certificate
+- **Online to set up, offline to work.** Setup may use the network to fetch the model runtime, the models and updates; nothing the user owns is sent. When setup finishes, the app says it is ready and works offline, and offline is the default from then on
+- **A cloud model is optional, off by default, and never offered during setup.** It is turned on in settings, behind a plain-language warning that states what leaves the machine, what never does, who receives it and that the provider may charge. The send rule is the engine's existing one: everything except `confidential` is sent, which includes `private`, the default sensitivity, so the warning says so explicitly. While it is on, the app shows it is on, and marking something confidential is one action away
+
+Exit criteria are fixed in a pre-registration before the app stages start, as The Quiet Engine's were. At minimum: a person who has never used a terminal installs OpenKOS on a clean machine, drops a file, gets an answer that cites it, and settles a pending decision, without help and without opening a terminal.
+
+Out of scope: a mobile app; syncing a workspace through a cloud or across devices; accounts; the Horizon's third-party extension points, which build on the stable API but are not part of this arc.
 
 What a user can do after MVP 6: install OpenKOS like any other application, drop files in, ask questions, and settle the pending queue, without a terminal.
 
