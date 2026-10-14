@@ -407,7 +407,7 @@ _PASS_REPLY: Final = json.dumps(
         },
         {  # unannotated: nothing in the gold contains it
             "subject": "ack",
-            "value": "Solar noted",
+            "value": "Solar was noted down",
             "evidence": "UI: Okay noted, solar it is.",
         },
         {  # matches d5 only (compuesta)

@@ -65,7 +65,9 @@ def test_non_verbatim_evidence_is_dropped() -> None:
 
 
 def test_evidence_must_come_from_its_own_window() -> None:
-    reply = "[" + _item("case", "Plastic case.", "the case will be plastic") + "]"
+    reply = (
+        "[" + _item("case", "The case is plastic.", "the case will be plastic") + "]"
+    )
     result = dp.run_decision_pass([WINDOW_A], _FakeLLM([reply]))
     assert result.results == []
 
@@ -95,30 +97,43 @@ def test_fenced_empty_array_is_not_a_failure() -> None:
 
 
 def test_one_failed_window_does_not_lose_the_others() -> None:
-    good = "[" + _item("case", "Plastic case.", "the case will be plastic") + "]"
+    good = "[" + _item("case", "The case is plastic.", "the case will be plastic") + "]"
     llm = _FakeLLM([BackendUnavailable("x"), good])
     result = dp.run_decision_pass([WINDOW_A, WINDOW_B], llm)
-    assert [r.title for r in result.results] == ["Plastic case"]
+    assert [r.title for r in result.results] == ["The case is plastic"]
     assert result.failure == "decision_pass: BackendUnavailable"
 
 
 def test_dedup_by_normalized_subject_first_wins_across_windows() -> None:
     first = (
-        "[" + _item("Remote  Case", "Wood.", "The case could be wood or plastic") + "]"
+        "["
+        + _item(
+            "Remote  Case", "The case is wood.", "The case could be wood or plastic"
+        )
+        + "]"
     )
-    second = "[" + _item("remote case", "Plastic.", "the case will be plastic") + "]"
+    second = (
+        "["
+        + _item("remote case", "The case is plastic.", "the case will be plastic")
+        + "]"
+    )
     result = dp.run_decision_pass([WINDOW_A, WINDOW_B], _FakeLLM([first, second]))
-    assert [r.description for r in result.results] == ["Remote Case: Wood."]
+    assert [r.description for r in result.results] == ["Remote Case: The case is wood."]
 
 
 def test_cap_bounds_pass_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dp, "MAX_PASS_DECISIONS", 2)
     items = ",".join(
-        _item(f"topic {n}", f"Value {n}.", "we'll go with the regular chip")
+        _item(
+            f"topic {n}", f"Chosen value number {n}.", "we'll go with the regular chip"
+        )
         for n in range(5)
     )
     result = dp.run_decision_pass([WINDOW_A], _FakeLLM([f"[{items}]"]))
-    assert [r.title for r in result.results] == ["Value 0", "Value 1"]
+    assert [r.title for r in result.results] == [
+        "Chosen value number 0",
+        "Chosen value number 1",
+    ]
 
 
 def test_body_is_value_plus_quoted_evidence_and_nothing_else() -> None:
@@ -188,3 +203,29 @@ def test_the_title_is_bounded_at_a_word_boundary() -> None:
 def test_the_subject_stays_available_in_the_description() -> None:
     result = dp.to_result(dp.DecisionItem("battery type", "Use solar.", "q"))
     assert result.description.startswith("battery type")
+
+
+def test_min_value_words_is_three() -> None:
+    assert dp.MIN_VALUE_WORDS == 3
+
+
+@pytest.mark.parametrize(
+    ("value", "kept"),
+    [
+        ("We'll say two", True),  # exactly the floor: kept
+        ("Yes we did", True),
+        ("Use plastic", False),  # two words: below the floor
+        ("two", False),
+        ("  Use   plastic  ", False),  # whitespace never inflates the count
+    ],
+)
+def test_value_below_the_word_floor_is_dropped(value: str, kept: bool) -> None:
+    data = {"subject": "case", "value": value, "evidence": "q"}
+    assert (dp.validate_item(data) is not None) is kept
+
+
+def test_prompt_admits_imposed_requirements_and_excludes_actions() -> None:
+    prompt = dp._SYSTEM_PROMPT
+    assert "requirement or constraint" in prompt
+    assert "without the transcript" in prompt
+    assert "action items" in prompt
