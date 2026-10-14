@@ -1,0 +1,225 @@
+{
+  "accept_recommended": {
+    "commits": [
+      "openkos: merge concepts/foo-2 into concepts/foo",
+      "openkos: merge concepts/bar-2 into concepts/bar"
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "identity",
+        "applied",
+        "as_proposed"
+      ],
+      [
+        "identity",
+        "applied",
+        "as_proposed"
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n2 candidate group(s) -> 2 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 2 candidate group(s) served from persisted adjudications; 2 judged fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n\ropenkos curate: embedding doc 1/2 - 0s...\ropenkos curate: embedding doc 2/2 - 0s...\n",
+    "stdout": "\nopenkos curate: Identity: 2 group(s) judged the same this run by gemma4:26b-a4b, offered for one answer (any confidence):\n  concepts/foo-2 -> concepts/foo (confidence 0.95) -- undo: openkos unmerge concepts/foo\n  concepts/bar-2 -> concepts/bar (confidence 0.60) -- undo: openkos unmerge concepts/bar\nAccept all 2 recommended merge(s)? [y/N]: y\n  accepting concepts/foo-2 -> concepts/foo -- undo: openkos unmerge concepts/foo\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n  accepting concepts/bar-2 -> concepts/bar -- undo: openkos unmerge concepts/bar\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: applied 2, skipped 0.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "adjudicate_apply_d": {
+    "commits": [
+      "openkos: keep distinct concepts/foo/concepts/foo-2"
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "identity",
+        "declined",
+        "declined"
+      ]
+    ],
+    "stderr": "openkos adjudicate: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\n",
+    "stdout": "  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\nMerge concepts/foo-2 into concepts/foo? [y]es / [s]kip / [d]istinct (d records a permanent keep-distinct ruling): d\nopenkos adjudicate --apply: applied 0, skipped 1 (N>2: 0, already-merged: 0, declined: 1)\n  declined: concepts/foo-2 -> concepts/foo\n"
+  },
+  "auto_merge": {
+    "commits": [
+      "openkos: auto-merge 2 pair(s) in the measured identity class"
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "identity",
+        "applied",
+        "as_proposed"
+      ],
+      [
+        "identity",
+        "applied",
+        "as_proposed"
+      ]
+    ],
+    "stderr": "2 candidate group(s) -> 2 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 2 candidate group(s) served from persisted adjudications; 2 judged fresh.\n",
+    "stdout": "openkos curate: Identity: merged 2 pair(s) automatically (measured class, gemma4:26b-a4b, confidence >= 0.90):\n  concepts/foo-2 -> concepts/foo (confidence 0.95) -- undo: openkos unmerge concepts/foo\n  concepts/bar-2 -> concepts/bar (confidence 0.95) -- undo: openkos unmerge concepts/bar\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: applied 2 automatically; 0 in-class group(s) left for review -- run `openkos curate` on a terminal.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "drift_exit_three": {
+    "commits": [],
+    "exit_code": 3,
+    "rows": [
+      [
+        "identity",
+        "pending",
+        null
+      ],
+      [
+        "identity",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n2 candidate group(s) -> 2 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 2 candidate group(s) served from persisted adjudications; 2 judged fresh.\nopenkos curate: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/foo.md. Nothing was written, nothing was deleted. Re-run to recompute over the current bundle.\n",
+    "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\n"
+  },
+  "guard_order_drift_first": {
+    "commits": [],
+    "exit_code": 3,
+    "rows": [
+      [
+        "identity",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n1 candidate group(s) -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos curate: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/foo.md. Nothing was written, nothing was deleted. Re-run to recompute over the current bundle.\n",
+    "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\n"
+  },
+  "identity_d": {
+    "commits": [
+      "openkos: keep distinct concepts/foo/concepts/foo-2"
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "identity",
+        "declined",
+        "declined"
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n1 candidate group(s) -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\nMerge concepts/foo-2 into concepts/foo? [y]es / [s]kip / [d]istinct (d records a permanent keep-distinct ruling): d\nPreconditions: empty\nIdentity: applied 0, skipped 1.\n  declined: concepts/foo-2 -> concepts/foo\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "identity_s": {
+    "commits": [],
+    "exit_code": 0,
+    "rows": [
+      [
+        "identity",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n1 candidate group(s) -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\nMerge concepts/foo-2 into concepts/foo? [y]es / [s]kip / [d]istinct (d records a permanent keep-distinct ruling): s\nPreconditions: empty\nIdentity: applied 0, skipped 1.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "identity_y": {
+    "commits": [
+      "openkos: merge concepts/foo-2 into concepts/foo"
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "identity",
+        "applied",
+        "as_proposed"
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n1 candidate group(s) -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n\ropenkos curate: embedding doc 1/1 - 0s...\n",
+    "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\nMerge concepts/foo-2 into concepts/foo? [y]es / [s]kip / [d]istinct (d records a permanent keep-distinct ruling): y\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: applied 1, skipped 0.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "keep_distinct_record_failure": {
+    "commits": [],
+    "exit_code": 0,
+    "rows": [
+      [
+        "identity",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n1 candidate group(s) -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos curate: warning -- failed to record the keep-distinct ruling (read-only filesystem); this group will be offered again.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\nPreconditions: empty\nIdentity: applied 0, skipped 1.\n  declined: concepts/foo-2 -> concepts/foo\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "member_vanished": {
+    "commits": [],
+    "exit_code": 0,
+    "rows": [
+      [
+        "identity",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n1 candidate group(s) -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos curate: Identity: skipped concepts/foo-2 -> concepts/foo -- a member no longer exists.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\nPreconditions: empty\nIdentity: applied 0, skipped 1.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "non_tty_refusal": {
+    "commits": [],
+    "exit_code": 0,
+    "rows": [],
+    "stderr": "1 candidate group(s) -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\n",
+    "stdout": "Preconditions: empty\nIdentity: non-interactive write consent unavailable -- run `openkos adjudicate --apply-same --confirm-count <n>` instead.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "partial_availability": {
+    "commits": [
+      "openkos: merge concepts/foo-2 into concepts/foo"
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "identity",
+        "applied",
+        "as_proposed"
+      ],
+      [
+        "identity",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n2 candidate group(s) -> 2 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 2 candidate group(s) served from persisted adjudications; 2 judged fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n\ropenkos curate: embedding doc 1/1 - 0s...\n",
+    "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: unavailable -- connection refused. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment. Already applied 1, skipped 0 before the failure.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "write_failure_at_merge": {
+    "commits": [
+      "openkos: merge concepts/foo-2 into concepts/foo"
+    ],
+    "exit_code": 1,
+    "rows": [
+      [
+        "identity",
+        "applied",
+        "as_proposed"
+      ],
+      [
+        "identity",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n2 candidate group(s) -> 2 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 2 candidate group(s) served from persisted adjudications; 2 judged fresh.\nopenkos curate: Identity: failed while merging concepts/bar-2 into concepts/bar -- disk full.\n",
+    "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n\n  merge concepts/bar-2 into concepts/bar (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/bar-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/bar (canonical id (base of a -N family))\n"
+  },
+  "write_failure_at_prepare": {
+    "commits": [
+      "openkos: merge concepts/foo-2 into concepts/foo"
+    ],
+    "exit_code": 1,
+    "rows": [
+      [
+        "identity",
+        "applied",
+        "as_proposed"
+      ],
+      [
+        "identity",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n2 candidate group(s) -> 2 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 2 candidate group(s) served from persisted adjudications; 2 judged fresh.\nopenkos curate: Identity: failed while merging concepts/bar-2 into concepts/bar -- no plan.\n",
+    "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n"
+  }
+}
