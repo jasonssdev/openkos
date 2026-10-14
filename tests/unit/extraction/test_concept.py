@@ -106,7 +106,7 @@ def _array(*items: str) -> str:
     return "[" + ", ".join(items) + "]"
 
 
-def _objects(*args: object, **kwargs: object) -> "list[concept_mod.ExtractionResult]":
+def _objects(*args: object, **kwargs: object) -> list[concept_mod.ExtractionResult]:
     """`extract_concept(...).objects`.
 
     Every test below predates the #404 cap report and asserts on the object
@@ -4694,7 +4694,7 @@ _DATED_REVIEW_DECISION = (
 )
 
 
-def _sole_dated_result(title: str) -> "concept_mod.ExtractionResult":
+def _sole_dated_result(title: str) -> concept_mod.ExtractionResult:
     return concept_mod.ExtractionResult(
         type="Event", title=title, description="d", body=""
     )
@@ -6476,7 +6476,7 @@ class _WindowKeyedLLM:
         windows: Sequence[str],
         replies: dict[int, str | Exception],
         *,
-        on_call: "Callable[[int], None] | None" = None,
+        on_call: Callable[[int], None] | None = None,
     ) -> None:
         self._windows = list(windows)
         self._replies = replies
@@ -6504,7 +6504,7 @@ class _WindowKeyedLLM:
         return reply
 
 
-def _finish_second_window_first() -> "Callable[[int], None]":
+def _finish_second_window_first() -> Callable[[int], None]:
     """An `on_call` hook that makes window 0 finish AFTER window 1, with no
     wall-clock assumption.
 
@@ -7355,7 +7355,7 @@ merged list at exactly one candidate -- the re-ask trigger, and the
 single-candidate union that skips the judge call entirely (#644)."""
 
 
-def _kept_subject() -> "concept_mod.ExtractionResult":
+def _kept_subject() -> concept_mod.ExtractionResult:
     return concept_mod.ExtractionResult(
         type="Concept",
         title="Backup Encryption",

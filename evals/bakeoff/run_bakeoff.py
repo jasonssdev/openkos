@@ -97,7 +97,7 @@ def read_cell(directory: pathlib.Path) -> dict[str, Any] | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None  # a torn write is "not done": the cell simply re-runs
     return data if isinstance(data, dict) else None
 
@@ -349,7 +349,7 @@ def _eligibility_state(results: pathlib.Path, tag: str) -> str | None:
         return None
     try:
         stored = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     if stored.get("version") != ollama_mod.ELIGIBILITY_VERSION:
         return None  # written under older rules: not a verdict, re-measure
@@ -362,7 +362,7 @@ def _estimate_note(results: pathlib.Path, tag: str) -> str:
     path = _eligibility_path(results, tag)
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return ""
     if record.get("version") != ollama_mod.ELIGIBILITY_VERSION:
         return ""
@@ -612,7 +612,7 @@ def _find_stamp(directory: pathlib.Path) -> dict[str, Any] | None:
     for path in sorted(directory.rglob("runs-*.json"), reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except OSError, ValueError:
             continue
         if isinstance(data, dict) and isinstance(data.get("stamp"), dict):
             return dict(data["stamp"])

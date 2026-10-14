@@ -808,7 +808,7 @@ def _commit_has_confidential(root: Path, paths: Sequence[str]) -> bool:
         try:
             text = file_path.read_text(encoding="utf-8")
             metadata, _ = okf.load_frontmatter(text)
-        except (OSError, ValueError):
+        except OSError, ValueError:
             continue
         if str(metadata.get("sensitivity", "")).strip() == okf.SENSITIVITY_ORDER[-1]:
             return True
@@ -2425,12 +2425,12 @@ the one-line preview every other consenting caller prints cannot drift."""
 
 def _apply_reconciliation(
     root: Path,
-    prepared: "PreparedMerge",
+    prepared: PreparedMerge,
     *,
     no_reconcile: bool,
     verb: str,
     reconcile: bool = False,
-) -> "PreparedMerge":
+) -> PreparedMerge:
     """Run the #645 pass when `_reconcile_planned`, else return `prepared`
     unchanged -- the shared post-consent half of the disclosure above.
 
@@ -2466,7 +2466,7 @@ def _apply_reconciliation(
 
 
 def _format_merge_preview_line(
-    prepared: "PreparedMerge", *, no_reconcile: bool = False, reconcile: bool = False
+    prepared: PreparedMerge, *, no_reconcile: bool = False, reconcile: bool = False
 ) -> str:
     """The "merge X into Y (...)" preview line for one prepared merge,
     extracted verbatim from the former inline body (issue #137 closing
@@ -2521,7 +2521,7 @@ def _format_merge_preview_line(
     )
 
 
-def _echo_n_gt2_skip(bundle_dir: Path, group: "CandidateGroup") -> None:
+def _echo_n_gt2_skip(bundle_dir: Path, group: CandidateGroup) -> None:
     """The SAME-verdict N>2 skip report shared by `_run_adjudicate_apply`
     and `_run_adjudicate_apply_same` (issue #191) -- ONE helper so the two
     walks can never drift apart again.
@@ -2810,7 +2810,7 @@ def _run_adjudicate_apply(
 
 
 def _refused_stacked_line(
-    report: "StackedBodyReport", absorbed_canonical: str, survivor_canonical: str
+    report: StackedBodyReport, absorbed_canonical: str, survivor_canonical: str
 ) -> str:
     """The `--apply-same` refusal line for one guardrail-crossing merge
     (issue #559): names the share, the threshold, and the per-item-consent
@@ -2826,7 +2826,7 @@ def _refused_stacked_line(
 
 
 def _echo_batch_pass1_skips(
-    bundle_dir: Path, preview: "application_lifecycle.BatchApplyPreview"
+    bundle_dir: Path, preview: application_lifecycle.BatchApplyPreview
 ) -> None:
     """Render every Pass-1 classification exclusion from `preview.skips`
     (issue #918 Slice 5), in the exact wording and relative order
@@ -2864,7 +2864,7 @@ def _echo_batch_pass1_skips(
 
 
 def _echo_batch_pass1_items(
-    preview: "application_lifecycle.BatchApplyPreview",
+    preview: application_lifecycle.BatchApplyPreview,
     *,
     no_reconcile: bool,
     reconcile: bool,
@@ -4682,7 +4682,7 @@ def _reingest_will_skip(src: Path, layout: config.WorkspaceLayout) -> bool:
         if not concept_path.exists():
             return False
         metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return False
     if metadata.get(okf.ORIGIN_KEY_KEY) is None:
         return False
@@ -9027,8 +9027,8 @@ class _SensitivitySkip:
 
 
 def _reconcile_merged_survivor(
-    root: Path, prepared: "PreparedMerge"
-) -> tuple["PreparedMerge", "str | _SensitivitySkip | None"]:
+    root: Path, prepared: PreparedMerge
+) -> tuple[PreparedMerge, str | _SensitivitySkip | None]:
     """Run the #645 reconciliation pass over `prepared`'s merged survivor:
     returns `(updated_prepared, None)` on success, or `(prepared,
     failure_reason)` -- the caller keeps the stacked body and notices.
@@ -12821,7 +12821,7 @@ def _suggest_relations_ports() -> relations_service.SuggestRelationsPorts:
     )
 
 
-def _refuse(exc: "relations_service.SuggestionRefused") -> "typer.Exit":
+def _refuse(exc: relations_service.SuggestionRefused) -> typer.Exit:
     """Print a typed suggestion refusal verbatim and map its TYPE to the exit
     code: 3 for drift (the one failure a script may safely retry, #319), 1 for
     everything else."""
@@ -13227,8 +13227,8 @@ class AdjudicationServes(NamedTuple):
     alone, and `rubric_stale` is a count a caller could silently swap with
     nothing but a type checker noticing."""
 
-    served: "dict[str, AdjudicatedCandidate]"
-    to_judge: "list[CandidateGroup]"
+    served: dict[str, AdjudicatedCandidate]
+    to_judge: list[CandidateGroup]
     rubric_stale: int
     """How many groups re-judge with a persisted row predating the current
     judgment rubric (#838) -- the caller names the reason so the re-spend
@@ -13248,10 +13248,10 @@ class AdjudicationServes(NamedTuple):
 
 
 def _reassemble_adjudications(
-    candidates: "list[CandidateGroup]",
-    served: "dict[str, AdjudicatedCandidate]",
-    fresh: "Sequence[AdjudicatedCandidate]",
-) -> "list[AdjudicatedCandidate]":
+    candidates: list[CandidateGroup],
+    served: dict[str, AdjudicatedCandidate],
+    fresh: Sequence[AdjudicatedCandidate],
+) -> list[AdjudicatedCandidate]:
     """Rebuild a run's verdicts in CANDIDATE order, merging what the store
     served with what the model just judged (#867) -- the adjudication twin
     of `_reassemble_edge_suggestions`, extracted from the `adjudicate` verb
@@ -13279,7 +13279,7 @@ def _reassemble_adjudications(
 
 def _partition_adjudication_serves(
     layout: config.WorkspaceLayout,
-    candidates: "list[CandidateGroup]",
+    candidates: list[CandidateGroup],
     *,
     include_confidential: bool,
     warn_on_failure: bool = True,
@@ -13398,10 +13398,10 @@ beside the partition it answers."""
 
 
 def _reassemble_edge_suggestions(
-    edges: "list[Edge]",
-    served: "dict[str, EdgeSuggestion]",
-    fresh: "Sequence[EdgeSuggestion]",
-) -> "list[EdgeSuggestion]":
+    edges: list[Edge],
+    served: dict[str, EdgeSuggestion],
+    fresh: Sequence[EdgeSuggestion],
+) -> list[EdgeSuggestion]:
     """One-line delegator (issue #1168): the merge lives in
     `application/suggest_relations_service.py`, shared by `suggest-relations`
     and `curate`'s Structure stage, and is kept under this name for the
@@ -13411,7 +13411,7 @@ def _reassemble_edge_suggestions(
 
 def _partition_edge_suggestion_serves(
     layout: config.WorkspaceLayout,
-    edges: "list[Edge]",
+    edges: list[Edge],
     *,
     include_confidential: bool,
     warn_on_failure: bool = True,
@@ -13438,11 +13438,11 @@ def _partition_edge_suggestion_serves(
 
 def _persist_edge_suggestions(
     layout: config.WorkspaceLayout,
-    results: "Sequence[EdgeSuggestion]",
+    results: Sequence[EdgeSuggestion],
     *,
     include_confidential: bool,
     surface: str = "suggest-relations",
-    judged_digests: "Mapping[str, str | None] | None" = None,
+    judged_digests: Mapping[str, str | None] | None = None,
 ) -> None:
     """Delegator to `relations_service.persist_edge_suggestions` (issue
     #1168), which owns the persist rule (#799). This wrapper only renders the
@@ -13471,11 +13471,11 @@ def _echo_stderr(message: str) -> None:
 
 def _persist_adjudications(
     layout: config.WorkspaceLayout,
-    results: "Sequence[AdjudicatedCandidate]",
+    results: Sequence[AdjudicatedCandidate],
     *,
     include_confidential: bool,
     surface: str = "adjudicate",
-    judged_digests: "Mapping[str, str | None] | None" = None,
+    judged_digests: Mapping[str, str | None] | None = None,
 ) -> None:
     """Persist freshly judged adjudication verdicts (#779), fail-open: a
     failed persist costs one stderr advisory, never the run -- the same
@@ -13572,7 +13572,7 @@ def _persist_adjudications(
 
 def _echo_declined_finding(
     record: bundle_decisions.DecisionRecord,
-    finding: "findings.PersistedFinding | None",
+    finding: findings.PersistedFinding | None,
 ) -> None:
     """One `--declined` listing entry (pending-work spec: "The declined-
     listing view surfaces it"; Scenario "A stale finding remains visible as

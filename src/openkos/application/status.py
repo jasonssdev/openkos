@@ -334,7 +334,7 @@ def read_status_overview(layout: config.WorkspaceLayout) -> StatusOverview:
         recent_entries: tuple[bundle_log.LogEntry, ...] | None = tuple(
             bundle_log.read_recent_entries(log_text, RECENT_ACTIVITY_LIMIT)
         )
-    except (OSError, ValueError):
+    except OSError, ValueError:
         recent_entries = None
 
     return StatusOverview(survey=survey, recent_entries=recent_entries)

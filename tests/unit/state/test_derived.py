@@ -279,7 +279,7 @@ def test_reindex_gate_force_writes_even_when_manifest_unchanged(
 def test_sqlite_operational_error_supports_manual_errorcode_assignment() -> None:
     """Spike/decision test (task 1.1): confirms `sqlite_errorcode` is
     settable and readable on a MANUALLY constructed `sqlite3.OperationalError`
-    on this interpreter (Python 3.13) -- this is what lets tests inject a
+    on this interpreter (Python 3.14) -- this is what lets tests inject a
     lock-contention failure at any write surface without a real concurrent
     second connection. If this assumption ever regresses on a future
     interpreter, the documented fallback is a real 2nd-connection `BEGIN

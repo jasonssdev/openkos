@@ -108,7 +108,7 @@ def _queue(root: Path) -> Iterator[sqlite3.Connection | None]:
         return
     try:
         conn = derived.open_derived_connection(path)
-    except (sqlite3.Error, OSError):
+    except sqlite3.Error, OSError:
         yield None
         return
     try:

@@ -14,7 +14,7 @@ license-files = ["LICENSE"]
 authors = [
     { name = "Jason", email = "jasonssdev@gmail.com" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 keywords = [
     "okf",
     "open-knowledge-format",
@@ -36,8 +36,6 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Text Processing :: Indexing",
@@ -190,7 +188,7 @@ branch = true
 fail_under = 90
 show_missing = true
 
-# Ruff infers `target-version` from `project.requires-python` (3.12) and
+# Ruff infers `target-version` from `project.requires-python` (3.14) and
 # defaults `line-length` to 88; neither is restated here. The formatter runs on
 # defaults, so there is no [tool.ruff.format] section.
 
@@ -199,7 +197,7 @@ select = [
     "E",   # pycodestyle errors
     "F",   # Pyflakes: undefined names, unused imports
     "I",   # isort: deterministic import order, keeps the layering rule auditable
-    "UP",  # pyupgrade: the 3.12 floor means no back-compat idioms are needed
+    "UP",  # pyupgrade: the 3.14 floor means no back-compat idioms are needed
     "B",   # bugbear: mutable defaults, `raise ... from`, unstrict `zip`
     "BLE", # blind-except: a broad catch must name its reason (`noqa: BLE001 -- why`)
     "SIM", # flake8-simplify
@@ -234,8 +232,8 @@ extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
 [tool.mypy]
 # Pin the analysis target to the declared floor so a contributor on a newer
-# interpreter cannot merge code that is broken on 3.12.
-python_version = "3.12"
+# interpreter cannot merge code that is broken on 3.14.
+python_version = "3.14"
 files = ["src", "tests"]
 strict = true
 # Not implied by `strict`: dead code left by a wrong narrowing is a real bug,

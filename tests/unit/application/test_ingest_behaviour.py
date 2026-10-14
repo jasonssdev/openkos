@@ -1526,7 +1526,7 @@ def test_ingest_healthy_judge_selection_stamps_no_extraction_notice(
 
 def _first_healthy_ingest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> "_SequencedLLM":
+) -> _SequencedLLM:
     """One healthy union+judge ingest of `notes.txt`: two distinct
     candidates, judge selects both. Returns the exhausted fake."""
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")

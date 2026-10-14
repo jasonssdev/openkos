@@ -152,7 +152,7 @@ def harvest_titles(root: Path) -> list[str]:
     for path in sorted(root.rglob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        except json.JSONDecodeError, UnicodeDecodeError, OSError:
             continue
         _walk(data, found)
     return sorted(t for t in found if _MIN_TITLE_CHARS <= len(t) <= _MAX_TITLE_CHARS)

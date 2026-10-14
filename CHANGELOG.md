@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Changed
+
+- **Python 3.14 is now the only supported interpreter.** `requires-python` is `>=3.14`, and development, CI and release all run 3.14 (ADR-0054). Users on Python 3.12 or 3.13 stay on 0.5.5, the last release that installs there, and must move to Python 3.14 to upgrade.
+
 ## [0.5.5] - 2026-10-14
 
 Two additions for meeting transcripts. A Source's `event_date` can now carry a local time of day, so `revisions` can order two Decisions made on the same day. And an opt-in decision pass, `transcript_decisions`, extracts one Decision per decision actually reached in a meeting, each with a verbatim evidence line. With the new key left off and every `event_date` date-only, ingest output is identical to 0.5.4.

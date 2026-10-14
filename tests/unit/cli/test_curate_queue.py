@@ -584,7 +584,7 @@ class _TierModel:
         default = types.TYPE_TO_DEFAULT_VOLATILITY["Concept"]
         return f'{{"tier": "{default}", "rationale": "keep it"}}'
 
-    def embed(self, texts: "list[str]") -> "list[list[float]]":
+    def embed(self, texts: list[str]) -> list[list[float]]:
         return [[1.0] + [0.0] * 7 for _ in texts]
 
 

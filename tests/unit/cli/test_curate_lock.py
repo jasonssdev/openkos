@@ -75,7 +75,7 @@ class _OfflineOllama:
     def chat(self, messages: object) -> str:
         return '{"extract": false}'
 
-    def embed(self, texts: "list[str]") -> "list[list[float]]":
+    def embed(self, texts: list[str]) -> list[list[float]]:
         return [[1.0] + [0.0] * (EMBED_DIM - 1) for _ in texts]
 
 

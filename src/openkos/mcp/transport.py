@@ -102,7 +102,7 @@ the over-long bytes."""
 def start_reader(
     reader: BinaryIO,
     loop: asyncio.AbstractEventLoop,
-    queue: "asyncio.Queue[bytes | None]",
+    queue: asyncio.Queue[bytes | None],
     *,
     max_line_bytes: int = MAX_LINE_BYTES,
 ) -> threading.Thread:

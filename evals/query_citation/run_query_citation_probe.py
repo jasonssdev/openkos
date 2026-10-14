@@ -376,7 +376,7 @@ def baseline_counts() -> tuple[int, int, int]:
     for path in sorted(_BASELINE_DIR.glob(_BASELINE_GLOB)):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except OSError, ValueError:
             continue
         for row in payload.get("rows", []):
             cited = row.get("cited")

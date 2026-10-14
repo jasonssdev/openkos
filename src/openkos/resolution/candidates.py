@@ -64,7 +64,7 @@ from openkos.model import okf
 from .normalize import normalize_key
 from .similarity import acronym_expansion_match, near_match_score
 
-_TIER_ORDER: dict["Tier", int] = {}
+_TIER_ORDER: dict[Tier, int] = {}
 """Populated after `Tier` is defined -- HIGH sorts before LOW within a type
 partition (module-level ordering table, keeps `find_candidates`'s sort key
 a simple lookup)."""

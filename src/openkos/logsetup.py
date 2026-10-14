@@ -133,7 +133,7 @@ def _read_record(path: Path, digest: str) -> Path | None:
         with path.open("rb") as handle:
             raw = handle.read(_MAX_RECORD_BYTES + 1)
         text = raw.decode("utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
     if len(raw) > _MAX_RECORD_BYTES or not text or "\x00" in text:
         return None

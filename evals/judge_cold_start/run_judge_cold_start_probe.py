@@ -304,7 +304,7 @@ def loaded_models(host: str, *, timeout: float = 10.0) -> tuple[str, ...]:
             f"{host}/api/ps", timeout=timeout
         ) as response:
             data = json.loads(response.read())
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+    except urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError:
         return ()
     return tuple(str(m.get("name", "")) for m in data.get("models", []))
 
@@ -318,7 +318,7 @@ def unload(host: str, model: str, *, timeout: float = 60.0) -> bool:
     """
     try:
         _post(host, "/api/generate", {"model": model, "keep_alive": 0}, timeout=timeout)
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+    except urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError:
         return False
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

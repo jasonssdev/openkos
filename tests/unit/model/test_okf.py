@@ -866,7 +866,7 @@ def test_build_source_concept_round_trips_event_date_through_load_frontmatter() 
     ],
 )
 def test_read_event_date(
-    metadata: dict[str, object], expected: "okf.StoredEventDate"
+    metadata: dict[str, object], expected: okf.StoredEventDate
 ) -> None:
     assert okf.read_event_date(metadata) == expected
 

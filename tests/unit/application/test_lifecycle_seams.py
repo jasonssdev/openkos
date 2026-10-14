@@ -255,7 +255,7 @@ def _doc(sensitivity: str | None) -> bytes:
 
 def _prepared(
     survivor: str | None, absorbed: str | None, merged: str | None
-) -> "application_lifecycle.PreparedMerge":
+) -> application_lifecycle.PreparedMerge:
     merged_text = _doc(merged).decode()
     return cast(
         "application_lifecycle.PreparedMerge",

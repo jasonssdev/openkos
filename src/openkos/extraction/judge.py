@@ -51,7 +51,7 @@ verbatim rather than adding new parsing code)."""
 
 
 def _build_judge_messages(
-    source_text: str, candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]"
+    source_text: str, candidates: list[JudgeCandidate] | tuple[JudgeCandidate, ...]
 ) -> list[Message]:
     """Assemble the 2-message prompt: system selection rules + the source
     text and the numbered candidate list as the user turn."""
@@ -67,7 +67,7 @@ def _build_judge_messages(
 
 
 def prompt_overhead_chars(
-    candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
+    candidates: list[JudgeCandidate] | tuple[JudgeCandidate, ...],
 ) -> int:
     """Chars the judge prompt spends on everything EXCEPT the source text
     (#866): the system rules, the rendered candidate lines, and the fixed
@@ -118,7 +118,7 @@ def _normalize_title(value: str) -> str:
 
 def _salvage_full_line_echoes(
     kept: tuple[str, ...],
-    candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
+    candidates: list[JudgeCandidate] | tuple[JudgeCandidate, ...],
 ) -> tuple[str, ...]:
     """Resolve kept strings that echo a WHOLE candidate line back to the
     bare candidate title (#644, measured on a cold-start probe): despite
@@ -229,16 +229,16 @@ def _unparseable_cause(reply: str) -> str:
     """Which way the reply failed `extract_json_object`."""
     try:
         json.loads(reply.strip())
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return f"{JUDGE_FAILURE_UNPARSEABLE}: {_UNPARSEABLE_NO_JSON}"
     return f"{JUDGE_FAILURE_UNPARSEABLE}: {_UNPARSEABLE_JSON_NOT_OBJECT}"
 
 
 def _select_once(
     source_text: str,
-    candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
+    candidates: list[JudgeCandidate] | tuple[JudgeCandidate, ...],
     llm: LLMBackend,
-) -> "tuple[tuple[str, ...], None] | tuple[None, str]":
+) -> tuple[tuple[str, ...], None] | tuple[None, str]:
     """One judge attempt: chat, parse, validate, salvage.
 
     Returns `(selected, cause)` -- EXACTLY ONE is set, and the return type
@@ -276,8 +276,8 @@ def _select_once(
 
 def classify_reply(
     reply: str,
-    candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
-) -> "tuple[tuple[str, ...], None] | tuple[None, str]":
+    candidates: list[JudgeCandidate] | tuple[JudgeCandidate, ...],
+) -> tuple[tuple[str, ...], None] | tuple[None, str]:
     """`(selected, cause)` for a reply that arrived without raising.
 
     Exactly one of the two is set, spelled in the type. Split out of `_select_once` (#795) so
@@ -299,7 +299,7 @@ def classify_reply(
 
 def select(
     source_text: str,
-    candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
+    candidates: list[JudgeCandidate] | tuple[JudgeCandidate, ...],
     llm: LLMBackend,
 ) -> JudgeOutcome:
     """Ask `llm` which of `candidates` are genuine, distinct subjects.

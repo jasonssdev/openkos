@@ -363,7 +363,7 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
             rel_dir = ""
         try:
             text = scan.path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             skip_notices.append(f"{identity}.md: skipped (unreadable)")
             continue
         try:
@@ -550,7 +550,7 @@ def resolve_windows(cfg: config.Config) -> tuple[VolatilityWindows, list[str]]:
     return windows, notices
 
 
-def window_for_doc(doc: "LintDoc", windows: VolatilityWindows) -> timedelta | None:
+def window_for_doc(doc: LintDoc, windows: VolatilityWindows) -> timedelta | None:
     """Resolve `doc`'s stale-stamp window, or `None` if it must never be
     flagged (freshness-lint-v1 + freshness-suggest-windows, load-bearing
     precedence).

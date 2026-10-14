@@ -99,7 +99,7 @@ def read_concept(
 
     try:
         text = concept_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return UnreadableConcept(concept_id=canonical_id)
 
     try:

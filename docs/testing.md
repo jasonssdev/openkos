@@ -70,9 +70,9 @@ that is not published yet.
 > end-user path `uv tool install` isolates the CLI itself; for the contributor
 > path `uv sync` and `uv run` manage `.venv/` for you.
 
-### 0.2 Python 3.12+ and uv
+### 0.2 Python 3.14 and uv
 
-OpenKOS targets **Python 3.12+** and both install paths use
+OpenKOS targets **Python 3.14** and both install paths use
 [`uv`](https://docs.astral.sh/uv/), which can also provision Python itself:
 
 ```bash
@@ -80,9 +80,9 @@ OpenKOS targets **Python 3.12+** and both install paths use
 curl -LsSf https://astral.sh/uv/install.sh | sh   # or: brew install uv
 uv --version                                      # verify
 
-# install Python only if no 3.12+ is already present
+# install Python only if no 3.14 is already present
 python3 --version
-uv python install 3.12
+uv python install 3.14
 ```
 
 ### 0.3 Ollama and **two** models

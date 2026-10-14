@@ -132,7 +132,7 @@ def _facet_clusters(titles: list[str]) -> tuple[tuple[str, int], ...]:
 def _survey_one(path: Path) -> Candidate | None:
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
     body = _strip_fenced_code(text)
     titles = [match.group(2) for match in _HEADING_RE.finditer(body)]

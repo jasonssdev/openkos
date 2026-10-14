@@ -170,7 +170,7 @@ class FtsIndex:
         """Close the underlying connection, dropping the in-memory database."""
         self._conn.close()
 
-    def __enter__(self) -> "FtsIndex":
+    def __enter__(self) -> FtsIndex:
         """Return `self` -- the connection is already open by construction."""
         return self
 
@@ -250,7 +250,7 @@ def _doc_row(path: Path, concept_id: str) -> tuple[str, str, str, str, str] | st
     doc that vanishes or corrupts after the walk is reported, not raised."""
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return "unreadable"
     try:
         metadata, body = okf.load_frontmatter(text)
@@ -510,7 +510,7 @@ def refresh_fts_index(
         conn.close()
 
 
-def open_fts_index_readonly(path: Path) -> "FtsIndex | None":
+def open_fts_index_readonly(path: Path) -> FtsIndex | None:
     """Open the on-disk FTS index at `path` read-only, for `query`/`answer()`
     (derived-index-cache: Consumers Read Persisted Indexes Read-Only;
     fts-state: Persisted index read-only for non-reindex consumers).

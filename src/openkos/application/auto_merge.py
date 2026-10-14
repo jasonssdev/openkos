@@ -585,7 +585,7 @@ def _restore(root: Path, snapshot: Mapping[Path, bytes | None]) -> tuple[str, ..
                 path.unlink(missing_ok=True)
             else:
                 fsio.write_atomic(path, original.decode("utf-8"))
-        except (OSError, ValueError):
+        except OSError, ValueError:
             unrestored.append(path.relative_to(root).as_posix())
     return tuple(unrestored)
 
@@ -606,7 +606,7 @@ def survivors_edited_since(
             _data, text = fsio.snapshot_read(
                 layout.bundle_dir / f"{record.survivor}.md"
             )
-        except (OSError, ValueError):
+        except OSError, ValueError:
             continue
         if bundle_ledger.survivor_sha256(text) != record.survivor_after_sha256:
             edited.append(record.survivor)

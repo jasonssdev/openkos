@@ -214,7 +214,7 @@ class PendingReport:
 def _read_inbox(layout: WorkspaceLayout) -> Path | None:
     try:
         return config.read_config(layout.root).unattended.inbox
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
 
 

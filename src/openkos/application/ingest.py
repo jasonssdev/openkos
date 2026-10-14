@@ -378,7 +378,7 @@ def dead_sources_in_family(
         concept_path = okf.concept_path_for(f"sources/{slug}", layout.bundle_dir)
         try:
             metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, okf.FrontmatterError):
+        except OSError, UnicodeDecodeError, okf.FrontmatterError:
             continue
         if metadata.get(
             okf.EXTRACTION_STATUS_KEY
@@ -416,7 +416,7 @@ def raw_member_origin_key(bundle_dir: Path, member: Path) -> str | None:
     concept_path = okf.concept_path_for(f"sources/{slug}", bundle_dir)
     try:
         metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, okf.FrontmatterError):
+    except OSError, UnicodeDecodeError, okf.FrontmatterError:
         return None  # unreadable or malformed frontmatter degrades to unknown
     value = metadata.get(okf.ORIGIN_KEY_KEY)
     return value if isinstance(value, str) and value else None
@@ -1755,7 +1755,7 @@ def find_uncatalogued_objects(
                 continue
             try:
                 metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):  # degrade per file, like family_owns_source
+            except OSError, ValueError:  # degrade per file, like family_owns_source
                 continue
             provenance = metadata.get("provenance")
             if not isinstance(provenance, list) or provenance_key not in provenance:

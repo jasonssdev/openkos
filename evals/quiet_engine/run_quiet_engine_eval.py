@@ -392,7 +392,7 @@ def scan_bundle(workspace: Path) -> dict[str, Doc]:
             continue
         try:
             parsed = okf.try_load_frontmatter(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             continue
         meta = parsed[0] if parsed is not None else {}
         provenance = meta.get("provenance")

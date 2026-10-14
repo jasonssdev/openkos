@@ -219,7 +219,7 @@ def _reread_sensitivity_blocked(
         return False
     try:
         text = doc.path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return True
     try:
         metadata, _body = okf.load_frontmatter(text)

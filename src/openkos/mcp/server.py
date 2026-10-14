@@ -757,7 +757,7 @@ def _warn_insecure_key_at_startup(root: Path) -> None:
     every tool call already surfaces a broken `openkos.yaml` on its own."""
     try:
         cfg = config.read_config(root)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return
     warning = application_backends.insecure_key_warning(cfg)
     if warning is not None:
@@ -774,7 +774,7 @@ def _tool_deadline_for(root: Path) -> float:
     surfaces a broken `openkos.yaml` on its own."""
     try:
         cfg = config.read_config(root)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return DEFAULT_TOOL_DEADLINE_SECONDS
     return cfg.chat_timeout + TOOL_DEADLINE_HEADROOM_SECONDS
 

@@ -839,7 +839,7 @@ def _sync_real_index(
             env=env,
             timeout=_COMMIT_TIMEOUT_SECONDS,
         )
-    except (GitError, ValueError):
+    except GitError, ValueError:
         return
 
 

@@ -1248,7 +1248,7 @@ def test_suggest_relations_closes_the_proximity_source(
         def close(self) -> None:
             closed.append(True)
 
-        def __enter__(self) -> "_Source":
+        def __enter__(self) -> _Source:
             return self
 
         def __exit__(self, *exc: object) -> None:

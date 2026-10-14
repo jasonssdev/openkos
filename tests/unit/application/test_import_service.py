@@ -311,7 +311,7 @@ class TestNamespaceRefusals:
         real.write_text(own, encoding="utf-8")
         try:
             (imports_dir / f"{NS}--private.md").symlink_to(real)
-        except (OSError, NotImplementedError):
+        except OSError, NotImplementedError:
             pytest.skip("symlinks are not available here")
         assert refusal_of(root, foreign_copy(tmp_path)).code == "anchor-path-taken"
 
@@ -325,7 +325,7 @@ class TestNamespaceRefusals:
             (layout.bundle_dir / "imports").symlink_to(
                 elsewhere, target_is_directory=True
             )
-        except (OSError, NotImplementedError):
+        except OSError, NotImplementedError:
             pytest.skip("symlinks are not available here")
         refusal = refusal_of(root, foreign_copy(tmp_path))
         assert refusal.code == "symlink"
@@ -341,7 +341,7 @@ class TestNamespaceRefusals:
         (root / "bundle").rename(real)
         try:
             (root / "bundle").symlink_to(real, target_is_directory=True)
-        except (OSError, NotImplementedError):
+        except OSError, NotImplementedError:
             pytest.skip("symlinks are not available here")
         assert refusal_of(root, foreign_copy(tmp_path)).code == "symlink"
 
@@ -381,7 +381,7 @@ class TestForeignRefusalsSurface:
         if build is None:
             try:
                 (foreign / "link.md").symlink_to(foreign / "ok.md")
-            except (OSError, NotImplementedError):
+            except OSError, NotImplementedError:
                 pytest.skip("symlinks are not available here")
             rel = "link.md"
         else:
@@ -1440,7 +1440,7 @@ class TestPublishDrift:
         import_plan = plan(root, foreign)
         try:
             (foreign / "link.md").symlink_to(foreign / "index.md")
-        except (OSError, NotImplementedError):
+        except OSError, NotImplementedError:
             pytest.skip("symlinks are not available here")
         refusal = publish_refused(root, import_plan)
         assert (refusal.code, refusal.retry_safe) == ("foreign-changed", True)
@@ -1498,7 +1498,7 @@ class TestPublishDrift:
             (layout.bundle_dir / "imports").symlink_to(
                 elsewhere, target_is_directory=True
             )
-        except (OSError, NotImplementedError):
+        except OSError, NotImplementedError:
             pytest.skip("symlinks are not available here")
         refusal = publish_refused(root, import_plan)
         assert refusal.code == "symlink"
@@ -1974,7 +1974,7 @@ class TestTornRunRecovery:
         linked = imports_dir / f".{NS}.openkos-import-link"
         try:
             linked.symlink_to(outside, target_is_directory=True)
-        except (OSError, NotImplementedError):
+        except OSError, NotImplementedError:
             linked = None  # type: ignore[assignment]
 
         publish(root, plan(root, foreign_copy(tmp_path)))

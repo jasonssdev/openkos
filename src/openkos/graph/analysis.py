@@ -17,7 +17,7 @@ import networkx as nx
 from openkos.graph.base import GraphStore
 
 
-def to_digraph(store: GraphStore) -> "nx.DiGraph[str]":
+def to_digraph(store: GraphStore) -> nx.DiGraph[str]:
     """Deterministically convert `store`'s projection into an `nx.DiGraph`.
 
     Every node from `store.nodes()` is added FIRST, so a node with no edges

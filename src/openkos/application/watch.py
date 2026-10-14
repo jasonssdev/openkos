@@ -474,7 +474,7 @@ def _file_refusal(
         tally.deferred += 1
         tally.busy = True
         return True
-    except (sqlite3.Error, OSError):
+    except sqlite3.Error, OSError:
         tally.failure = "queue_unwritable"
         log.error("watch refusal not queued (%s)", tally.failure)
         _record(conn, cand, digest=cand.digest, outcome=DEFERRED)
@@ -496,7 +496,7 @@ def _retire_rows(
             return True
         for path in inbox_paths:
             producers.retire_watch_refusals(conn, path, commit_section=section)
-    except (runner._Halted, lock.WorkspaceBusyError, sqlite3.Error, OSError):
+    except runner._Halted, lock.WorkspaceBusyError, sqlite3.Error, OSError:
         return False
     return True
 
@@ -521,7 +521,7 @@ def _queue_supersessions(
                 bundle_dir=queue.bundle_dir,
                 commit_section=section,
             )
-        except (runner._Halted, lock.WorkspaceBusyError, sqlite3.Error, OSError):
+        except runner._Halted, lock.WorkspaceBusyError, sqlite3.Error, OSError:
             log.warning(
                 "supersession not queued; record it with: %s",
                 svc.supersede_command(supersession),

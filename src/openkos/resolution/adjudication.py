@@ -173,7 +173,7 @@ def _load_members(
             text = okf.concept_path_for(concept_id, bundle_dir).read_text(
                 encoding="utf-8"
             )
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             continue
         try:
             metadata, body = okf.load_frontmatter(text)
