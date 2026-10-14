@@ -42,7 +42,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
@@ -148,7 +148,7 @@ class IngestPolicy:
 
     include_confidential: bool = False
     re_extract: bool = False
-    event_date: date | None = None
+    event_date: okf.EventWhen | None = None
     skip_confirmation: bool = False
     """`--auto`: the confirmation question is not asked. The drift guard
     still runs -- skipping the prompt does not skip the window it stood in."""

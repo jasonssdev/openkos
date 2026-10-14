@@ -10,7 +10,7 @@ service-layer dataclasses (`RevisionPlan`, `RevisionOutcome`,
 mirroring `test_decision_revision.py`'s and `test_revisions_service.py`'s
 own posture of exercising pure functions over hand-built values."""
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -384,3 +384,63 @@ def test_empty_result_messages() -> None:
         with_candidates_plan, empty_outcome, excluded=0
     )
     assert no_findings_report.strip() == "No decision revisions found."
+
+
+def test_same_day_date_times_are_directed_and_rendered_with_their_time() -> None:
+    """#1349 (ADR-0052): two Decisions made hours apart on one day are
+    directed, and the reaffirmation line names the time it happened."""
+    pair_ids = ("decisions/alpha", "decisions/beta")
+    verdict = _verdict(
+        *pair_ids,
+        RevisionVerdictValue.REAFFIRMS,
+        confidence=0.9,
+        quotes=("Alpha quote.", "Beta quote."),
+        date_a=DecisionDate(value=datetime(2026, 4, 1, 11, 3), state="dated"),
+        date_b=DecisionDate(value=datetime(2026, 4, 1, 15, 34), state="dated"),
+    )
+    report = revisions_report.revisions_report(
+        _plan([pair_ids]), revisions.RevisionOutcome(results=(verdict,)), excluded=0
+    )
+
+    assert "decisions/alpha" in report.splitlines()
+    assert "reaffirmed by decisions/beta on 2026-04-01T15:34" in report
+
+
+@pytest.mark.parametrize(
+    ("dates", "expected"),
+    [
+        # An old row written before date-times existed stays readable.
+        (("2026-01-01", "2026-04-01"), "on 2026-04-01"),
+        (("2026-04-01T11:03", "2026-04-01T15:34"), "on 2026-04-01T15:34"),
+        (("2026-04-01T11:03:30", "2026-04-01T11:03:45"), "on 2026-04-01T11:03:45"),
+        # Mixed precision on one day is `equal`: no direction, so no group.
+        (("2026-04-01", "2026-04-01T15:34"), None),
+    ],
+)
+def test_served_findings_read_back_both_shapes(
+    dates: tuple[str, str], expected: str | None
+) -> None:
+    pair_ids = ("decisions/alpha", "decisions/beta")
+    finding = revision_findings.RevisionFinding(
+        pair_ids=pair_ids,
+        verdict="reaffirms",
+        confidence=0.9,
+        rationale="stub rationale",
+        quotes=("Alpha quote.", "Beta quote."),
+        dates=dates,
+        date_states=("dated", "dated"),
+        include_confidential=False,
+        prompt_version="stub-version",
+        input_digests=(),
+    )
+
+    report = revisions_report.revisions_report(
+        _plan([pair_ids], served=(finding,)),
+        revisions.RevisionOutcome(results=()),
+        excluded=0,
+    )
+
+    if expected is None:
+        assert "reaffirmed by" not in report
+    else:
+        assert f"reaffirmed by decisions/beta {expected}" in report

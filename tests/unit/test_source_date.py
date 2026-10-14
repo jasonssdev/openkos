@@ -6,7 +6,7 @@ full contract. Cases mirror `tasks.md` Slice 1's RED/GREEN pairs and
 design.md's two parser tables.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -94,3 +94,70 @@ def test_event_date_from_name(name: str, expected: date | None) -> None:
 def test_parsers_never_raise(text: str) -> None:
     source_date.parse_event_date(text)
     source_date.event_date_from_name(text)
+
+
+# --- #1349: the flag also accepts a naive local date-time ------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("2026-07-14T10:00", datetime(2026, 7, 14, 10, 0)),
+        ("2026-07-14T10:00:00", datetime(2026, 7, 14, 10, 0)),
+        ("2026-07-14T15:34:59", datetime(2026, 7, 14, 15, 34, 59)),
+        ("2026-07-14T00:00", datetime(2026, 7, 14, 0, 0)),
+        ("2026-07-14T23:59:59", datetime(2026, 7, 14, 23, 59, 59)),
+    ],
+)
+def test_parse_event_date_accepts_a_naive_local_date_time(
+    text: str, expected: datetime
+) -> None:
+    result = source_date.parse_event_date(text)
+
+    assert result == expected
+    assert isinstance(result, datetime)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "2026-07-14T10:00Z",
+        "2026-07-14T10:00:00Z",
+        "2026-07-14T10:00+02:00",
+        "2026-07-14T10:00:00-0500",
+        "2026-07-14T10:00:00.5",
+        "2026-07-14T10:00:00.000000",
+        "2026-07-14 10:00",
+        "2026-07-14t10:00",
+        "2026-07-14T10",
+        "2026-07-14T1:00",
+        "2026-07-14T24:00",
+        "2026-07-14T10:60",
+        "2026-07-14T10:00:60",
+        "2026-02-30T10:00",
+        "2026-07-14T",
+        "2026-07-14T10:00 ",
+        "2026-07-14T10:00\n",
+        "20260714T1000",
+        "2026-W28-2T10:00",
+        # Arabic-Indic digits in the time part: not ASCII `[0-9]`.
+        "2026-07-14T١٠:٠٠",  # noqa: RUF001
+    ],
+)
+def test_parse_event_date_refuses_what_a_date_time_does_not_allow(text: str) -> None:
+    assert source_date.parse_event_date(text) is None
+
+
+def test_a_date_only_flag_still_parses_to_a_plain_date() -> None:
+    result = source_date.parse_event_date("2026-07-14")
+
+    assert result == date(2026, 7, 14)
+    assert not isinstance(result, datetime)
+
+
+def test_file_name_inference_stays_date_only() -> None:
+    """A time in a file name is never evidence: only the date token counts."""
+    result = source_date.event_date_from_name("call-2026-07-14T10-00.txt")
+
+    assert result == date(2026, 7, 14)
+    assert not isinstance(result, datetime)

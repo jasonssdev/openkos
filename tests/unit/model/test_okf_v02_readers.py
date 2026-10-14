@@ -76,11 +76,11 @@ def test_generation_time_generated_present_never_falls_back() -> None:
     ("value", "expected"),
     [
         (
-            datetime(2026, 7, 14, 9, 0, 0),  # noqa: DTZ001 -- naive on purpose: a
+            datetime(2026, 7, 14, 9, 0, 0),
             # hand-written unquoted `at:`/`timestamp:` scalar YAML resolves to a
             # naive `datetime` just as readily as an aware one; `_parse_instant`
             # must pass it through unchanged either way
-            datetime(2026, 7, 14, 9, 0, 0),  # noqa: DTZ001 -- same naive value, expected unchanged
+            datetime(2026, 7, 14, 9, 0, 0),
         ),
         (
             "2026-07-14T09:00:00+00:00",

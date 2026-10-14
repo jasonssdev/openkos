@@ -30,6 +30,7 @@ from typing import Final, Literal, get_args
 
 import frontmatter
 import yaml
+from frontmatter import default_handlers as _frontmatter_default_handlers
 
 from openkos import fsio
 from openkos.model.relations import ENGINE_OWNED_RELATION_TYPES
@@ -282,9 +283,10 @@ Emitted only when user-controlled evidence resolved one: the
 or any other derived value -- absence means exactly one thing: no
 evidence, matching `ORIGIN_KEY_KEY`'s convention above.
 
-Written as a QUOTED ISO-8601 calendar date string
-(`event_date: '2026-07-14'`), never a bare unquoted scalar, so every YAML
-parser reads the same text (ADR-0023's YAML-implicit-typing forces). The
+Written as a QUOTED ISO-8601 string -- a calendar date
+(`event_date: '2026-07-14'`) or, since ADR-0052, a naive local date-time
+(`event_date: '2026-07-14T10:00'`) -- never a bare unquoted scalar, so every
+YAML parser reads the same text (ADR-0023's YAML-implicit-typing forces). The
 tolerant reader is `read_event_date` below, which also accepts a bare
 `date` a person wrote by hand.
 
@@ -292,6 +294,83 @@ tolerant reader is `read_event_date` below, which also accepts a bare
 generic fill-the-gap merge rule: a survivor keeps only its own value, the
 same exclusion `type_alternative` gets (#803) and for the same reason --
 it records evidence about ONE Source, not a property of a merged entity."""
+
+
+EventWhen = date | datetime
+"""A Source's `event_date` value (ADR-0052): a calendar `date`, or a NAIVE
+local `datetime` carrying a time of day. `datetime` is a SUBCLASS of `date`,
+so `isinstance(x, date)` is `True` for both and cannot tell them apart --
+every precision test in the engine is `isinstance(x, datetime)`, and a
+`date` and a `datetime` never compare with `<`/`>` (it raises) or equal each
+other. Callers that need an order go through `event_dates.at_common_precision`."""
+
+_EVENT_WHEN_RE: Final = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?)?"
+)
+"""The strict `event_date` text shape: `YYYY-MM-DD`, optionally followed by
+`THH:MM` or `THH:MM:SS`. ASCII `[0-9]` only, and a prefilter for the same
+reason `source_date`'s is: `date.fromisoformat` / `datetime.fromisoformat`
+alone also accept Basic format, week dates, offsets, fractions and a space
+separator, none of which this key allows. The time ranges are bounded here
+(hour 00-23, minute and second 00-59) because Python 3.14's
+`datetime.fromisoformat` also accepts `T24:00` as the next day's midnight."""
+
+
+def parse_event_when(text: str) -> EventWhen | None:
+    """Parse the canonical `event_date` text (ADR-0052), or `None` when it is
+    not a real calendar date or a real naive time of day. The ONE reader of
+    that text for the stored value and for the findings store's `date_0` /
+    `date_1` columns. Never raises."""
+    if not _EVENT_WHEN_RE.fullmatch(text):
+        return None
+    try:
+        if "T" in text:
+            return datetime.fromisoformat(text)
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def format_event_when(value: EventWhen) -> str:
+    """The canonical `event_date` text (ADR-0052): `YYYY-MM-DD`, or
+    `YYYY-MM-DDTHH:MM` with `:SS` appended only when the seconds are
+    non-zero, so one instant has exactly one text and `parse_event_when` /
+    `format_event_when` round-trip byte-identically. A date-only value
+    formats exactly as `date.isoformat()` always did.
+
+    A zoned or fractional `datetime` raises `TypeError`: it would write an
+    offset or a precision no input ever stated, and the key allows neither."""
+    if isinstance(value, datetime):
+        if value.tzinfo is not None or value.microsecond:
+            raise TypeError(
+                "event_date must be a naive local time with whole seconds "
+                f"(an offset or fraction is not allowed): {value!r}"
+            )
+        return value.isoformat(timespec="seconds" if value.second else "minutes")
+    return value.isoformat()
+
+
+class _QuotedStr(str):
+    """A string the YAML emitter always single-quotes. `YYYY-MM-DDTHH:MM` is
+    not a YAML 1.1 timestamp (it has no seconds), so a plain dump would leave
+    it bare, while every other `event_date` text is quoted because it does
+    resolve to a timestamp. ADR-0023 wants one quoted string for every
+    parser; this keeps the key uniform."""
+
+    __slots__ = ()
+
+
+def _represent_quoted_str(
+    dumper: yaml.representer.BaseRepresenter, data: _QuotedStr
+) -> yaml.Node:
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(data), style="'")
+
+
+# `frontmatter` dumps with libyaml's `CSafeDumper` when it is built in and
+# with `SafeDumper` otherwise; its representer table is per class, so the
+# one it actually uses is registered, and so is the pure-Python one.
+for _dumper in {yaml.SafeDumper, _frontmatter_default_handlers.SafeDumper}:
+    _dumper.add_representer(_QuotedStr, _represent_quoted_str)
 
 
 @dataclass(frozen=True)
@@ -305,12 +384,12 @@ class StoredEventDate:
     `application.ingest.resolve_event_date`'s precedence chain: it is
     never carried forward as-is."""
 
-    value: date | None
+    value: EventWhen | None
     malformed: bool
     raw: object
 
 
-def _tolerant_date(raw: object) -> StoredEventDate:
+def _tolerant_date(raw: object, *, allow_time: bool = True) -> StoredEventDate:
     """Tolerantly read a single raw value as a date (design.md Decision 2's
     reader-tolerance table, Decision 5's refactor for Phase 4): the shared
     body of `read_event_date` (via `EVENT_DATE_KEY`) and `read_incoming_date`
@@ -322,26 +401,32 @@ def _tolerant_date(raw: object) -> StoredEventDate:
     exactly as it already does for `timestamp`, so this reader MUST accept
     both a quoted string and a bare `date` and normalize to one form.
 
+    `allow_time` (ADR-0052) is `True` for the stored `event_date`, which may
+    carry a naive local time, and `False` for the incoming `date:` key, which
+    is untrusted input and stays date-only. A bare `datetime` is accepted
+    only when it is naive and has whole seconds: PyYAML turns an unquoted
+    `2026-07-14T10:00:30` into one, while an offset or a fraction yields a
+    zoned or fractional value that this key does not allow.
+
     The `datetime.datetime` check MUST run before the `date` check,
     because `datetime` is a `date` SUBCLASS: an unquoted
     `2026-07-14 10:00` would otherwise pass an `isinstance(x, date)` check
-    and silently drop its time component instead of being reported as
-    malformed.
+    and silently drop its time component instead of being handled as a
+    date-time or reported as malformed.
 
-    Reuses `_ISO_DATE_RE` (this module's §9 date-heading shape check) plus
-    a calendar-validity check via `date.fromisoformat` -- a deliberate,
-    documented narrow twin of `source_date.parse_event_date`, kept inside
-    this seam rather than importing that module (design.md Decision 2)."""
+    String shapes go through `parse_event_when` -- a deliberate, documented
+    narrow twin of `source_date.parse_event_date`, kept inside this seam
+    rather than importing that module (design.md Decision 2)."""
     if isinstance(raw, datetime):
+        if allow_time and raw.tzinfo is None and not raw.microsecond:
+            return StoredEventDate(value=raw, malformed=False, raw=raw)
         return StoredEventDate(value=None, malformed=True, raw=raw)
     if isinstance(raw, date):
         return StoredEventDate(value=raw, malformed=False, raw=raw)
-    if isinstance(raw, str) and _ISO_DATE_RE.match(raw):
-        try:
-            value = date.fromisoformat(raw)
-        except ValueError:
-            return StoredEventDate(value=None, malformed=True, raw=raw)
-        return StoredEventDate(value=value, malformed=False, raw=raw)
+    if isinstance(raw, str):
+        value = parse_event_when(raw)
+        if value is not None and (allow_time or not isinstance(value, datetime)):
+            return StoredEventDate(value=value, malformed=False, raw=raw)
     return StoredEventDate(value=None, malformed=True, raw=raw)
 
 
@@ -366,7 +451,8 @@ def read_incoming_date(mapping: Mapping[str, object]) -> date | None:
     absent `EVENT_DATE_KEY` does for `read_event_date`."""
     if "date" not in mapping:
         return None
-    return _tolerant_date(mapping["date"]).value
+    # `allow_time=False` never yields a `datetime`: the result is date-only.
+    return _tolerant_date(mapping["date"], allow_time=False).value
 
 
 EXTRACTION_NOTICE_KEY: Final = "extraction_notice"
@@ -1272,7 +1358,7 @@ def build_source_concept(
     extraction_status: ExtractionStatus | None = None,
     extraction_notice: ExtractionNotice | tuple[ExtractionNotice, ...] | None = None,
     origin_key: str | None = None,
-    event_date: date | None = None,
+    event_date: EventWhen | None = None,
     source_frontmatter: Mapping[str, object] | None = None,
 ) -> str:
     """Build a conformant OKF Source concept document (D4/ingest-source-body D1).
@@ -1365,9 +1451,11 @@ def build_source_concept(
     `event_date` (issue #1014c, ADR-0023) is emitted as `EVENT_DATE_KEY`
     under exactly the same "only when not `None`" rule; the caller has
     already resolved the value (`application.ingest.resolve_event_date`)
-    -- this function performs no resolution of its own. A `datetime`
-    argument raises `TypeError`: it is a `date` subclass, and its
-    `isoformat()` would write a time of day no input ever stated.
+    -- this function performs no resolution of its own. It is written
+    through `format_event_when` (ADR-0052): a date-only value as before, a
+    naive local date-time as `YYYY-MM-DDTHH:MM[:SS]`. A zoned or fractional
+    `datetime` raises `TypeError`: it would write an offset or a precision no
+    input ever stated.
 
     `source_frontmatter` (design.md Decision 2; preserve-source-frontmatter,
     issue #1062) is emitted as `SOURCE_FRONTMATTER_KEY` under the same "only
@@ -1432,12 +1520,7 @@ def build_source_concept(
     if origin_key is not None:
         metadata[ORIGIN_KEY_KEY] = origin_key
     if event_date is not None:
-        if isinstance(event_date, datetime):
-            raise TypeError(
-                "event_date must be a date, not a datetime "
-                f"(it would write a time of day no input stated): {event_date!r}"
-            )
-        metadata[EVENT_DATE_KEY] = event_date.isoformat()
+        metadata[EVENT_DATE_KEY] = _QuotedStr(format_event_when(event_date))
     if source_frontmatter is not None:
         metadata[SOURCE_FRONTMATTER_KEY] = copy.deepcopy(source_frontmatter)
     if raw_content is None:

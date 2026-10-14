@@ -1304,13 +1304,13 @@ class EventDateResolution:
     enough of the PRIOR state for the CLI to render the exact preview line
     and stderr warning (design.md Decision 7) without re-reading anything."""
 
-    value: date | None
+    value: okf.EventWhen | None
     """What this run writes -- `None` means the key stays absent."""
 
     origin: EventDateOrigin | None
     """`None` iff `value` is `None`."""
 
-    previous: date | None
+    previous: okf.EventWhen | None
     """The prior stored value, ONLY when it was validly readable -- `None`
     both when the key was absent and when it was malformed (a malformed
     value is never carried forward, so it cannot be a `previous`)."""
@@ -1335,7 +1335,7 @@ class EventDateResolution:
 
 def resolve_event_date(
     *,
-    flag: date | None,
+    flag: okf.EventWhen | None,
     stored: okf.StoredEventDate | None,
     inferred: date | None,
     incoming: date | None = None,
@@ -1360,7 +1360,7 @@ def resolve_event_date(
     stored_raw = stored.raw if stored is not None else None
 
     if flag is not None:
-        value: date | None = flag
+        value: okf.EventWhen | None = flag
         origin: EventDateOrigin | None = "flag"
     elif previous is not None:
         value = previous
@@ -1501,7 +1501,7 @@ def compose_source_document(
     concept_text: str | None,
     cfg: config.Config,
     timestamp: str,
-    event_date_flag: date | None = None,
+    event_date_flag: okf.EventWhen | None = None,
     source_name: str | None = None,
 ) -> SourceDocumentPlan:
     """Compose this run's Source document from local inputs (design:

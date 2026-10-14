@@ -216,6 +216,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
     "S101", # `assert` is what a test is made of
+    "DTZ001", # `event_date` times are naive local wall-clock by contract (ADR-0052)
 ]
 "evals/**/*.py" = [
     "BLE001", # probe harnesses record a failed run and move on; they are not engine code

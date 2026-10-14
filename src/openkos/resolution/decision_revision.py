@@ -61,7 +61,6 @@ import math
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
 from difflib import SequenceMatcher
 from enum import Enum
 from typing import Final, Literal, cast
@@ -70,6 +69,7 @@ from openkos import event_dates
 from openkos.llm import parsing
 from openkos.llm.base import BackendError, LLMBackend, Message
 from openkos.llm.prompts import load_prompt, prompt_hash
+from openkos.model import okf
 from openkos.resolution import similarity
 from openkos.resolution.decision_subject import quoted_verbatim
 from openkos.resolution.normalize import normalize_key
@@ -94,7 +94,7 @@ class DecisionDate:
     """One Decision's resolved event date. `value` holds the single agreed
     date when `state == "dated"`; it is `None` for every other state."""
 
-    value: date | None
+    value: okf.EventWhen | None
     state: DateState
 
 
@@ -130,6 +130,12 @@ def pair_direction(
     - Both dated, distinct `value`: `holder` is whichever id resolved the
       LATER date, `earlier` is the other, `reason = "dated"`.
 
+    "Equal" and "later" are decided at the finest precision BOTH sides carry
+    (ADR-0052, `event_dates.at_common_precision`): two date-times compare
+    as date-times, and when either side is date-only they compare as dates,
+    so a date-time and a date on the same day are `equal`. A time is never
+    assumed for a date-only side.
+
     No field of a judge reply is ever read here (design.md Decision 6,
     ADR-0025): this function's only inputs are two ids and two
     `DecisionDate` values, so no model output can ever set direction."""
@@ -142,8 +148,9 @@ def pair_direction(
     # `state` Literal and `value` Optional are independent fields to
     # `mypy`, so `cast` -- not `assert` (banned outside tests by this
     # repo's Ruff config, S101) -- narrows the type with no new branch.
-    value_a = cast(date, date_a.value)
-    value_b = cast(date, date_b.value)
+    value_a, value_b = event_dates.at_common_precision(
+        cast(okf.EventWhen, date_a.value), cast(okf.EventWhen, date_b.value)
+    )
     if value_a == value_b:
         return Direction(holder=None, earlier=None, reason="equal")
     if value_a < value_b:
@@ -532,7 +539,7 @@ def _format_resolved_date(decision_date: DecisionDate) -> str:
     `pair_direction` only returns when BOTH sides are `dated`). `cast`, not
     `assert` (S101, banned outside `tests/`), narrows the type with no new
     branch -- the same pattern `pair_direction` itself uses above."""
-    return cast(date, decision_date.value).isoformat()
+    return okf.format_event_when(cast(okf.EventWhen, decision_date.value))
 
 
 _JUDGE_SYSTEM_PROMPT: Final = load_prompt("decision_revision/judge")

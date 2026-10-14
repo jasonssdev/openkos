@@ -12,7 +12,7 @@ import inspect
 import json
 import math
 from collections.abc import Iterable, Sequence
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -1027,4 +1027,74 @@ def test_judge_prompt_separates_a_narrowed_choice_from_an_overturned_one() -> No
     assert lines["unrelated"] == (
         "- unrelated: the two concern a different subject, or one has no bearing "
         "on the other."
+    )
+
+
+# ---------------------------------------------------------------------------
+# #1349: pair_direction at the finest precision both sides carry (ADR-0052)
+# ---------------------------------------------------------------------------
+
+_MORNING = datetime(2026, 7, 14, 11, 3)
+_AFTERNOON = datetime(2026, 7, 14, 15, 34)
+_SAME_DAY = date(2026, 7, 14)
+_NEXT_DAY = date(2026, 7, 15)
+
+
+@pytest.mark.parametrize(
+    ("value_a", "value_b", "holder", "earlier", "reason"),
+    [
+        # Two date-times on one day are directed.
+        (_MORNING, _AFTERNOON, "b", "a", "dated"),
+        (_AFTERNOON, _MORNING, "a", "b", "dated"),
+        # Equal to the minute, and to the second, is still `equal`.
+        (_MORNING, datetime(2026, 7, 14, 11, 3, 0), None, None, "equal"),
+        (
+            datetime(2026, 7, 14, 11, 3, 1),
+            datetime(2026, 7, 14, 11, 3, 2),
+            "b",
+            "a",
+            "dated",
+        ),
+        # A date-only side forces a date comparison: the same day is `equal`.
+        (_AFTERNOON, _SAME_DAY, None, None, "equal"),
+        (_SAME_DAY, _MORNING, None, None, "equal"),
+        # ...and a different day is directed by the dates alone.
+        (_AFTERNOON, _NEXT_DAY, "b", "a", "dated"),
+        (_NEXT_DAY, _MORNING, "a", "b", "dated"),
+        # Date-time on an earlier day against a later time on a later day.
+        (datetime(2026, 7, 14, 23, 59), datetime(2026, 7, 15, 0, 1), "b", "a", "dated"),
+        # Date-only against date-only is unchanged.
+        (_SAME_DAY, _SAME_DAY, None, None, "equal"),
+        (_SAME_DAY, _NEXT_DAY, "b", "a", "dated"),
+    ],
+)
+def test_pair_direction_compares_at_the_finest_common_precision(
+    value_a: date,
+    value_b: date,
+    holder: str | None,
+    earlier: str | None,
+    reason: str,
+) -> None:
+    result = decision_revision.pair_direction(
+        "a",
+        DecisionDate(value=value_a, state="dated"),
+        "b",
+        DecisionDate(value=value_b, state="dated"),
+    )
+
+    assert (result.holder, result.earlier, result.reason) == (holder, earlier, reason)
+
+
+def test_resolved_dates_render_at_their_stored_precision() -> None:
+    assert (
+        decision_revision._format_resolved_date(
+            DecisionDate(value=_MORNING, state="dated")
+        )
+        == "2026-07-14T11:03"
+    )
+    assert (
+        decision_revision._format_resolved_date(
+            DecisionDate(value=_SAME_DAY, state="dated")
+        )
+        == "2026-07-14"
     )

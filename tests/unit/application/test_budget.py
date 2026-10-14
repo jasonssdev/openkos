@@ -217,9 +217,7 @@ def test_the_day_boundary_is_local_midnight_not_utc_midnight(tmp_path: Path) -> 
 
 def test_a_naive_clock_is_refused() -> None:
     with pytest.raises(ValueError, match="timezone"):
-        budget.local_day_start_utc(
-            datetime(2026, 9, 30, 1, 0)  # noqa: DTZ001 -- naive on purpose
-        )
+        budget.local_day_start_utc(datetime(2026, 9, 30, 1, 0))
 
 
 def test_an_unreadable_job_record_fails_closed_before_any_client_exists(

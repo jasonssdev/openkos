@@ -8415,3 +8415,58 @@ def test_existing_derived_object_unaffected_by_later_source_tag_change(
     assert source_metadata["tags"] == ["gamma"]
     after = derived_path.read_bytes()
     assert after == before
+
+
+def test_ingest_writes_a_date_time_flag_in_canonical_form_and_prints_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1349 (ADR-0052): the flag accepts a naive local date-time, the
+    Source records its canonical text, and the preview line shows it."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14T10:00:00", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    text = concept_path.read_text(encoding="utf-8")
+    assert "event_date: '2026-07-14T10:00'\n" in text
+    assert "event date 2026-07-14T10:00 (from --event-date)" in result.stdout
+
+
+def test_ingest_overwrite_names_both_date_times(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+    first = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14T10:00", "--auto"]
+    )
+    assert first.exit_code == 0
+
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--event-date", "2026-07-14T15:34:05", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert (
+        "event date 2026-07-14T15:34:05 (from --event-date, replacing "
+        "2026-07-14T10:00)" in result.stdout
+    )
+
+
+def test_ingest_infers_only_the_date_from_a_timed_file_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "call-2026-07-14T10-00.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", source.name, "--auto"])
+
+    assert result.exit_code == 0
+    assert "event date 2026-07-14 (from the file name)" in result.stdout
