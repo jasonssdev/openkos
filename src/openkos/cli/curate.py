@@ -51,7 +51,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import typer
 
@@ -68,7 +68,7 @@ from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
 from openkos.application import suggest_volatility_service as volatility_service
 from openkos.application.lock_wait import CommitSection
-from openkos.application.write_gate import DriftDetected, WriteFailed
+from openkos.application.write_gate import DriftDetected, Refused, WriteFailed
 from openkos.cli import observability, output
 from openkos.graph.base import Edge
 from openkos.graph.sqlite_graph import build_graph
@@ -1418,6 +1418,26 @@ def _decision_ports(ctx: CurateContext) -> curate_decisions.DecisionPorts:
             reconcile=ctx.reconcile,
             verb="curate",
         ),
+        # The config commit reads git, so the decision stays in `cli.main`
+        # (#1330); both bind late like the rest.
+        plan_config_commit=lambda root, verb, concept_type, tier, baseline: (
+            cli_main._decide_config_commit(root, verb, concept_type, tier, baseline)
+        ),
+        autocommit_config_edit=lambda root, message, plan: (
+            cli_main._autocommit_config_edit(
+                root,
+                message,
+                cast("cli_main._ConfigCommitPlan | None", plan),
+            )
+        ),
+    )
+
+
+def _tier_failed_line(exc: WriteFailed) -> str:
+    """The line the Metadata stage prints when a tier cannot be set."""
+    return (
+        "openkos curate: Metadata: failed while setting volatility "
+        f"for {exc.subjects[0]} -- {exc.error}."
     )
 
 
@@ -2518,54 +2538,45 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             continue
 
         try:
-            prepared = application_lifecycle.prepare_set_volatility(
-                ctx.layout.config_path, result.type_name, result.suggested_tier
+            preview = curate_decisions.preview_set_tier(
+                ctx.layout, result.type_name, result.suggested_tier
             )
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos curate: Metadata: failed while setting volatility "
-                f"for {result.type_name} -- {exc}.",
-                err=True,
-            )
+        except WriteFailed as exc:
+            typer.echo(_tier_failed_line(exc), err=True)
             raise typer.Exit(code=1) from exc
 
         # The commit phase (#1137): the prompt held no workspace lock, and the
-        # write replaces the whole file, so it is re-validated under it.
-        with cli_main._commit_section_for(ctx.root)():
-            cli_main._reject_drifted_targets(
-                ctx.layout, {ctx.layout.config_path: prepared.config_bytes}, "curate"
-            )
-            config_commit = cli_main._plan_config_commit(
+        # write replaces the whole file, so it is re-validated under it,
+        # inside the surface.
+        try:
+            outcome = curate_decisions.commit_tier_decision(
                 ctx.root,
-                "curate",
-                result.type_name,
-                result.suggested_tier,
-                prepared.config_bytes,
+                ctx.layout,
+                preview,
+                ports=_decision_ports(ctx),
+                surface="curate",
             )
-
-            try:
-                application_lifecycle.set_volatility_core(
-                    ctx.layout.config_path, prepared
-                )
-            except (OSError, ValueError) as exc:
-                typer.echo(
-                    "openkos curate: Metadata: failed while setting volatility "
-                    f"for {result.type_name} -- {exc}.",
-                    err=True,
-                )
-                raise typer.Exit(code=1) from exc
-
-            volatility_sha = cli_main._autocommit_config_edit(
-                ctx.root,
-                f"openkos: set-volatility {result.type_name} -> {result.suggested_tier}",
-                config_commit,
-            )
+        except DriftDetected as exc:
+            typer.echo(exc.message, err=True)
+            raise typer.Exit(code=3) from exc
+        except WriteFailed as exc:
+            typer.echo(_tier_failed_line(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        except Refused as exc:
+            # The dirty-`openkos.yaml` refusal (#1330); its text is composed
+            # by the config-commit port.
+            typer.echo(exc.message, err=True)
+            raise typer.Exit(code=1) from exc
+        if not isinstance(outcome, curate_decisions.Applied):
+            # A Stale needs a token, which this path has none of.
+            skipped += 1
+            continue
         # #800: this stage writes `openkos.yaml`, not the bundle, so neither
         # `unmerge` nor `forget` has anything to say about undoing it -- the
         # commit is the only way back, which makes naming it worth more here
         # than anywhere else in the session.
-        if volatility_sha is not None:
-            cli_main._echo_commit_disclosure(volatility_sha, prefix="  ")
+        if outcome.commit_sha is not None:
+            cli_main._echo_commit_disclosure(outcome.commit_sha, prefix="  ")
         applied += 1
 
     for concept_id in sorted(_sensitivity_gap_ids(ctx.layout.bundle_dir)):
