@@ -6799,6 +6799,7 @@ def _capturing_extractor(seen: dict[str, object]) -> object:
         llm: object,
         on_progress: object = None,
         concurrent: bool = False,
+        transcript_decisions: bool = False,
     ) -> concept_mod.ExtractionOutcome:
         seen["concurrent"] = concurrent
         return concept_mod.ExtractionOutcome(

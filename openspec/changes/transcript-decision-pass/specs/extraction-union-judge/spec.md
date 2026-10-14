@@ -64,9 +64,23 @@ window order.
 ### Requirement: A Pass Decision Body Is Composed Deterministically
 
 Each admitted item MUST become a candidate of type `Decision` whose title is
-derived from the subject, whose description is the value, and whose body is
-composed only from the value and the quoted evidence line. The body MUST NOT
-contain any other text of the window.
+derived from the value (the value as a short statement, without its closing
+punctuation, bounded in length), whose description names the subject and the
+value, and whose body is composed only from the value and the quoted evidence
+line. The body MUST NOT contain any other text of the window.
+
+The title MUST NOT be the bare subject. Ingest attaches a candidate to an
+existing concept of the same type and normalized title, so two different
+decisions about one subject in two meetings would otherwise merge into one
+object and the pair that decision-revision detection needs would never exist.
+The same decision stated again from the same source keeps its title.
+
+#### Scenario: Two decisions on one subject stay two objects
+
+- GIVEN a stored Decision from one meeting whose value is "Use a solar cell."
+- WHEN a later meeting yields a Decision about the same subject with the
+  value "Use a lithium cell."
+- THEN ingest creates a second Decision rather than attaching to the first
 
 #### Scenario: The body carries the value and the quote only
 

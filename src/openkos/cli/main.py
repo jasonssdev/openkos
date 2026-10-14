@@ -4741,7 +4741,10 @@ def _estimate_batch_calls(
         derived = source_title.derive_source_title(text)
         title = derived if derived is not None else _titleize(path.stem)
         estimate = estimate_extraction_calls(
-            text, source_title=title, union_judge=cfg.union_judge
+            text,
+            source_title=title,
+            union_judge=cfg.union_judge,
+            transcript_decisions=cfg.transcript_decisions,
         )
         calls += estimate.calls
         if estimate.windows:

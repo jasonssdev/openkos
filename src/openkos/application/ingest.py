@@ -741,19 +741,30 @@ def stage_derived_objects(
             lost_in_staging=0,
         )
 
-    extractor = extract_concept_union if union_judge else extract_concept
     # `OllamaError` propagates unswallowed on total failure -- see docstring
     # above. A chunked source's single-window failure no longer reaches
     # here as an exception at all (#1053): the extractor itself retries and
     # skips that window, and the loss shows up below as `report.
     # skipped_chunks`, not as a caught exception.
-    outcome = extractor(
-        raw_content,
-        source_title=source_title,
-        llm=llm,
-        on_progress=on_progress,
-        concurrent=cfg.concurrent_extraction,
-    )
+    if union_judge:
+        # #1348: the decision pass belongs to the union extractor only; the
+        # legacy single-run path takes no such argument and is unchanged.
+        outcome = extract_concept_union(
+            raw_content,
+            source_title=source_title,
+            llm=llm,
+            on_progress=on_progress,
+            concurrent=cfg.concurrent_extraction,
+            transcript_decisions=cfg.transcript_decisions,
+        )
+    else:
+        outcome = extract_concept(
+            raw_content,
+            source_title=source_title,
+            llm=llm,
+            on_progress=on_progress,
+            concurrent=cfg.concurrent_extraction,
+        )
 
     extractions = outcome.objects
     report = outcome.report

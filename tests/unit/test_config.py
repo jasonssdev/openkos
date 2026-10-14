@@ -3733,3 +3733,49 @@ def test_read_config_refuses_a_non_boolean_attach_at_ingest(
 
     with pytest.raises(ValueError, match="'attach_at_ingest' must be a boolean"):
         config.read_config(tmp_path)
+
+
+# --- transcript_decisions: opt-in transcript decision pass (#1348) ----------
+
+
+def test_transcript_decisions_key_validation(tmp_path: Path) -> None:
+    """Bool-only like `revision_history`: absent or null is off, `true` reads."""
+    assert config.DEFAULT_TRANSCRIPT_DECISIONS is False
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+    assert config.read_config(tmp_path).transcript_decisions is False
+
+    (tmp_path / "openkos.yaml").write_text(
+        "transcript_decisions: null\n", encoding="utf-8"
+    )
+    assert config.read_config(tmp_path).transcript_decisions is False
+
+    (tmp_path / "openkos.yaml").write_text(
+        "transcript_decisions: true\n", encoding="utf-8"
+    )
+    assert config.read_config(tmp_path).transcript_decisions is True
+
+
+@pytest.mark.parametrize(
+    "yaml_body",
+    [
+        "transcript_decisions: 1\n",
+        'transcript_decisions: "yes"\n',
+        "transcript_decisions: [true]\n",
+    ],
+)
+def test_read_config_refuses_a_non_boolean_transcript_decisions(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'transcript_decisions' must be a boolean"):
+        config.read_config(tmp_path)
+
+
+def test_the_template_documents_the_transcript_decisions_key() -> None:
+    template = (
+        Path(config.__file__).parent / "templates" / "openkos.yaml.template"
+    ).read_text(encoding="utf-8")
+
+    assert "transcript_decisions" in template
+    assert "unmeasured" in template.casefold()
