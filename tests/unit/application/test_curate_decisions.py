@@ -3590,3 +3590,26 @@ def test_skip_and_listing_succeed_with_no_model_and_start_no_judging(
     assert item.evaluation == "pending_evaluation"
     assert outcome == NotApplied(Action.SKIP, "skipped")
     assert _only(layout).evaluation == "pending_evaluation"  # still unjudged
+
+
+@pytest.mark.parametrize(
+    "row", [_contradiction_row, _revision_row, _watch_row], ids=lambda f: f.__name__
+)
+def test_a_kind_with_no_actions_reports_freshness_as_not_computed(
+    tmp_path: Path, row: Callable[[], pq.Proposal]
+) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(layout, row())
+
+    assert item.actions == ()
+    assert item.fresh is None  # never True: nothing was checked
+
+
+def test_actionable_kinds_keep_a_computed_freshness(tmp_path: Path) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+    _enqueue(layout, _identity_row(layout))
+
+    assert _only(layout).fresh is True
+    _edit(layout, _SURVIVOR)
+    assert _only(layout).fresh is False

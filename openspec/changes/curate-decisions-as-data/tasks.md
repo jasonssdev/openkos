@@ -394,9 +394,10 @@ check also fails `row_is_fresh`, so checking it first turned every in-section
 race into `Stale` and broke the "a move after the token check is drift, never
 stale" tests; what reaches the late check is a row that was already stale when
 the token was issued. `row_resolved` and `row_superseded` stay first. (2) The
-action-less kinds (`contradiction`, `revision`, `watch_refusal`) are always
-`fresh=True`: nothing can be applied to them, and their input refs can be
-synthetic labels that `current_finding_digest` cannot hash. (3) Keep-distinct
+action-less kinds (`contradiction`, `revision`, `watch_refusal`) report
+`fresh=None` (not computed, never fresh): nothing can be applied to them and
+their input refs can be synthetic labels `current_finding_digest` cannot hash.
+The first S4a commit reported `True`; a review found that contradicted the spec. (3) Keep-distinct
 takes the token path too: `KeepDistinctDecisionPreview`, a `member` content line
 per member in `version_of`, and `commit_keep_distinct_decision` (the CLI's
 `commit_keep_distinct` is unchanged). (4) `preview_decision` returns a

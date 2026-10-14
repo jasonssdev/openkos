@@ -981,9 +981,11 @@ class DecisionItem:
     decision_key: str
     kind: DecisionKind
     targets: tuple[str, ...]
-    fresh: bool
+    fresh: bool | None
     """`False` when the row was computed from inputs that have changed since.
-    A stale item is listed, never hidden, and an apply against it is `Stale`."""
+    A stale item is listed, never hidden, and an apply against it is `Stale`.
+    `None` means freshness was NOT computed for this kind (one that carries no
+    actions here, whose input refs may be synthetic); it never means fresh."""
     evaluation: Literal[
         "judged_same", "judged_different", "pending_evaluation", "not_applicable"
     ]
@@ -996,6 +998,8 @@ class DecisionItem:
     payload_digest: str
 
 
+_ACTIONABLE_KINDS = frozenset({"identity", "relation_type", "volatility"})
+
 _CONTRADICTION_RESOLVES = (
     "openkos contradictions --decline, openkos reconcile or openkos unmerge"
 )
@@ -1004,8 +1008,8 @@ _CONTRADICTION_RESOLVES = (
 def _inputs_fresh(layout: config.WorkspaceLayout, row: curate_queue.OpenRow) -> bool:
     """The list's freshness predicate for `row`, by kind: recorded inputs
     still hash as recorded (identity, relation_type), the proposed-against tier
-    is still the effective one (volatility). The other kinds take no action,
-    so there is nothing for staleness to guard."""
+    is still the effective one (volatility). The other kinds take no action
+    and are never asked: the list reports their freshness as not computed."""
     kind = row.item.kind
     if kind in ("identity", "relation_type"):
         return curate_queue.row_is_fresh(
@@ -1150,7 +1154,7 @@ def _item_of(
         decision_key=row.item.decision_key,
         kind=kind,  # type: ignore[arg-type]
         targets=row.item.targets,
-        fresh=_inputs_fresh(layout, row),
+        fresh=_inputs_fresh(layout, row) if kind in _ACTIONABLE_KINDS else None,
         evaluation=evaluation,  # type: ignore[arg-type]
         actions=actions,
         withheld=withheld,
