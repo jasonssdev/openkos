@@ -92,3 +92,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0051](0051-lexical-channel-stems-and-a-tokenizer-change-is-a-schema-bump.md) | The lexical channel stems with the porter tokenizer, and a tokenizer change is a schema bump that reaches existing workspaces | Accepted | 2026-10-06 |
 | [0052](0052-event-date-accepts-a-local-time.md) | A Source's event_date may carry a naive local time, and direction compares at the finest precision both sides carry | Accepted | 2026-10-13 |
 | [0053](0053-curation-decisions-are-a-two-phase-application-surface.md) | Curation decisions are an application surface applied through a two-phase preview and commit | Proposed | 2026-10-14 |
+| [0054](0054-python-314-is-the-only-supported-interpreter.md) | Python 3.14 is the only supported interpreter | Proposed | 2026-10-14 |
