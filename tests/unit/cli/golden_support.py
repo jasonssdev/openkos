@@ -5,10 +5,15 @@ application service.
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 ROOT_PLACEHOLDER = "<ROOT>"
+SHA_PLACEHOLDER = "<SHA>"
+
+_COMMIT_SHA = re.compile(r"committed as [0-9a-f]{7,40}")
+_REVERT_SHA = re.compile(r"`git revert [0-9a-f]{7,40}`")
 
 
 def normalise(text: str, root: Path) -> str:
@@ -16,6 +21,14 @@ def normalise(text: str, root: Path) -> str:
     return text.replace(str(root.resolve()), ROOT_PLACEHOLDER).replace(
         str(root), ROOT_PLACEHOLDER
     )
+
+
+def normalise_shas(text: str) -> str:
+    """Replace the commit id in every `committed as <hex>` disclosure, and in
+    the `git revert <hex>` hint the same sentence carries, so a golden holds
+    across runs (a sha depends on the clock and the tmp path)."""
+    text = _COMMIT_SHA.sub(f"committed as {SHA_PLACEHOLDER}", text)
+    return _REVERT_SHA.sub(f"`git revert {SHA_PLACEHOLDER}`", text)
 
 
 class Goldens:
