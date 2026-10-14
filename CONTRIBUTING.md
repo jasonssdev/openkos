@@ -65,7 +65,7 @@ So for a change above that bar the flow is: **issue (discuss the approach) → o
 
 AI coding agents: [`AGENTS.md`](AGENTS.md) is the project canon — principles, conventions, and quality gates. Read it first.
 
-OpenKOS targets **Python 3.12+** and uses [`uv`](https://github.com/astral-sh/uv) for environment and dependency management.
+OpenKOS targets **Python 3.14** and uses [`uv`](https://github.com/astral-sh/uv) for environment and dependency management.
 
 ```bash
 git clone https://github.com/jasonssdev/openkos.git

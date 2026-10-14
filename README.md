@@ -45,7 +45,7 @@ ollama pull gemma4:26b-a4b  # judge model — contradictions and identity (large
 >
 > For naming relations during curation there is also an **optional measured upgrade** (`ollama pull gemma2:27b`, **15.6 GB**) that nearly doubles relation-type accuracy — opt in later with `models: {edge_typing: gemma2:27b}` in `openkos.yaml`; `openkos doctor` and `curate` both point at it.
 
-**3 · Install the engine** (needs Python 3.12+ and [git](https://git-scm.com)):
+**3 · Install the engine** (needs Python 3.14+ and [git](https://git-scm.com)):
 
 ```bash
 uv tool install openkos   # or: pipx install openkos — or: pip install openkos

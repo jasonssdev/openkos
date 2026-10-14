@@ -61,7 +61,7 @@ As shipped, the whole derived layer is five SQLite files under `.openkos/`, all 
 
 | Role | Technology | License |
 | --- | --- | --- |
-| Language / runtime | Python 3.12+ | PSF |
+| Language / runtime | Python 3.14 | PSF |
 | CLI | Typer | MIT |
 | Schemas / validation | stdlib dataclasses + hand-rolled validators (Pydantic deliberately not adopted) | PSF |
 | Knowledge format | Markdown + YAML frontmatter (OKF) | — |
@@ -102,7 +102,7 @@ SQLite, FTS5, and everything git-related add nothing: SQLite ships with Python, 
 
 ## Core framework
 
-- **Python 3.12+**
+- **Python 3.14**
 - **Typer** for the command-line interface (Click, MIT, is the mature fallback if we ever want fewer abstractions)
 - **Stdlib dataclasses and hand-rolled validators** for schemas and validation — Pydantic was in the original plan but has not been needed; it remains an option if validation outgrows the stdlib
 - **Markdown + YAML frontmatter** using the OKF v0.2 field set (`type`, `title`, `description`, `resource`, `tags`, `generated`, `status`, `sources`)
