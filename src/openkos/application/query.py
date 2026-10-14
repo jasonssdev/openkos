@@ -82,7 +82,7 @@ def _open_vector_store_or_degrade(
         return nullcontext(None), True
     try:
         return open_vector_store(path), False
-    except (VecUnavailable, sqlite3.Error):
+    except VecUnavailable, sqlite3.Error:
         return nullcontext(None), True
 
 
@@ -637,7 +637,7 @@ def cited_concept_level(concept_id: str, bundle_dir: Path) -> str:
         # the rest of the pipeline already tolerates.
         text = okf.concept_path_for(concept_id, bundle_dir).read_text(encoding="utf-8")
         metadata, _ = okf.load_frontmatter(text)
-    except (OSError, ValueError):  # a read/decode/parse failure
+    except OSError, ValueError:  # a read/decode/parse failure
         # `okf.FrontmatterError` and `UnicodeDecodeError` are `ValueError`s.
         return "confidential"
     return okf.combine_sensitivity(

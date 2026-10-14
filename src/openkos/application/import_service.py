@@ -189,7 +189,7 @@ def _lstat_or_none(path: Path) -> os.stat_result | None:
     a refusal: a path that cannot be inspected is not known to be free."""
     try:
         return os.lstat(path)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return None
     except OSError as exc:
         raise ImportRefusal(
@@ -265,7 +265,7 @@ def _is_own_anchor(path: Path, namespace: str, label: str) -> bool:
     torn run's leftover is overwritten and any other file is never touched)."""
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return False
     return okf.is_import_anchor_of(text, namespace=namespace, label=label)
 

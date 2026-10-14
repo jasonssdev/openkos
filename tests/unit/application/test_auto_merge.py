@@ -944,7 +944,7 @@ class _Commits:
         self.held.append(self.section.held)
         try:
             return vcs_git.commit_paths(root, paths, message)
-        except (vcs_git.GitError, OSError):
+        except vcs_git.GitError, OSError:
             return None
 
 

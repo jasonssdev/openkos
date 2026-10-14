@@ -94,7 +94,7 @@ def _unmerge(
     *,
     commits: CommitRecorder | None = None,
     policy: svc.UnmergePolicy | None = None,
-    confirm: "object | None" = None,
+    confirm: object | None = None,
     observer: svc.UnmergeObserver | None = None,
     absorbed_id: str = _ABSORBED,
 ) -> svc.UnmergeOutcome:

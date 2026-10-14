@@ -46,7 +46,7 @@ class _SpyOpenAICompatible(OfflineOpenAICompatible):
     a stub-based test that only checks `exit_code == 0` could pass even if
     the CLI silently fell back to `OllamaClient`."""
 
-    instances: ClassVar[list["_SpyOpenAICompatible"]] = []
+    instances: ClassVar[list[_SpyOpenAICompatible]] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]

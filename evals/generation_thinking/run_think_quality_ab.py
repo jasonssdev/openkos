@@ -222,7 +222,7 @@ class ThinkInjectingUrlopen:
             return request
         try:
             body = json.loads(data)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except json.JSONDecodeError, UnicodeDecodeError:
             return request
         if not isinstance(body, dict) or "messages" not in body:
             return request

@@ -293,7 +293,7 @@ class _RecordingTransport:
         }
         try:
             data = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             # Leave the counters unread and let the client raise its own
             # malformed-response error. A recorder must never be the thing that
             # decides a run failed.

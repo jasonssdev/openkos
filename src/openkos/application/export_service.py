@@ -86,7 +86,7 @@ def _read(path: Path) -> tuple[bytes, str] | None:
     try:
         data = path.read_bytes()
         return data, data.decode("utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
 
 

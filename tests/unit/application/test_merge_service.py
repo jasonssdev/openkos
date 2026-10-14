@@ -95,7 +95,7 @@ def _merge(
     events: list[str],
     commits: CommitRecorder | None = None,
     policy: svc.MergePolicy | None = None,
-    confirm: "object | None" = None,
+    confirm: object | None = None,
     survivor_id: str = _SURVIVOR,
     absorbed_id: str = _ABSORBED,
     observer: svc.MergeObserver | None = None,

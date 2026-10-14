@@ -567,7 +567,7 @@ class OllamaClient:
             attempt += 1
             try:
                 return self._embed_once(texts)
-            except (OllamaModelNotFound, OllamaEmbeddingDimensionMismatch):
+            except OllamaModelNotFound, OllamaEmbeddingDimensionMismatch:
                 raise
             except OllamaError:
                 if attempt >= self._embed_retry_attempts:

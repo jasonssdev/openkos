@@ -444,7 +444,7 @@ def _load_doc(
     `False`, fail-closed."""
     try:
         text = okf.concept_path_for(concept_id, bundle_dir).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return concept_id, ""
     try:
         metadata, body = okf.load_frontmatter(text)
@@ -554,7 +554,7 @@ def _merged_body_candidates(
             continue
         try:
             entries = _read_ledger_entries(survivor_id, bundle_dir)
-        except (OSError, ValueError):
+        except OSError, ValueError:
             continue
         for entry in entries:
             candidates.append(
@@ -642,7 +642,7 @@ def _load_ledger_bodies(
         current_text = okf.concept_path_for(survivor_id, bundle_dir).read_text(
             encoding="utf-8"
         )
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return (survivor_id, ""), (entry.absorbed_id, "")
     try:
         current_metadata, _ = okf.load_frontmatter(current_text)

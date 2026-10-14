@@ -101,7 +101,7 @@ def git_identity(
                 check=False,
                 timeout=15,
             )
-        except (OSError, subprocess.SubprocessError):
+        except OSError, subprocess.SubprocessError:
             return None
         return str(done.stdout).strip() if done.returncode == 0 else None
 

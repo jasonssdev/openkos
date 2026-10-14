@@ -468,7 +468,7 @@ def open_vector_store(
     path: Path,
     *,
     connect: Callable[[str], sqlite3.Connection] = sqlite3.connect,
-) -> "VectorStoreDB":
+) -> VectorStoreDB:
     """Open (creating if needed) the vector store database at `path`.
 
     Checks `sqlite-vec` loadability on a throwaway `:memory:` connection
@@ -784,7 +784,7 @@ class VectorStoreDB:
         exit, never raises."""
         self._conn.close()
 
-    def __enter__(self) -> "VectorStoreDB":
+    def __enter__(self) -> VectorStoreDB:
         """Return `self` -- the connection is already open by construction."""
         return self
 

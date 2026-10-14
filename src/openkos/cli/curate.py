@@ -181,8 +181,8 @@ class Stage:
 
     name: str
     noun: str
-    probe: "Callable[[CurateContext], StageProbe]"
-    run: "Callable[[CurateContext, StageProbe], StageOutcome]"
+    probe: Callable[[CurateContext], StageProbe]
+    run: Callable[[CurateContext, StageProbe], StageOutcome]
     needs_llm: bool = True
     writes: bool = True
     unattended_hint: str | None = None

@@ -212,7 +212,7 @@ def _bundle_text_snapshot(layout: config.WorkspaceLayout) -> dict[str, str]:
         rel = path.relative_to(layout.bundle_dir).as_posix()
         try:
             files[rel] = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             continue
     return files
 
@@ -481,7 +481,7 @@ def is_fresh(
             persisted = revision_findings.open_revision_findings(conn)
         finally:
             conn.close()
-    except (OSError, sqlite3.Error):
+    except OSError, sqlite3.Error:
         return False
 
     latest_by_pair: dict[tuple[str, str], revision_findings.RevisionFinding] = {}
@@ -601,7 +601,7 @@ def plan_revisions(
                 conn.close()
             for row in persisted:
                 persisted_by_pair[row.pair_ids] = row
-        except (OSError, sqlite3.Error):
+        except OSError, sqlite3.Error:
             persisted_by_pair = {}
 
     served: list[revision_findings.RevisionFinding] = []
@@ -656,7 +656,7 @@ def _load_doc(
         text = okf.concept_path_for(concept_id, layout.bundle_dir).read_text(
             encoding="utf-8"
         )
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return concept_id, ""
     try:
         metadata, body = okf.load_frontmatter(text)
@@ -835,7 +835,7 @@ def actionable_revision_findings(
             persisted = revision_findings.open_revision_findings(conn)
         finally:
             conn.close()
-    except (OSError, sqlite3.Error):
+    except OSError, sqlite3.Error:
         return ()
 
     latest_by_pair: dict[tuple[str, str], revision_findings.RevisionFinding] = {}

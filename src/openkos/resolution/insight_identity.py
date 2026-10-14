@@ -180,7 +180,7 @@ def _filed_questions(bundle_dir: Path) -> list[_FiledInsight]:
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             continue
         try:
             metadata, _ = okf.load_frontmatter(text)

@@ -71,7 +71,7 @@ def queue_present(layout: config.WorkspaceLayout) -> bool:
         if not layout.findings_db_path.is_file():
             return False
         conn = derived.open_derived_connection(layout.findings_db_path)
-    except (sqlite3.Error, OSError):
+    except sqlite3.Error, OSError:
         return False
     try:
         return pq.queue_exists(conn)
@@ -88,7 +88,7 @@ def read_open_rows(layout: config.WorkspaceLayout, kind: str) -> tuple[OpenRow, 
         return ()
     try:
         conn = derived.open_derived_connection(layout.findings_db_path)
-    except (sqlite3.Error, OSError):
+    except sqlite3.Error, OSError:
         return ()
     try:
         return tuple(
@@ -211,7 +211,7 @@ def volatility_suggestions(
     workspace's `type_tiers` override, else the registry default)."""
     try:
         type_tiers = config.read_config(layout.root).type_tiers
-    except (OSError, ValueError):
+    except OSError, ValueError:
         type_tiers = {}
     served: dict[str, TierSuggestion] = {}
     for row in read_open_rows(layout, "volatility"):
@@ -272,7 +272,7 @@ def _enqueue_missing(
         return
     try:
         conn = derived.open_derived_connection(layout.findings_db_path)
-    except (sqlite3.Error, OSError):
+    except sqlite3.Error, OSError:
         return
     try:
         open_keys = {item.decision_key for item in pq.open_items(conn)}
@@ -285,7 +285,7 @@ def _enqueue_missing(
                 commit_section=commit_section,
                 bundle_dir=layout.bundle_dir,
             )
-    except (sqlite3.Error, OSError, lock.WorkspaceBusyError):
+    except sqlite3.Error, OSError, lock.WorkspaceBusyError:
         return
     finally:
         conn.close()

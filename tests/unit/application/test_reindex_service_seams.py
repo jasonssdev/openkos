@@ -77,7 +77,7 @@ class _Store:
     def __init__(self, tag: str | None) -> None:
         self._tag = tag
 
-    def __enter__(self) -> "_Store":
+    def __enter__(self) -> _Store:
         return self
 
     def __exit__(self, *exc: object) -> None:

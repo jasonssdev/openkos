@@ -135,11 +135,11 @@ def _break_os_walk(monkeypatch: pytest.MonkeyPatch) -> None:
     walk_error = OSError(13, "Permission denied", "locked")
 
     def fake_walk(
-        top: "str | os.PathLike[str]",
+        top: str | os.PathLike[str],
         topdown: bool = True,
-        onerror: "Callable[[OSError], object] | None" = None,
+        onerror: Callable[[OSError], object] | None = None,
         followlinks: bool = False,
-    ) -> "object":
+    ) -> object:
         if onerror is not None:
             onerror(walk_error)
         yield from original_walk(top, topdown, onerror, followlinks)

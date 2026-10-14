@@ -604,7 +604,7 @@ def boot_id() -> str:
                 check=True,
             ).stdout
             return hashlib.sha256(out.strip().encode()).hexdigest()[:16]
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         pass
     return ""
 

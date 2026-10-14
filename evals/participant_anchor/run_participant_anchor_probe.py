@@ -509,7 +509,7 @@ def _load_adjudication() -> dict[str, str]:
     """The hand-written `key -> anchored|stub` map, or an empty map."""
     try:
         raw = json.loads(ADJUDICATION_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         return {}
     labels = raw.get("labels", {})
     return (

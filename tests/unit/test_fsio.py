@@ -43,7 +43,7 @@ def test_write_exclusive_unlinks_partial_file_on_write_failure(
         def __init__(self, real: Any) -> None:
             self._real = real
 
-        def __enter__(self) -> "_RaisingFile":
+        def __enter__(self) -> _RaisingFile:
             return self
 
         def __exit__(self, *exc_info: object) -> None:
@@ -205,7 +205,7 @@ def test_copy_exclusive_unlinks_partial_dst_on_write_failure(
         def __init__(self, real: Any) -> None:
             self._real = real
 
-        def __enter__(self) -> "_RaisingFile":
+        def __enter__(self) -> _RaisingFile:
             return self
 
         def __exit__(self, *exc_info: object) -> None:

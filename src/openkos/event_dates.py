@@ -115,7 +115,7 @@ def _guarded_read(
     an intermediate's one-hop traversal (design.md Decision 1 step 4)."""
     try:
         text = okf.concept_path_for(concept_id, bundle_dir).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
     try:
         metadata, _ = okf.load_frontmatter(text)

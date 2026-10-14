@@ -1437,7 +1437,7 @@ def test_prepare_one_merge_returns_none_for_an_unresolved_member(
     assert prepared is None
 
 
-def _prepared_merge_fixture(tmp_path: Path) -> "lifecycle_service.PreparedMerge":
+def _prepared_merge_fixture(tmp_path: Path) -> lifecycle_service.PreparedMerge:
     layout = _workspace(tmp_path)
     _write_concept(layout.bundle_dir, "concepts/survivor", title="Survivor")
     _write_concept(layout.bundle_dir, "concepts/absorbed", title="Absorbed")

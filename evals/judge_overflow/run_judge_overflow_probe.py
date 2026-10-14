@@ -131,7 +131,7 @@ class _RecordingTransport:
         }
         try:
             data = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             self.calls.append(entry)
             return _ReplayResponse(body)
         if isinstance(data, dict):

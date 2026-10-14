@@ -2205,7 +2205,7 @@ def _orphaned_raw_copies(
         try:
             candidate.resolve().relative_to(raw_dir_resolved)
             is_file = candidate.is_file()
-        except (OSError, ValueError):
+        except OSError, ValueError:
             continue
         if is_file:
             found.add(resource)
@@ -3014,7 +3014,7 @@ def member_body_length(bundle_dir: Path, member_id: str) -> int:
     try:
         path, _canonical = resolve_concept_path(bundle_dir, member_id)
         _metadata, body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return -1
     return len(body.strip())
 
@@ -3076,7 +3076,7 @@ def cross_source_same_pair(bundle_dir: Path, member_ids: tuple[str, ...]) -> boo
         try:
             path, _canonical = resolve_concept_path(bundle_dir, member_id)
             metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return False
         raw = metadata.get("provenance")
         if not isinstance(raw, list) or not raw:
@@ -3120,7 +3120,7 @@ def cross_type_concern(bundle_dir: Path, member_ids: tuple[str, ...]) -> str | N
             return None
         try:
             metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return f"{member_id} could not be read, so its OKF type is unknown"
         raw = metadata.get("type")
         if not isinstance(raw, str) or not raw:

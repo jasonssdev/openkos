@@ -145,7 +145,7 @@ class _OfflineOllama:
     def chat(self, messages: object) -> str:
         return '{"extract": false}'
 
-    def embed(self, texts: "list[str]") -> "list[list[float]]":
+    def embed(self, texts: list[str]) -> list[list[float]]:
         return [[1.0] + [0.0] * (EMBED_DIM - 1) for _ in texts]
 
 
@@ -566,7 +566,7 @@ class _FakeCandidateStore:
     def __init__(self, candidate_report: object) -> None:
         self.candidate_report = candidate_report
 
-    def __enter__(self) -> "_FakeCandidateStore":
+    def __enter__(self) -> _FakeCandidateStore:
         return self
 
     def __exit__(self, *exc: object) -> None:

@@ -75,7 +75,7 @@ def extract_json_object(raw: object) -> dict[str, Any] | None:
             continue
         try:
             parsed = json.loads(candidate)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             continue
         if isinstance(parsed, dict):
             return parsed
@@ -107,7 +107,7 @@ def extract_json_items(raw: object) -> list[dict[str, Any]]:
             continue
         try:
             parsed = json.loads(candidate)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             continue
         if isinstance(parsed, list):
             return [item for item in parsed if isinstance(item, dict)]

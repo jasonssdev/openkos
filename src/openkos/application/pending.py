@@ -212,7 +212,7 @@ def judged_different_groups(
             persisted = adjudications_store.open_adjudications(conn)
         finally:
             conn.close()
-    except (OSError, sqlite3.Error):
+    except OSError, sqlite3.Error:
         return frozenset()
     latest: dict[str, adjudications_store.Adjudication] = {}
     for row in persisted:

@@ -883,7 +883,7 @@ def _guarded_read(
         return None
     try:
         text = okf.concept_path_for(concept_id, bundle_dir).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
     try:
         metadata, body = okf.load_frontmatter(text)
@@ -1396,7 +1396,7 @@ def _dense_search(
         BackendEmbeddingDimensionMismatch,
     ):
         raise
-    except (VecUnavailable, sqlite3.Error, BackendError):
+    except VecUnavailable, sqlite3.Error, BackendError:
         return [], True
 
 

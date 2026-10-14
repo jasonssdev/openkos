@@ -850,7 +850,7 @@ def _symlinks_are_creatable(probe_dir: Path) -> bool:
     probe_link = probe_dir / "okos-symlink-probe-link.tmp"
     try:
         probe_link.symlink_to(probe_target.name)
-    except (OSError, NotImplementedError):
+    except OSError, NotImplementedError:
         return False
     else:
         probe_link.unlink()
@@ -871,7 +871,7 @@ def _hardlinks_are_creatable(probe_dir: Path) -> bool:
     probe_link = probe_dir / "okos-hardlink-probe-link.tmp"
     try:
         os.link(probe_target, probe_link)
-    except (OSError, NotImplementedError, AttributeError):
+    except OSError, NotImplementedError, AttributeError:
         return False
     else:
         probe_link.unlink()

@@ -1090,7 +1090,7 @@ def parse_incoming_frontmatter(text: str) -> IncomingFrontmatter:
             dump_frontmatter({SOURCE_FRONTMATTER_KEY: loaded})
         )
         survives_round_trip = round_tripped.get(SOURCE_FRONTMATTER_KEY) == loaded
-    except (FrontmatterError, yaml.YAMLError):  # storage must never raise here
+    except FrontmatterError, yaml.YAMLError:  # storage must never raise here
         survives_round_trip = False
     if not survives_round_trip:
         return IncomingFrontmatter(status="unsupported-value", mapping=None)

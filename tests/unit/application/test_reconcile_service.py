@@ -59,7 +59,7 @@ def _reconcile(
     *,
     commits: CommitRecorder | None = None,
     observer: svc.ReconcileObserver | None = None,
-    confirm: "object | None" = None,
+    confirm: object | None = None,
     auto: bool = True,
     id_a: str | None = _A,
     id_b: str | None = _B,

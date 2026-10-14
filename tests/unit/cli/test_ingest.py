@@ -781,7 +781,7 @@ class _FakeStatus:
         self.exited = False
         self.updates: list[str] = []
 
-    def __enter__(self) -> "_FakeStatus":
+    def __enter__(self) -> _FakeStatus:
         self.entered = True
         return self
 
@@ -800,7 +800,7 @@ class _FakeConsole:
     constructor kwargs and every `.status(...)` call so tests can assert
     `stderr=True` construction and that the spinner is entered/exited."""
 
-    instances: ClassVar[list["_FakeConsole"]] = []
+    instances: ClassVar[list[_FakeConsole]] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         self.init_kwargs = kwargs

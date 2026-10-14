@@ -1251,10 +1251,10 @@ def _strip_ungrounded_expansions(
     def _grounded(phrase: str) -> bool:
         return " ".join(phrase.casefold().split()) in normalized_source
 
-    def _acronym_first(match: "re.Match[str]") -> str:
+    def _acronym_first(match: re.Match[str]) -> str:
         return match.group(0) if _grounded(match.group(2)) else match.group(1)
 
-    def _expansion_first(match: "re.Match[str]") -> str:
+    def _expansion_first(match: re.Match[str]) -> str:
         return match.group(0) if _grounded(match.group(1)) else match.group(2)
 
     stripped: list[ExtractionResult] = []
@@ -2063,7 +2063,7 @@ additive: `None` is the default at every seam, and no phase label ever
 changes what is extracted."""
 
 
-def _report(on_progress: "ProgressHook | None", phase: str) -> None:
+def _report(on_progress: ProgressHook | None, phase: str) -> None:
     """Emit `phase` when a hook was given. One helper so no call site has to
     repeat the `is not None` guard, and so a piped run (which passes `None`)
     costs exactly one comparison per phase.
@@ -2170,7 +2170,7 @@ model is told text is missing rather than left to read two spliced
 passages as contiguous."""
 
 
-def _prompt_overhead_chars(messages: "list[Message]") -> int:
+def _prompt_overhead_chars(messages: list[Message]) -> int:
     """Chars a prompt spends on everything EXCEPT the source text: the
     message list built over an EMPTY source, summed -- the same
     defined-by-construction idiom as `judge.prompt_overhead_chars`, shared
@@ -3640,7 +3640,7 @@ def _select_with_progress(
     judge_input: list[ExtractionResult],
     llm: LLMBackend,
     on_progress: ProgressHook | None,
-) -> "judge_mod.JudgeOutcome":
+) -> judge_mod.JudgeOutcome:
     """Report the judge phase, then run it (issue #701).
 
     One function so the label and the call cannot drift apart. Reporting
@@ -3675,7 +3675,7 @@ def _run_decision_pass(
     meeting_shaped: bool,
     llm: LLMBackend,
     on_progress: ProgressHook | None,
-) -> "tuple[list[ExtractionResult], str | None]":
+) -> tuple[list[ExtractionResult], str | None]:
     """The transcript decision pass (#1348) for one source: `([], None)` when
     the key is off or the source is not meeting-shaped, else the verified pass
     Decisions plus the first failure cause, if any.

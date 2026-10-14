@@ -385,7 +385,7 @@ class CandidateReport:
     so the pre-#567 `pairs[:retained]` invariant is the `offset == 0`
     special case. Defaults to `0` so every existing constructor and the
     `candidates=None` build are untouched."""
-    quarantine_withheld: tuple["WithheldCandidate", ...] = ()
+    quarantine_withheld: tuple[WithheldCandidate, ...] = ()
     """The pairs pass 3 WITHHELD because both endpoints derive from one
     source under #772's judge-degrade quarantine (#841), sorted by pair,
     each carrying the quarantined source(s) it was attributed to. Withheld
@@ -462,7 +462,7 @@ class SqliteGraphStore:
         """Close the underlying connection, dropping the in-memory database."""
         self._conn.close()
 
-    def __enter__(self) -> "SqliteGraphStore":
+    def __enter__(self) -> SqliteGraphStore:
         """Return `self` -- the connection is already open by construction."""
         return self
 
@@ -484,7 +484,7 @@ def _read_doc(path: Path) -> tuple[dict[str, object], str] | str:
     vanishes or corrupts after the walk is reported, not raised."""
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return "unreadable"
     try:
         return okf.load_frontmatter(text)
@@ -974,7 +974,7 @@ def refresh_graph_store(
         conn.close()
 
 
-def open_graph_store_readonly(path: Path) -> "SqliteGraphStore | None":
+def open_graph_store_readonly(path: Path) -> SqliteGraphStore | None:
     """Open the on-disk graph projection at `path` read-only, for future
     `answer()` consumers (derived-index-cache: Consumers Read Persisted
     Indexes Read-Only; graph-projection: Persisted index read-only for

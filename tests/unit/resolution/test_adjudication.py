@@ -173,7 +173,7 @@ def test_one_result_per_input_group_same_order(tmp_path: Path) -> None:
     ],
 )
 def test_verdict_mapping_case_insensitive(
-    tmp_path: Path, raw_verdict: str, expected: "adjudication_mod.Verdict"
+    tmp_path: Path, raw_verdict: str, expected: adjudication_mod.Verdict
 ) -> None:
     _write_doc(tmp_path / "a.md", title="A")
     _write_doc(tmp_path / "b.md", title="B")

@@ -367,7 +367,7 @@ def _load_doc(
     `False`, fail-closed."""
     try:
         text = okf.concept_path_for(concept_id, bundle_dir).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return concept_id, ""
     try:
         metadata, body = okf.load_frontmatter(text)
@@ -700,7 +700,7 @@ def _object_type(bundle_dir: Path, concept_id: str) -> str | None:
     would silently mis-classify it."""
     try:
         text = okf.concept_path_for(concept_id, bundle_dir).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
     try:
         metadata, _ = okf.load_frontmatter(text)

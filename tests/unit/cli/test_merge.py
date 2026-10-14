@@ -1598,12 +1598,12 @@ _RECONCILED_BODY = (
 
 
 def _patch_reconciliation(
-    monkeypatch: pytest.MonkeyPatch, reply: "str | None"
+    monkeypatch: pytest.MonkeyPatch, reply: str | None
 ) -> list[dict[str, object]]:
     """Patch the model seam (`reconcile_merged_body`) and record calls."""
     calls: list[dict[str, object]] = []
 
-    def _fake(**kwargs: object) -> "str | None":
+    def _fake(**kwargs: object) -> str | None:
         calls.append(kwargs)
         return reply
 
@@ -2235,7 +2235,7 @@ class _RecordingChat:
             display_host="localhost:11434" if is_local else "remote.example:443",
         )
 
-    def chat(self, messages: "Sequence[Message]") -> str:
+    def chat(self, messages: Sequence[Message]) -> str:
         self.sent.extend(message["content"] for message in messages)
         return _RECONCILED_BODY
 
