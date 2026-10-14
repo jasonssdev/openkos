@@ -422,9 +422,11 @@ the dedicated decision pass over a meeting-shaped source, one extra model call
 per chunk window (one call for a short transcript), and lets the Decisions it
 verifies replace the general pass's topic-bundle Decisions for that source.
 
-`False`, and deliberately so: the pass ships with NO measurement yet -- no
-harness has scored its per-decision recall or its cost on real transcripts --
-so it stays off, and off restores the pre-pass path byte-for-byte."""
+`False`, and deliberately so: a pre-registered measurement on AMI meeting
+transcripts (`evals/transcript_decisions/`) found it recovers about three times
+as many hand-annotated decisions as the general pass, at high precision, but
+short of the bar set for making it the default. So it stays opt-in, and off
+restores the pre-pass path byte-for-byte."""
 
 DEFAULT_REVISION_HISTORY = False
 """Packaged default for `revision_history` (#1014 piece b): whether `query`

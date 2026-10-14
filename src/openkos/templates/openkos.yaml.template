@@ -101,9 +101,11 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # Decisions whose quoted evidence is found verbatim
                           # replace the general pass's Decisions for that source
                           # (default OFF). Costs one extra model call per window
-                          # and applies only to the union extractor
-                          # (`union_judge`). UNMEASURED -- experimental, no
-                          # harness has scored its recall yet.
+                          # (a failed window is asked once more) and applies
+                          # only to the union extractor (`union_judge`).
+                          # Measured on meeting transcripts: about 3x the
+                          # decisions recalled at high precision, yet short of
+                          # the bar for turning it on by default.
 # concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one
                           # by one (default OFF). Chunked sources only; below
                           # the chunk threshold there are no windows to
