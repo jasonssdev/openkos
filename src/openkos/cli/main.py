@@ -43,6 +43,7 @@ from openkos.application import catalog_delta as application_catalog_delta
 from openkos.application import commit_phase as application_commit_phase
 from openkos.application import (
     contradictions_service,
+    curate_decisions,
     duplicates_service,
     ingest_service,
     lock_wait,
@@ -13192,15 +13193,23 @@ def _record_identity_decline_from_walk(
     merge happened, and the worst case is that the group is offered again,
     which is precisely the pre-#797 behaviour. Losing the operator's place
     mid-walk to persist a suppression would be the larger harm."""
-    try:
-        rel_path = _apply_identity_decision(
-            layout, tuple(member_ids), target_state="declined"
-        )
-        _autocommit(root, [rel_path], f"openkos: keep distinct {'/'.join(member_ids)}")
-    except (OSError, ValueError) as exc:
+    outcome = curate_decisions.record_keep_distinct(
+        root,
+        layout,
+        member_ids,
+        ports=curate_decisions.DecisionPorts(
+            # Late-bound, so a patch of either name still takes effect.
+            autocommit=lambda root_, paths, message: _autocommit(root_, paths, message),
+            on_warning=_echo_warning,
+            record_identity_ruling=lambda layout_, members, _on_warning: (
+                _apply_identity_decision(layout_, members, target_state="declined")
+            ),
+        ),
+    )
+    if isinstance(outcome, curate_decisions.NotApplied):
         typer.echo(
             f"openkos {verb}: warning -- failed to record the keep-distinct "
-            f"ruling ({exc}); this group will be offered again.",
+            f"ruling ({outcome.detail}); this group will be offered again.",
             err=True,
         )
 
