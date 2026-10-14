@@ -3778,4 +3778,6 @@ def test_the_template_documents_the_transcript_decisions_key() -> None:
     ).read_text(encoding="utf-8")
 
     assert "transcript_decisions" in template
-    assert "unmeasured" in template.casefold()
+    entry = template.split("# transcript_decisions:", 1)[1].split("\n# ", 1)[0]
+    assert "unmeasured" not in entry.casefold()
+    assert "measured" in entry.casefold()
