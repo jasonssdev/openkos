@@ -155,6 +155,73 @@
     "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n1 candidate group(s) -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos curate: Identity: skipped concepts/foo-2 -> concepts/foo -- a member no longer exists.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
     "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\nPreconditions: empty\nIdentity: applied 0, skipped 1.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
   },
+  "metadata_dirty_config_refusal": {
+    "commits": [],
+    "exit_code": 1,
+    "rows": [
+      [
+        "volatility",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Metadata: checking...\n1 concept type(s) -> 1 LLM call(s)\nopenkos curate: refusing to write -- openkos.yaml has uncommitted changes to the 'Concept' tier entry (or a shape this command cannot edit in the committed version), so the change cannot be committed on its own; commit or stash them, then try again.\n",
+    "stdout": "\n[volatile] Concept\n  rationale: stub rationale\nSet Concept -> volatile? [y/N/s/a]: y\n"
+  },
+  "metadata_drift_exit_three": {
+    "commits": [],
+    "exit_code": 3,
+    "rows": [
+      [
+        "volatility",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Metadata: checking...\n1 concept type(s) -> 1 LLM call(s)\nopenkos curate: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: openkos.yaml. Nothing was written. Re-run to recompute over the current bundle.\n",
+    "stdout": "\n[volatile] Concept\n  rationale: stub rationale\n"
+  },
+  "metadata_n_then_a": {
+    "commits": [
+      "openkos: set-volatility Entity -> slow",
+      "openkos: set-volatility Event -> volatile"
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "volatility",
+        "pending",
+        null
+      ],
+      [
+        "volatility",
+        "applied",
+        "as_proposed"
+      ],
+      [
+        "volatility",
+        "applied",
+        "as_proposed"
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Metadata: checking...\n3 concept type(s), 2 served -> 1 LLM call(s)\nopenkos curate: Metadata: accepting the remaining items without asking.\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n[volatile] Concept\n  rationale: stub rationale\n\n[slow] Entity\n  rationale: stub rationale\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n\n[volatile] Event\n  rationale: stub rationale\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: applied 2, skipped 1.\n  declined: Concept -> volatile\nContradictions: No candidate pairs found.\n"
+  },
+  "metadata_y": {
+    "commits": [
+      "openkos: set-volatility Concept -> volatile"
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "volatility",
+        "applied",
+        "as_proposed"
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Metadata: checking...\n1 concept type(s) -> 1 LLM call(s)\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n[volatile] Concept\n  rationale: stub rationale\nSet Concept -> volatile? [y/N/s/a]: y\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: applied 1, skipped 0.\nContradictions: No candidate pairs found.\n"
+  },
   "non_tty_refusal": {
     "commits": [],
     "exit_code": 0,
@@ -181,6 +248,136 @@
     ],
     "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n2 candidate group(s) -> 2 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 2 candidate group(s) served from persisted adjudications; 2 judged fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n\ropenkos curate: embedding doc 1/1 - 0s...\n",
     "stdout": "\n  merge concepts/foo-2 into concepts/foo (sensitivity private->private, 0 rewrite(s), removes bundle/concepts/foo-2.md, stacks 14 unreconciled body char(s) (21% of merged body))\n  survivor: concepts/foo (canonical id (base of a -N family))\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: unavailable -- connection refused. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment. Already applied 1, skipped 0 before the failure.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "structure_accept_remaining_and_reverse": {
+    "commits": [
+      "openkos: relate concepts/bar -> concepts/foo (depends_on)",
+      "openkos: relate concepts/foo -> concepts/bar-2 (depends_on)",
+      "openkos: relate concepts/foo-2 -> concepts/bar (depends_on)"
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "relation_type",
+        "applied",
+        "modified"
+      ],
+      [
+        "relation_type",
+        "applied",
+        "as_proposed"
+      ],
+      [
+        "relation_type",
+        "applied",
+        "as_proposed"
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n3 untyped edge(s) -> 3 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: symmetric suggested relation types are applied without review -- accuracy is measured, not assumed (see evals/edge_typing/ and issue #513). Asymmetric types still ask per item (issue #624). Re-run without `--accept structure` to decide each one.\nopenkos curate: Structure: 0 of 3 candidate edge(s) served from persisted suggestions; 3 typed fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n\ropenkos curate: embedding doc 1/3 - 0s...\ropenkos curate: embedding doc 2/3 - 0s...\ropenkos curate: embedding doc 3/3 - 0s...\n",
+    "stdout": "\n[depends_on] concepts/foo -> concepts/bar\n  rationale: stub rationale\n  a = accept this and every remaining depends_on; r = relate concepts/bar -> concepts/foo [depends_on] instead\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n\n[depends_on] concepts/foo -> concepts/bar-2\n  rationale: stub rationale\n  a = accept this and every remaining depends_on; r = relate concepts/bar-2 -> concepts/foo [depends_on] instead\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\n\n[depends_on] concepts/foo-2 -> concepts/bar\n  rationale: stub rationale\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: applied 3, skipped 0.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "structure_drift_exit_three": {
+    "commits": [],
+    "exit_code": 3,
+    "rows": [
+      [
+        "relation_type",
+        "pending",
+        null
+      ],
+      [
+        "relation_type",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n2 untyped edge(s) -> 2 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: 0 of 2 candidate edge(s) served from persisted suggestions; 2 typed fresh.\nopenkos curate: refusing to write -- 1 write target(s) changed on disk after this run computed its plan: bundle/concepts/foo.md. Nothing was written. Re-run to recompute over the current bundle.\n",
+    "stdout": "\n[references] concepts/foo -> concepts/bar\n  rationale: stub rationale\n"
+  },
+  "structure_endpoint_dropped_before_prepare": {
+    "commits": [],
+    "exit_code": 0,
+    "rows": [
+      [
+        "relation_type",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n1 untyped edge(s) -> 1 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: 0 of 1 candidate edge(s) served from persisted suggestions; 1 typed fresh.\nopenkos curate: Structure: skipped concepts/foo -> concepts/bar -- an endpoint no longer exists.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n[references] concepts/foo -> concepts/bar\n  rationale: stub rationale\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: applied 0, skipped 1.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "structure_endpoint_dropped_in_section": {
+    "commits": [],
+    "exit_code": 0,
+    "rows": [
+      [
+        "relation_type",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n1 untyped edge(s) -> 1 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: 0 of 1 candidate edge(s) served from persisted suggestions; 1 typed fresh.\nopenkos curate: Structure: skipped concepts/foo -> concepts/bar -- an endpoint no longer exists.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n[references] concepts/foo -> concepts/bar\n  rationale: stub rationale\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: applied 0, skipped 1.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "structure_n_and_s": {
+    "commits": [],
+    "exit_code": 0,
+    "rows": [
+      [
+        "relation_type",
+        "pending",
+        null
+      ],
+      [
+        "relation_type",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n2 untyped edge(s) -> 2 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: 0 of 2 candidate edge(s) served from persisted suggestions; 2 typed fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n[references] concepts/foo -> concepts/bar\n  rationale: stub rationale\n\n[references] concepts/foo-2 -> concepts/bar\n  rationale: stub rationale\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: applied 0, skipped 2.\n  declined: concepts/foo -> concepts/bar [references]\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "structure_write_failure_at_prepare": {
+    "commits": [],
+    "exit_code": 1,
+    "rows": [
+      [
+        "relation_type",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n1 untyped edge(s) -> 1 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: 0 of 1 candidate edge(s) served from persisted suggestions; 1 typed fresh.\nopenkos curate: Structure: failed while relating concepts/foo -> concepts/bar -- no plan.\n",
+    "stdout": "\n[references] concepts/foo -> concepts/bar\n  rationale: stub rationale\n"
+  },
+  "structure_write_failure_at_relate": {
+    "commits": [],
+    "exit_code": 1,
+    "rows": [
+      [
+        "relation_type",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n1 untyped edge(s) -> 1 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: 0 of 1 candidate edge(s) served from persisted suggestions; 1 typed fresh.\nopenkos curate: Structure: failed while relating concepts/foo -> concepts/bar -- disk full.\n",
+    "stdout": "\n[references] concepts/foo -> concepts/bar\n  rationale: stub rationale\n"
+  },
+  "structure_y": {
+    "commits": [
+      "openkos: relate concepts/foo -> concepts/bar (references)"
+    ],
+    "exit_code": 0,
+    "rows": [
+      [
+        "relation_type",
+        "applied",
+        "as_proposed"
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n1 untyped edge(s) -> 1 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: 0 of 1 candidate edge(s) served from persisted suggestions; 1 typed fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n\ropenkos curate: embedding doc 1/1 - 0s...\n",
+    "stdout": "\n[references] concepts/foo -> concepts/bar\n  rationale: stub rationale\nRelate concepts/foo -> concepts/bar [references]? [y/N/s/a]: y\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: applied 1, skipped 0.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
   },
   "write_failure_at_merge": {
     "commits": [
