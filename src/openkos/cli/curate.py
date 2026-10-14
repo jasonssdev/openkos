@@ -1435,6 +1435,11 @@ class _CurateDecisionObserver(curate_decisions.DecisionObserver):
             err=True,
         )
 
+    def relate_endpoint_missing(self, source: str, target: str) -> None:
+        # An endpoint forgotten while the prompt waited (#1137): the edge is
+        # dropped instead of relating to a concept that no longer exists.
+        _echo_dropped_edge(Edge(source_id=source, target_id=target))
+
     def keep_distinct_unrecorded(self, member_ids: tuple[str, ...], error: str) -> None:
         typer.echo(
             "openkos curate: warning -- failed to record the keep-distinct "
@@ -1450,6 +1455,16 @@ def _merge_failed_line(failure: WriteFailed) -> str:
     return (
         f"openkos curate: Identity: failed while merging {absorbed} into "
         f"{survivor} -- {failure.error}."
+    )
+
+
+def _relate_failed_line(failure: WriteFailed) -> str:
+    """`curate`'s line for a relation that could not be planned or written; the
+    subjects are the source and the target as written, in that order."""
+    source, target = failure.subjects
+    return (
+        f"openkos curate: Structure: failed while relating {source} -> {target} "
+        f"-- {failure.error}."
     )
 
 
@@ -2123,7 +2138,6 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     )
 
     layout = ctx.layout
-    log_path = layout.bundle_dir / "log.md"
     now = datetime.now(UTC)
     applied = 0
     skipped = 0
@@ -2213,79 +2227,48 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         if reverse:
             edge = Edge(source_id=edge.target_id, target_id=edge.source_id)
 
-        source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
-        target_path = okf.concept_path_for(edge.target_id, layout.bundle_dir)
-        if not _all_present(layout, (edge.source_id, edge.target_id)):
+        # The prompt rendered from the suggestion alone, so the plan is built
+        # here, after consent (the surface's `preview_relate`).
+        try:
+            preview = curate_decisions.preview_relate(
+                ctx.root, layout, suggestion, reverse=reverse, now=now
+            )
+        except WriteFailed as exc:
+            typer.echo(_relate_failed_line(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if isinstance(preview, curate_decisions.NotApplied):
             # An endpoint forgotten while the prompt waited (#1137): drop the
             # row instead of relating to a concept that no longer exists.
             _echo_dropped_edge(edge)
             skipped += 1
             continue
-        try:
-            prepared = application_lifecycle.prepare_relate(
-                source_path,
-                log_path,
-                edge.source_id,
-                edge.target_id,
-                suggestion.suggested_type,
-                ctx.root,
-                now=now,
-                target_path=target_path,
-            )
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos curate: Structure: failed while relating "
-                f"{edge.source_id} -> {edge.target_id} -- {exc}.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-
-        # `log.md` is re-composed below, not guarded: another verb's entry
-        # appended since the plan was composed is kept.
-        drift_baselines = {source_path: prepared.source_bytes}
-        if prepared.target_bytes is not None:
-            drift_baselines[target_path] = prepared.target_bytes
         # The commit phase (#1137): the prompt held no workspace lock, so the
-        # endpoints are re-checked and the write targets re-validated under it.
-        with cli_main._commit_section_for(ctx.root)():
-            if not _all_present(layout, (edge.source_id, edge.target_id)):
-                _echo_dropped_edge(edge)
-                skipped += 1
-                continue
-            cli_main._reject_drifted_targets(layout, drift_baselines, "curate")
-            prepared = cli_main._recomposed_catalog(
-                application_lifecycle.recompose_relate_log,
-                log_path,
-                prepared,
-                verb="curate",
-            )
-
-            try:
-                application_lifecycle.relate_core(
-                    source_path, log_path, prepared, target_path=target_path
-                )
-            except (OSError, ValueError) as exc:
-                typer.echo(
-                    "openkos curate: Structure: failed while relating "
-                    f"{edge.source_id} -> {edge.target_id} -- {exc}.",
-                    err=True,
-                )
-                raise typer.Exit(code=1) from exc
-
-            relate_commit_paths = [f"bundle/{edge.source_id}.md", "bundle/log.md"]
-            if prepared.new_target_text is not None:
-                relate_commit_paths.insert(1, f"bundle/{edge.target_id}.md")
-            relate_sha = cli_main._autocommit(
+        # endpoints are re-checked and the write targets re-validated under
+        # it, inside the surface.
+        try:
+            outcome = curate_decisions.commit_relate_decision(
                 ctx.root,
-                relate_commit_paths,
-                f"openkos: relate {edge.source_id} -> {edge.target_id} "
-                f"({suggestion.suggested_type})",
+                layout,
+                preview,
+                ports=_decision_ports(ctx),
+                observer=_CurateDecisionObserver(),
+                surface="curate",
             )
+        except DriftDetected as exc:
+            typer.echo(exc.message, err=True)
+            raise typer.Exit(code=3) from exc
+        except WriteFailed as exc:
+            typer.echo(_relate_failed_line(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if not isinstance(outcome, curate_decisions.Applied):
+            # A vanished endpoint; a Stale needs a token, which this path has none of.
+            skipped += 1
+            continue
         # #800: one commit per accepted edge, so one line per accepted edge
         # -- a session that applied dozens of relations is exactly the case
         # where "which of these do I take back" needs a per-item answer.
-        if relate_sha is not None:
-            cli_main._echo_commit_disclosure(relate_sha, prefix="  ")
+        if outcome.commit_sha is not None:
+            cli_main._echo_commit_disclosure(outcome.commit_sha, prefix="  ")
         applied += 1
 
     if isinstance(batch.failure, BackendUnavailable | BackendModelNotFound):

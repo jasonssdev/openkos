@@ -11,10 +11,11 @@ the commit section), never with a mock of the function under test.
 import ast
 import contextlib
 import dataclasses
+import hashlib
 import inspect
 import json
 from collections.abc import Callable, Iterator, Sequence
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -36,13 +37,16 @@ from openkos.application.curate_decisions import (
     DecisionVersion,
     MergeDecisionPreview,
     NotApplied,
+    RelateDecisionPreview,
     Stale,
 )
 from openkos.bundle import bundle
 from openkos.bundle import decisions as bundle_decisions
+from openkos.graph.base import Edge
 from openkos.model import okf
 from openkos.resolution.adjudication import Verdict
 from openkos.resolution.candidates import CandidateGroup, Tier
+from openkos.resolution.edge_typing import EdgeSuggestion
 from openkos.state import derived
 from openkos.state import pending_queue as pq
 
@@ -1332,3 +1336,749 @@ def test_only_the_injected_port_may_reach_a_model(
 
     assert isinstance(outcome, Applied)
     assert recorder.reconciled == [planned.prepared]
+
+
+# --------------------------------------------------------------------------- #
+# Relate: preview and commit, forward and reversed
+# --------------------------------------------------------------------------- #
+
+_NOW = datetime(2026, 3, 4, 12, 0, tzinfo=UTC)
+_SRC, _TGT = "concepts/a", "concepts/b"
+
+
+def _relate_workspace(tmp_path: Path) -> tuple[Path, config.WorkspaceLayout]:
+    root = tmp_path / "ws"
+    root.mkdir()
+    config.write_config(root)
+    layout = config.WorkspaceLayout(root)
+    bundle.create(layout.bundle_dir, date(2026, 1, 1))
+    _concept(layout, _SRC, "The source body.")
+    _concept(layout, _TGT, "The target body.")
+    return root, layout
+
+
+def _suggestion(
+    rel_type: str | None = "related_to",
+    *,
+    corrected: bool = False,
+) -> EdgeSuggestion:
+    return EdgeSuggestion(
+        edge=Edge(source_id=_SRC, target_id=_TGT),
+        suggested_type=rel_type,
+        rationale="because",
+        corrected_edge=Edge(source_id=_TGT, target_id=_SRC) if corrected else None,
+    )
+
+
+def _relate_preview(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    *,
+    rel_type: str | None = "related_to",
+    reverse: bool = False,
+    corrected: bool = False,
+    now: datetime = _NOW,
+) -> RelateDecisionPreview | NotApplied:
+    return curate_decisions.preview_relate(
+        root,
+        layout,
+        _suggestion(rel_type, corrected=corrected),
+        reverse=reverse,
+        now=now,
+    )
+
+
+def _must_relate(
+    root: Path, layout: config.WorkspaceLayout, **kwargs: object
+) -> RelateDecisionPreview:
+    preview = _relate_preview(root, layout, **kwargs)  # type: ignore[arg-type]
+    assert isinstance(preview, RelateDecisionPreview)
+    return preview
+
+
+def test_a_relate_preview_carries_the_plan_and_the_decision_key(
+    tmp_path: Path,
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    before = _snapshot(root)
+
+    preview = _must_relate(root, layout)
+
+    assert (preview.source_id, preview.target_id) == (_SRC, _TGT)
+    assert preview.relation_type == "related_to"
+    assert preview.decision_key == pq.stored_decision_key(
+        "relation_type", pq.relation_type_key(_SRC, _TGT)
+    )
+    assert preview.prepared.source_canonical == _SRC
+    assert preview.prepared.target_canonical == _TGT
+    assert preview.prepared.updated_relations_count == 1
+    assert _snapshot(root) == before  # a preview writes nothing
+
+
+def test_a_reversed_relate_preview_swaps_the_endpoints_and_keeps_the_key(
+    tmp_path: Path,
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    forward = _must_relate(root, layout)
+
+    reversed_ = _must_relate(root, layout, reverse=True)
+
+    assert (reversed_.source_id, reversed_.target_id) == (_TGT, _SRC)
+    assert reversed_.prepared.source_canonical == _TGT
+    assert reversed_.decision_key == forward.decision_key
+    assert (
+        reversed_.prepared.source_bytes
+        == (layout.bundle_dir / f"{_TGT}.md").read_bytes()
+    )
+
+
+def test_a_direction_corrected_suggestion_previews_its_effective_edge(
+    tmp_path: Path,
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+
+    corrected = _must_relate(root, layout, corrected=True)
+    both = _must_relate(root, layout, corrected=True, reverse=True)
+
+    assert (corrected.source_id, corrected.target_id) == (_TGT, _SRC)
+    # A reversal flips the effective edge, not the candidate one.
+    assert (both.source_id, both.target_id) == (_SRC, _TGT)
+
+
+@pytest.mark.parametrize("missing", [_SRC, _TGT])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_an_endpoint_that_no_longer_resolves_is_returned_member_missing(
+    tmp_path: Path, missing: str, reverse: bool
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    (layout.bundle_dir / f"{missing}.md").unlink()
+
+    outcome = _relate_preview(root, layout, reverse=reverse)
+
+    expected = Action.RELATE_REVERSED if reverse else Action.RELATE
+    assert outcome == NotApplied(expected, "member_missing")
+
+
+def test_a_suggestion_without_a_type_is_not_offered(tmp_path: Path) -> None:
+    root, layout = _relate_workspace(tmp_path)
+
+    assert _relate_preview(root, layout, rel_type=None) == NotApplied(
+        Action.RELATE, "not_offered"
+    )
+
+
+def test_the_preview_date_comes_from_the_caller_not_a_clock(tmp_path: Path) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    early = datetime(2020, 5, 6, 12, 0, tzinfo=UTC)
+
+    old = _must_relate(root, layout, now=early)
+    new = _must_relate(root, layout, now=_NOW)
+
+    assert old.prepared.new_log_text != new.prepared.new_log_text
+    assert early.astimezone().date().isoformat() in old.prepared.new_log_text
+    assert _NOW.astimezone().date().isoformat() in new.prepared.new_log_text
+
+
+def test_a_relate_plan_that_cannot_be_built_is_a_typed_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    cause = ValueError("bad frontmatter")
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise cause
+
+    monkeypatch.setattr(application_lifecycle, "prepare_relate", _boom)
+
+    with pytest.raises(write_gate.WriteFailed) as caught:
+        _relate_preview(root, layout)
+
+    assert caught.value.operation == "relate"
+    assert caught.value.subjects == (_SRC, _TGT)
+    assert caught.value.error == "bad frontmatter"
+    assert caught.value.__cause__ is cause
+
+
+def _relate_content_digest(
+    layout: config.WorkspaceLayout, *pairs: tuple[str, bytes]
+) -> str:
+    lines = sorted(
+        f"write\t{concept_id}.md\t{hashlib.sha256(data).hexdigest()}"
+        for concept_id, data in pairs
+    )
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def test_the_relate_version_hashes_the_source_and_target_bytes(
+    tmp_path: Path,
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout, rel_type="supersedes")
+    assert preview.prepared.target_bytes is not None
+
+    version = curate_decisions.version_of(preview, layout=layout, payload_digest="p1")
+
+    assert version.decision_key == preview.decision_key
+    assert version.payload_digest == "p1"
+    assert version.content_digest == _relate_content_digest(
+        layout,
+        (_SRC, preview.prepared.source_bytes),
+        (_TGT, preview.prepared.target_bytes),
+    )
+
+
+def test_a_relate_without_a_target_write_hashes_the_source_alone(
+    tmp_path: Path,
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout)
+    assert preview.prepared.target_bytes is None
+
+    version = curate_decisions.version_of(preview, layout=layout, payload_digest=None)
+
+    assert version.content_digest == _relate_content_digest(
+        layout, (_SRC, preview.prepared.source_bytes)
+    )
+
+
+@pytest.mark.parametrize("edited", [_SRC, _TGT])
+def test_editing_an_endpoint_changes_the_relate_content_digest(
+    tmp_path: Path, edited: str
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    before = curate_decisions.version_of(
+        _must_relate(root, layout, rel_type="supersedes"),
+        layout=layout,
+        payload_digest=None,
+    )
+
+    _edit(layout, edited)
+    after = curate_decisions.version_of(
+        _must_relate(root, layout, rel_type="supersedes"),
+        layout=layout,
+        payload_digest=None,
+    )
+
+    assert after.content_digest != before.content_digest
+
+
+def test_the_log_and_the_date_are_not_part_of_the_relate_digest(
+    tmp_path: Path,
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    first = curate_decisions.version_of(
+        _must_relate(root, layout, now=datetime(2020, 1, 1, 12, tzinfo=UTC)),
+        layout=layout,
+        payload_digest=None,
+    )
+    log = layout.bundle_dir / "log.md"
+    log.write_text(log.read_text(encoding="utf-8") + "\nanother verb\n")
+
+    second = curate_decisions.version_of(
+        _must_relate(root, layout, now=_NOW), layout=layout, payload_digest=None
+    )
+
+    assert second.content_digest == first.content_digest
+
+
+def test_a_reversed_relate_has_its_own_content_digest(tmp_path: Path) -> None:
+    root, layout = _relate_workspace(tmp_path)
+
+    forward = curate_decisions.version_of(
+        _must_relate(root, layout), layout=layout, payload_digest=None
+    )
+    backward = curate_decisions.version_of(
+        _must_relate(root, layout, reverse=True), layout=layout, payload_digest=None
+    )
+
+    assert forward.decision_key == backward.decision_key
+    assert forward.content_digest != backward.content_digest
+
+
+# -- relate commit ---------------------------------------------------------- #
+
+
+class _RelateRecorder(_Recorder):
+    """A hook that fires as the section opens, to move the world under it."""
+
+    def __init__(
+        self, *, sha: str | None = "abc1234", on_enter: Callable[[], None] | None = None
+    ) -> None:
+        super().__init__(sha=sha)
+        self._on_enter = on_enter
+
+    @contextlib.contextmanager
+    def section(self) -> Iterator[None]:
+        self.events.append("enter")
+        try:
+            if self._on_enter is not None:
+                self._on_enter()
+            yield
+        finally:
+            self.events.append("exit")
+
+
+class _RelateObserver(DecisionObserver):
+    def __init__(self, recorder: _Recorder) -> None:
+        self._recorder = recorder
+        self.missing: list[tuple[str, str]] = []
+
+    def relate_endpoint_missing(self, source: str, target: str) -> None:
+        self._recorder.events.append("endpoint_missing")
+        self.missing.append((source, target))
+
+
+def _commit_relate(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    preview: RelateDecisionPreview,
+    recorder: _RelateRecorder,
+    *,
+    surface: str = "curate",
+    expected: DecisionVersion | None = None,
+) -> curate_decisions.ApplyOutcome:
+    return curate_decisions.commit_relate_decision(
+        root,
+        layout,
+        preview,
+        ports=recorder.ports(),
+        observer=_RelateObserver(recorder),
+        surface=surface,
+        expected=expected,
+    )
+
+
+def _relations_of(layout: config.WorkspaceLayout, concept_id: str) -> list[object]:
+    text = (layout.bundle_dir / f"{concept_id}.md").read_text(encoding="utf-8")
+    return list(okf.decode_relations(okf.load_frontmatter(text)[0]))
+
+
+def test_a_relate_commit_writes_the_edge_inside_one_section(tmp_path: Path) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout)
+    recorder = _RelateRecorder()
+
+    outcome = _commit_relate(root, layout, preview, recorder)
+
+    assert outcome == Applied(preview.decision_key, Action.RELATE, "abc1234")
+    assert recorder.events == ["enter", "autocommit", "exit"]
+    assert recorder.commits == [
+        (
+            ("bundle/concepts/a.md", "bundle/log.md"),
+            "openkos: relate concepts/a -> concepts/b (related_to)",
+        )
+    ]
+    assert _relations_of(layout, _SRC) == [okf.Relation(target=_TGT, type="related_to")]
+    assert "Added a 'related_to' relation" in (layout.bundle_dir / "log.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_a_supersedes_relate_commits_the_target_export_too(tmp_path: Path) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout, rel_type="supersedes")
+    recorder = _RelateRecorder()
+
+    outcome = _commit_relate(root, layout, preview, recorder)
+
+    assert isinstance(outcome, Applied)
+    assert recorder.commits == [
+        (
+            ("bundle/concepts/a.md", "bundle/concepts/b.md", "bundle/log.md"),
+            "openkos: relate concepts/a -> concepts/b (supersedes)",
+        )
+    ]
+
+
+def test_a_reversed_relate_writes_the_swapped_edge(tmp_path: Path) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout, reverse=True)
+    recorder = _RelateRecorder()
+
+    outcome = _commit_relate(root, layout, preview, recorder)
+
+    assert outcome == Applied(preview.decision_key, Action.RELATE_REVERSED, "abc1234")
+    assert (
+        recorder.commits[0][1]
+        == "openkos: relate concepts/b -> concepts/a (related_to)"
+    )
+    assert recorder.commits[0][0] == ("bundle/concepts/b.md", "bundle/log.md")
+    assert _relations_of(layout, _TGT) == [okf.Relation(target=_SRC, type="related_to")]
+    assert _relations_of(layout, _SRC) == []
+
+
+def test_a_degraded_autocommit_still_applies_the_relation(tmp_path: Path) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout)
+
+    outcome = _commit_relate(root, layout, preview, _RelateRecorder(sha=None))
+
+    assert outcome == Applied(preview.decision_key, Action.RELATE, None)
+    assert _relations_of(layout, _SRC) != []
+
+
+def test_the_relate_write_goes_through_the_lifecycle_module_attribute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout)
+    calls: list[str] = []
+    real = application_lifecycle.relate_core
+
+    def _spy(*args: object, **kwargs: object) -> None:
+        calls.append("relate_core")
+        real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(application_lifecycle, "relate_core", _spy)
+
+    _commit_relate(root, layout, preview, _RelateRecorder())
+
+    assert calls == ["relate_core"]
+
+
+def test_a_cli_relate_commit_reprepares_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout)
+
+    def _forbidden(*args: object, **kwargs: object) -> object:
+        raise AssertionError("the CLI path must not re-preview")
+
+    monkeypatch.setattr(application_lifecycle, "prepare_relate", _forbidden)
+
+    assert isinstance(_commit_relate(root, layout, preview, _RelateRecorder()), Applied)
+
+
+@pytest.mark.parametrize("gone", [_SRC, _TGT])
+def test_an_endpoint_vanishing_is_reported_inside_the_section_and_writes_nothing(
+    tmp_path: Path, gone: str
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout)
+    recorder = _RelateRecorder(
+        on_enter=lambda: (layout.bundle_dir / f"{gone}.md").unlink()
+    )
+    observer = _RelateObserver(recorder)
+    before = _snapshot(layout.bundle_dir)
+    before.pop(layout.bundle_dir / f"{gone}.md")
+
+    outcome = curate_decisions.commit_relate_decision(
+        root,
+        layout,
+        preview,
+        ports=recorder.ports(),
+        observer=observer,
+        surface="curate",
+    )
+
+    assert outcome == NotApplied(Action.RELATE, "member_missing")
+    assert recorder.events == ["enter", "endpoint_missing", "exit"]
+    assert observer.missing == [(_SRC, _TGT)]
+    assert recorder.commits == []
+    assert _snapshot(layout.bundle_dir) == before
+
+
+@pytest.mark.parametrize("edited", [_SRC, _TGT])
+def test_drift_in_an_endpoint_is_raised_naming_it_and_the_surface(
+    tmp_path: Path, edited: str
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout, rel_type="supersedes")
+    _edit(layout, edited)
+    recorder = _RelateRecorder()
+    before = _snapshot(root)
+
+    with pytest.raises(write_gate.DriftDetected) as caught:
+        _commit_relate(root, layout, preview, recorder, surface="desktop")
+
+    assert edited in caught.value.message
+    assert "openkos desktop" in caught.value.message
+    assert recorder.commits == []
+    assert _snapshot(root) == before
+
+
+def _refuse_log_recompose(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _refuse(*args: object, **kwargs: object) -> object:
+        raise catalog_delta.CatalogRecomposeError("the log moved")
+
+    monkeypatch.setattr(application_lifecycle, "recompose_relate_log", _refuse)
+
+
+def test_a_log_recompose_failure_becomes_drift_and_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout)
+    _refuse_log_recompose(monkeypatch)
+    recorder = _RelateRecorder()
+    before = _snapshot(root)
+
+    with pytest.raises(write_gate.DriftDetected) as caught:
+        _commit_relate(root, layout, preview, recorder)
+
+    assert caught.value.message == "the log moved"
+    assert isinstance(caught.value.__cause__, catalog_delta.CatalogRecomposeError)
+    assert recorder.commits == []
+    assert _snapshot(root) == before
+
+
+def test_the_log_recompose_is_told_which_surface_is_committing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout)
+    verbs: list[object] = []
+    real = application_lifecycle.recompose_relate_log
+
+    def _spy(*args: object, **kwargs: object) -> object:
+        verbs.append(kwargs.get("verb"))
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(application_lifecycle, "recompose_relate_log", _spy)
+
+    _commit_relate(root, layout, preview, _RelateRecorder(), surface="desktop")
+
+    assert verbs == ["desktop"]
+
+
+def test_endpoint_drift_is_reported_before_a_log_recompose_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout)
+    _edit(layout, _SRC)
+    _refuse_log_recompose(monkeypatch)
+
+    with pytest.raises(write_gate.DriftDetected) as caught:
+        _commit_relate(root, layout, preview, _RelateRecorder())
+
+    assert _SRC in caught.value.message
+    assert caught.value.message != "the log moved"
+
+
+@pytest.mark.parametrize("error", [OSError("disk full"), ValueError("bad plan")])
+def test_a_failing_relate_write_is_a_typed_write_failure_with_its_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    preview = _must_relate(root, layout, reverse=True)
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr(application_lifecycle, "relate_core", _boom)
+    recorder = _RelateRecorder()
+
+    with pytest.raises(write_gate.WriteFailed) as caught:
+        _commit_relate(root, layout, preview, recorder)
+
+    assert caught.value.operation == "relate"
+    assert caught.value.subjects == (_TGT, _SRC)
+    assert caught.value.error == str(error)
+    assert caught.value.__cause__ is error
+    assert recorder.commits == []
+    assert recorder.events == ["enter", "exit"]
+
+
+# -- the relate row resolution --------------------------------------------- #
+
+
+def _relation_proposal(source: str = _SRC, target: str = _TGT) -> pq.Proposal:
+    return pq.Proposal(
+        kind="relation_type",
+        key_body=pq.relation_type_key(_SRC, _TGT),
+        producer="suggest-relations/1",
+        payload=json.dumps(
+            {
+                "effective_source_id": source,
+                "effective_target_id": target,
+                "suggested_type": "related_to",
+            }
+        ),
+        targets=(_SRC, _TGT),
+    )
+
+
+def _row_resolution(
+    layout: config.WorkspaceLayout, proposal: pq.Proposal
+) -> tuple[str, str]:
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        status, resolution = conn.execute(
+            "SELECT status, resolution FROM pending_items WHERE decision_key = ?",
+            (proposal.decision_key,),
+        ).fetchone()
+        return status, resolution
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("reverse", "resolution"), [(False, "as_proposed"), (True, "modified")]
+)
+def test_a_relate_commit_resolves_its_row_as_proposed_or_modified(
+    tmp_path: Path, reverse: bool, resolution: str
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    proposal = _relation_proposal()
+    _enqueue(layout, proposal)
+
+    _commit_relate(
+        root, layout, _must_relate(root, layout, reverse=reverse), _RelateRecorder()
+    )
+
+    assert _row_resolution(layout, proposal) == ("applied", resolution)
+
+
+# -- the relate token path -------------------------------------------------- #
+
+
+def _relate_token(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    proposal: pq.Proposal,
+    *,
+    with_payload_digest: bool = True,
+    reverse: bool = False,
+) -> DecisionVersion:
+    return curate_decisions.version_of(
+        _must_relate(root, layout, reverse=reverse),
+        layout=layout,
+        payload_digest=pq.payload_digest_for(proposal) if with_payload_digest else None,
+    )
+
+
+def _relate_seeded(
+    tmp_path: Path,
+) -> tuple[Path, config.WorkspaceLayout, pq.Proposal, DecisionVersion]:
+    root, layout = _relate_workspace(tmp_path)
+    proposal = _relation_proposal()
+    _enqueue(layout, proposal)
+    return root, layout, proposal, _relate_token(root, layout, proposal)
+
+
+def test_a_current_relate_token_commits_and_resolves_the_row(tmp_path: Path) -> None:
+    root, layout, proposal, version = _relate_seeded(tmp_path)
+
+    outcome = _commit_relate(
+        root, layout, _must_relate(root, layout), _RelateRecorder(), expected=version
+    )
+
+    assert outcome == Applied(proposal.decision_key, Action.RELATE, "abc1234")
+    assert curate_queue.open_row_by_key(layout, proposal.decision_key) is None
+    assert _relations_of(layout, _SRC) != []
+
+
+def test_a_reversed_relate_token_commits_the_reversed_edge(tmp_path: Path) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    proposal = _relation_proposal()
+    _enqueue(layout, proposal)
+    version = _relate_token(root, layout, proposal, reverse=True)
+
+    outcome = _commit_relate(
+        root,
+        layout,
+        _must_relate(root, layout, reverse=True),
+        _RelateRecorder(),
+        expected=version,
+    )
+
+    assert isinstance(outcome, Applied)
+    assert outcome.action is Action.RELATE_REVERSED
+    assert _relations_of(layout, _TGT) != []
+
+
+def test_an_endpoint_edited_after_the_relate_token_is_stale_before_the_section(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal, version = _relate_seeded(tmp_path)
+    preview = _must_relate(root, layout)
+    _edit(layout, _SRC)
+    before = _snapshot(root)
+    recorder = _RelateRecorder()
+
+    outcome = _commit_relate(root, layout, preview, recorder, expected=version)
+
+    assert outcome == Stale(proposal.decision_key, "content_changed")
+    assert recorder.events == []
+    assert _snapshot(root) == before
+
+
+def test_a_relate_row_resolved_elsewhere_is_stale_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal, version = _relate_seeded(tmp_path)
+    preview = _must_relate(root, layout)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        conn.execute(
+            "UPDATE pending_items SET status = 'declined', resolution = 'declined'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    before = _snapshot(root)
+    recorder = _RelateRecorder()
+
+    outcome = _commit_relate(root, layout, preview, recorder, expected=version)
+
+    assert outcome == Stale(proposal.decision_key, "row_resolved")
+    assert recorder.events == ["enter", "exit"]
+    assert _snapshot(root) == before
+
+
+def test_a_superseded_relate_row_is_stale_and_writes_nothing(tmp_path: Path) -> None:
+    root, layout, proposal, version = _relate_seeded(tmp_path)
+    preview = _must_relate(root, layout)
+    _enqueue(layout, _relation_proposal(source=_TGT, target=_SRC))
+    before = _snapshot(root)
+    recorder = _RelateRecorder()
+
+    outcome = _commit_relate(root, layout, preview, recorder, expected=version)
+
+    assert outcome == Stale(proposal.decision_key, "row_superseded")
+    assert recorder.events == ["enter", "exit"]
+    assert _snapshot(root) == before
+
+
+def test_a_relate_token_without_a_payload_digest_is_rejected_as_resolved(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal, _ = _relate_seeded(tmp_path)
+    version = _relate_token(root, layout, proposal, with_payload_digest=False)
+
+    outcome = _commit_relate(
+        root, layout, _must_relate(root, layout), _RelateRecorder(), expected=version
+    )
+
+    assert outcome == Stale(proposal.decision_key, "row_resolved")
+    assert _relations_of(layout, _SRC) == []
+
+
+def test_a_move_after_the_relate_token_check_is_drift_never_stale(
+    tmp_path: Path,
+) -> None:
+    root, layout, _proposal, version = _relate_seeded(tmp_path)
+    recorder = _RelateRecorder(on_enter=lambda: _edit(layout, _SRC))
+
+    with pytest.raises(write_gate.DriftDetected):
+        _commit_relate(
+            root, layout, _must_relate(root, layout), recorder, expected=version
+        )
+
+    assert recorder.commits == []
+
+
+def test_an_endpoint_gone_before_the_relate_token_is_checked_is_not_applied(
+    tmp_path: Path,
+) -> None:
+    root, layout, _proposal, version = _relate_seeded(tmp_path)
+    preview = _must_relate(root, layout)
+    (layout.bundle_dir / f"{_TGT}.md").unlink()
+    recorder = _RelateRecorder()
+
+    outcome = _commit_relate(root, layout, preview, recorder, expected=version)
+
+    assert outcome == NotApplied(Action.RELATE, "member_missing")
+    assert recorder.events == []
