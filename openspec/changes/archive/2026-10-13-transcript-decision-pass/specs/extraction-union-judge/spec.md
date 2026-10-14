@@ -41,16 +41,22 @@ shape `{subject, value, evidence}`. An empty array MUST be a valid answer.
 ### Requirement: Pass Items Are Admitted Fail-Closed
 
 An item MUST be dropped unless `subject`, `value` and `evidence` are
-non-empty strings and `evidence` is quoted verbatim in the window that
-produced it (casefold and whitespace-collapse normalization, as for the
-existing quoted-verbatim check). Surviving items MUST be deduplicated by
+non-empty strings, `value` has at least three words, and `evidence` is
+quoted verbatim in the window that produced it (casefold and
+whitespace-collapse normalization, as for the existing quoted-verbatim check). Surviving items MUST be deduplicated by
 normalized subject across windows, the first occurrence winning, and MUST be
-capped per source by a fixed bound applied after deduplication, in reply and
-window order.
+capped per source by a fixed bound (25) applied after deduplication, in reply
+and window order.
 
 #### Scenario: Paraphrased evidence is dropped
 
 - GIVEN an item whose evidence line does not appear in its window
+- WHEN the pass admits items
+- THEN that item produces no Decision
+
+#### Scenario: A value under three words is dropped
+
+- GIVEN an item whose value is "Two buttons" and whose evidence is verbatim
 - WHEN the pass admits items
 - THEN that item produces no Decision
 
@@ -65,8 +71,8 @@ window order.
 
 Each admitted item MUST become a candidate of type `Decision` whose title is
 derived from the value (the value as a short statement, without its closing
-punctuation, bounded in length), whose description names the subject and the
-value, and whose body is composed only from the value and the quoted evidence
+punctuation, at most 100 characters, cut at a word boundary), whose
+description is `<subject>: <value>`, and whose body is composed only from the value and the quoted evidence
 line. The body MUST NOT contain any other text of the window.
 
 The title MUST NOT be the bare subject. Ingest attaches a candidate to an
@@ -93,8 +99,11 @@ The same decision stated again from the same source keeps its title.
 ### Requirement: Pass Decisions Replace The Main Pass's Decisions Fail-Closed
 
 WHEN the pass yields at least one Decision for a source, those Decisions
-MUST replace the main extraction pass's Decision candidates for that source;
-candidates of other types MUST be untouched. WHEN the pass yields none, or
+MUST replace the main extraction pass's Decision candidates for that source
+(removed before the judge runs); candidates of other types MUST be untouched.
+The pass Decisions MUST join the retained set after the judge and its
+positional backstop, so the backstop never drops a verified pass Decision;
+they are bounded only by their own cap. WHEN the pass yields none, or
 fails because of a backend error or an unparseable reply, the main pass's
 Decisions MUST be kept unchanged and the failure MUST be reported without
 raising.
