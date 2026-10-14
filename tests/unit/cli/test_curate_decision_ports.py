@@ -134,3 +134,38 @@ def test_the_reconciliation_reads_the_cli_main_helper_on_every_call_with_the_fla
 
     assert ports.reconcile(tmp_path, plan) is reconciled
     assert seen == [(tmp_path, plan, False, True, "curate")]
+
+
+def test_the_config_commit_decision_reads_the_cli_main_helper_on_every_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ports = _ports(tmp_path)
+    assert ports.plan_config_commit is not None
+    seen: list[tuple[Path, str, str, str, bytes]] = []
+
+    def _patched(
+        root: Path, verb: str, concept_type: str, tier: str, baseline: bytes
+    ) -> None:
+        seen.append((root, verb, concept_type, tier, baseline))
+
+    monkeypatch.setattr("openkos.cli.main._decide_config_commit", _patched)
+
+    assert ports.plan_config_commit(tmp_path, "curate", "Person", "slow", b"x") is None
+    assert seen == [(tmp_path, "curate", "Person", "slow", b"x")]
+
+
+def test_the_config_commit_reads_the_cli_main_helper_on_every_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ports = _ports(tmp_path)
+    assert ports.autocommit_config_edit is not None
+    seen: list[tuple[Path, str, object]] = []
+
+    def _patched(root: Path, message: str, plan: object = None) -> str:
+        seen.append((root, message, plan))
+        return "feed123"
+
+    monkeypatch.setattr("openkos.cli.main._autocommit_config_edit", _patched)
+
+    assert ports.autocommit_config_edit(tmp_path, "msg", None) == "feed123"
+    assert seen == [(tmp_path, "msg", None)]

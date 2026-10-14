@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 from openkos import config
 from openkos.application import (
@@ -38,7 +38,7 @@ from openkos.application import (
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application.lock_wait import CommitSection
-from openkos.application.write_gate import DriftDetected, WriteFailed
+from openkos.application.write_gate import DriftDetected, Refused, WriteFailed
 from openkos.model import okf
 from openkos.resolution.adjudication import Verdict
 from openkos.resolution.candidates import CandidateGroup
@@ -117,6 +117,22 @@ class Stale:
 ApplyOutcome = Applied | NotApplied | Stale
 
 
+class ConfigCommitPlan(Protocol):
+    """How a config edit is committed when `openkos.yaml` carries uncommitted
+    edits (#1330). OPAQUE to this module: the adapter's port makes it and the
+    adapter's commit port consumes it; the service only carries it between
+    the two."""
+
+
+@dataclass(frozen=True)
+class ConfigCommitRefusal:
+    """The adapter's refusal to commit a config edit on its own. `message` is
+    the complete text the adapter composed; the service raises it as a
+    `write_gate.Refused` and prints nothing."""
+
+    message: str
+
+
 def _ignore_warning(message: str) -> None:
     """The default warning sink: drop it."""
 
@@ -168,6 +184,23 @@ class DecisionPorts:
     """The body-reconciliation pass of an identity merge: the only place a
     model may be reached. Called only when the preview reports one planned,
     after the caller chose to commit and before the commit section opens."""
+
+    plan_config_commit: (
+        Callable[
+            [Path, str, str, str, bytes], ConfigCommitPlan | ConfigCommitRefusal | None
+        ]
+        | None
+    ) = None
+    """Decides, from the working tree and git, how a config edit is committed:
+    `(root, surface, concept_type, tier, baseline)` to a plan, a refusal, or
+    `None` when the ordinary path-scoped commit is right. It reads git, so it
+    stays adapter-side. When unset, the commit is always the ordinary one."""
+
+    autocommit_config_edit: (
+        Callable[[Path, str, ConfigCommitPlan | None], str | None] | None
+    ) = None
+    """Commits the config edit, honoring the plan, and returns the abbreviated
+    sha or `None`. When unset, `autocommit` commits `openkos.yaml` alone."""
 
 
 class DecisionObserver:
@@ -392,8 +425,21 @@ def _relate_content_lines(
     return sorted(f"write\t{name}\t{_sha256(data)}" for name, data in baselines.items())
 
 
+def _tier_content_lines(preview: TierDecisionPreview) -> list[str]:
+    """The proposed tier and the digest of the configuration it would replace.
+    A tier item carries no input digests, so the bytes `openkos.yaml` holds
+    now stand for the currently effective tier: another verb moving it moves
+    the version."""
+    return sorted(
+        [
+            f"tier\t{preview.type_name}\t{preview.tier}",
+            f"config\t{_sha256(preview.prepared.config_bytes)}",
+        ]
+    )
+
+
 def version_of(
-    preview: MergeDecisionPreview | RelateDecisionPreview,
+    preview: MergeDecisionPreview | RelateDecisionPreview | TierDecisionPreview,
     *,
     layout: config.WorkspaceLayout,
     payload_digest: str | None,
@@ -402,11 +448,12 @@ def version_of(
 
     `payload_digest` is the open queue row's, or `None` when no row backs the
     item. The CLI never calls this, so its walk pays no hashing cost."""
-    lines = (
-        _relate_content_lines(preview.prepared)
-        if isinstance(preview, RelateDecisionPreview)
-        else _merge_content_lines(layout, preview.prepared)
-    )
+    if isinstance(preview, RelateDecisionPreview):
+        lines = _relate_content_lines(preview.prepared)
+    elif isinstance(preview, TierDecisionPreview):
+        lines = _tier_content_lines(preview)
+    else:
+        lines = _merge_content_lines(layout, preview.prepared)
     return DecisionVersion(
         decision_key=preview.decision_key,
         payload_digest=payload_digest,
@@ -699,3 +746,102 @@ def commit_relate_decision(
             f"({preview.relation_type})",
         )
     return Applied(preview.decision_key, preview.action, commit_sha)
+
+
+# -- set tier -------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class TierDecisionPreview:
+    """What setting one concept type's volatility tier would do, computed
+    without writing. `prepared.config_bytes` is the drift baseline and, with
+    the proposed tier, the content of the version."""
+
+    prepared: application_lifecycle.PreparedSetVolatility
+    type_name: str
+    tier: str
+    decision_key: str
+
+
+def preview_set_tier(
+    layout: config.WorkspaceLayout, type_name: str, tier: str
+) -> TierDecisionPreview:
+    """Preview setting `type_name` to `tier` in `openkos.yaml`.
+
+    Writes nothing and calls no model. A configuration shape that cannot be
+    edited raises `WriteFailed("set_tier", ...)`."""
+    try:
+        prepared = application_lifecycle.prepare_set_volatility(
+            layout.config_path, type_name, tier
+        )
+    except (OSError, ValueError) as exc:
+        raise WriteFailed("set_tier", (type_name,), str(exc)) from exc
+    return TierDecisionPreview(
+        prepared=prepared,
+        type_name=type_name,
+        tier=tier,
+        decision_key=pq.stored_decision_key("volatility", pq.volatility_key(type_name)),
+    )
+
+
+def commit_tier_decision(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    preview: TierDecisionPreview,
+    *,
+    ports: DecisionPorts,
+    surface: str,
+    expected: DecisionVersion | None = None,
+) -> ApplyOutcome:
+    """Commit one previewed tier change.
+
+    With `expected=None` (the CLI) the drift guard compares against the bytes
+    read at preview. With a token, the change is re-previewed from current
+    bytes first (`Stale("content_changed")` before the section, which is what
+    an effective tier moved elsewhere looks like), and inside the section the
+    open row is re-read by `decision_key` (`row_resolved`, `row_superseded`).
+
+    Inside ONE commit section, in order: config drift (RAISED as
+    `DriftDetected`), the config-commit decision (a refusal is RAISED as
+    `Refused` carrying the adapter's text), then the write through
+    `lifecycle.set_volatility_core` (a failure is `WriteFailed`) and the
+    config commit. Every failed check writes nothing. The sha, if any, is on
+    the returned `Applied`."""
+    if expected is not None:
+        refreshed = preview_set_tier(layout, preview.type_name, preview.tier)
+        if (
+            version_of(refreshed, layout=layout, payload_digest=None).content_digest
+            != expected.content_digest
+        ):
+            return Stale(expected.decision_key, "content_changed")
+        preview = refreshed
+
+    prepared = preview.prepared
+    message = f"openkos: set-volatility {preview.type_name} -> {preview.tier}"
+    with ports.commit_section():
+        if expected is not None and (stale := _stale_row(layout, expected)):
+            return stale
+        drift = application_drift.describe_drift(
+            layout, {layout.config_path: prepared.config_bytes}, surface
+        )
+        if drift is not None:
+            raise DriftDetected(drift)
+        decision = (
+            None
+            if ports.plan_config_commit is None
+            else ports.plan_config_commit(
+                root, surface, preview.type_name, preview.tier, prepared.config_bytes
+            )
+        )
+        if isinstance(decision, ConfigCommitRefusal):
+            raise Refused(decision.message)
+        try:
+            application_lifecycle.set_volatility_core(layout.config_path, prepared)
+        except (OSError, ValueError) as exc:
+            raise WriteFailed("set_tier", (preview.type_name,), str(exc)) from exc
+        commit_sha = (
+            ports.autocommit(root, ["openkos.yaml"], message)
+            if ports.autocommit_config_edit is None
+            else ports.autocommit_config_edit(root, message, decision)
+        )
+    return Applied(preview.decision_key, Action.SET_TIER, commit_sha)

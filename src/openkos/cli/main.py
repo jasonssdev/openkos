@@ -1531,24 +1531,27 @@ class _ConfigCommitPlan:
     apply: Callable[[bytes], bytes]
 
 
-def _plan_config_commit(
+def _decide_config_commit(
     root: Path,
     verb: str,
     concept_type: str,
     tier: str,
     baseline: bytes,
-) -> _ConfigCommitPlan | None:
-    """Before `set-volatility` writes (#1330): `None` when `openkos.yaml` is
-    clean (or there is no committed version, or no git), so the ordinary
-    path-scoped commit is correct. Otherwise the file carries uncommitted
-    edits that `git add -- openkos.yaml` would sweep into a commit titled for
-    another change -- and whose printed `git revert` would undo them -- so
-    return a plan that commits the change applied to the committed version.
+) -> _ConfigCommitPlan | curate_decisions.ConfigCommitRefusal | None:
+    """Before a config-rewriting verb writes (#1330): `None` when
+    `openkos.yaml` is clean (or there is no committed version, or no git), so
+    the ordinary path-scoped commit is correct. Otherwise the file carries
+    uncommitted edits that `git add -- openkos.yaml` would sweep into a commit
+    titled for another change -- and whose printed `git revert` would undo
+    them -- so return a plan that commits the change applied to the committed
+    version.
 
-    Refuses (exit 1, nothing written) when the change cannot be applied
-    cleanly to the committed version: the user's edit touches the very
-    `type_tiers` entry this verb sets, or the committed file is not one
-    `set_type_tier` can edit."""
+    Returns a `ConfigCommitRefusal` (nothing written) when the change cannot
+    be applied cleanly to the committed version: the user's edit touches the
+    very `type_tiers` entry this verb sets, or the committed file is not one
+    `set_type_tier` can edit. It reads git and nothing else: it never prints
+    and never exits, so the curation decision surface can reach it as a port;
+    `_plan_config_commit` is the exit wrapper."""
     try:
         if not vcs_git.paths_dirty(root, ["openkos.yaml"]):
             return None
@@ -1570,16 +1573,30 @@ def _plan_config_commit(
     except ValueError:
         same_entry = False
     if not same_entry:
-        typer.echo(
+        return curate_decisions.ConfigCommitRefusal(
             f"openkos {verb}: refusing to write -- openkos.yaml has "
             f"uncommitted changes to the {concept_type!r} tier entry (or a "
             "shape this command cannot edit in the committed version), so "
             "the change cannot be committed on its own; commit or stash "
-            "them, then try again.",
-            err=True,
+            "them, then try again."
         )
-        raise typer.Exit(code=1)
     return _ConfigCommitPlan(apply=apply)
+
+
+def _plan_config_commit(
+    root: Path,
+    verb: str,
+    concept_type: str,
+    tier: str,
+    baseline: bytes,
+) -> _ConfigCommitPlan | None:
+    """`_decide_config_commit` for a verb that owns its exit: a refusal is
+    echoed to stderr and exits 1 with nothing written (`set-volatility`)."""
+    decision = _decide_config_commit(root, verb, concept_type, tier, baseline)
+    if isinstance(decision, curate_decisions.ConfigCommitRefusal):
+        typer.echo(decision.message, err=True)
+        raise typer.Exit(code=1)
+    return decision
 
 
 def _autocommit_config_edit(

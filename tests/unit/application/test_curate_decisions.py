@@ -32,6 +32,7 @@ from openkos.application import lifecycle as application_lifecycle
 from openkos.application.curate_decisions import (
     Action,
     Applied,
+    ConfigCommitRefusal,
     DecisionObserver,
     DecisionPorts,
     DecisionVersion,
@@ -39,6 +40,7 @@ from openkos.application.curate_decisions import (
     NotApplied,
     RelateDecisionPreview,
     Stale,
+    TierDecisionPreview,
 )
 from openkos.bundle import bundle
 from openkos.bundle import decisions as bundle_decisions
@@ -2082,3 +2084,485 @@ def test_an_endpoint_gone_before_the_relate_token_is_checked_is_not_applied(
 
     assert outcome == NotApplied(Action.RELATE, "member_missing")
     assert recorder.events == []
+
+
+# --------------------------------------------------------------------------- #
+# Set tier: preview and commit
+# --------------------------------------------------------------------------- #
+
+_TYPE, _TIER = "Person", "volatile"
+
+
+def _tier_workspace(tmp_path: Path) -> tuple[Path, config.WorkspaceLayout]:
+    root = tmp_path / "ws"
+    root.mkdir()
+    config.write_config(root)
+    return root, config.WorkspaceLayout(root)
+
+
+def _must_tier(
+    layout: config.WorkspaceLayout, type_name: str = _TYPE, tier: str = _TIER
+) -> TierDecisionPreview:
+    return curate_decisions.preview_set_tier(layout, type_name, tier)
+
+
+def _config_text(layout: config.WorkspaceLayout) -> str:
+    return layout.config_path.read_text(encoding="utf-8")
+
+
+def _move_effective_tier(layout: config.WorkspaceLayout, tier: str = "static") -> None:
+    """Change the tier the type is on, as another verb would."""
+    layout.config_path.write_text(
+        config.set_type_tier(_config_text(layout), _TYPE, tier), encoding="utf-8"
+    )
+
+
+def test_a_tier_preview_carries_the_plan_and_the_decision_key(tmp_path: Path) -> None:
+    _root, layout = _tier_workspace(tmp_path)
+    before = layout.config_path.read_bytes()
+
+    preview = _must_tier(layout)
+
+    assert preview.type_name == _TYPE
+    assert preview.tier == _TIER
+    assert preview.decision_key == pq.stored_decision_key(
+        "volatility", pq.volatility_key(_TYPE)
+    )
+    assert preview.prepared.config_bytes == before
+    assert preview.prepared.new_config_text == config.set_type_tier(
+        before.decode("utf-8"), _TYPE, _TIER
+    )
+
+
+def test_a_tier_preview_writes_nothing(tmp_path: Path) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    before = _snapshot(root)
+
+    _must_tier(layout)
+
+    assert _snapshot(root) == before
+
+
+@pytest.mark.parametrize("error", [OSError, ValueError])
+def test_a_tier_plan_that_cannot_be_built_is_a_typed_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: type[Exception]
+) -> None:
+    _root, layout = _tier_workspace(tmp_path)
+    cause = error("cannot edit")
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise cause
+
+    monkeypatch.setattr(application_lifecycle, "prepare_set_volatility", _boom)
+
+    with pytest.raises(write_gate.WriteFailed) as caught:
+        _must_tier(layout)
+
+    assert caught.value.operation == "set_tier"
+    assert caught.value.subjects == (_TYPE,)
+    assert caught.value.error == "cannot edit"
+    assert caught.value.__cause__ is cause
+
+
+def _tier_content_digest(layout: config.WorkspaceLayout, tier: str = _TIER) -> str:
+    lines = sorted(
+        [
+            f"tier\t{_TYPE}\t{tier}",
+            f"config\t{hashlib.sha256(layout.config_path.read_bytes()).hexdigest()}",
+        ]
+    )
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def test_the_tier_version_hashes_the_proposed_tier_and_the_config_bytes(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _tier_workspace(tmp_path)
+    preview = _must_tier(layout)
+
+    version = curate_decisions.version_of(preview, layout=layout, payload_digest="p1")
+
+    assert version.decision_key == preview.decision_key
+    assert version.payload_digest == "p1"
+    assert version.content_digest == _tier_content_digest(layout)
+
+
+def test_the_tier_version_covers_the_proposed_tier(tmp_path: Path) -> None:
+    _root, layout = _tier_workspace(tmp_path)
+
+    slow = curate_decisions.version_of(
+        _must_tier(layout, tier="slow"), layout=layout, payload_digest=None
+    )
+    fast = curate_decisions.version_of(
+        _must_tier(layout, tier=_TIER), layout=layout, payload_digest=None
+    )
+
+    assert slow.content_digest != fast.content_digest
+
+
+def test_the_tier_version_covers_the_currently_effective_tier(tmp_path: Path) -> None:
+    _root, layout = _tier_workspace(tmp_path)
+    before = curate_decisions.version_of(
+        _must_tier(layout), layout=layout, payload_digest=None
+    )
+
+    _move_effective_tier(layout)
+    after = curate_decisions.version_of(
+        _must_tier(layout), layout=layout, payload_digest=None
+    )
+
+    assert before.content_digest != after.content_digest
+
+
+class _TierRecorder(_Recorder):
+    """Records the config-commit ports beside the section, in call order."""
+
+    def __init__(
+        self,
+        *,
+        sha: str | None = "abc1234",
+        plan: object = None,
+        refusal: str | None = None,
+        on_enter: Callable[[], None] | None = None,
+    ) -> None:
+        super().__init__(sha=sha)
+        self.plan = plan
+        self.refusal = refusal
+        self.plan_calls: list[tuple[Path, str, str, str, bytes]] = []
+        self.edit_commits: list[tuple[Path, str, object]] = []
+        self._on_enter = on_enter
+
+    def plan_config_commit(
+        self, root: Path, verb: str, concept_type: str, tier: str, baseline: bytes
+    ) -> object:
+        self.events.append("plan")
+        self.plan_calls.append((root, verb, concept_type, tier, baseline))
+        return None if self.refusal is None else ConfigCommitRefusal(self.refusal)
+
+    def autocommit_config_edit(
+        self, root: Path, message: str, plan: object = None
+    ) -> str | None:
+        self.events.append("commit_edit")
+        self.edit_commits.append((root, message, plan))
+        return self._sha
+
+    @contextlib.contextmanager
+    def section(self) -> Iterator[None]:
+        self.events.append("enter")
+        try:
+            if self._on_enter is not None:
+                self._on_enter()
+            yield
+        finally:
+            self.events.append("exit")
+
+    def ports(self) -> DecisionPorts:
+        return dataclasses.replace(
+            super().ports(),
+            plan_config_commit=self.plan_config_commit,
+            autocommit_config_edit=self.autocommit_config_edit,
+        )
+
+
+def _commit_tier(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    preview: TierDecisionPreview,
+    recorder: _TierRecorder,
+    *,
+    surface: str = "curate",
+    expected: DecisionVersion | None = None,
+) -> curate_decisions.ApplyOutcome:
+    return curate_decisions.commit_tier_decision(
+        root,
+        layout,
+        preview,
+        ports=recorder.ports(),
+        surface=surface,
+        expected=expected,
+    )
+
+
+def test_a_tier_commit_writes_the_config_and_commits_inside_one_section(
+    tmp_path: Path,
+) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    preview = _must_tier(layout)
+    recorder = _TierRecorder()
+
+    outcome = _commit_tier(root, layout, preview, recorder)
+
+    assert outcome == Applied(preview.decision_key, Action.SET_TIER, "abc1234")
+    assert _config_text(layout) == preview.prepared.new_config_text
+    assert recorder.events == ["enter", "plan", "commit_edit", "exit"]
+    assert recorder.edit_commits == [
+        (root, f"openkos: set-volatility {_TYPE} -> {_TIER}", None)
+    ]
+
+
+def test_the_config_plan_is_asked_for_the_surface_the_type_the_tier_and_the_baseline(
+    tmp_path: Path,
+) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    preview = _must_tier(layout)
+    recorder = _TierRecorder()
+
+    _commit_tier(root, layout, preview, recorder, surface="curate")
+
+    assert recorder.plan_calls == [
+        (root, "curate", _TYPE, _TIER, preview.prepared.config_bytes)
+    ]
+
+
+def test_the_opaque_config_plan_reaches_the_commit_unchanged(tmp_path: Path) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    plan = object()
+    recorder = _TierRecorder(plan=plan)
+    recorder.plan_config_commit = (  # type: ignore[method-assign]
+        lambda *args: plan
+    )
+
+    _commit_tier(root, layout, _must_tier(layout), recorder)
+
+    assert recorder.edit_commits[0][2] is plan
+
+
+def test_a_degraded_tier_commit_still_applies_the_tier(tmp_path: Path) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    preview = _must_tier(layout)
+
+    outcome = _commit_tier(root, layout, preview, _TierRecorder(sha=None))
+
+    assert outcome == Applied(preview.decision_key, Action.SET_TIER, None)
+    assert _config_text(layout) == preview.prepared.new_config_text
+
+
+def test_a_config_commit_refusal_is_raised_with_its_text_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    preview = _must_tier(layout)
+    before = _snapshot(root)
+    recorder = _TierRecorder(refusal="openkos curate: refusing to write -- dirty.")
+
+    with pytest.raises(write_gate.Refused) as caught:
+        _commit_tier(root, layout, preview, recorder)
+
+    assert not isinstance(caught.value, write_gate.WriteFailed)
+    assert caught.value.message == "openkos curate: refusing to write -- dirty."
+    assert _snapshot(root) == before
+    assert recorder.edit_commits == []
+    assert recorder.events == ["enter", "plan", "exit"]
+
+
+def test_drift_in_the_config_is_raised_naming_the_surface_before_the_plan(
+    tmp_path: Path,
+) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    preview = _must_tier(layout)
+    _move_effective_tier(layout)
+    before = _snapshot(root)
+    recorder = _TierRecorder()
+
+    with pytest.raises(write_gate.DriftDetected) as caught:
+        _commit_tier(root, layout, preview, recorder, surface="curate")
+
+    assert "openkos.yaml" in caught.value.message
+    assert "curate" in caught.value.message
+    assert _snapshot(root) == before
+    assert recorder.events == ["enter", "exit"]  # the plan port was never asked
+
+
+@pytest.mark.parametrize("error", [OSError("disk full"), ValueError("bad plan")])
+def test_a_failing_tier_write_is_a_typed_write_failure_with_its_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    preview = _must_tier(layout)
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr(application_lifecycle, "set_volatility_core", _boom)
+    recorder = _TierRecorder()
+
+    with pytest.raises(write_gate.WriteFailed) as caught:
+        _commit_tier(root, layout, preview, recorder)
+
+    assert caught.value.operation == "set_tier"
+    assert caught.value.subjects == (_TYPE,)
+    assert caught.value.error == str(error)
+    assert caught.value.__cause__ is error
+    assert recorder.edit_commits == []
+    assert recorder.events == ["enter", "plan", "exit"]
+
+
+def test_the_tier_write_goes_through_the_lifecycle_module_attribute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    preview = _must_tier(layout)
+    seen: list[Path] = []
+
+    def _spy(config_path: Path, prepared: object) -> None:
+        seen.append(config_path)
+
+    monkeypatch.setattr(application_lifecycle, "set_volatility_core", _spy)
+
+    _commit_tier(root, layout, preview, _TierRecorder())
+
+    assert seen == [layout.config_path]
+
+
+def test_ports_without_the_config_commit_ports_fall_back_to_a_plain_commit(
+    tmp_path: Path,
+) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    preview = _must_tier(layout)
+    recorder = _Recorder()
+
+    outcome = curate_decisions.commit_tier_decision(
+        root, layout, preview, ports=recorder.ports(), surface="curate"
+    )
+
+    assert outcome == Applied(preview.decision_key, Action.SET_TIER, "abc1234")
+    assert recorder.commits == [
+        (("openkos.yaml",), f"openkos: set-volatility {_TYPE} -> {_TIER}")
+    ]
+
+
+# -- the tier row resolution and token path --------------------------------- #
+
+
+def _tier_proposal(tier: str = _TIER) -> pq.Proposal:
+    return pq.Proposal(
+        kind="volatility",
+        key_body=pq.volatility_key(_TYPE),
+        producer="suggest-volatility/1",
+        payload=json.dumps(
+            {
+                "type_name": _TYPE,
+                "current_default": "slow",
+                "suggested_tier": tier,
+                "rationale": "because",
+            }
+        ),
+        targets=(),
+    )
+
+
+def _tier_seeded(
+    tmp_path: Path,
+) -> tuple[Path, config.WorkspaceLayout, pq.Proposal, DecisionVersion]:
+    root, layout = _tier_workspace(tmp_path)
+    proposal = _tier_proposal()
+    _enqueue(layout, proposal)
+    version = curate_decisions.version_of(
+        _must_tier(layout),
+        layout=layout,
+        payload_digest=pq.payload_digest_for(proposal),
+    )
+    return root, layout, proposal, version
+
+
+def test_a_tier_commit_resolves_its_row_as_proposed(tmp_path: Path) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    proposal = _tier_proposal()
+    _enqueue(layout, proposal)
+
+    _commit_tier(root, layout, _must_tier(layout), _TierRecorder())
+
+    assert _row_resolution(layout, proposal) == ("applied", "as_proposed")
+
+
+def test_a_current_tier_token_commits_and_resolves_the_row(tmp_path: Path) -> None:
+    root, layout, proposal, version = _tier_seeded(tmp_path)
+    preview = _must_tier(layout)
+
+    outcome = _commit_tier(root, layout, preview, _TierRecorder(), expected=version)
+
+    assert outcome == Applied(proposal.decision_key, Action.SET_TIER, "abc1234")
+    assert _config_text(layout) == preview.prepared.new_config_text
+    assert curate_queue.open_row_by_key(layout, proposal.decision_key) is None
+
+
+def test_the_effective_tier_changed_elsewhere_is_stale_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal, version = _tier_seeded(tmp_path)
+    preview = _must_tier(layout)
+    _move_effective_tier(layout)
+    before = _snapshot(root)
+    recorder = _TierRecorder()
+
+    outcome = _commit_tier(root, layout, preview, recorder, expected=version)
+
+    assert outcome == Stale(proposal.decision_key, "content_changed")
+    assert recorder.events == []
+    assert _snapshot(root) == before
+
+
+def test_a_tier_row_resolved_elsewhere_is_stale_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal, version = _tier_seeded(tmp_path)
+    preview = _must_tier(layout)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        conn.execute(
+            "UPDATE pending_items SET status = 'declined', resolution = 'declined'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    before = _snapshot(root)
+    recorder = _TierRecorder()
+
+    outcome = _commit_tier(root, layout, preview, recorder, expected=version)
+
+    assert outcome == Stale(proposal.decision_key, "row_resolved")
+    assert recorder.events == ["enter", "exit"]
+    assert _snapshot(root) == before
+
+
+def test_a_superseded_tier_row_is_stale_and_writes_nothing(tmp_path: Path) -> None:
+    root, layout, proposal, version = _tier_seeded(tmp_path)
+    preview = _must_tier(layout)
+    _enqueue(layout, _tier_proposal("fast"))
+    before = _snapshot(root)
+    recorder = _TierRecorder()
+
+    outcome = _commit_tier(root, layout, preview, recorder, expected=version)
+
+    assert outcome == Stale(proposal.decision_key, "row_superseded")
+    assert recorder.events == ["enter", "exit"]
+    assert _snapshot(root) == before
+
+
+def test_a_tier_token_without_a_payload_digest_is_rejected_as_resolved(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal, _ = _tier_seeded(tmp_path)
+    version = curate_decisions.version_of(
+        _must_tier(layout), layout=layout, payload_digest=None
+    )
+    before = _snapshot(root)
+
+    outcome = _commit_tier(
+        root, layout, _must_tier(layout), _TierRecorder(), expected=version
+    )
+
+    assert outcome == Stale(proposal.decision_key, "row_resolved")
+    assert _snapshot(root) == before
+
+
+def test_a_move_after_the_tier_token_check_is_drift_never_stale(
+    tmp_path: Path,
+) -> None:
+    root, layout, _proposal, version = _tier_seeded(tmp_path)
+    recorder = _TierRecorder(on_enter=lambda: _move_effective_tier(layout))
+
+    with pytest.raises(write_gate.DriftDetected):
+        _commit_tier(root, layout, _must_tier(layout), recorder, expected=version)
+
+    assert recorder.edit_commits == []
