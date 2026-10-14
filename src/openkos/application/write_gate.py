@@ -9,6 +9,10 @@ per service, is what stops the three exit-code contracts drifting apart:
 
 * `Refused` -- exit 1: a precondition failed, Phase A or Phase B raised, or
   the workspace is not one. Nothing further was written.
+* `WriteFailed` -- exit 1, a `Refused` that names WHICH write failed
+  (`merge`, `relate` or `set_tier`), over which subjects, with what error, and
+  chains its cause. It carries structured fields so an adapter formats its own
+  line; `message` is a neutral rendering with no `openkos <verb>:` prefix.
 * `DriftDetected` -- exit 3, the ONE failure a script may safely retry
   (#319): a target changed, vanished or left the workspace after Phase A read
   it, so nothing was written.
@@ -47,6 +51,26 @@ class WriteRefused(Exception):
 
 class Refused(WriteRefused):
     """A precondition failed or a phase raised; nothing further was written."""
+
+
+class WriteFailed(Refused):
+    """A curation write raised an `OSError`/`ValueError` after its guards
+    passed (the curate-decisions surface, ADR-0053). Structured so the
+    adapter composes the exact line it has always printed from `operation`,
+    `subjects` and `error`; raise it `from` the original exception so the
+    cause is chained. Being a `Refused`, a service's own
+    `except (OSError, ValueError)` can never swallow it."""
+
+    def __init__(
+        self,
+        operation: Literal["merge", "relate", "set_tier"],
+        subjects: tuple[str, ...],
+        error: str,
+    ) -> None:
+        super().__init__(f"{operation} failed for {', '.join(subjects)}: {error}")
+        self.operation = operation
+        self.subjects = subjects
+        self.error = error
 
 
 class DriftDetected(WriteRefused):

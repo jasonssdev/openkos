@@ -58,7 +58,12 @@ import typer
 from openkos import config, lint, lock, sensitivity
 from openkos.application import auto_merge as application_auto_merge
 from openkos.application import backends as application_backends
-from openkos.application import curate_queue, merge_service, pending_queue_report
+from openkos.application import (
+    curate_decisions,
+    curate_queue,
+    merge_service,
+    pending_queue_report,
+)
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
@@ -1237,8 +1242,10 @@ def _run_auto_merge_pass(
         ctx.root,
         ctx.layout,
         plan,
-        commit_section=cli_main._commit_section_for(ctx.root),
-        autocommit=cli_main._autocommit,
+        commit_section=lambda: cli_main._commit_section_for(ctx.root)(),
+        autocommit=lambda root, paths, message: cli_main._autocommit(
+            root, paths, message
+        ),
         judged_digests=judged_digests,
         digest_of=digest_of,
     )
@@ -1382,6 +1389,42 @@ def _offer_accept_recommended(
             applied += 1
             merged.add(frozenset(group.member_ids))
     return applied, frozenset(merged)
+
+
+def _decision_ports(ctx: CurateContext) -> curate_decisions.DecisionPorts:
+    """The effects the curation decision surface sequences, bound to the CLI.
+
+    Every port binds LATE -- through a lambda that reads the `cli.main`
+    attribute on each call -- so a patch of `_autocommit`,
+    `_commit_section_for` or `_apply_identity_decision` made after this is
+    built still takes effect. `_autocommit` keeps its one definition in
+    `cli/main.py`."""
+    from openkos.cli import main as cli_main
+
+    return curate_decisions.DecisionPorts(
+        autocommit=lambda root, paths, message: cli_main._autocommit(
+            root, paths, message
+        ),
+        commit_section=lambda: cli_main._commit_section_for(ctx.root)(),
+        on_warning=lambda message: cli_main._echo_warning(message),
+        record_identity_ruling=lambda layout, member_ids, _on_warning: (
+            cli_main._apply_identity_decision(
+                layout, member_ids, target_state="declined"
+            )
+        ),
+    )
+
+
+class _CurateDecisionObserver(curate_decisions.DecisionObserver):
+    """Prints, with `curate`'s wording, the lines the surface reports from
+    inside a commit section."""
+
+    def keep_distinct_unrecorded(self, member_ids: tuple[str, ...], error: str) -> None:
+        typer.echo(
+            "openkos curate: warning -- failed to record the keep-distinct "
+            f"ruling ({error}); this group will be offered again.",
+            err=True,
+        )
 
 
 def _identity_write_one(
@@ -1767,6 +1810,9 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             # #1264: "not now" -- nothing is written and nothing is
             # recorded, so the pair (and its pending row) stays open and the
             # next run offers it again.
+            curate_decisions.skip_decision(
+                curate_decisions.identity_decision_key(group.member_ids)
+            )
             skipped += 1
             continue
         if answer == "distinct":
@@ -1783,12 +1829,17 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             #
             # A commit phase (#1137): the prompt held no lock, so a member
             # forgotten meanwhile has no ruling to record -- a row naming it
-            # would outlive the concept it is about.
-            with cli_main._commit_section_for(ctx.root)():
-                if _all_present(layout, group.member_ids):
-                    cli_main._record_identity_decline_from_walk(
-                        ctx.root, ctx.layout, group.member_ids, verb="curate"
-                    )
+            # would outlive the concept it is about. The surface owns the
+            # section and the presence check; a vanished member is a silent
+            # skip and a record failure is fail-open (its advisory prints
+            # from the observer), so the outcome needs no further handling.
+            curate_decisions.commit_keep_distinct(
+                ctx.root,
+                layout,
+                group.member_ids,
+                ports=_decision_ports(ctx),
+                observer=_CurateDecisionObserver(),
+            )
             continue
 
         if _identity_write_one(ctx, prepared):
