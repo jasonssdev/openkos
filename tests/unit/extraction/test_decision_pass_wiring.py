@@ -155,7 +155,8 @@ def test_empty_or_failed_pass_keeps_main_decisions(
 ) -> None:
     llm = _RoutingLLM(pass_reply, _main(_CONCEPT, _MAIN_DECISION))
     outcome = _run(llm, on=True)
-    assert llm.pass_calls == 1
+    # An unparseable reply is asked once more (#1361); the rest are not.
+    assert llm.pass_calls == (2 if pass_reply == "nonsense" else 1)  # noqa: S105 -- a reply, not a credential
     assert _titles(outcome, "Decision") == ["Product Design Choices"]
     assert outcome.report.decision_pass_added_titles == ()
 

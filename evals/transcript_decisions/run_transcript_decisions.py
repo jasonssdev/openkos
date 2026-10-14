@@ -432,12 +432,15 @@ _PASS_REPLY: Final = json.dumps(
 class _FakeLLM:
     """Canned replies; counts calls. Never touches a network."""
 
-    def __init__(self, reply: str) -> None:
+    def __init__(self, reply: str, first: str | None = None) -> None:
         self.reply = reply
+        self.first = first  # the reply to call 1, when it differs
         self.calls = 0
 
     def chat(self, messages: Sequence[Any]) -> str:
         self.calls += 1
+        if self.calls == 1 and self.first is not None:
+            return self.first
         return self.reply
 
 
@@ -644,6 +647,16 @@ def _self_test() -> int:
         )
         check("records per run and meeting", len(records), 4)
         check("one chat call per window", fake.calls, 4)
+        retry = run_arm(
+            "pass",
+            {"ES2015a": _SYNTH_TRANSCRIPT},
+            rows,
+            TimedBackend(_FakeLLM(_PASS_REPLY, first="not json")),
+            1,
+            log=lambda _line: None,
+        )[0]
+        check("a retried window counts both real calls", retry["calls"], 2)
+        check("a retried window is not a failure", retry["failure"], None)
         first = records[0]
         check("windows reported", first["windows"], 1)
         check("calls reported", first["calls"], 1)
