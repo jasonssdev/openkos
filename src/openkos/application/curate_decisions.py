@@ -20,11 +20,12 @@ calls go through the module attribute (`duplicates_service.<name>`), never a
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal, Protocol
 
 from openkos import config
@@ -34,14 +35,19 @@ from openkos.application import (
     curate_queue,
     duplicates_service,
     merge_service,
+    pending_queue_report,
 )
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
+from openkos.application import pending as application_pending
 from openkos.application.lock_wait import CommitSection
 from openkos.application.write_gate import DriftDetected, Refused, WriteFailed
+from openkos.graph.base import Edge
 from openkos.model import okf
+from openkos.model import types as model_types
+from openkos.model.relations import ASYMMETRIC_RELATION_TYPES, validate_relation_type
 from openkos.resolution.adjudication import Verdict
-from openkos.resolution.candidates import CandidateGroup
+from openkos.resolution.candidates import CandidateGroup, Tier
 from openkos.resolution.edge_typing import EdgeSuggestion
 from openkos.state import pending_queue as pq
 
@@ -280,12 +286,73 @@ def commit_keep_distinct(
     is returned."""
     members = tuple(member_ids)
     with ports.commit_section():
-        if not _all_present(layout, members):
-            return NotApplied(Action.KEEP_DISTINCT, "member_missing")
-        outcome = record_keep_distinct(root, layout, members, ports=ports)
-        if isinstance(outcome, NotApplied):
-            observer.keep_distinct_unrecorded(members, outcome.detail or "")
-        return outcome
+        return _keep_distinct_in_section(root, layout, members, ports, observer)
+
+
+def _keep_distinct_in_section(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    members: tuple[str, ...],
+    ports: DecisionPorts,
+    observer: DecisionObserver,
+) -> Applied | NotApplied:
+    if not _all_present(layout, members):
+        return NotApplied(Action.KEEP_DISTINCT, "member_missing")
+    outcome = record_keep_distinct(root, layout, members, ports=ports)
+    if isinstance(outcome, NotApplied):
+        observer.keep_distinct_unrecorded(members, outcome.detail or "")
+    return outcome
+
+
+@dataclass(frozen=True)
+class KeepDistinctDecisionPreview:
+    """What a keep-distinct ruling rests on: the members it is about. It has
+    no plan to compute, so its version covers the members' current bytes."""
+
+    member_ids: tuple[str, ...]
+    decision_key: str
+
+
+def _keep_distinct_content_lines(
+    layout: config.WorkspaceLayout, member_ids: Sequence[str]
+) -> list[str]:
+    """One `"member\t<id>\t<sha256>"` line per member (`-` for one that does
+    not resolve), so a member edited or forgotten moves the version."""
+    lines = []
+    for member_id in sorted(member_ids):
+        path = okf.concept_path_for(member_id, layout.bundle_dir)
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            digest = "-"
+        lines.append(f"member\t{member_id}\t{digest}")
+    return lines
+
+
+def commit_keep_distinct_decision(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    preview: KeepDistinctDecisionPreview,
+    *,
+    ports: DecisionPorts,
+    observer: DecisionObserver,
+    expected: DecisionVersion,
+) -> ApplyOutcome:
+    """`commit_keep_distinct` against a version token.
+
+    A member edited since the token was issued returns
+    `Stale("content_changed")` before the section; inside the section the open
+    row is re-read by `decision_key` (`row_resolved`, `row_superseded`,
+    `row_inputs_changed`) before anything is written."""
+    refreshed = version_of(preview, layout=layout, payload_digest=None)
+    if refreshed.content_digest != expected.content_digest:
+        return Stale(expected.decision_key, "content_changed")
+    with ports.commit_section():
+        if stale := _stale_row(layout, expected) or _stale_inputs(layout, expected):
+            return stale
+        return _keep_distinct_in_section(
+            root, layout, preview.member_ids, ports, observer
+        )
 
 
 # -- identity merge -------------------------------------------------------- #
@@ -439,7 +506,12 @@ def _tier_content_lines(preview: TierDecisionPreview) -> list[str]:
 
 
 def version_of(
-    preview: MergeDecisionPreview | RelateDecisionPreview | TierDecisionPreview,
+    preview: (
+        MergeDecisionPreview
+        | RelateDecisionPreview
+        | TierDecisionPreview
+        | KeepDistinctDecisionPreview
+    ),
     *,
     layout: config.WorkspaceLayout,
     payload_digest: str | None,
@@ -452,6 +524,8 @@ def version_of(
         lines = _relate_content_lines(preview.prepared)
     elif isinstance(preview, TierDecisionPreview):
         lines = _tier_content_lines(preview)
+    elif isinstance(preview, KeepDistinctDecisionPreview):
+        lines = _keep_distinct_content_lines(layout, preview.member_ids)
     else:
         lines = _merge_content_lines(layout, preview.prepared)
     return DecisionVersion(
@@ -483,9 +557,10 @@ def _repreview(
 def _stale_row(
     layout: config.WorkspaceLayout, expected: DecisionVersion
 ) -> Stale | None:
-    """Whether the queue row `expected` was issued for is still the open one.
-    Called INSIDE the commit section, where every queue writer also enters,
-    so the check and the write cannot interleave with a producer."""
+    """Whether the queue row `expected` was issued for is still the open one
+    and unchanged (`row_resolved`, `row_superseded`). Called INSIDE the commit
+    section, where every queue writer also enters, so the check and the write
+    cannot interleave with a producer."""
     row = (
         None
         if expected.payload_digest is None
@@ -495,6 +570,22 @@ def _stale_row(
         return Stale(expected.decision_key, "row_resolved")
     if row.item.payload_digest != expected.payload_digest:
         return Stale(expected.decision_key, "row_superseded")
+    return None
+
+
+def _stale_inputs(
+    layout: config.WorkspaceLayout, expected: DecisionVersion
+) -> Stale | None:
+    """Whether the open row `expected` was issued for was computed from inputs
+    that have changed since (`row_inputs_changed`). Called INSIDE the section,
+    right before the write and AFTER the drift guards: a document that moved
+    after the token was checked is a race, raised as drift, so what reaches
+    this check is a row that was already stale when the token was issued."""
+    row = curate_queue.open_row_by_key(layout, expected.decision_key)
+    if row is None:
+        return Stale(expected.decision_key, "row_resolved")
+    if not _inputs_fresh(layout, row):
+        return Stale(expected.decision_key, "row_inputs_changed")
     return None
 
 
@@ -573,6 +664,8 @@ def commit_merge_decision(
         )
         if read_drift is not None:
             raise DriftDetected(read_drift)
+        if expected is not None and (stale := _stale_inputs(layout, expected)):
+            return stale
         try:
             commit_sha = merge_service.commit_merge(
                 root, layout, prepared, autocommit=ports.autocommit
@@ -728,6 +821,8 @@ def commit_relate_decision(
             )
         except catalog_delta.CatalogRecomposeError as exc:
             raise DriftDetected(str(exc)) from exc
+        if expected is not None and (stale := _stale_inputs(layout, expected)):
+            return stale
         try:
             application_lifecycle.relate_core(
                 source_path, log_path, prepared, target_path=target_path
@@ -826,6 +921,8 @@ def commit_tier_decision(
         )
         if drift is not None:
             raise DriftDetected(drift)
+        if expected is not None and (stale := _stale_inputs(layout, expected)):
+            return stale
         decision = (
             None
             if ports.plan_config_commit is None
@@ -845,3 +942,447 @@ def commit_tier_decision(
             else ports.autocommit_config_edit(root, message, decision)
         )
     return Applied(preview.decision_key, Action.SET_TIER, commit_sha)
+
+
+# -- the list -------------------------------------------------------------- #
+
+DecisionKind = Literal[
+    "identity",
+    "relation_type",
+    "volatility",
+    "contradiction",
+    "revision",
+    "watch_refusal",
+]
+
+
+@dataclass(frozen=True)
+class WithheldAction:
+    """An action the item's kind could offer but this item does not, and why."""
+
+    action: Action
+    reason: Literal[
+        "pending_evaluation",
+        "judged_different",
+        "cross_type",
+        "more_than_two_members",
+        "no_valid_suggestion",
+    ]
+
+
+@dataclass(frozen=True)
+class DecisionItem:
+    """One open decision, as data a client can render and act on.
+
+    OWNER-LOCAL: `payload` is the stored proposal, which can derive from
+    confidential concepts. Nothing here ranks by, or presents, the
+    adjudicator's confidence: it travels inside `payload` as stored."""
+
+    decision_key: str
+    kind: DecisionKind
+    targets: tuple[str, ...]
+    fresh: bool
+    """`False` when the row was computed from inputs that have changed since.
+    A stale item is listed, never hidden, and an apply against it is `Stale`."""
+    evaluation: Literal[
+        "judged_same", "judged_different", "pending_evaluation", "not_applicable"
+    ]
+    actions: tuple[Action, ...]
+    withheld: tuple[WithheldAction, ...]
+    resolves_via: str
+    """Where the item resolves when it carries no action (and the command that
+    resolves it for one that does)."""
+    payload: Mapping[str, object]
+    payload_digest: str
+
+
+_CONTRADICTION_RESOLVES = (
+    "openkos contradictions --decline, openkos reconcile or openkos unmerge"
+)
+
+
+def _inputs_fresh(layout: config.WorkspaceLayout, row: curate_queue.OpenRow) -> bool:
+    """The list's freshness predicate for `row`, by kind: recorded inputs
+    still hash as recorded (identity, relation_type), the proposed-against tier
+    is still the effective one (volatility). The other kinds take no action,
+    so there is nothing for staleness to guard."""
+    kind = row.item.kind
+    if kind in ("identity", "relation_type"):
+        return curate_queue.row_is_fresh(
+            row,
+            application_pending.current_finding_digest(layout.bundle_dir),
+            row.item.targets,
+        )
+    if kind == "volatility":
+        return curate_queue.volatility_row_is_fresh(layout, row)
+    return True
+
+
+def _strings(payload: Mapping[str, object], *names: str) -> tuple[str, ...] | None:
+    values = [payload.get(name) for name in names]
+    if not all(isinstance(value, str) for value in values):
+        return None
+    return tuple(str(value) for value in values)
+
+
+def _relation_fields(
+    payload: Mapping[str, object],
+) -> tuple[str, str, str, str, str, str] | None:
+    """`(source, target, effective source, effective target, type, rationale)`
+    of a relation row, or `None` when the row does not carry a usable type."""
+    fields = _strings(
+        payload,
+        "source_id",
+        "target_id",
+        "effective_source_id",
+        "effective_target_id",
+        "suggested_type",
+        "rationale",
+    )
+    if fields is None:
+        return None
+    try:
+        suggested = validate_relation_type(fields[4])
+    except ValueError:
+        return None
+    return (fields[0], fields[1], fields[2], fields[3], suggested, fields[5])
+
+
+def _tier_fields(payload: Mapping[str, object]) -> tuple[str, str] | None:
+    """`(type name, proposed tier)` of a volatility row, or `None`."""
+    fields = _strings(payload, "type_name", "suggested_tier")
+    if fields is None or fields[1] not in model_types.VOLATILITY_TIERS:
+        return None
+    return fields[0], fields[1]
+
+
+def _identity_members(row: curate_queue.OpenRow) -> tuple[str, ...]:
+    listed = row.payload.get("member_ids")
+    if isinstance(listed, list) and all(isinstance(m, str) for m in listed):
+        return tuple(str(m) for m in listed)
+    return row.item.targets
+
+
+def _identity_actions(
+    layout: config.WorkspaceLayout, row: curate_queue.OpenRow
+) -> tuple[str, tuple[Action, ...], tuple[WithheldAction, ...]]:
+    adjudication = row.payload.get("adjudication")
+    verdict = adjudication.get("verdict") if isinstance(adjudication, dict) else None
+    members = _identity_members(row)
+    reason: (
+        Literal[
+            "pending_evaluation",
+            "judged_different",
+            "cross_type",
+            "more_than_two_members",
+        ]
+        | None
+    )
+    if verdict == Verdict.SAME.value:
+        evaluation = "judged_same"
+        if len(members) != 2:
+            reason = "more_than_two_members"
+        elif application_lifecycle.cross_type_concern(layout.bundle_dir, members):
+            reason = "cross_type"
+        else:
+            reason = None
+    elif verdict == Verdict.DIFFERENT.value:
+        evaluation, reason = "judged_different", "judged_different"
+    else:
+        evaluation, reason = "pending_evaluation", "pending_evaluation"
+    if reason is None:
+        return evaluation, (Action.MERGE, Action.KEEP_DISTINCT, Action.SKIP), ()
+    return (
+        evaluation,
+        (Action.KEEP_DISTINCT, Action.SKIP),
+        (WithheldAction(Action.MERGE, reason),),
+    )
+
+
+def _actions_of(
+    layout: config.WorkspaceLayout, row: curate_queue.OpenRow
+) -> tuple[str, tuple[Action, ...], tuple[WithheldAction, ...]]:
+    """`(evaluation, actions, withheld)` for one open row, by kind."""
+    kind = row.item.kind
+    if kind == "identity":
+        return _identity_actions(layout, row)
+    if kind == "relation_type":
+        fields = _relation_fields(row.payload)
+        if fields is None:
+            return (
+                "not_applicable",
+                (),
+                (WithheldAction(Action.RELATE, "no_valid_suggestion"),),
+            )
+        suggested = fields[4]
+        actions: tuple[Action, ...]
+        if suggested == "supersedes":
+            return "not_applicable", (), ()
+        if suggested in ASYMMETRIC_RELATION_TYPES:
+            actions = (Action.RELATE, Action.RELATE_REVERSED, Action.SKIP)
+        else:
+            actions = (Action.RELATE, Action.SKIP)
+        return "not_applicable", actions, ()
+    if kind == "volatility":
+        if _tier_fields(row.payload) is None:
+            return (
+                "not_applicable",
+                (),
+                (WithheldAction(Action.SET_TIER, "no_valid_suggestion"),),
+            )
+        return "not_applicable", (Action.SET_TIER, Action.SKIP), ()
+    return "not_applicable", (), ()
+
+
+def _configured_inbox(layout: config.WorkspaceLayout) -> Path | None:
+    try:
+        return config.read_config(layout.root).unattended.inbox
+    except OSError, ValueError:
+        return None
+
+
+def _item_of(
+    layout: config.WorkspaceLayout, row: curate_queue.OpenRow, inbox: Path | None
+) -> DecisionItem:
+    evaluation, actions, withheld = _actions_of(layout, row)
+    kind = row.item.kind
+    return DecisionItem(
+        decision_key=row.item.decision_key,
+        kind=kind,  # type: ignore[arg-type]
+        targets=row.item.targets,
+        fresh=_inputs_fresh(layout, row),
+        evaluation=evaluation,  # type: ignore[arg-type]
+        actions=actions,
+        withheld=withheld,
+        resolves_via=(
+            _CONTRADICTION_RESOLVES
+            if kind == "contradiction"
+            else pending_queue_report.row_resolving_command(
+                row.item, inbox, layout.bundle_dir
+            )
+        ),
+        payload=MappingProxyType(row.payload),
+        payload_digest=row.item.payload_digest,
+    )
+
+
+def list_open_decisions(layout: config.WorkspaceLayout) -> tuple[DecisionItem, ...]:
+    """Every open decision, read from the pending-work queue.
+
+    LLM-free, lock-free and write-free: it constructs no model client, takes
+    no lock and creates nothing, so an unreachable backend or an absent queue
+    does not matter. Order is deterministic: `pq.KINDS` order, then the
+    queue's own order within a kind. A stale row is listed with
+    `fresh=False`, never omitted. OWNER-LOCAL, like every `DecisionItem`."""
+    inbox = _configured_inbox(layout)
+    return tuple(
+        _item_of(layout, row, inbox)
+        for kind in pq.KINDS
+        for row in curate_queue.read_open_rows(layout, kind)
+    )
+
+
+# -- preview and apply by token --------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class DecisionPolicy:
+    """The inputs a re-preview needs that the token does not carry. A caller
+    holding only the token and the `decision_key` commits with the defaults.
+    None of the three enters the token, so a different policy never makes a
+    token `Stale`."""
+
+    no_reconcile: bool = False
+    reconcile: bool = False
+    now: datetime | None = None
+    """`None`: read once per call from the clock."""
+
+
+DecisionPreviewBody = (
+    MergeDecisionPreview
+    | RelateDecisionPreview
+    | TierDecisionPreview
+    | KeepDistinctDecisionPreview
+)
+
+
+@dataclass(frozen=True)
+class DecisionPreview:
+    """What an action would do, and the version to commit it against."""
+
+    preview: DecisionPreviewBody
+    version: DecisionVersion
+
+
+def _refusal(item: DecisionItem, action: Action) -> NotApplied | None:
+    """Why `action` is not one this item takes, or `None` when it is."""
+    if action in item.actions:
+        return None
+    if any(w.action is action and action is Action.MERGE for w in item.withheld):
+        return NotApplied(action, "not_mergeable")
+    return NotApplied(action, "not_offered")
+
+
+def _group_of(row: curate_queue.OpenRow) -> CandidateGroup:
+    """The candidate group a merge preview needs, rebuilt from the row's own
+    payload (no detection runs)."""
+    members = tuple(sorted(_identity_members(row)))
+    types = row.payload.get("member_types")
+    member_types = (
+        tuple(str(t) for t in types)
+        if isinstance(types, list) and len(types) == len(members)
+        else ()
+    )
+    try:
+        tier = Tier(str(row.payload.get("tier")))
+    except ValueError:
+        tier = Tier.HIGH
+    return CandidateGroup(
+        okf_type=str(row.payload.get("okf_type") or ""),
+        member_ids=members,
+        tier=tier,
+        trigger=str(row.payload.get("trigger") or ""),
+        member_types=member_types,
+    )
+
+
+def _build_preview(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    row: curate_queue.OpenRow,
+    action: Action,
+    policy: DecisionPolicy,
+) -> DecisionPreviewBody | NotApplied:
+    """The preview for `action` over the open `row`: member ids, relation
+    endpoints and type, and proposed tier all come from the row's payload."""
+    if action is Action.MERGE:
+        group = _group_of(row)
+        survivor, absorbed, criterion = application_lifecycle.ordered_merge_pair(
+            layout.bundle_dir, group.member_ids
+        )
+        return preview_merge(
+            root,
+            layout,
+            group,
+            verdict=Verdict.SAME,
+            ordered_pair=(survivor, absorbed),
+            survivor_criterion=criterion,
+            no_reconcile=policy.no_reconcile,
+            reconcile=policy.reconcile,
+        )
+    if action in (Action.RELATE, Action.RELATE_REVERSED):
+        fields = _relation_fields(row.payload)
+        if fields is None:
+            return NotApplied(action, "not_offered")
+        source, target, eff_source, eff_target, suggested, rationale = fields
+        edge, effective = Edge(source, target), Edge(eff_source, eff_target)
+        return preview_relate(
+            root,
+            layout,
+            EdgeSuggestion(
+                edge=edge,
+                suggested_type=suggested,
+                rationale=rationale,
+                corrected_edge=None if effective == edge else effective,
+            ),
+            reverse=action is Action.RELATE_REVERSED,
+            now=policy.now or datetime.now(UTC),
+        )
+    if action is Action.SET_TIER:
+        tier_fields = _tier_fields(row.payload)
+        if tier_fields is None:
+            return NotApplied(action, "not_offered")
+        return preview_set_tier(layout, *tier_fields)
+    members = tuple(sorted(_identity_members(row)))
+    return KeepDistinctDecisionPreview(members, row.item.decision_key)
+
+
+def preview_decision(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    decision_key: str,
+    action: Action,
+    *,
+    policy: DecisionPolicy = DecisionPolicy(),  # noqa: B008 -- frozen, shared
+) -> DecisionPreview | NotApplied | Stale:
+    """What `action` would do to the open decision `decision_key`, with the
+    version to commit it against. Writes nothing, takes no lock, calls no
+    model. A key with no open row is `Stale("row_resolved")`; an action the item
+    does not take is `NotApplied` (`not_mergeable` for a withheld merge,
+    `not_offered` otherwise); skip has no plan, so it is
+    `NotApplied("skipped")`."""
+    row = curate_queue.open_row_by_key(layout, decision_key)
+    if row is None:
+        return Stale(decision_key, "row_resolved")
+    item = _item_of(layout, row, None)
+    if (refusal := _refusal(item, action)) is not None:
+        return refusal
+    if action is Action.SKIP:
+        return skip_decision(decision_key)
+    built = _build_preview(root, layout, row, action, policy)
+    if isinstance(built, NotApplied):
+        return built
+    return DecisionPreview(
+        built,
+        version_of(built, layout=layout, payload_digest=row.item.payload_digest),
+    )
+
+
+def apply_decision(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    version: DecisionVersion,
+    action: Action,
+    *,
+    policy: DecisionPolicy = DecisionPolicy(),  # noqa: B008 -- frozen, shared
+    ports: DecisionPorts,
+    observer: DecisionObserver,
+    surface: str,
+) -> ApplyOutcome:
+    """Apply `action` to the decision `version` was issued for, against that
+    version, holding no state but the token.
+
+    The item is re-listed by `version.decision_key`. A merge the item withholds
+    is `NotApplied("not_mergeable")` and any other action outside its set is
+    `NotApplied("not_offered")`; skip writes nothing and returns
+    `NotApplied("skipped")`, leaving the row `pending`. Otherwise the action is
+    re-previewed from current bytes and committed on the token path of its
+    kind, which returns `Stale` (and writes nothing) when the version no longer
+    holds. A decision with no open row is `Stale("row_resolved")`."""
+    row = curate_queue.open_row_by_key(layout, version.decision_key)
+    if row is None:
+        return Stale(version.decision_key, "row_resolved")
+    if (refusal := _refusal(_item_of(layout, row, None), action)) is not None:
+        return refusal
+    if action is Action.SKIP:
+        return skip_decision(version.decision_key)
+    built = _build_preview(root, layout, row, action, policy)
+    if isinstance(built, NotApplied):
+        return built
+    if isinstance(built, MergeDecisionPreview):
+        return commit_merge_decision(
+            root,
+            layout,
+            built,
+            ports=ports,
+            observer=observer,
+            surface=surface,
+            expected=version,
+        )
+    if isinstance(built, RelateDecisionPreview):
+        return commit_relate_decision(
+            root,
+            layout,
+            built,
+            ports=ports,
+            observer=observer,
+            surface=surface,
+            expected=version,
+        )
+    if isinstance(built, TierDecisionPreview):
+        return commit_tier_decision(
+            root, layout, built, ports=ports, surface=surface, expected=version
+        )
+    return commit_keep_distinct_decision(
+        root, layout, built, ports=ports, observer=observer, expected=version
+    )

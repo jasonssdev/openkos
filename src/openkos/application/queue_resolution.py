@@ -79,6 +79,10 @@ NON_RESOLVING_CORES: Final = {
     "openkos.application.lifecycle.sync_tags_core": (
         "no queue kind proposes a tag sync"
     ),
+    "openkos.application.curate_decisions.apply_decision": (
+        "only dispatches to the commit_*_decision functions, whose write cores "
+        "each resolve the row; it writes nothing itself"
+    ),
 }
 """Fully qualified `*_core` that resolves no row, with the reason."""
 
