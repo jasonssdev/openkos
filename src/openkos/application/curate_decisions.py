@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
@@ -41,6 +42,7 @@ from openkos.application.write_gate import DriftDetected, WriteFailed
 from openkos.model import okf
 from openkos.resolution.adjudication import Verdict
 from openkos.resolution.candidates import CandidateGroup
+from openkos.resolution.edge_typing import EdgeSuggestion
 from openkos.state import pending_queue as pq
 
 
@@ -377,8 +379,21 @@ def _merge_content_lines(
     return sorted(lines)
 
 
+def _relate_content_lines(
+    prepared: application_lifecycle.PreparedRelate,
+) -> list[str]:
+    """One `"write\t<path>\t<sha256>"` line per document the relate plan will
+    write and guards: the source, and the target when a deprecated-status
+    export is planned. `log.md` is re-composed over its current bytes at
+    commit, never guarded, so it is not part of the version."""
+    baselines = {f"{prepared.source_canonical}.md": prepared.source_bytes}
+    if prepared.target_bytes is not None:
+        baselines[f"{prepared.target_canonical}.md"] = prepared.target_bytes
+    return sorted(f"write\t{name}\t{_sha256(data)}" for name, data in baselines.items())
+
+
 def version_of(
-    preview: MergeDecisionPreview,
+    preview: MergeDecisionPreview | RelateDecisionPreview,
     *,
     layout: config.WorkspaceLayout,
     payload_digest: str | None,
@@ -387,11 +402,15 @@ def version_of(
 
     `payload_digest` is the open queue row's, or `None` when no row backs the
     item. The CLI never calls this, so its walk pays no hashing cost."""
-    content = "\n".join(_merge_content_lines(layout, preview.prepared))
+    lines = (
+        _relate_content_lines(preview.prepared)
+        if isinstance(preview, RelateDecisionPreview)
+        else _merge_content_lines(layout, preview.prepared)
+    )
     return DecisionVersion(
         decision_key=preview.decision_key,
         payload_digest=payload_digest,
-        content_digest=_sha256(content.encode("utf-8")),
+        content_digest=_sha256("\n".join(lines).encode("utf-8")),
     )
 
 
@@ -518,3 +537,165 @@ def commit_merge_decision(
                 str(exc),
             ) from exc
     return Applied(preview.decision_key, Action.MERGE, commit_sha)
+
+
+# -- relate ---------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class RelateDecisionPreview:
+    """What committing one relation would do, computed without writing.
+
+    `source_id` and `target_id` are the edge AS WRITTEN: already swapped when
+    `reverse`. `decision_key` is the same for either direction (the queue key
+    is the unordered edge). `suggestion`, `reverse` and `now` are how this
+    preview was made, kept so a token commit can re-preview from current
+    bytes."""
+
+    prepared: application_lifecycle.PreparedRelate
+    source_id: str
+    target_id: str
+    relation_type: str
+    decision_key: str
+    suggestion: EdgeSuggestion
+    reverse: bool
+    now: datetime
+
+    @property
+    def action(self) -> Action:
+        return Action.RELATE_REVERSED if self.reverse else Action.RELATE
+
+
+def preview_relate(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    suggestion: EdgeSuggestion,
+    *,
+    reverse: bool,
+    now: datetime,
+) -> RelateDecisionPreview | NotApplied:
+    """Preview relating `suggestion`'s effective edge, swapped when `reverse`.
+
+    Writes nothing and calls no model. `now` is the caller's, once per stage,
+    so every entry of a run carries one date. A suggestion with no valid type
+    is `NotApplied("not_offered")`; an endpoint that no longer resolves is
+    `NotApplied("member_missing")`; a plan that cannot be built raises
+    `WriteFailed`."""
+    action = Action.RELATE_REVERSED if reverse else Action.RELATE
+    relation_type = suggestion.suggested_type
+    if relation_type is None:
+        return NotApplied(action, "not_offered")
+    edge = suggestion.effective_edge
+    source_id, target_id = (
+        (edge.target_id, edge.source_id)
+        if reverse
+        else (edge.source_id, edge.target_id)
+    )
+    if not _all_present(layout, (source_id, target_id)):
+        return NotApplied(action, "member_missing")
+    try:
+        prepared = application_lifecycle.prepare_relate(
+            okf.concept_path_for(source_id, layout.bundle_dir),
+            layout.bundle_dir / "log.md",
+            source_id,
+            target_id,
+            relation_type,
+            root,
+            now=now,
+            target_path=okf.concept_path_for(target_id, layout.bundle_dir),
+        )
+    except (OSError, ValueError) as exc:
+        raise WriteFailed("relate", (source_id, target_id), str(exc)) from exc
+    return RelateDecisionPreview(
+        prepared=prepared,
+        source_id=source_id,
+        target_id=target_id,
+        relation_type=relation_type,
+        decision_key=pq.stored_decision_key(
+            "relation_type", pq.relation_type_key(source_id, target_id)
+        ),
+        suggestion=suggestion,
+        reverse=reverse,
+        now=now,
+    )
+
+
+def commit_relate_decision(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    preview: RelateDecisionPreview,
+    *,
+    ports: DecisionPorts,
+    observer: DecisionObserver,
+    surface: str,
+    expected: DecisionVersion | None = None,
+) -> ApplyOutcome:
+    """Commit one previewed relation.
+
+    With `expected=None` (the CLI) the drift guard compares against the
+    baselines read at preview. With a token, the relation is re-previewed
+    from current bytes first (`Stale("content_changed")` before the section),
+    and inside the section the open row is re-read by `decision_key`
+    (`row_resolved`, `row_superseded`).
+
+    Inside ONE commit section, in order: endpoints present (a vanished one is
+    announced through the observer and RETURNED as
+    `NotApplied("member_missing")`), endpoint drift, the `log.md` recompose
+    (both RAISED as `DriftDetected`), then the write through
+    `lifecycle.relate_core` and its auto-commit. A failing write is
+    `WriteFailed`. Every failed check writes nothing."""
+    if expected is not None:
+        refreshed = preview_relate(
+            root, layout, preview.suggestion, reverse=preview.reverse, now=preview.now
+        )
+        if isinstance(refreshed, NotApplied):
+            return refreshed
+        if (
+            version_of(refreshed, layout=layout, payload_digest=None).content_digest
+            != expected.content_digest
+        ):
+            return Stale(expected.decision_key, "content_changed")
+        preview = refreshed
+
+    prepared = preview.prepared
+    source_path = okf.concept_path_for(preview.source_id, layout.bundle_dir)
+    target_path = okf.concept_path_for(preview.target_id, layout.bundle_dir)
+    log_path = layout.bundle_dir / "log.md"
+    with ports.commit_section():
+        if expected is not None and (stale := _stale_row(layout, expected)):
+            return stale
+        if not _all_present(layout, (preview.source_id, preview.target_id)):
+            observer.relate_endpoint_missing(preview.source_id, preview.target_id)
+            return NotApplied(preview.action, "member_missing")
+        # `log.md` is re-composed below, not guarded: another verb's entry
+        # appended since the plan was composed is kept.
+        baselines = {source_path: prepared.source_bytes}
+        if prepared.target_bytes is not None:
+            baselines[target_path] = prepared.target_bytes
+        drift = application_drift.describe_drift(layout, baselines, surface)
+        if drift is not None:
+            raise DriftDetected(drift)
+        try:
+            prepared = application_lifecycle.recompose_relate_log(
+                log_path, prepared, verb=surface
+            )
+        except catalog_delta.CatalogRecomposeError as exc:
+            raise DriftDetected(str(exc)) from exc
+        try:
+            application_lifecycle.relate_core(
+                source_path, log_path, prepared, target_path=target_path
+            )
+        except (OSError, ValueError) as exc:
+            raise WriteFailed(
+                "relate", (preview.source_id, preview.target_id), str(exc)
+            ) from exc
+        paths = [f"bundle/{preview.source_id}.md", "bundle/log.md"]
+        if prepared.new_target_text is not None:
+            paths.insert(1, f"bundle/{preview.target_id}.md")
+        commit_sha = ports.autocommit(
+            root,
+            paths,
+            f"openkos: relate {preview.source_id} -> {preview.target_id} "
+            f"({preview.relation_type})",
+        )
+    return Applied(preview.decision_key, preview.action, commit_sha)
