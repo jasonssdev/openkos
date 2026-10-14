@@ -77,7 +77,7 @@ changed rule to it.
 
 - **recall** = gold `decision` rows matched by at least one Decision / gold
   `decision` rows.
-- **Shared evidence (PROPOSED, see the pre-registration).** An adjudicated
+- **Shared evidence (registered, see the pre-registration).** An adjudicated
   `compuesta` row may have child rows (`<parent>-1`, `<parent>-2`, ...) that carry
   the SAME evidence as the parent. Matching is by evidence, so one Decision
   quoting that line would match every child. `decision` rows of one meeting with
