@@ -266,6 +266,11 @@ $RECYCLE.BIN/
 /data/ami/raw/
 /evals/decision_extraction/results/
 
+# `evals/transcript_decisions/` stores, per run, the AMI evidence lines the
+# pass produced and the produced titles. Both are corpus content, so stored
+# results stay on the machine that ran them.
+/evals/transcript_decisions/results/
+
 # `evals/query_identity/` writes one row per SCORED PAIR, which is quadratic in
 # the stored population: 14,365 pairs is already 8 MB on one line. The report
 # beside it carries every conclusion, and `--rescore` reads a locally

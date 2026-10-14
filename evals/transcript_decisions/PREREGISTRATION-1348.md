@@ -15,7 +15,7 @@ failure rate and cost?
 AMI development series ONLY: ES2015, IS1004, TS3009 (the thesis's ADR-0005
 split; `scoring.DEV_SERIES`, enforced in code). The thesis's evaluation series
 are out of bounds here. Gold: the thesis's adjudicated decision CSVs
-(`final_status` in decision / no_decision / sin_soporte / compuesta), passed by
+(`final_status` in decision / no_decision / sin_soporte / compuesta / descartar), passed by
 flag and not vendored.
 
 Known limits, stated now: IS1004 and TS3009 are unannotated at the time of
@@ -46,9 +46,25 @@ spanned 0.25 against itself at 5).
 ## Metrics
 
 As defined in the README: recall, the produced split (matched_decision,
-matched_non_decision, matched_compuesta, unadjudicated, unannotated),
+matched_non_decision, matched_compuesta, matched_descartar, unadjudicated,
+unannotated),
 precision-on-annotated, duplicate titles across meetings, windows, calls,
 failures, wall time; mean and min-max over runs, always `n of TOTAL`.
+
+## Recall under shared evidence -- PROPOSED, awaiting maintainer approval
+
+An adjudicated `compuesta` row may be split into child rows (`<parent>-1`, ...)
+that copy the parent's evidence. Matching is by evidence, so a single produced
+Decision quoting that line matches every child and would recall all of them,
+inflating recall. PROPOSED rule: `decision` rows of one meeting whose normalized
+evidence acts are identical (by acts, not by id prefix) form a group; the group's
+recall credit is min(number of `decision` rows in the group, number of DISTINCT
+Decisions produced in that run for that meeting that matched the group); recall
+is the sum of credits over the `decision`-row count. Singleton rows are
+unchanged; groups of two or more are reported as `shared_evidence_groups`.
+Companion definitions: `descartar` rows are excluded from the recall
+denominator and a Decision matching only such rows is `matched_descartar`,
+excluded from precision. Not in force until the maintainer approves it.
 
 ## Decision rule -- PROPOSED, to be fixed by the maintainer before the first treatment run
 

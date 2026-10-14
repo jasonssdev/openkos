@@ -45,7 +45,7 @@ precision, which is the safe direction for a harness deciding whether to ship.""
 
 PARTIAL_STAMP: Final = "PARTIAL -- NOT THE PRE-REGISTERED RESULT"
 
-STATUSES: Final = ("decision", "no_decision", "sin_soporte", "compuesta")
+STATUSES: Final = ("decision", "no_decision", "sin_soporte", "compuesta", "descartar")
 NON_DECISION: Final = frozenset({"no_decision", "sin_soporte"})
 
 _SERIES_RE: Final = re.compile(r"^([A-Z]{2}\d{4})[a-z]?$")
@@ -184,7 +184,11 @@ def classify(matched_ids: Sequence[str], status_by_id: Mapping[str, str]) -> str
     """Which bucket a produced Decision falls in. A match on a `decision` row
     wins over a match on a non-decision row: a baseline body can quote both,
     and this precedence flatters the baseline's precision, never the pass's
-    (a pass item carries one evidence line)."""
+    (a pass item carries one evidence line). Full order: decision > non_decision
+    > compuesta > descartar > unadjudicated > unannotated. `compuesta` outranks
+    `descartar` because a compuesta row marks a sentence that DOES carry real
+    decisions (its children hold them), while `descartar` marks a sentence with
+    nothing usable; both are excluded from precision."""
     statuses = {status_by_id.get(i) for i in matched_ids}
     if "decision" in statuses:
         return "matched_decision"
@@ -192,9 +196,23 @@ def classify(matched_ids: Sequence[str], status_by_id: Mapping[str, str]) -> str
         return "matched_non_decision"
     if "compuesta" in statuses:
         return "matched_compuesta"
+    if "descartar" in statuses:
+        return "matched_descartar"
     if matched_ids:
         return "unadjudicated"
     return "unannotated"
+
+
+def recall_credit(
+    group_ids: Sequence[str], items_matched: Sequence[Sequence[str]]
+) -> int:
+    """Recall credit of one shared-evidence group: the number of `decision`
+    rows in it, capped by how many DISTINCT produced Decisions matched it.
+    Rows sharing identical evidence cannot be told apart by matching, so one
+    Decision quoting that line would otherwise recall every one of them."""
+    ids = set(group_ids)
+    hits = sum(1 for matched in items_matched if ids & set(matched))
+    return min(len(ids), hits)
 
 
 def _ratio(num: int, den: int) -> float | None:
@@ -215,30 +233,45 @@ def series_run_metrics(
     out: dict[str, dict[str, Any]] = {}
     for series, recs in sorted(by_series.items()):
         buckets: dict[str, int] = defaultdict(int)
-        matched: set[str] = set()
         titles: dict[str, set[str]] = defaultdict(set)
         for rec in recs:
             for item in rec["items"]:
                 buckets[classify(item["matched_ids"], status_by_id)] += 1
-                matched.update(item["matched_ids"])
                 titles[title_key(item["title"])].add(rec["meeting"])
         meetings = {rec["meeting"] for rec in recs}
         in_scope = {i for i in status_by_id if meeting_of[i] in meetings}
         decision_ids = {i for i in in_scope if status_by_id[i] == "decision"}
         decision_rows = len(decision_ids)
+        # Decision rows of one meeting with identical (normalized) acts form a
+        # group; empty acts can never match, so they stay out of any group.
+        groups: dict[tuple[str, tuple[tuple[str, ...], ...]], list[str]] = defaultdict(
+            list
+        )
+        for r in rows:
+            if r.decision_id in decision_ids and r.acts:
+                groups[(r.meeting_id, r.acts)].append(r.decision_id)
+        items_by_meeting: dict[str, list[Sequence[str]]] = defaultdict(list)
+        for rec in recs:
+            items_by_meeting[rec["meeting"]].extend(
+                item["matched_ids"] for item in rec["items"]
+            )
+        recalled = sum(
+            recall_credit(ids, items_by_meeting[meeting])
+            for (meeting, _acts), ids in groups.items()
+        )
         unrecallable = sum(
             1
             for r in rows
             if r.decision_id in decision_ids
             and not any(len(act) >= MIN_MATCH_TOKENS for act in r.acts)
         )
-        recalled = len(matched & decision_ids)
         md, mn = buckets["matched_decision"], buckets["matched_non_decision"]
         shared = {t: m for t, m in titles.items() if len(m) > 1}
         out[series] = {
             "decision_rows": decision_rows,
             "recalled": recalled,
             "unrecallable_rows": unrecallable,
+            "shared_evidence_groups": sum(1 for g in groups.values() if len(g) > 1),
             "recall": _ratio(recalled, decision_rows),
             "compuesta_rows": sum(
                 1 for i in in_scope if status_by_id[i] == "compuesta"
@@ -247,6 +280,10 @@ def series_run_metrics(
             "matched_decision": md,
             "matched_non_decision": mn,
             "matched_compuesta": buckets["matched_compuesta"],
+            "matched_descartar": buckets["matched_descartar"],
+            "descartar_rows": sum(
+                1 for i in in_scope if status_by_id[i] == "descartar"
+            ),
             "unadjudicated": buckets["unadjudicated"],
             "unannotated": buckets["unannotated"],
             "precision_on_annotated": _ratio(md, md + mn),
@@ -329,11 +366,16 @@ def render_report(
                 f"- decision rows no act of which reaches the {MIN_MATCH_TOKENS}-token "
                 f"match floor (counted in the denominator, unrecallable by "
                 f"construction): {first['unrecallable_rows']} of {first['decision_rows']}",
-                f"- compuesta rows (excluded from recall): {first['compuesta_rows']}",
+                f"- compuesta rows (excluded from recall): {first['compuesta_rows']}; "
+                f"descartar rows (excluded from recall): {first['descartar_rows']}",
+                f"- shared_evidence_groups (decision rows with identical evidence in "
+                f"one meeting; recall credit capped by distinct matching Decisions): "
+                f"{first['shared_evidence_groups']}",
                 f"- produced: {_fmt(agg['produced'], False)} Decisions per run, split "
                 f"matched_decision {_fmt(agg['matched_decision'], False)}, "
                 f"matched_non_decision {_fmt(agg['matched_non_decision'], False)}, "
                 f"matched_compuesta {_fmt(agg['matched_compuesta'], False)}, "
+                f"matched_descartar {_fmt(agg['matched_descartar'], False)}, "
                 f"unadjudicated {_fmt(agg['unadjudicated'], False)}, "
                 f"unannotated {_fmt(agg['unannotated'], False)}",
                 f"- precision-on-annotated: "

@@ -66,9 +66,17 @@ cannot be recalled; those are counted in the denominator and reported
 
 - **recall** = gold `decision` rows matched by at least one Decision / gold
   `decision` rows.
+- **Shared evidence (PROPOSED, see the pre-registration).** An adjudicated
+  `compuesta` row may have child rows (`<parent>-1`, `<parent>-2`, ...) that carry
+  the SAME evidence as the parent. Matching is by evidence, so one Decision
+  quoting that line would match every child. `decision` rows of one meeting with
+  identical normalized acts therefore form a group, and a group's recall credit
+  is min(decision rows in it, DISTINCT produced Decisions of that run and
+  meeting that matched it). Recall sums the credits; singleton rows behave as
+  before. Groups of two or more rows are reported as `shared_evidence_groups`.
 - Produced Decisions, split: `matched_decision`; `matched_non_decision` (a
   `no_decision` or `sin_soporte` row: a false positive against the gold);
-  `matched_compuesta`; `unadjudicated` (matched a row with a blank
+  `matched_compuesta`; `matched_descartar`; `unadjudicated` (matched a row with a blank
   `final_status`); `unannotated` (matched nothing).
 - **precision-on-annotated** = matched_decision / (matched_decision +
   matched_non_decision). `unannotated` is **not** a false positive: the gold
@@ -79,6 +87,14 @@ cannot be recalled; those are counted in the denominator and reported
   and excluded from the recall denominator: one Decision cannot be right about
   several, so scoring them against single-decision output would be unfair either
   way.
+- `descartar` rows (a truncated, broken or unintelligible sentence, or one that
+  repeats a decision already annotated in the same meeting) are counted apart,
+  excluded from the recall denominator, and a Decision that matches only such
+  rows lands in `matched_descartar`: reported, never a false positive. Bucket
+  precedence when a Decision matches several rows: decision > non_decision >
+  compuesta > descartar > unadjudicated > unannotated. `compuesta` outranks
+  `descartar` because a compuesta sentence does carry real decisions (in its
+  children), while `descartar` marks nothing usable.
 - **duplicate titles across meetings of a series**: distinct normalized titles
   produced in two or more meetings, and how many Decisions that would merge at
   ingest (`attach_at_ingest` merges on type + title). A proxy for the

@@ -606,6 +606,105 @@ def _self_test() -> int:
             True,
         )
 
+        # `descartar`, shared-evidence groups (synthetic gold, hand-built records)
+        split_csv = root / "split.csv"
+        split_csv.write_text(
+            "decision_id,meeting_id,source_sentence_id,sentence_text,evidence_text,final_status\n"
+            'g1,ES2015c,s1,x,"A: we will use the kinetic battery for power .",compuesta\n'
+            'g1-1,ES2015c,s1,x,"A: we will use the kinetic battery for power .",decision\n'
+            'g1-2,ES2015c,s1,x,"A: we will use the kinetic battery for power .",decision\n'
+            'g2,ES2015c,s2,x,"B: that is a broken sentence about the scroll wheel .",descartar\n'
+            'g3,ES2015c,s3,x,"C: maybe we could add a speaker to the remote .",no_decision\n'
+            'g4,ES2015c,s4,x,"D: the case will be made of yellow plastic .",decision\n'
+            'g5,ES2015c,s5,x,"A: the scroll wheel stays out of the design .",decision\n'
+            'g6,ES2015c,s6,x,"A: the scroll wheel stays out of the design .",decision\n',
+            encoding="utf-8",
+        )
+        split_rows = scoring.load_gold([split_csv])
+        check(
+            "descartar is an accepted status",
+            [r.status for r in split_rows if r.decision_id == "g2"],
+            ["descartar"],
+        )
+        unknown_csv = root / "unknown.csv"
+        unknown_csv.write_text(
+            "decision_id,meeting_id,source_sentence_id,sentence_text,evidence_text,final_status\n"
+            "u1,ES2015c,s1,x,A: some words here for it,descartada\n",
+            encoding="utf-8",
+        )
+        try:
+            scoring.load_gold([unknown_csv])
+            failures.append("an unknown final_status was accepted")
+        except SystemExit as exc:
+            check("unknown status is named", "descartada" in str(exc), True)
+
+        def split_record(item_matches: Sequence[Sequence[str]]) -> dict[str, Any]:
+            return {
+                "arm": "pass",
+                "run": 1,
+                "meeting": "ES2015c",
+                "series": "ES2015",
+                "windows": 1,
+                "calls": 1,
+                "failure": None,
+                "wall_s": 0.0,
+                "items": [
+                    {"title": f"t{n}", "evidence": [], "matched_ids": list(ids)}
+                    for n, ids in enumerate(item_matches)
+                ],
+            }
+
+        def split_metrics(item_matches: Sequence[Sequence[str]]) -> dict[str, Any]:
+            record = split_record(item_matches)
+            return scoring.series_run_metrics([record], split_rows)["ES2015"]
+
+        group = ["g1", "g1-1", "g1-2"]
+        one = split_metrics([group])
+        check("compuesta parent is not a decision row", one["decision_rows"], 5)
+        check(
+            "shared groups counted (children, g5/g6)", one["shared_evidence_groups"], 2
+        )
+        check("one item on a 2-child group credits 1", one["recalled"], 1)
+        two = split_metrics([group, group[1:]])
+        check("two distinct items credit 2", two["recalled"], 2)
+        three = split_metrics([group, group[1:], ["g1-2"]])
+        check("three items on a 2-row group credit 2", three["recalled"], 2)
+        mixed = split_metrics([["g5", "g6"], ["g4"]])
+        check("id-prefix-free groups share too", mixed["recalled"], 2)
+        check("recall is credit over decision rows", mixed["recall"], 2 / 5)
+        check("descartar rows counted apart", one["descartar_rows"], 1)
+        only_d = split_metrics([["g2"]])
+        check("descartar-only item has its own bucket", only_d["matched_descartar"], 1)
+        check("descartar is not unannotated", only_d["unannotated"], 0)
+        check("descartar is no false positive", only_d["precision_on_annotated"], None)
+        check("descartar adds no recall", only_d["recalled"], 0)
+        check(
+            "decision beats descartar",
+            split_metrics([["g2", "g4"]])["matched_decision"],
+            1,
+        )
+        check(
+            "non_decision beats descartar",
+            split_metrics([["g2", "g3"]])["matched_non_decision"],
+            1,
+        )
+        check(
+            "compuesta beats descartar",
+            split_metrics([["g2", "g1"]])["matched_compuesta"],
+            1,
+        )
+        split_report = scoring.render_report(
+            [split_record([group])], split_rows, ["ES2015c"]
+        )
+        check(
+            "report names the shared groups",
+            "shared_evidence_groups" in split_report,
+            True,
+        )
+        check(
+            "report names matched_descartar", "matched_descartar" in split_report, True
+        )
+
         # the aggregate: spread over runs
         agg = scoring.aggregate([{"recall": 0.2}, {"recall": 0.6}, {"recall": None}])
         check("aggregate", agg["recall"], {"mean": 0.4, "min": 0.2, "max": 0.6, "n": 2})
