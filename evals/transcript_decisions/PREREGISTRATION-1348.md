@@ -38,9 +38,13 @@ construction.
   per meeting per run (several calls per window).
 - `pass`: the pass alone, scored through its evidence line.
 
-The end-to-end arm (key on) is NOT a separate arm: its pass Decisions are
-exactly the `pass` arm's, appended after the main pass's, so `pass` plus the
-failure count determine it.
+The end-to-end arm (key on) is NOT a separate arm: whenever the pass yields
+at least one Decision, those REPLACE the main pass's Decisions
+(`extract_concept_union` drops every main-pass Decision before the judge and
+appends the pass's after the judge and its backstop); otherwise the main pass's
+Decisions stand. So `pass` plus the failure count determine it. (Corrected
+after registration: the first registered text said "appended after the main
+pass's", which misdescribed the code. No rule changed.)
 
 Frozen configuration: model `qwen3:8b`; the production generation ceiling and
 context window (the harness's constants); the decision pass prompt as merged in
