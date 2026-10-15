@@ -30,7 +30,7 @@ from openkos.llm.base import (
     Message,
 )
 from openkos.model import okf
-from openkos.resolution import edge_typing
+from openkos.resolution import edge_typing, volatility_typing
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
     AdjudicationBatch,
@@ -41,6 +41,7 @@ from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, 
 from openkos.state import adjudications as store
 from openkos.state import derived, jobs
 from openkos.state import edge_suggestions as edge_store
+from openkos.state import volatility_suggestions as volatility_store
 from tests.unit.application.curation_support import make_workspace
 
 _RUBRIC = rubric_digest()
@@ -430,10 +431,10 @@ def test_a_group_whose_members_are_all_confidential_adds_nothing_to_calls(
     assert (exempt.to_judge, exempt.calls) == (6, 6)
 
 
-def test_an_unsupported_kind_is_refused() -> None:
+def test_an_unknown_kind_is_refused() -> None:
     ports = judging.JudgingPorts(chat_client=lambda cfg, task: _Client())
-    with pytest.raises(ValueError, match="volatility"):
-        judging.quote_judging(Path(), "volatility", ports=ports)
+    with pytest.raises(ValueError, match="bogus"):
+        judging.quote_judging(Path(), "bogus", ports=ports)  # type: ignore[arg-type]
 
 
 def test_a_root_that_is_not_a_workspace_is_refused(tmp_path: Path) -> None:
@@ -548,7 +549,10 @@ def test_a_capped_candidate_set_carries_the_truncation_notice(fx: _Fixture) -> N
 
 
 def _seed_job(
-    fx: _Fixture | _RelFixture, *, started: datetime, ended: datetime | None = None
+    fx: _Fixture | _RelFixture | _VolFixture,
+    *,
+    started: datetime,
+    ended: datetime | None = None,
 ) -> None:
     conn = jobs.open_jobs(fx.layout.jobs_db_path)
     try:
@@ -2087,12 +2091,12 @@ def test_a_relation_call_past_the_ceiling_is_refused_before_it_is_made(
     assert judge.calls == 2
 
 
-def test_a_run_of_a_kind_this_stage_does_not_run_yet_is_refused(
+def test_a_run_of_an_unknown_kind_is_refused(
     rel: _RelFixture,
 ) -> None:
-    token = _token(binding=_binding(kind="volatility"))
+    token = _token(binding=_binding(kind="bogus"))
 
-    with pytest.raises(ValueError, match="volatility"):
+    with pytest.raises(ValueError, match="bogus"):
         _rel_run(rel, token)
 
     assert rel.tasks == []
@@ -2584,6 +2588,949 @@ def test_a_relation_run_writes_nothing_to_a_stream(
     rel: _RelFixture, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _outcome(_rel_run(rel, rel.quote().token, judge=_edge_judge()))
+
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+
+# -- volatility: fixture --------------------------------------------------------- #
+
+_TYPES = ("Person", "Project", "Event", "Place", "Thing")
+
+
+def _tier_reply(tier: str = "slow") -> str:
+    return json.dumps({"tier": tier, "rationale": "Tiered."})
+
+
+def _tier_judge(*args: object, **kwargs: object) -> _Judge:
+    """A scripted client that answers a tier where `_Judge` would answer an
+    identity verdict."""
+    kwargs.setdefault("default_reply", _tier_reply())
+    return _Judge(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def _write_typed(
+    root: Path, concept_id: str, type_name: str, *, sensitivity: str = "private"
+) -> None:
+    path = root / "bundle" / f"{concept_id}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        okf.dump_frontmatter(
+            {"type": type_name, "title": concept_id, "sensitivity": sensitivity},
+            f"# {concept_id}\n\nBody of {concept_id}.\n",
+        ),
+        encoding="utf-8",
+    )
+
+
+class _VolFixture:
+    """Five concept types of one readable private concept each. The leaf's
+    planning, the serve lookup and the persist are the shipped ones."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.layout = config.WorkspaceLayout(root)
+        self.client: _Judge = _tier_judge()
+        self.tasks: list[str | None] = []
+
+    def _chat_client(self, cfg: config.Config, task: str | None) -> _Judge:
+        self.tasks.append(task)
+        return self.client
+
+    def ports(self, **over: object) -> judging.JudgingPorts:
+        return dataclasses.replace(
+            judging.JudgingPorts(
+                chat_client=self._chat_client,
+                now=lambda: _NOW,
+                sleep=lambda seconds: None,
+            ),
+            **over,  # type: ignore[arg-type]
+        )
+
+    def quote(
+        self, *, include_confidential: bool = False, **over: object
+    ) -> judging.JudgingQuote:
+        return judging.quote_judging(
+            self.root,
+            "volatility",
+            include_confidential=include_confidential,
+            ports=self.ports(**over),
+        )
+
+    def model(self) -> str:
+        return config.resolve_task_model(
+            config.read_config(self.root), "volatility_typing"
+        )
+
+    def plan(self) -> tuple[volatility_typing.PlannedType, ...]:
+        return volatility_typing.plan_types(self.layout.bundle_dir)
+
+    def seed(
+        self, type_name: str, *, tier: str = "slow", model: str | None = None
+    ) -> None:
+        """Persist a servable answer for `type_name`'s current question."""
+        [planned] = [p for p in self.plan() if p.type_name == type_name]
+        conn = derived.open_derived_connection(self.layout.findings_db_path)
+        try:
+            volatility_store.record_volatility_suggestions(
+                conn,
+                [
+                    volatility_store.PersistedVolatilitySuggestion(
+                        type_name=type_name,
+                        model=model or self.model(),
+                        prompt_digest=planned.prompt_digest,
+                        suggested_tier=tier,
+                        rationale="Stored.",
+                        input_refs=planned.input_refs,
+                    )
+                ],
+            )
+        finally:
+            conn.close()
+
+    def stored(self) -> dict[str, str]:
+        """The persisted answers: type -> suggested tier."""
+        if not self.layout.findings_db_path.exists():
+            return {}
+        conn = derived.open_derived_connection(self.layout.findings_db_path)
+        try:
+            return {
+                row.type_name: row.suggested_tier
+                for row in volatility_store.open_volatility_suggestions(conn)
+            }
+        finally:
+            conn.close()
+
+    def edit(self, concept_id: str) -> None:
+        path = self.layout.bundle_dir / f"{concept_id}.md"
+        path.write_text(path.read_text(encoding="utf-8") + "\nEdited.\n", "utf-8")
+
+
+@pytest.fixture
+def vol(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _VolFixture:
+    root = make_workspace(tmp_path, monkeypatch)
+    for type_name in _TYPES:
+        _write_typed(root, f"things/{type_name.lower()}-1", type_name)
+    return _VolFixture(root)
+
+
+# -- volatility: the quote ------------------------------------------------------- #
+
+
+def test_a_volatility_quote_is_kind_tagged_and_splits_served_from_to_judge(
+    vol: _VolFixture,
+) -> None:
+    vol.seed("Person")
+    vol.seed("Project")
+
+    quote = vol.quote()
+
+    assert quote.kind == "volatility"
+    assert (quote.total, quote.served, quote.to_judge, quote.calls) == (5, 2, 3, 3)
+    assert quote.uncertain == 0
+    assert quote.token.calls == 3
+    assert [item.work_key for item in quote.token.work] == ["Event", "Place", "Thing"]
+
+
+def test_a_volatility_quote_binds_the_volatility_model_and_no_rubric(
+    vol: _VolFixture,
+) -> None:
+    (vol.root / "openkos.yaml").write_text(
+        (vol.root / "openkos.yaml").read_text(encoding="utf-8")
+        + "models:\n  volatility_typing: tier-model\n  adjudication: judge-model\n",
+        encoding="utf-8",
+    )
+
+    quote = vol.quote()
+
+    assert quote.binding.kind == "volatility"
+    assert quote.binding.model == "tier-model"
+    assert quote.binding.rubric_digest is None
+    assert set(vol.tasks) == {"volatility_typing"}
+    [model_notice] = [n for n in quote.notices if n.code == "model"]
+    assert model_notice.model == "tier-model"
+
+
+def test_a_volatility_quote_makes_no_model_call_and_writes_nothing(
+    vol: _VolFixture,
+) -> None:
+    before = {
+        str(p): p.read_bytes() for p in sorted(vol.root.rglob("*")) if p.is_file()
+    }
+    client = _Client()
+    vol.client = client  # type: ignore[assignment]
+
+    vol.quote()
+
+    assert client.chats == 0
+    assert not vol.layout.findings_db_path.exists()
+    assert before == {
+        str(p): p.read_bytes() for p in sorted(vol.root.rglob("*")) if p.is_file()
+    }
+
+
+def test_a_volatility_quote_prices_what_the_leaf_would_ask(vol: _VolFixture) -> None:
+    vol.seed("Place")
+
+    quote = vol.quote()
+
+    assert quote.calls == volatility_typing.unanswered_type_count(
+        vol.layout.bundle_dir, served=lambda t, d: None if t != "Place" else _held()
+    )
+
+
+def _held() -> volatility_typing.TierSuggestion:
+    return volatility_typing.TierSuggestion("Place", "slow", "slow", "held")
+
+
+def test_a_volatility_work_item_is_the_type_with_its_sampled_concept_digests(
+    vol: _VolFixture,
+) -> None:
+    current = application_pending.current_finding_digest(vol.layout.bundle_dir)
+
+    quote = vol.quote()
+
+    [item] = [i for i in quote.token.work if i.work_key == "Event"]
+    assert item.member_digests == (("things/event-1", current("things/event-1")),)
+
+
+def test_an_edited_sampled_concept_returns_a_type_to_judge(vol: _VolFixture) -> None:
+    vol.seed("Person")
+    assert vol.quote().served == 1
+
+    vol.edit("things/person-1")
+
+    requote = vol.quote()
+    assert (requote.served, requote.to_judge) == (0, 5)
+
+
+def test_a_stored_answer_under_another_model_is_not_served(vol: _VolFixture) -> None:
+    vol.seed("Person", model="some-other-model")
+
+    quote = vol.quote()
+
+    assert (quote.served, quote.to_judge) == (0, 5)
+
+
+def test_a_degraded_stored_answer_is_not_served(vol: _VolFixture) -> None:
+    vol.seed("Person", tier="not-a-tier")
+
+    assert vol.quote().served == 0
+
+
+def test_a_confidential_only_type_is_quoted_only_when_the_run_may_see_it(
+    vol: _VolFixture,
+) -> None:
+    _write_typed(vol.root, "things/secret-1", "Secret", sensitivity="confidential")
+
+    blocked = vol.quote()
+    opted_in = vol.quote(include_confidential=True)
+
+    assert "Secret" not in [i.work_key for i in blocked.token.work]
+    assert "Secret" in [i.work_key for i in opted_in.token.work]
+    assert (blocked.to_judge, opted_in.to_judge) == (5, 6)
+
+
+def test_a_local_backend_makes_the_effective_confidential_bit_true_for_volatility(
+    vol: _VolFixture,
+) -> None:
+    _write_typed(vol.root, "things/secret-1", "Secret", sensitivity="confidential")
+    vol.client = _tier_judge(is_local=True)
+
+    quote = vol.quote()
+
+    assert quote.binding.effective_confidential is True
+    assert (quote.to_judge, quote.calls) == (6, 6)
+
+
+def test_a_volatility_quote_ignores_the_uncertain_opt_in(vol: _VolFixture) -> None:
+    plain = judging.quote_judging(vol.root, "volatility", ports=vol.ports())
+    opted = judging.quote_judging(
+        vol.root, "volatility", include_uncertain=True, ports=vol.ports()
+    )
+
+    assert opted.token == plain.token
+    assert opted.token.include_uncertain is False
+
+
+def test_a_volatility_quote_over_no_types_quotes_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty = _VolFixture(make_workspace(tmp_path, monkeypatch))
+
+    quote = empty.quote()
+
+    assert (quote.total, quote.served, quote.to_judge, quote.calls) == (0, 0, 0, 0)
+    assert quote.token.work == ()
+
+
+def test_a_volatility_quote_carries_the_models_notice_once_and_nothing_else(
+    vol: _VolFixture,
+) -> None:
+    quote = vol.quote()
+
+    assert [n.code for n in quote.notices] == ["model"]
+
+
+def test_the_unattended_notice_reaches_a_volatility_quote_without_moving_price_or_token(
+    vol: _VolFixture,
+) -> None:
+    quiet = vol.quote()
+    _seed_job(vol, started=_NOW)
+
+    busy = vol.quote()
+
+    assert _unattended(quiet) == []
+    assert len(_unattended(busy)) == 1
+    assert busy.token == quiet.token
+    assert (busy.served, busy.to_judge, busy.calls) == (
+        quiet.served,
+        quiet.to_judge,
+        quiet.calls,
+    )
+
+
+def test_a_workspace_type_override_is_part_of_the_question_a_volatility_quote_serves(
+    vol: _VolFixture,
+) -> None:
+    vol.seed("Event")
+    (vol.root / "openkos.yaml").write_text(
+        (vol.root / "openkos.yaml").read_text(encoding="utf-8")
+        + "type_tiers:\n  Event: slow\n",
+        encoding="utf-8",
+    )
+
+    quote = vol.quote()
+
+    assert (quote.served, quote.to_judge) == (0, 5)
+
+
+# -- volatility: the run: support ------------------------------------------------ #
+
+_SORTED = sorted(_TYPES)
+"""The order the leaf asks the types in, and so the order of the quote's work."""
+
+
+def _vol_run(
+    vol: _VolFixture,
+    token: judging.QuoteToken | None,
+    *,
+    judge: _Judge | None = None,
+    stop: StopToken | None = None,
+    observer: judging.JudgingObserver | None = None,
+    chunk_size: int | None = None,
+    sleeps: list[float] | None = None,
+    **ports: object,
+) -> judging.JudgingOutcome | judging.QuoteStale | judging.RunRefused:
+    if judge is not None:
+        vol.client = judge
+    sleep = sleeps.append if sleeps is not None else (lambda seconds: None)
+    return judging.run_judging(
+        vol.root,
+        token,
+        stop=stop or StopToken(),
+        ports=vol.ports(**{"sleep": sleep, **ports}),
+        observer=observer or judging.JudgingObserver(),
+        chunk_size=chunk_size,
+    )
+
+
+def _vtypes(*indexes: int) -> list[str]:
+    return [_SORTED[i] for i in indexes]
+
+
+# -- volatility: the run: the binding ceiling ------------------------------------ #
+
+
+def test_a_volatility_run_asks_exactly_the_quoted_types_and_persists_them(
+    vol: _VolFixture,
+) -> None:
+    vol.seed("Event", tier="volatile")
+    token = vol.quote().token
+    bundle_before = _bundle_bytes(vol.root)
+    judge = _tier_judge(default_reply=_tier_reply("static"))
+
+    outcome = _outcome(_vol_run(vol, token, judge=judge))
+
+    assert (outcome.kind, outcome.status) == ("volatility", "completed")
+    assert (outcome.judged, outcome.calls, outcome.persisted) == (4, 4, 4)
+    assert (outcome.unpersisted, outcome.dropped, outcome.deferred) == (0, 0, 0)
+    assert outcome.not_in_quote == ()
+    assert outcome.settled_since_quote == 0
+    stored = vol.stored()
+    assert stored["Event"] == "volatile", "the served row is kept"
+    assert {stored[name] for name in _vtypes(1, 2, 3, 4)} == {"static"}
+    assert _bundle_bytes(vol.root) == bundle_before, "a run never writes the bundle"
+
+
+def test_a_volatility_run_prices_the_re_quote_after_it_as_all_served(
+    vol: _VolFixture,
+) -> None:
+    _outcome(_vol_run(vol, vol.quote().token, judge=_tier_judge()))
+
+    requote = vol.quote()
+
+    assert (requote.served, requote.to_judge, requote.calls) == (5, 0, 0)
+
+
+def test_a_type_added_since_the_quote_is_named_and_never_asked(
+    vol: _VolFixture,
+) -> None:
+    token = vol.quote().token
+    _write_typed(vol.root, "things/added-1", "Added")
+    judge = _tier_judge()
+
+    outcome = _outcome(_vol_run(vol, token, judge=judge))
+
+    assert outcome.not_in_quote == ("Added",)
+    assert (outcome.judged, judge.calls) == (5, 5)
+    assert "Added" not in vol.stored()
+
+
+def test_a_type_answered_elsewhere_is_settled_and_not_paid_for_again(
+    vol: _VolFixture,
+) -> None:
+    token = vol.quote().token
+    vol.seed("Person")
+    judge = _tier_judge()
+
+    outcome = _outcome(_vol_run(vol, token, judge=judge))
+
+    assert (outcome.settled_since_quote, outcome.judged, judge.calls) == (1, 4, 4)
+    assert outcome.not_in_quote == ()
+
+
+def test_a_type_that_vanished_is_settled_not_asked(vol: _VolFixture) -> None:
+    token = vol.quote().token
+    (vol.layout.bundle_dir / "things" / "person-1.md").unlink()
+
+    outcome = _outcome(_vol_run(vol, token, judge=_tier_judge()))
+
+    assert (outcome.settled_since_quote, outcome.judged, outcome.deferred) == (1, 4, 0)
+
+
+def test_a_sampled_concept_edited_since_the_quote_is_no_longer_the_quoted_item(
+    vol: _VolFixture,
+) -> None:
+    token = vol.quote().token
+    vol.edit("things/place-1")
+    judge = _tier_judge()
+
+    outcome = _outcome(_vol_run(vol, token, judge=judge))
+
+    assert outcome.not_in_quote == ("Place",)
+    assert (outcome.settled_since_quote, outcome.judged, judge.calls) == (1, 4, 4)
+
+
+def test_a_volatility_call_past_the_ceiling_is_refused_before_it_is_made(
+    vol: _VolFixture,
+) -> None:
+    token = dataclasses.replace(vol.quote().token, calls=2)
+    judge = _tier_judge()
+
+    with pytest.raises(AssertionError, match="ceiling of 2"):
+        _vol_run(vol, token, judge=judge, chunk_size=5)
+
+    assert judge.calls == 2
+
+
+def test_a_volatility_run_without_a_token_is_refused_before_anything_is_built(
+    vol: _VolFixture,
+) -> None:
+    outcome = _vol_run(vol, None)
+
+    assert outcome == judging.RunRefused("no_quote_token")
+    assert vol.tasks == []
+
+
+@pytest.mark.parametrize(
+    ("yaml", "field"),
+    [
+        ("models:\n  volatility_typing: another-model\n", "model"),
+        ("backend: openai-compatible\nbase_url: http://x\n", "backend"),
+    ],
+)
+def test_a_moved_volatility_binding_is_stale_and_spends_and_writes_nothing(
+    vol: _VolFixture, yaml: str, field: str
+) -> None:
+    token = vol.quote().token
+    path = vol.root / "openkos.yaml"
+    path.write_text(path.read_text(encoding="utf-8") + yaml, encoding="utf-8")
+    judge = _tier_judge()
+
+    result = _vol_run(vol, token, judge=judge)
+
+    assert isinstance(result, judging.QuoteStale)
+    assert result.kind == "volatility"
+    assert field in result.changed
+    assert judge.calls == 0
+    assert not vol.layout.findings_db_path.exists()
+
+
+def test_a_volatility_backend_that_moved_onto_this_machine_is_stale(
+    vol: _VolFixture,
+) -> None:
+    token = vol.quote().token
+
+    result = _vol_run(vol, token, judge=_tier_judge(is_local=True))
+
+    assert isinstance(result, judging.QuoteStale)
+    assert result.changed == ("locality", "confidential")
+
+
+# -- volatility: the run: chunks, persistence and cancellation ------------------- #
+
+
+def test_each_volatility_chunk_persists_before_the_next_type_is_asked(
+    vol: _VolFixture,
+) -> None:
+    log: list[str] = []
+    assert judging.VOLATILITY_CHUNK_SIZE == 1
+
+    outcome = _outcome(
+        _vol_run(
+            vol,
+            vol.quote().token,
+            judge=_tier_judge(log=log),
+            commit_section=_Sections(log),
+        )
+    )
+
+    assert log == ["chat", "enter", "exit"] * 5
+    assert outcome.persisted == 5
+
+
+def test_a_larger_volatility_chunk_asks_its_types_before_one_persist(
+    vol: _VolFixture,
+) -> None:
+    log: list[str] = []
+
+    _outcome(
+        _vol_run(
+            vol,
+            vol.quote().token,
+            judge=_tier_judge(log=log),
+            commit_section=_Sections(log),
+            chunk_size=2,
+        )
+    )
+
+    assert log == ["chat", "chat", "enter", "exit"] * 2 + ["chat", "enter", "exit"]
+
+
+def test_a_volatility_chunk_size_below_one_is_refused(vol: _VolFixture) -> None:
+    with pytest.raises(ValueError, match="chunk_size"):
+        _vol_run(vol, vol.quote().token, chunk_size=0)
+
+
+def test_a_stop_from_inside_a_volatility_call_lets_that_chunk_persist_and_defers_the_rest(
+    vol: _VolFixture,
+) -> None:
+    stop = StopToken()
+    token = vol.quote().token
+
+    outcome = _outcome(
+        _vol_run(
+            vol,
+            token,
+            judge=_tier_judge(on_chat=lambda n: stop.set() if n == 1 else None),
+            stop=stop,
+        )
+    )
+
+    assert outcome.status == "stopped"
+    assert (outcome.judged, outcome.persisted, outcome.deferred) == (1, 1, 4)
+    assert set(vol.stored()) == set(_vtypes(0))
+    requote = vol.quote()
+    assert (requote.served, requote.to_judge) == (1, 4)
+
+
+def test_a_stop_before_the_first_volatility_chunk_makes_no_call(
+    vol: _VolFixture,
+) -> None:
+    stop = StopToken()
+    stop.set()
+    token = vol.quote().token
+    judge = _tier_judge()
+
+    outcome = _outcome(_vol_run(vol, token, judge=judge, stop=stop))
+
+    assert (outcome.status, outcome.judged, outcome.deferred) == ("stopped", 0, 5)
+    assert judge.calls == 0
+    assert not vol.layout.findings_db_path.exists()
+
+
+def test_a_stop_during_the_last_volatility_chunk_still_completes(
+    vol: _VolFixture,
+) -> None:
+    stop = StopToken()
+
+    outcome = _outcome(
+        _vol_run(
+            vol,
+            vol.quote().token,
+            judge=_tier_judge(on_chat=lambda n: stop.set() if n == 5 else None),
+            stop=stop,
+        )
+    )
+
+    assert (outcome.status, outcome.judged, outcome.deferred) == ("completed", 5, 0)
+
+
+def test_a_volatility_chunk_is_bounded_and_filtered_to_its_quoted_types(
+    vol: _VolFixture,
+) -> None:
+    """Each invocation of the service sees only the types of its chunk and is
+    bound to the chunk's size: a type the quote did not cover is never reached."""
+    token = vol.quote().token
+    _write_typed(vol.root, "things/added-1", "Added")
+    seen: list[tuple[set[str], object]] = []
+
+    def spy(
+        bundle_dir: Path, **kwargs: object
+    ) -> volatility_typing.TierSuggestionBatch:
+        seen.append((set(kwargs["only_types"]), kwargs["max_calls"]))  # type: ignore[call-overload]
+        return volatility_typing.suggest_volatility(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    _outcome(_vol_run(vol, token, chunk_size=2, suggest_volatility=spy))
+
+    assert seen == [
+        ({"Event", "Person"}, 2),
+        ({"Place", "Project"}, 2),
+        ({"Thing"}, 2),
+    ]
+
+
+def test_a_stop_that_leaves_every_remaining_type_settled_ends_the_run(
+    vol: _VolFixture,
+) -> None:
+    """When the types still to do stop existing mid-run, there is nothing to ask:
+    they are settled, not deferred, and the run completes."""
+    token = vol.quote().token
+
+    def vanish(n: int) -> None:
+        if n == 1:
+            for name in _SORTED[1:]:
+                (vol.layout.bundle_dir / "things" / f"{name.lower()}-1.md").unlink()
+
+    outcome = _outcome(
+        _vol_run(vol, token, judge=_tier_judge(on_chat=vanish), chunk_size=1)
+    )
+
+    assert outcome.status == "completed"
+    assert (outcome.judged, outcome.persisted, outcome.deferred) == (1, 1, 0)
+    assert outcome.settled_since_quote == 4
+
+
+# -- volatility: the run: what is stored ------------------------------------------ #
+
+
+def test_a_volatility_reply_that_degrades_is_judged_but_never_persisted(
+    vol: _VolFixture,
+) -> None:
+    judge = _tier_judge(["not json at all"], default_reply=_tier_reply())
+
+    outcome = _outcome(_vol_run(vol, vol.quote().token, judge=judge))
+
+    assert (outcome.judged, outcome.persisted, outcome.dropped) == (5, 4, 1)
+    assert _SORTED[0] not in vol.stored()
+    assert outcome.judged == outcome.persisted + outcome.dropped + outcome.unpersisted
+
+
+def test_a_verdict_about_a_concept_edited_during_the_call_is_dropped(
+    vol: _VolFixture,
+) -> None:
+    token = vol.quote().token
+
+    outcome = _outcome(
+        _vol_run(
+            vol,
+            token,
+            judge=_tier_judge(
+                on_chat=lambda n: vol.edit("things/person-1") if n == 2 else None
+            ),
+        )
+    )
+
+    assert (outcome.judged, outcome.persisted, outcome.dropped) == (5, 4, 1)
+    assert "Person" not in vol.stored()
+
+
+def test_a_verdict_about_a_concept_forgotten_during_the_call_is_dropped(
+    vol: _VolFixture,
+) -> None:
+    token = vol.quote().token
+
+    def forget(n: int) -> None:
+        if n == 2:
+            (vol.layout.bundle_dir / "things" / "person-1.md").unlink()
+
+    outcome = _outcome(_vol_run(vol, token, judge=_tier_judge(on_chat=forget)))
+
+    assert (outcome.judged, outcome.persisted, outcome.dropped) == (5, 4, 1)
+    assert "Person" not in vol.stored()
+
+
+# -- volatility: the run: progress and the observer -------------------------------- #
+
+
+def test_volatility_progress_events_carry_the_run_index_total_type_and_tier(
+    vol: _VolFixture,
+) -> None:
+    observer = _Recorder()
+    vol.seed("Event")
+
+    _outcome(
+        _vol_run(
+            vol,
+            vol.quote().token,
+            judge=_tier_judge(default_reply=_tier_reply("static")),
+            observer=observer,
+            chunk_size=3,
+        )
+    )
+
+    assert [(e.index, e.total) for e in observer.progress_events] == [
+        (1, 4), (2, 4), (3, 4), (4, 4),
+    ]  # fmt: skip
+    assert [e.work_key for e in observer.progress_events] == _vtypes(1, 2, 3, 4)
+    assert {e.verdict for e in observer.progress_events} == {"static"}
+    assert observer.persisted == [3, 4]
+
+
+def test_a_volatility_progress_event_never_carries_the_rationale(
+    vol: _VolFixture,
+) -> None:
+    observer = _Recorder()
+
+    _outcome(_vol_run(vol, vol.quote().token, judge=_tier_judge(), observer=observer))
+
+    assert len(observer.progress_events) == 5
+    for event in observer.progress_events:
+        assert "Tiered." not in repr(event)
+
+
+@pytest.mark.parametrize("fail_on", [1, 3])
+def test_a_volatility_observer_that_raises_loses_no_paid_work(
+    vol: _VolFixture, fail_on: int
+) -> None:
+    observer = _Recorder(fail_on_progress=fail_on)
+
+    outcome = _outcome(
+        _vol_run(vol, vol.quote().token, judge=_tier_judge(), observer=observer)
+    )
+
+    assert outcome.observer_failed is True
+    assert (outcome.status, outcome.persisted) == ("completed", 5)
+    assert len(vol.stored()) == 5
+    assert len(observer.progress_events) == fail_on
+
+
+# -- volatility: the run: a busy workspace ----------------------------------------- #
+
+
+def test_a_transient_busy_volatility_workspace_is_absorbed(vol: _VolFixture) -> None:
+    log: list[str] = []
+    sleeps: list[float] = []
+
+    outcome = _outcome(
+        _vol_run(
+            vol,
+            vol.quote().token,
+            judge=_tier_judge(log=log),
+            commit_section=_Sections(log, busy=1),
+            sleeps=sleeps,
+            chunk_size=5,
+        )
+    )
+
+    assert (outcome.status, outcome.persisted, outcome.unpersisted) == (
+        "completed",
+        5,
+        0,
+    )
+    assert sleeps == [1.0]
+
+
+def test_a_persistently_busy_volatility_workspace_stops_the_spend_and_says_so(
+    vol: _VolFixture,
+) -> None:
+    log: list[str] = []
+    sections = _Sections(log, always_busy=True)
+    sleeps: list[float] = []
+    judge = _tier_judge(log=log)
+    observer = _Recorder()
+
+    outcome = _outcome(
+        _vol_run(
+            vol,
+            vol.quote().token,
+            judge=judge,
+            commit_section=sections,
+            sleeps=sleeps,
+            observer=observer,
+            chunk_size=2,
+        )
+    )
+
+    assert outcome.status == "unpersisted"
+    assert outcome.unpersisted_cause == "workspace_busy"
+    assert (outcome.judged, outcome.unpersisted, outcome.persisted) == (2, 2, 0)
+    assert outcome.deferred == 3
+    assert judge.calls == 2, "nothing further is spent once persistence fails"
+    assert sleeps == [1.0, 2.0]
+    assert sections.attempts == judging.PERSIST_ATTEMPTS
+    assert observer.persisted == []
+    assert "enter" not in log, "no lock is held between attempts"
+
+
+def test_a_volatility_store_error_is_reported_as_unpersisted_with_its_cause(
+    vol: _VolFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(volatility_store, "record_volatility_suggestions", _boom)
+    judge = _tier_judge()
+
+    outcome = _outcome(_vol_run(vol, vol.quote().token, judge=judge, chunk_size=1))
+
+    assert outcome.status == "unpersisted"
+    assert outcome.unpersisted_cause == "store_error"
+    assert (outcome.unpersisted, outcome.persisted, outcome.deferred) == (1, 0, 4)
+    assert judge.calls == 1
+
+
+# -- volatility: the run: backend errors -------------------------------------------- #
+
+
+def test_a_failed_volatility_type_ends_the_run_with_its_prefix_kept(
+    vol: _VolFixture,
+) -> None:
+    judge = _tier_judge([_tier_reply(), BackendGenerationCapped("capped")])
+
+    outcome = _outcome(_vol_run(vol, vol.quote().token, judge=judge, chunk_size=5))
+
+    assert outcome.status == "failed"
+    assert isinstance(outcome.failure, BackendGenerationCapped)
+    assert (outcome.judged, outcome.persisted, outcome.failed_at) == (1, 1, 2)
+    assert outcome.deferred == 3, "the failed type was reached; three were not"
+    assert set(vol.stored()) == set(_vtypes(0))
+
+
+def test_a_volatility_failed_at_is_the_run_position_not_the_chunk_position(
+    vol: _VolFixture,
+) -> None:
+    judge = _tier_judge(
+        [_tier_reply(), _tier_reply(), BackendGenerationCapped("capped")]
+    )
+
+    outcome = _outcome(_vol_run(vol, vol.quote().token, judge=judge, chunk_size=2))
+
+    assert (outcome.status, outcome.failed_at) == ("failed", 3)
+    assert (outcome.judged, outcome.persisted, outcome.deferred) == (2, 2, 2)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [BackendUnavailable("down"), BackendModelNotFound("missing")],
+)
+def test_a_volatility_availability_error_propagates_after_the_prefix_is_persisted(
+    vol: _VolFixture, error: Exception
+) -> None:
+    observer = _Recorder()
+    judge = _tier_judge([_tier_reply(), error])
+
+    with pytest.raises(type(error)):
+        _vol_run(vol, vol.quote().token, judge=judge, observer=observer, chunk_size=5)
+
+    assert set(vol.stored()) == set(_vtypes(0))
+    assert observer.persisted == [1]
+
+
+def test_a_volatility_availability_error_on_the_first_call_writes_nothing(
+    vol: _VolFixture,
+) -> None:
+    observer = _Recorder()
+
+    with pytest.raises(BackendUnavailable):
+        _vol_run(
+            vol,
+            vol.quote().token,
+            judge=_tier_judge([BackendUnavailable("down")]),
+            observer=observer,
+        )
+
+    assert not vol.layout.findings_db_path.exists()
+    assert observer.persisted == []
+
+
+def test_a_busy_volatility_workspace_wins_over_a_backend_failure_in_one_chunk(
+    vol: _VolFixture,
+) -> None:
+    log: list[str] = []
+
+    outcome = _outcome(
+        _vol_run(
+            vol,
+            vol.quote().token,
+            judge=_tier_judge([_tier_reply(), BackendUnavailable("down")], log=log),
+            commit_section=_Sections(log, always_busy=True),
+            chunk_size=5,
+        )
+    )
+
+    assert outcome.status == "unpersisted"
+    assert outcome.unpersisted_cause == "workspace_busy"
+    assert isinstance(outcome.failure, BackendUnavailable)
+    assert (outcome.judged, outcome.unpersisted, outcome.failed_at) == (1, 1, 2)
+
+
+# -- volatility: the run: locks, the daemon and silence ----------------------------- #
+
+
+def test_the_workspace_lock_is_free_during_every_volatility_call(
+    vol: _VolFixture,
+) -> None:
+    from openkos.application import lock_wait
+
+    free_during_call: list[bool] = []
+
+    def _probe(n: int) -> None:
+        try:
+            with lock.workspace_lock(vol.root):
+                free_during_call.append(True)
+        except lock.WorkspaceBusyError:
+            free_during_call.append(False)
+
+    outcome = _outcome(
+        _vol_run(
+            vol,
+            vol.quote().token,
+            judge=_tier_judge(on_chat=_probe),
+            commit_section=lock_wait.locked_commit_section(vol.root, wait_seconds=0),
+            chunk_size=2,
+        )
+    )
+
+    assert free_during_call == [True] * 5
+    assert outcome.persisted == 5
+
+
+def test_an_active_engine_does_not_block_a_volatility_run(vol: _VolFixture) -> None:
+    _seed_job(vol, started=_NOW - timedelta(days=30))
+    before = vol.layout.jobs_db_path.read_bytes()
+
+    outcome = _outcome(_vol_run(vol, vol.quote().token, judge=_tier_judge()))
+
+    assert (outcome.status, outcome.persisted) == ("completed", 5)
+    assert vol.layout.jobs_db_path.read_bytes() == before
+
+
+def test_a_volatility_run_writes_nothing_to_a_stream(
+    vol: _VolFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _outcome(_vol_run(vol, vol.quote().token, judge=_tier_judge()))
 
     captured = capsys.readouterr()
     assert (captured.out, captured.err) == ("", "")

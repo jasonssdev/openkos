@@ -631,3 +631,126 @@ Existing tests modified: see below. The `_Judge` helper gained a `default_reply`
   `application/judging.py` 98 %. One later test-only addition (the unsupported-run-kind test) ran
   with the judging and wiring files: 184 passed; ruff and mypy re-run clean.
 - `uv run python evals/run_self_tests.py`: 57 of 57 harness self-tests run, 0 failing
+
+## S3b: `volatility` on the protocol (complete, 6/6)
+
+Branch `feat/judging-s3b`, off merged main (identity and relation_type merged). No golden or
+fixture file edited; the `suggest-volatility` and curate Metadata tests and goldens pass unchanged.
+No monkeypatched name moved (nothing renamed or relocated).
+
+### What was built
+
+- **Two additive seams on `resolution/volatility_typing.py`** (the service needed neither a quote
+  nor a filter, and the volatility service has no `CostQuote`):
+  - `plan_types(...) -> tuple[PlannedType, ...]` and the `PlannedType` dataclass (`type_name`,
+    `prompt_digest`, `input_refs`, `answered`): the LLM-free view `suggest_volatility` plans from.
+    It reuses `_plan_questions`, so a quote and a run cannot drift from the leaf. `unanswered_type_count`
+    is untouched.
+  - `only_types: Collection[str] | None = None` on `suggest_volatility` and `_plan_questions`:
+    narrows the run to named types exactly as `skip_types` leaves types out. `None` (the default,
+    and what every existing caller passes) is byte-identical. `suggest_volatility_service` is
+    untouched: it reaches `only_types` through its existing `suggest_volatility` port.
+- `judging.py`: `volatility` joins `_KINDS` and `_CHUNK_SIZES` (`VOLATILITY_CHUNK_SIZE = 1`);
+  `_context` resolves the `volatility_typing` task; `JudgingPorts` gained `plan_volatility_types` and
+  `suggest_volatility`; `_volatility_plan`, `_volatility_item`, `_quote_volatility`, `_run_volatility`,
+  `_VolatilityChunk`, `_VolatilityObserver`, `_volatility_progress_hook`, `_classify_volatility_chunk`.
+- A run re-invokes `suggest_volatility_tiers` once per chunk with `use_cache=True`, `max_calls=size`,
+  the ceiling client, the retrying section and a typing port narrowed to the chunk's types, so the
+  service's own served lookup and persist (`record_answers`) are reused.
+
+### Decisions and findings
+
+- **Unit and work item.** One concept type is the unit (the service's own unit: one chat call per
+  type). `WorkItem.work_key` is the type name and `member_digests` are the sampled concepts the
+  prompt carries, so an edited sampled concept makes the item no longer the quoted one.
+- **The quote** never calls the service: it asks the leaf's own plan (same arguments the service
+  forwards: effective-confidential inputs, `rationale_language`, `type_tiers`, the serve lookup
+  under the task model), so `served` is the answered types and `to_judge == calls ==` unanswered
+  types (a test pins it equal to `unanswered_type_count`). Notices: the one `model` notice and the
+  shared `unattended_active`; the service's bundle-scan warning has no notice code and is not carried.
+- **`include_uncertain` does not apply**: a tier suggestion has no UNCERTAIN-like verdict (a reply is
+  a valid tier or a degrade). It is ignored and recorded `False` in the token, as for `relation_type`.
+- **"Raised or forgotten during the call" is enforced by withholding from the service's persist.**
+  `record_answers` has no digest guard (unlike the relations persist), and a stored volatility row is
+  keyed on the prompt digest, so a row about an edited concept would never be served but a row naming
+  a forgotten concept would keep its text. `_VolatilityChunk` pins every sampled concept's digest at
+  chunk start and, after the call and before the service persists, removes from `batch.computed` any
+  type whose concepts changed (the answer still counts as `judged` and as `dropped`). The service's
+  persist code is unchanged.
+- **Outcome accounting.** `judged = persisted + dropped + unpersisted` (a degraded reply is `dropped`;
+  persist outcome is read off the store via `cached_answers`, not off the service's log). A type that
+  stopped being a question mid-run or was answered elsewhere is `settled_since_quote`, so
+  `deferred = len(work still owed) - reached` has no separate "vanished" correction as relations has.
+  `failed_at` is `before + failed_index` with the leaf's 1-based position inside the chunk.
+- Worst-case stop latency for volatility: `1 x chat_timeout` (600 s by default) plus one persist, plus
+  the 3 to 109 ms of LLM-free planning per invocation; carried into the module docstring (S3b.4)
+  together with the relation figure.
+- `test_an_unsupported_kind_is_refused` (and the relation-run twin): both used `volatility` as the kind
+  a surface does not support. With all three kinds supported they now use an invalid kind string
+  (`"bogus"`), keeping the refusal path (it is still reachable: `JudgingKind` is only a type hint).
+  The run's kind check now reads `_CHUNK_SIZES` (the runnable kinds), so a kind added to `_KINDS`
+  without a chunk size is refused rather than a `KeyError`.
+
+### TDD Cycle Evidence (RED observed before GREEN)
+
+| Behavior (tasks) | Test(s) | Observed RED | GREEN |
+|---|---|---|---|
+| Leaf seam `plan_types` | `test_plan_types_names_every_question_with_its_inputs_and_whether_it_is_answered` | `AttributeError: module 'openkos.resolution.volatility_typing' has no attribute 'plan_types'` | passes |
+| Leaf seam `only_types` | `test_only_types_leaves_every_other_type_unasked_and_uncounted` | `TypeError: suggest_volatility() got an unexpected keyword argument 'only_types'` | passes |
+| The quote (S3b.1) | 15 `volatility` quote tests (kind tag, binding, no model call, price equals the leaf's, work item, edit, other model, degraded row, confidential, local backend, uncertain opt-in, empty, notices, unattended, type override) | 15 failed, each `ValueError: judging kind 'volatility' cannot be quoted yet` | 173 passed once the two refusal tests were retargeted |
+| The run (S3b.2, S3b.3) | 36 `volatility` run tests (ceiling, `not_in_quote`, settled, stale, chunks, stop at a chunk boundary, drop on edit and on forget, progress, observer, retry, `unpersisted`, `failed_at`, availability errors, lock, engine, silence) | 36 failed with `ValueError: judging kind 'volatility' cannot be run yet` (plus one `chunk_size` match failing for the same reason); the no-token test passed by construction (it refuses before the kind check) | first GREEN run: one failure, a TEST defect (the vanish test deleted the type in flight); fixed in the test, 211 passed |
+| Guard widening (S3b.4) | `test_the_extracted_verbs_still_resolve_their_own_task_model` | `AssertionError: ('judging.py', {'adjudication', 'edge_typing', 'volatility_typing'})` once `_context` named the task | passes after `_EXPECTED_SERVICE_TASKS["judging.py"]` widened |
+| `test_an_unknown_kind_is_refused`, `test_a_run_of_an_unknown_kind_is_refused` | retargeted existing tests | **Not observed RED**: they were red on the quote commit (volatility no longer refused) and were retargeted at the same time | passes |
+
+### Mutations (applied, test file run, restored from a byte copy, `__pycache__` purged)
+
+| Mutation | First failure |
+|---|---|
+| quote: every type in `work` (`if True`) | `test_a_volatility_quote_is_kind_tagged_and_splits_served_from_to_judge` |
+| quote: `served` counts the unanswered | the same test |
+| quote: `local_exemption=False` | `test_a_local_backend_makes_the_effective_confidential_bit_true_for_volatility` |
+| quote: `type_tiers=None` | `test_a_workspace_type_override_is_part_of_the_question_a_volatility_quote_serves` |
+| run: drop `only_types=self.types` | `test_a_volatility_chunk_is_bounded_and_filtered_to_its_quoted_types` |
+| run: drop `max_calls=size` | the same test |
+| run: `use_cache=False` | `test_a_volatility_run_asks_exactly_the_quoted_types_and_persists_them` |
+| run: pin check `False` | `test_a_verdict_about_a_concept_edited_during_the_call_is_dropped` |
+| run: `judge = list(token.work)` | `test_a_type_answered_elsewhere_is_settled_and_not_paid_for_again` |
+| run: `vanished += 0` | `test_a_stop_that_leaves_every_remaining_type_settled_ends_the_run` |
+| run: progress `before=0` | `test_volatility_progress_events_carry_the_run_index_total_type_and_tier` |
+| run: cause always `store_error` | `test_a_persistently_busy_volatility_workspace_stops_the_spend_and_says_so` |
+| run: `failed_at` chunk-relative | `test_a_volatility_failed_at_is_the_run_position_not_the_chunk_position` |
+| run: `fresh` from the pruned `computed` | `test_a_verdict_about_a_concept_edited_during_the_call_is_dropped` |
+| run: commit section dropped | `test_each_volatility_chunk_persists_before_the_next_type_is_asked` |
+| run: persisted always true (`elif True`) | `test_a_persistently_busy_volatility_workspace_stops_the_spend_and_says_so` |
+| leaf: `only_types` filter ignored | `test_plan_types_names_every_question_with_its_inputs_and_whether_it_is_answered` |
+
+Observation: the leaf's `deferred += 1` and `current_default` lines are not asserted by the CLI
+`suggest-volatility` tests or characterization (they stub the leaf), and mutating them left 95 tests
+green; they were already uncovered by those files before this slice and are not touched by it.
+
+### Existing tests modified
+
+- `tests/unit/application/test_judging.py`: `test_an_unsupported_kind_is_refused` became
+  `test_an_unknown_kind_is_refused` and `test_a_run_of_a_kind_this_stage_does_not_run_yet_is_refused`
+  became `test_a_run_of_an_unknown_kind_is_refused`; both use the string `"bogus"` instead of
+  `volatility`. `_seed_job` gained the new fixture in its type union.
+- `tests/unit/cli/test_chat_timeout_wiring.py`: `_EXPECTED_SERVICE_TASKS["judging.py"]` widened to
+  include `volatility_typing` (S3b.4; widened, not bypassed).
+- No golden or fixture file was touched.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `uv run pytest tests/unit/application/test_judging.py -k volatility`: green (whole file 211 tests) |
+| Runtime harness | the shipped volatility leaf, serve lookup and persist run for real over a workspace made by `init`; only the model is a scripted stub |
+| Rollback boundary | revert removes the volatility functions, the two ports and the two leaf seams; the other kinds are untouched |
+
+### Gates (after the last source change)
+
+- `uv run ruff check .`: All checks passed
+- `uv run ruff format --check .`: 602 files already formatted
+- `uv run mypy .`: Success, no issues found in 602 source files
+- `uv run pytest --cov`: 12496 passed, 6 skipped in 882.44 s, total coverage 96.62 % (required 90 %);
+  `application/judging.py` 99 %, `resolution/volatility_typing.py` 98 % (its 3 missed lines are older code)
+- `uv run python evals/run_self_tests.py`: 57 of 57 harness self-tests run, 0 failing

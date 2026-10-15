@@ -344,6 +344,7 @@ def _plan_questions(
     skip_types: Collection[str],
     served: Callable[[str, str], TierSuggestion | None] | None,
     type_tiers: Mapping[str, str] | None,
+    only_types: Collection[str] | None = None,
 ) -> tuple[list[_Planned], int]:
     """Every question this run would put to the model, in sorted-type order,
     each with the answer `served` already holds for it (or `None`), plus the
@@ -360,6 +361,7 @@ def _plan_questions(
         type_name: type_docs
         for type_name, type_docs in _sample_docs_by_type(docs).items()
         if type_name not in skip_types
+        and (only_types is None or type_name in only_types)
     }
     planned: list[_Planned] = []
     for type_index, type_name in enumerate(sorted(sampled_docs), start=1):
@@ -386,6 +388,56 @@ def _plan_questions(
         hit = served(type_name, digest) if served is not None else None
         planned.append((type_index, type_name, type_docs, messages, digest, hit))
     return planned, len(sampled_docs)
+
+
+@dataclass(frozen=True)
+class PlannedType:
+    """One question a run would put to the model, as `plan_types` reports it."""
+
+    type_name: str
+    prompt_digest: str
+    """The identity of the exact question (see `ComputedTier.prompt_digest`)."""
+    input_refs: tuple[str, ...]
+    """The concept ids whose bodies the prompt carries."""
+    answered: bool
+    """`served` already holds an answer for this exact prompt: asking it costs
+    no call."""
+
+
+def plan_types(
+    bundle_dir: Path,
+    *,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
+    rationale_language: str | None = None,
+    skip_types: Collection[str] = (),
+    served: Callable[[str, str], TierSuggestion | None] | None = None,
+    type_tiers: Mapping[str, str] | None = None,
+    only_types: Collection[str] | None = None,
+) -> tuple[PlannedType, ...]:
+    """Every question a run with these arguments would consider, in sorted-type
+    order, with what each is keyed on and whether `served` already answers it.
+    Reads and never asks: the LLM-free view `suggest_volatility` plans from, so
+    a caller that prices or filters work cannot drift from the run."""
+    planned, _count = _plan_questions(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+        rationale_language=rationale_language,
+        skip_types=skip_types,
+        served=served,
+        type_tiers=type_tiers,
+        only_types=only_types,
+    )
+    return tuple(
+        PlannedType(
+            type_name=type_name,
+            prompt_digest=digest,
+            input_refs=tuple(doc.identity for doc in type_docs),
+            answered=hit is not None,
+        )
+        for _index, type_name, type_docs, _messages, digest, hit in planned
+    )
 
 
 def unanswered_type_count(
@@ -425,6 +477,7 @@ def suggest_volatility(
     skip_types: Collection[str] = (),
     served: Callable[[str, str], TierSuggestion | None] | None = None,
     type_tiers: Mapping[str, str] | None = None,
+    only_types: Collection[str] | None = None,
 ) -> TierSuggestionBatch:
     """Suggest a volatility tier + rationale for every distinct concept TYPE
     present under `bundle_dir`, read-only.
@@ -520,7 +573,12 @@ def suggest_volatility(
     is `effective_tier`, so a suggestion equal to a tier the user already applied
     is not a change. Because it is in the prompt it is also in the cache key:
     changing `type_tiers` re-asks the type. `None` -- the default -- is the
-    registry default, byte-identical to before."""
+    registry default, byte-identical to before.
+
+    `only_types` narrows the run to the named types: every other type is left
+    out of the sample exactly as a `skip_types` one is (no call, not counted
+    toward `total`), for a caller that works through the types in chunks.
+    `None` -- the default -- considers every type, byte-identical to before."""
     planned, sampled_count = _plan_questions(
         bundle_dir,
         include_confidential=include_confidential,
@@ -529,6 +587,7 @@ def suggest_volatility(
         skip_types=skip_types,
         served=served,
         type_tiers=type_tiers,
+        only_types=only_types,
     )
     results: list[TierSuggestion] = []
     computed: dict[str, ComputedTier] = {}

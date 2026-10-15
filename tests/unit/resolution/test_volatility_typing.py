@@ -1101,3 +1101,49 @@ def test_an_invalid_override_falls_back_to_the_registry_default(
     )
 
     assert batch.results[0].current_default == types.TYPE_TO_DEFAULT_VOLATILITY["Event"]
+
+
+def test_plan_types_names_every_question_with_its_inputs_and_whether_it_is_answered(
+    tmp_path: Path,
+) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    _write_doc(tmp_path / "b.md", doc_type="Project", title="B")
+    held = volatility_typing_mod.TierSuggestion("Person", "slow", "slow", "held")
+
+    plan = volatility_typing_mod.plan_types(
+        tmp_path, served=lambda t, d: held if t == "Person" else None
+    )
+
+    assert [(p.type_name, p.answered) for p in plan] == [
+        ("Person", True),
+        ("Project", False),
+    ]
+    assert [p.input_refs for p in plan] == [("a",), ("b",)]
+    asked = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=_FakeLLM(replies=[_valid_reply()]), only_types={"Project"}
+    )
+    assert plan[1].prompt_digest == asked.computed["Project"].prompt_digest
+    assert plan[1].input_refs == asked.computed["Project"].input_refs
+
+
+def test_only_types_leaves_every_other_type_unasked_and_uncounted(
+    tmp_path: Path,
+) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    _write_doc(tmp_path / "b.md", doc_type="Project", title="B")
+    _write_doc(tmp_path / "c.md", doc_type="Event", title="C")
+    llm = _FakeLLM(replies=[_valid_reply()])
+    seen: list[tuple[int, int]] = []
+
+    batch = volatility_typing_mod.suggest_volatility(
+        tmp_path,
+        llm=llm,
+        only_types={"Project"},
+        on_progress=lambda index, total, s: seen.append((index, total)),
+    )
+
+    assert [s.type_name for s in batch.results] == ["Project"]
+    assert len(llm.calls) == 1
+    assert seen == [(1, 1)]
+    plan = volatility_typing_mod.plan_types(tmp_path, only_types={"Project"})
+    assert [p.type_name for p in plan] == ["Project"]
