@@ -200,7 +200,7 @@ Goal: `application/identity_adjudication.py` owns the helpers; `cli/main.py` kee
 delegators and re-exports; the two `typer.echo` advisories become fields on a typed
 result and are re-rendered byte for byte by the delegator.
 
-- [ ] S1.1 RED: create `tests/unit/application/test_identity_adjudication.py` with
+- [x] S1.1 RED: create `tests/unit/application/test_identity_adjudication.py` with
   tests for the moved behavior: `partition_adjudication_serves` (identical
   partition, `rubric_stale`, `store_read` degrade), `servable_verdict` (each failed
   check refuses: no latest row, rubric mismatch, member-set mismatch, digest mismatch,
@@ -208,11 +208,11 @@ result and are re-rendered byte for byte by the delegator.
   `persist_adjudications` (drops for moved/unreadable members, DIFFERENT
   resolution, `PersistResult` fields `persisted`/`dropped`/`store_error`/`busy`),
   `reassemble_adjudications`. Observe RED (module missing). Satisfies: J2, J9, J1.
-- [ ] S1.2 RED: add a layering/guard test (extend `tests/unit/application/test_layering.py`
+- [x] S1.2 RED: add a layering/guard test (extend `tests/unit/application/test_layering.py`
   usage, which scans new modules automatically) plus a dedicated AST assertion that
   `identity_adjudication.py` never calls `isatty` or `typer.echo`. Files:
   `tests/unit/application/test_identity_adjudication.py`. Satisfies: J1.
-- [ ] S1.3 GREEN: create `src/openkos/application/identity_adjudication.py` and move
+- [x] S1.3 GREEN: create `src/openkos/application/identity_adjudication.py` and move
   `AdjudicationServes`, `partition_adjudication_serves`, `servable_verdict` (the one
   predicate, with `include_confidential: bool | None`, `None` meaning the bit is
   not compared), `persist_adjudications` returning `PersistResult`, and
@@ -220,26 +220,26 @@ result and are re-rendered byte for byte by the delegator.
   `commit_section` port and a `write_through: bool = False` parameter whose `True`
   branch is added in S2c (the parameter is declared and ignored when `False`).
   Files: `src/openkos/application/identity_adjudication.py`. Satisfies: J2, J9, J1.
-- [ ] S1.4 GREEN: in `src/openkos/cli/main.py` replace the bodies with delegators
+- [x] S1.4 GREEN: in `src/openkos/cli/main.py` replace the bodies with delegators
   and re-exports (the #1168 precedent). `_persist_adjudications` passes
   `_commit_section_for(layout.root)` (call-time, so patch sites keep intercepting)
   and renders the two advisories byte for byte from `store_error` and `busy` with
   the same `surface`. Locate the helpers by name, not by line. Satisfies: J18, J1.
-- [ ] S1.5 RED then GREEN: update the registry key in
+- [x] S1.5 RED then GREEN: update the registry key in
   `src/openkos/application/queue_resolution.py` from
   `openkos.cli.main._persist_adjudications` to
   `openkos.application.identity_adjudication.persist_adjudications`; first change
   the registry test expectation so it fails, then the key. Files:
   `src/openkos/application/queue_resolution.py`, its test. Satisfies: J9, J18.
-- [ ] S1.6 Confirm the chat-timeout AST guard
+- [x] S1.6 Confirm the chat-timeout AST guard
   (`tests/unit/cli/test_chat_timeout_wiring.py`) is unaffected: the moved module
   makes no chat call. If the guard flags the new module, widen it per the design
   (values become sets) rather than bypassing it. Record the result. Satisfies: J1.
-- [ ] S1.7 REFACTOR and prove survival: run S0a goldens, `test_adjudicate.py` and the
+- [x] S1.7 REFACTOR and prove survival: run S0a goldens, `test_adjudicate.py` and the
   curate tests unchanged and observe GREEN. Mutate one patched line (a delegator's
   `_commit_section_for(...)` call in `cli/main.py`), observe a test redden, revert,
   purge, GREEN. Satisfies: J18.
-- [ ] S1.8 Run the five gates. Satisfies: J18.
+- [x] S1.8 Run the five gates. Satisfies: J18.
 
 Gates: the five gates above.
 Forecast: ~320 authored lines (net of the moved code).

@@ -115,3 +115,77 @@ so `raises=AssertionError` cannot absorb it. Observed: stored verdict broken -> 
 Note: the "chat stub raises" perturbation still reports XFAIL because `_identity_stage`
 never calls the chat client; the never-called precondition is a recorder
 (`chat_calls == []`), which would fail if the stage ever called it.
+
+## S1: Identity serve, persist and reassemble into `application/` (complete, 8/8)
+
+Branch `feat/judging-s1`, stacked-to-main on S0a and S0b. Behavior-preserving move; no
+golden or fixture edited, the S0b strict xfail still reports XFAIL (S1 does not fix the
+daemon).
+
+### What moved where
+
+| From `cli/main.py` | To `application/identity_adjudication.py` |
+|---|---|
+| `AdjudicationServes` | `AdjudicationServes` (main re-exports it by alias) |
+| `_partition_adjudication_serves` | `partition_adjudication_serves` (`warn_on_failure` becomes `on_warning: Callable \| None`) |
+| the serve rule inlined in the partition | `servable_verdict` (`include_confidential: bool \| None`, `None` = bit not compared), over a private `_serve` that also names the refusal so `rubric_stale` is counted without a second rule |
+| `_reassemble_adjudications` | `reassemble_adjudications` |
+| `_persist_adjudications` | `persist_adjudications` returning `PersistResult(persisted, dropped, store_error, busy)` |
+
+Delegators kept in `cli/main.py` (names unchanged): `_partition_adjudication_serves`,
+`_persist_adjudications`, `_reassemble_adjudications`, and the `AdjudicationServes`
+alias. `_persist_adjudications` still resolves `_commit_section_for(layout.root)` at call
+time and renders both advisories byte for byte; it still asks for no section when the
+batch is empty. `queue_resolution.WRITE_CORE_RESOLUTIONS` now keys
+`openkos.application.identity_adjudication.persist_adjudications`.
+
+### Tasks
+
+- [x] S1.1 RED: `tests/unit/application/test_identity_adjudication.py` (33 tests); RED was
+  `ImportError: cannot import name 'identity_adjudication'`.
+- [x] S1.2 Guard: the module's AST test (no `isatty`/`echo`/`print`/`input`, no
+  `typer`/`rich`/`openkos.cli`/`openkos.vcs`) plus the existing `test_layering.py`.
+- [x] S1.3 GREEN: the module, 33 passed. `write_through=True` raises
+  `NotImplementedError` until S2c, rather than being silently ignored.
+- [x] S1.4 Delegators in `cli/main.py`; unused imports removed (`NamedTuple`,
+  `queue_resolution`, `rubric_digest`, `withdraw_self_refuting_same`; no test patches them).
+- [x] S1.5 RED then GREEN: registry key (below).
+- [x] S1.6 `test_chat_timeout_wiring.py` unaffected (the module makes no chat call); no
+  widening needed.
+- [x] S1.7 Survival proven (below).
+- [x] S1.8 Gates recorded in the slice report.
+
+### TDD Cycle Evidence
+
+| Task | RED | GREEN |
+|------|-----|-------|
+| S1.1/S1.3 | collection `ImportError` (module missing) | 33 passed (one test rationale corrected: a self-refuting SAME is withdrawn to DIFFERENT, not UNCERTAIN) |
+| S1.2 layering | temporary `import typer`, `import sys`, `typer.echo(...)`, `sys.stdin.isatty()` in the module: 3 failed (`test_application_modules_never_import_cli_typer_or_rich`, the two new AST tests); reverted byte-exact | 56 passed |
+| S1.5 registry | new test `test_the_adjudication_persist_core_is_registered_at_its_application_home` failed with `KeyError`; after the move the old `openkos.cli.main._persist_adjudications` key also failed `test_a_resolving_core_calls_its_resolver` | key updated: all registry tests pass |
+| delegators | `tests/unit/cli/test_identity_adjudication_delegators.py` (6) pins the section seam, the empty-batch no-section behavior and both advisories byte for byte | 6 passed |
+
+### Survival evidence
+
+Before the move: S0a goldens, `test_adjudicate.py`, `test_curate_auto_merge.py`, the two
+queue-resolution tests: 260 passed. After: the same set plus the new tests, all green.
+
+Mutations (applied, test run, reverted byte-exact, `__pycache__` purged):
+
+| Mutation | Result |
+|---|---|
+| delegator `_commit_section_for(layout.root)` replaced by `lock_wait.locked_commit_section(...)` | SURVIVED the first run: no test patched that seam for the persist. Added the delegator tests; now 2 failed |
+| delegator busy advisory `busy` -> `BUSY` | 3 failed (the delegator test and both S0a busy goldens) |
+| moved `rubric_stale += 1` -> `+= 2` | 2 failed |
+| moved `if stored.rubric_digest != rubric` -> `is None` | 3 failed |
+| moved `dropped = len(results) - len(batch)` -> `0` | 3 failed |
+| moved `if digest is None or (` -> `if (` | 3 failed |
+
+### Deviations from the design text
+
+- `servable_verdict` is a thin wrapper over a private `_serve` that returns the refusal
+  kind, so the partition counts `rubric_stale` without a second copy of the rule.
+- `PersistResult.persisted` is 0 on a store error or a busy workspace (nothing was
+  written); `dropped` is reported on a store error and is 0 when the section was never
+  entered.
+- A new test file for the delegators was added (not in the task list) to close the
+  surviving-mutation gap above.

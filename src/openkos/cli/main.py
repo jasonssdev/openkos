@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal, NamedTuple, NoReturn, TypedDict, TypeVar, cast
+from typing import Final, Literal, NoReturn, TypedDict, TypeVar, cast
 
 import typer
 from rich.console import Console
@@ -45,10 +45,10 @@ from openkos.application import (
     contradictions_service,
     curate_decisions,
     duplicates_service,
+    identity_adjudication,
     ingest_service,
     lock_wait,
     merge_service,
-    queue_resolution,
     reconcile_service,
     reindex_service,
     unmerge_service,
@@ -122,8 +122,6 @@ from openkos.resolution.adjudication import (
     AdjudicationBatch,
     Verdict,
     adjudicate_candidates,
-    rubric_digest,
-    withdraw_self_refuting_same,
 )
 from openkos.resolution.candidates import (
     CandidateGroup,
@@ -13246,31 +13244,10 @@ def _apply_identity_decision(
     )
 
 
-class AdjudicationServes(NamedTuple):
-    """What `_partition_adjudication_serves` answers (#779, widened by
-    #838). A NamedTuple for `EdgeSuggestionServes`' exact reason: a widening
-    positional tuple makes every unpack order-sensitive by convention
-    alone, and `rubric_stale` is a count a caller could silently swap with
-    nothing but a type checker noticing."""
-
-    served: dict[str, AdjudicatedCandidate]
-    to_judge: list[CandidateGroup]
-    rubric_stale: int
-    """How many groups re-judge with a persisted row predating the current
-    judgment rubric (#838) -- the caller names the reason so the re-spend
-    is announced, never a surprising `0 of N served`. Counted whether or
-    not the group's members ALSO drifted: the rubric check runs before the
-    costlier per-member hashing, and the claim the stderr line makes (the
-    row predates the rubric) is true either way."""
-
-    store_read: bool
-    """Whether the store was actually READ (#809's fact, adopted here by
-    #867 when curate's Identity became this partition's second caller).
-    An absent file and an unreadable one both serve nothing, but neither
-    is a store that was read and held nothing for these groups -- and the
-    split line renders only for the last of the three, on BOTH surfaces,
-    so the two can never disagree the way #809 found the edge family's
-    had."""
+AdjudicationServes = identity_adjudication.AdjudicationServes
+"""Re-exported for the callers that unpack it by name (curate's Identity stage).
+The definition lives in `application/identity_adjudication.py`, beside the
+partition it answers."""
 
 
 def _reassemble_adjudications(
@@ -13278,29 +13255,11 @@ def _reassemble_adjudications(
     served: dict[str, AdjudicatedCandidate],
     fresh: Sequence[AdjudicatedCandidate],
 ) -> list[AdjudicatedCandidate]:
-    """Rebuild a run's verdicts in CANDIDATE order, merging what the store
-    served with what the model just judged (#867) -- the adjudication twin
-    of `_reassemble_edge_suggestions`, extracted from the `adjudicate` verb
-    for the same #809 reason: `curate`'s Identity stage is now a second
-    caller, and a later fix to the merge would otherwise land in one copy
-    and silently miss the other.
-
-    A served verdict wins over a fresh one for the same key -- a tiebreak
-    the callers' own partition makes unreachable, not a policy. Groups past
-    a mid-batch failure (#441) appear in neither map and stay absent.
-    Ordering follows `candidates`, so a served verdict and a fresh one are
-    indistinguishable downstream."""
-    fresh_by_key = {
-        adjudications_store.group_key_for(result.candidate.member_ids): result
-        for result in fresh
-    }
-    rebuilt: list[AdjudicatedCandidate] = []
-    for group in candidates:
-        key = adjudications_store.group_key_for(group.member_ids)
-        found = served.get(key) or fresh_by_key.get(key)
-        if found is not None:
-            rebuilt.append(found)
-    return rebuilt
+    """One-line delegator: the merge lives in
+    `application/identity_adjudication.py`, shared by `adjudicate` and `curate`'s
+    Identity stage, and is kept under this name for the callers that reach it
+    through `cli.main`."""
+    return identity_adjudication.reassemble_adjudications(candidates, served, fresh)
 
 
 def _partition_adjudication_serves(
@@ -13311,110 +13270,23 @@ def _partition_adjudication_serves(
     warn_on_failure: bool = True,
     surface: str = "adjudicate",
 ) -> AdjudicationServes:
-    """Split `candidates` into verdicts servable from `.openkos/findings.db`
-    and the groups that still need a model call (#779) -- the adjudication
-    twin of `_partition_persisted_serves`, same posture throughout.
+    """Delegator to `identity_adjudication.partition_adjudication_serves`, which
+    owns the serve rule (#779, #838). This wrapper only renders the service's
+    advisory, to stderr.
 
-    A group is SERVED iff its latest persisted row matches this run's
-    `include_confidential` bit (a verdict computed over a different member
-    subset must never serve), was computed under THIS build's judgment
-    rubric (#838: `rubric_digest` equality -- the same argument one input
-    wider, since a different rubric is a different prompt; a row carrying
-    no digest predates the column and is never servable), carries at
-    least one digest row, every stored `(member, digest)` equals the
-    member's CURRENT content hash, and the stored verdict is in the enum.
-    Everything else re-judges, conservatively -- including a
-    present-but-corrupt store, which degrades to one stderr advisory and
-    a full fresh judge rather than crashing before any model spend (the
-    #685 item-4 posture).
-
-    `rubric_stale` counts the groups refused with a row predating the
-    current rubric (mismatched or absent digest) -- whether or not their
-    members also drifted, since the rubric gate runs first -- so the
-    caller can name the reason: a rubric change re-judging every cached
-    group would otherwise read as a surprising `0 of N served` with no
-    stated cause (#838's announced-re-spend ruling)."""
-    if not layout.findings_db_path.exists():
-        return AdjudicationServes({}, candidates, 0, store_read=False)
-    try:
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            persisted = adjudications_store.open_adjudications(conn)
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error) as exc:
-        # `warn_on_failure=False` is curate's pricing probe (#867 review):
-        # the stage RUN rebuilds this partition minutes later and warns
-        # then, so an unreadable store costs one warning per curate run,
-        # not one per read -- the standalone verb partitions once and
-        # always warns. `surface` names the command the user actually ran
-        # (#867 review): a warning during a curate run must not be
-        # attributed to the standalone verb.
-        if warn_on_failure:
-            typer.echo(
-                f"openkos {surface}: warning -- failed to read persisted "
-                f"adjudications ({exc}); judging every group fresh.",
-                err=True,
-            )
-        return AdjudicationServes({}, candidates, 0, store_read=False)
-    latest: dict[str, adjudications_store.Adjudication] = {}
-    for row in persisted:
-        latest[adjudications_store.group_key_for(row.member_ids)] = row
-
-    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
-    current_rubric = rubric_digest()
-    served: dict[str, AdjudicatedCandidate] = {}
-    to_judge: list[CandidateGroup] = []
-    rubric_stale = 0
-    for group in candidates:
-        key = adjudications_store.group_key_for(group.member_ids)
-        stored = latest.get(key)
-        if stored is None or stored.include_confidential != include_confidential:
-            to_judge.append(group)
-            continue
-        # #838: a row from a different (or unknown, pre-column) rubric is
-        # a verdict this build would not produce; the operator who
-        # upgraded to a judgment fix must not keep being served the exact
-        # verdict the fix exists to replace. Checked BEFORE the member
-        # digests because it is the cheap comparison -- so a group whose
-        # members also drifted still counts here, which stays honest: the
-        # row does predate the rubric, whatever else is stale about it.
-        if stored.rubric_digest != current_rubric:
-            rubric_stale += 1
-            to_judge.append(group)
-            continue
-        # The stored ref SET must equal the group's current member set
-        # (#779 review, two lenses): a row carrying digests for fewer or
-        # different members than the group now holds was computed over a
-        # DIFFERENT prompt, however fresh each stored digest is.
-        if {digest.input_ref for digest in stored.input_digests} != set(
-            group.member_ids
-        ) or any(
-            current_digest(digest.input_ref) != digest.digest
-            for digest in stored.input_digests
-        ):
-            to_judge.append(group)
-            continue
-        try:
-            verdict = Verdict(stored.verdict)
-        except ValueError:
-            to_judge.append(group)
-            continue
-        # The SAME judgment path a fresh verdict goes through (#796). A
-        # row stored before that withdrawal existed still carries the
-        # verdict its own rationale argues against, and serving it would
-        # hand the operator a merge the engine now refuses to propose.
-        # Re-deciding costs nothing here: the rule is pure, reads only the
-        # rationale the row already carries, and is idempotent, so a row
-        # written after the rule shipped passes through untouched.
-        verdict, rationale = withdraw_self_refuting_same(verdict, stored.rationale)
-        served[key] = AdjudicatedCandidate(
-            candidate=group,
-            verdict=verdict,
-            confidence=stored.confidence,
-            rationale=rationale,
-        )
-    return AdjudicationServes(served, to_judge, rubric_stale, store_read=True)
+    `warn_on_failure=False` is curate's pricing probe (#867 review): the stage
+    RUN rebuilds this partition minutes later and warns then, so an unreadable
+    store costs one warning per curate run, not one per read -- the standalone
+    verb partitions once and always warns. `surface` names the command the user
+    actually ran, so a warning during a curate run is not attributed to the
+    standalone verb."""
+    return identity_adjudication.partition_adjudication_serves(
+        layout,
+        candidates,
+        include_confidential=include_confidential,
+        on_warning=_echo_stderr if warn_on_failure else None,
+        surface=surface,
+    )
 
 
 EdgeSuggestionServes = relations_service.EdgeSuggestionServes
@@ -13503,90 +13375,39 @@ def _persist_adjudications(
     surface: str = "adjudicate",
     judged_digests: Mapping[str, str | None] | None = None,
 ) -> None:
-    """Persist freshly judged adjudication verdicts (#779), fail-open: a
-    failed persist costs one stderr advisory, never the run -- the same
-    #684 posture curate's findings persist takes. A result any of whose
-    members has no current digest (unreadable -- including the
-    no-readable-member UNCERTAIN short-circuit) is skipped: a row whose
-    staleness can never be checked would serve forever.
+    """Delegator to `identity_adjudication.persist_adjudications` (#779), which
+    owns the persist rule and is fail-open: a failed persist costs one stderr
+    advisory, never the run -- the same #684 posture curate's findings persist
+    takes. This wrapper only renders the two advisories the service reports as
+    data; `surface` names the command the user actually ran (#867 review), since
+    curate's Identity stage persists through this helper too.
 
-    `judged_digests` is each member's content digest as it stood BEFORE the
-    judging call (#1137): the judging call holds no workspace lock, so a
-    member edited, raised or forgotten meanwhile has a different digest now,
-    and its verdict is dropped rather than stored against content nobody
-    judged. Without it the digests are read here, at persist time.
-
-    The persist is a commit phase: it takes the workspace lock, and a busy
-    workspace costs the same advisory a failed persist does."""
+    The persist is a commit phase: it enters the commit section the running
+    split verb published (`_commit_section_for`, resolved at call time so every
+    patch site keeps intercepting), and `judged_digests` pins each member as it
+    stood before the judging call (#1137)."""
     if not results:
         return
-    try:
-        # Both callers (`adjudicate`, `curate`) are split verbs, so the persist
-        # always enters the commit section the guard published.
-        with _commit_section_for(layout.root)():
-            current_digest = application_pending.current_finding_digest(
-                layout.bundle_dir
-            )
-            # #838: every fresh verdict records the rubric it was computed under,
-            # so the serve gate can refuse it after a judgment fix ships. Computed
-            # once -- it is constant within a build.
-            current_rubric = rubric_digest()
-            batch: list[adjudications_store.Adjudication] = []
-            for result in results:
-                digests: list[adjudications_store.InputDigest] = []
-                for member_id in result.candidate.member_ids:
-                    digest = current_digest(member_id)
-                    if digest is None or (
-                        judged_digests is not None
-                        and judged_digests.get(member_id) != digest
-                    ):
-                        break
-                    digests.append(
-                        adjudications_store.InputDigest(
-                            input_ref=member_id, digest=digest
-                        )
-                    )
-                else:
-                    batch.append(
-                        adjudications_store.Adjudication(
-                            member_ids=tuple(result.candidate.member_ids),
-                            verdict=result.verdict.value,
-                            confidence=result.confidence,
-                            rationale=result.rationale,
-                            include_confidential=include_confidential,
-                            input_digests=tuple(digests),
-                            rubric_digest=current_rubric,
-                        )
-                    )
-            if not batch:
-                return
-            try:
-                conn = derived.open_derived_connection(layout.findings_db_path)
-                try:
-                    adjudications_store.record_adjudications(conn, batch)
-                finally:
-                    conn.close()
-                # #1226: a persisted DIFFERENT verdict answers the pair's open
-                # identity row. Under the same lock as the persist, so no
-                # forget can interleave; best-effort, the queue is a cache.
-                for stored in batch:
-                    if stored.verdict == Verdict.DIFFERENT.value:
-                        queue_resolution.resolve_judged_different(
-                            layout.root, member_ids=stored.member_ids
-                        )
-            except (OSError, sqlite3.Error) as exc:
-                # `surface` names the command the user actually ran (#867 review):
-                # curate's Identity stage persists through this helper too.
-                typer.echo(
-                    f"openkos {surface}: warning -- failed to persist adjudication "
-                    f"verdicts ({exc}); the next run will re-judge them.",
-                    err=True,
-                )
-    except lock.WorkspaceBusyError as exc:
+    outcome = identity_adjudication.persist_adjudications(
+        layout,
+        results,
+        include_confidential=include_confidential,
+        judged_digests=judged_digests,
+        commit_section=_commit_section_for(layout.root),
+    )
+    if outcome.store_error is not None:
+        # `surface` names the command the user actually ran (#867 review):
+        # curate's Identity stage persists through this helper too.
+        typer.echo(
+            f"openkos {surface}: warning -- failed to persist adjudication "
+            f"verdicts ({outcome.store_error}); the next run will re-judge them.",
+            err=True,
+        )
+    if outcome.busy is not None:
         typer.echo(
             f"openkos {surface}: warning -- the workspace is busy, so the "
-            f"adjudication verdicts were not persisted ({exc}); the next run "
-            "will re-judge them.",
+            f"adjudication verdicts were not persisted ({outcome.busy}); the next "
+            "run will re-judge them.",
             err=True,
         )
 
