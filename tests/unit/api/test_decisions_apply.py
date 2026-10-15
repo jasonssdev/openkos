@@ -68,6 +68,11 @@ def _pin_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("GIT_CONFIG_VALUE_1", "test@openkos.invalid")
 
 
+@pytest.fixture(autouse=True)
+def no_client(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    support.forbid_model_clients(monkeypatch, "a preview or an apply")
+
+
 @pytest.fixture
 def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A committed workspace holding concepts a, b and c (c links to b)."""

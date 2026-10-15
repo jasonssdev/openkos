@@ -5,14 +5,52 @@ import contextlib
 import json
 from pathlib import Path
 
+import pytest
+
 from openkos import config
+from openkos.api import _wiring
+from openkos.application import backends, queue_producers
 from openkos.application import pending as application_pending
-from openkos.application import queue_producers
 from openkos.state import derived
 from openkos.state import jobs as jobs_store
 from openkos.state import pending_queue as pq
+from tests.unit.cli.commit_phase_support import write_doc
 
 _SQLITE_SIDECARS = ("-wal", "-shm")
+
+
+GROUP_TITLES = ("Acme Corporation", "Globex Industries", "Initech Systems")
+
+
+def write_identity_groups(root: Path) -> None:
+    """Three groups of two same-titled, explicitly private concepts.
+
+    The candidate search finds exactly these three groups, and the judging
+    service may send private (but not unlabelled) concepts to a remote model."""
+    for n, title in enumerate(GROUP_TITLES):
+        for suffix in ("a", "b"):
+            write_doc(
+                root,
+                f"concepts/g{n}-{suffix}",
+                {"type": "Concept", "title": title, "sensitivity": "private"},
+                f"Group {n} member {suffix}.\n",
+            )
+
+
+def forbid_model_clients(monkeypatch: pytest.MonkeyPatch, what: str) -> None:
+    """Fail the test if anything builds a model client of ANY kind.
+
+    The resolver's chat, embed and diagnostics builders are all replaced, and so
+    are the two concrete client classes the API's composition root binds, so a
+    client built around the resolver is caught too."""
+
+    def fail(*args: object, **kwargs: object) -> None:
+        pytest.fail(f"{what} built a model client")
+
+    for name in ("chat_client", "embed_client", "diagnostics_client"):
+        monkeypatch.setattr(backends, name, fail)
+    monkeypatch.setattr(_wiring, "OllamaClient", fail)
+    monkeypatch.setattr(_wiring, "OpenAICompatibleClient", fail)
 
 
 def snapshot(root: Path) -> dict[str, bytes]:

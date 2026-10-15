@@ -18,7 +18,6 @@ from openkos.api import (
     Workspace,
     list_decisions,
 )
-from openkos.application import backends
 from tests.unit.api import support
 from tests.unit.application.curation_support import make_workspace
 from tests.unit.cli.commit_phase_support import write_doc
@@ -35,11 +34,8 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def no_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fail(*args: object, **kwargs: object) -> None:
-        pytest.fail("listing built a model client")
-
-    monkeypatch.setattr(backends, "chat_client", fail)
+def no_client(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    support.forbid_model_clients(monkeypatch, "listing")
 
 
 def test_an_absent_queue_lists_nothing(root: Path) -> None:

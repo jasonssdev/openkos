@@ -504,14 +504,19 @@ class OfflineOpenAICompatible(OpenAICompatibleClient):
         )
 
 
-_BACKEND_BINDING_MODULES = ("openkos.cli.main", "openkos.mcp.server")
+_BACKEND_BINDING_MODULES = (
+    "openkos.cli.main",
+    "openkos.mcp.server",
+    "openkos.api._wiring",
+)
 """Every adapter module that binds its own copy of both concrete client
 classes through its own `_backend_factories()` (issue #1057 Phase 9, design
-Decision 4): `cli/main.py` and `mcp/server.py` each read `OllamaClient`/
-`OpenAICompatibleClient` from their OWN module globals at call time, so a
-seam that patches only one of the two adapters would leave the other
-reaching the network. One tuple, walked by one helper, means a future third
-adapter needs only a new entry here, not a hand-written third patch call."""
+Decision 4): `cli/main.py`, `mcp/server.py` and the Python API's composition
+root `api/_wiring.py` each read `OllamaClient`/`OpenAICompatibleClient` from
+their OWN module globals at call time, so a seam that patches only some of
+them would leave the others reaching the network. One tuple, walked by one
+helper, means a future adapter needs only a new entry here, not a
+hand-written extra patch call."""
 
 
 def _patch_backend_seams(monkeypatch: pytest.MonkeyPatch) -> None:
