@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0060: The stable Python API is a versioned facade package with one error root"
 description: OpenKOS publishes openkos.api, a synchronous in-process facade over application/ with an integer API_VERSION, a committed surface snapshot with a compatibility classifier, API-owned result types, a Workspace handle, and one OpenKosError root that existing refusal families join without losing a base.
-status: Proposed
+status: Accepted
 date: 2026-10-15
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0060: The stable Python API is a versioned facade package with one error root
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
 
 ## Context

@@ -13,4 +13,7 @@ and `application/lint.py` use, and a leaf is the only shape that keeps every
 edge downward. This module exports nothing beyond this docstring, matching
 `retrieval/__init__.py` -- callers import the context module directly
 (e.g. `from openkos.application import query`).
+
+This package stays internal: the declared public Python edge is `openkos.api`,
+and nothing under `openkos.application` is a compatibility promise (ADR-0060).
 """

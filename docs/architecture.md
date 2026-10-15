@@ -36,7 +36,9 @@ openkos/
 │   │   ├── provenance.py  references.py  links.py  relations.py
 │   │   ├── merge.py  ledger.py  decisions.py
 │   │   └── source_titles.py
-│   ├── vcs/git.py                # CANONICAL layer: history, revert, purge's history rewrite
+│   ├── vcs/                      # CANONICAL layer: history, revert, purge's history rewrite
+│   │   ├── git.py
+│   │   └── autocommit.py         # the print-free git auto-commit core the CLI and the Python API share
 │   ├── state/                    # DERIVED layer: SQLite stores under .openkos/ (see State taxonomy)
 │   │   ├── derived.py            # the shared opener + manifest-hash gate
 │   │   ├── fts.py  vectorstore.py  reindex.py
@@ -74,14 +76,20 @@ openkos/
 │   │   ├── queue_producers.py    # advisor findings enqueued as pending work
 │   │   ├── lock_wait.py  commit_phase.py   # the workspace lock held for a commit phase only
 │   │   ├── revisions.py  revisions_report.py   # decision-revision plan and report
+│   │   ├── curate_decisions.py  judging.py   # the review queue's decisions and judging as data
+│   │   ├── queue_refresh.py  identity_stage.py   # the model-free producer pass that makes judged items decidable
 │   │   ├── backends.py           # the one seam that resolves/constructs an LLM client
 │   │   └── consent.py            # confirmation gates staged as typed data
 │   ├── cli/                      # Typer entry layer
 │   │   ├── main.py  curate.py  observability.py
 │   ├── mcp/                      # stdio MCP adapter (read-only), async edge over the sync core
 │   │   ├── transport.py  server.py  tools.py  gate.py
+│   ├── api/                      # the declared public Python API: a versioned, synchronous facade over application/
+│   │   ├── __init__.py           # the public names, API_VERSION
+│   │   └── _workspace.py  _reads.py  _decisions.py  _judging.py  _refresh.py  _wiring.py   # private modules
 │   ├── prompts/                  # LLM system prompts: one file each, <task>/<name>.md (ADR-0043)
 │   ├── config.py                 # openkos.yaml + WorkspaceLayout
+│   ├── errors.py                 # OpenKosError, the one catchable root of the typed refusals the API documents
 │   ├── lint.py  lifecycle.py  sensitivity.py
 │   ├── event_dates.py  source_date.py  # bounded event-date resolver; a Source's event_date from evidence
 │   ├── read_outcome.py           # shared "a read verb's check could not run" vocabulary
@@ -99,9 +107,10 @@ openkos/
 
 The principles that shape it:
 
-- **Each package is a piece of the architecture.** `model` is the Knowledge Object; `bundle` + `vcs` are the durable canonical layer; `state` + `retrieval` + `graph` are the derived layer; `extraction` + `resolution` are the pipeline that turns text into objects and then decides what they mean; `lint`/`lifecycle`/`sensitivity` are the disciplines; `cli` and `mcp` are entry layers, one synchronous over stdin/args, one async over stdio.
+- **Each package is a piece of the architecture.** `model` is the Knowledge Object; `bundle` + `vcs` are the durable canonical layer; `state` + `retrieval` + `graph` are the derived layer; `extraction` + `resolution` are the pipeline that turns text into objects and then decides what they mean; `lint`/`lifecycle`/`sensitivity` are the disciplines; `cli`, `mcp` and `api` are entry layers: the CLI is synchronous over stdin/args, `mcp` is async over stdio, and `api` is the synchronous in-process facade other Python programs import.
 - **The Protocol seams that exist today** are `GraphStore` (`graph/base.py`), `VectorStore` (`state/vectorstore.py`), and `LLMBackend` and `Embedder` (`llm/base.py`). They define the shapes their implementations satisfy (`sqlite_graph.py`, the `sqlite-vec` store, `ollama.py`, `openai_compatible.py`). They are internal seams, not a published plugin API: OpenKOS ships no `Producer`/`Consumer` interface and no entry-point group. That extension surface is a roadmap item, not present code — see [`roadmap.md`](roadmap.md).
 - **One resolver seam constructs every LLM client.** `application/backends.py` resolves the configured `backend` (`ollama`, the default, or `openai-compatible`), the effective endpoint, and the environment-only API key, then constructs the matching concrete client — the CLI and MCP adapters call through it rather than importing `OllamaClient`/`OpenAICompatibleClient` directly. Adding a backend widens this one seam; it does not touch the pipeline packages that call `LLMBackend`/`Embedder`.
+- **One declared public Python surface.** `openkos.api` is the only public Python import path; `application/` and every other package stay internal, and no `application/` module is declared public in place ([ADR-0060](adr/0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md)). The facade is synchronous and in-process, owner-local like the CLI, and applies no sensitivity disclosure gate: an adapter that discloses to anyone else applies the gate itself. Compatibility is promised by an integer `API_VERSION` and a committed snapshot of every public name, not by the package version. Its refusals share one root, `OpenKosError` in `errors.py`, which existing refusal families join without losing a base. It covers the review queue; other verbs reach it as they are needed by a client.
 - **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. The write use cases are `query.py`, `ingest.py`, and `lifecycle.py`; the read verbs (`status`, `list`, `lint`, `doctor`, `get`) have their own read cores, so an adapter is a thin layer over shared code rather than a second implementation; and `consent.py` holds the confirmation contracts as typed data so a non-TTY adapter can answer a gate without re-deriving its prompt. `cli/` keeps parsing, presentation, exit codes, and the shared write mechanics the services call through rather than own.
 - **The derived layer is reconstructible — but not uniformly, and not for free.** The derived SQLite stores under `.openkos/` sit at several different points on that scale. See [State taxonomy](#state-taxonomy) below, which is the one place that distinction is written down.
 
@@ -114,8 +123,8 @@ A few conventions keep the repository clean as it grows:
 - **Specs are the contract, and they live in `openspec/`.** Behavior is agreed before it is built: `openspec/specs/{domain}/spec.md` is the living per-domain contract, and `openspec/changes/{change-name}/` carries a change in flight — proposal, delta specs, design, tasks — until it lands and its deltas merge into the main spec. The directory is tracked and reviewed like any other file, so the contract is readable by contributors rather than private to whoever wrote the code. `openspec/config.yaml` configures that process only; it does not compete with `pyproject.toml`, which remains the single source of config for the toolchain.
 - **Ship types.** Include an empty `src/openkos/py.typed` marker so type information is published to tools and to packages that extend OpenKOS.
 - **Internal seams are `typing.Protocol`.** Structural typing lets an implementation satisfy a seam without importing or subclassing it. Today this is used inside the engine (the graph, vector, LLM, and embedding seams); publishing any of it as a third-party extension point is a roadmap item and would need its own ADR.
-- **The core is synchronous.** The CLI, the application services, the extraction pipeline, and the stores are plain sync code. The `mcp` adapter is the one async edge over that core today: it owns the only event loop reaching into `mcp/`, and each tool call runs the synchronous application services on its own worker thread (ADR-0021, ADR-0027). A future local API would form its async edge the same way; parallel work such as batch embedding also uses a thread pool from sync code. The core itself is not made async — which is why ADR-0018's services are specified as synchronous.
-- **Layering is a followed convention, partially guarded by AST tests.** The canonical layer (`model`, `bundle`, `vcs`) does not depend on the derived layer (`state`, `retrieval`, `graph`); derived depends on canonical, never the reverse. `fsio`, `lock` and `userstate` are leaf modules that import only other leaf modules (`userstate` imports nothing from `openkos`), so either layer may use them. AST import guards pin parts of it: `tests/unit/bundle/test_layering.py`, `tests/unit/resolution/test_layering.py`, `tests/unit/retrieval/test_layering.py`, `tests/unit/mcp/test_layering.py`, and the canonical-layer check in `tests/unit/graph/test_base.py`. The rest is not automated; a tool such as import-linter would guard every boundary in CI and is not wired.
+- **The core is synchronous.** The CLI, the application services, the extraction pipeline, and the stores are plain sync code. The `mcp` adapter is the one async edge over that core today: it owns the only event loop reaching into `mcp/`, and each tool call runs the synchronous application services on its own worker thread (ADR-0021, ADR-0027). A local HTTP API would form its async edge the same way, on top of `openkos.api`; parallel work such as batch embedding also uses a thread pool from sync code. The core itself is not made async — which is why ADR-0018's services are specified as synchronous.
+- **Layering is a followed convention, partially guarded by AST tests.** The canonical layer (`model`, `bundle`, `vcs`) does not depend on the derived layer (`state`, `retrieval`, `graph`); derived depends on canonical, never the reverse. `fsio`, `lock`, `userstate` and `errors` are leaf modules that import only other leaf modules (`userstate` and `errors` import nothing from `openkos`), so either layer may use them. AST import guards pin parts of it: `tests/unit/bundle/test_layering.py`, `tests/unit/resolution/test_layering.py`, `tests/unit/retrieval/test_layering.py`, `tests/unit/mcp/test_layering.py`, `tests/unit/api/test_api_guards.py` (an import allowlist for `api/`, and a bar on any other module importing it), and the canonical-layer check in `tests/unit/graph/test_base.py`. The rest is not automated; a tool such as import-linter would guard every boundary in CI and is not wired.
 - **The OKF adapter is one seam.** Everything that knows the on-disk shape of the format — parsing and emitting frontmatter, the reserved-file structure, the conformance rules of §11 — lives in `model/okf.py` and nowhere else. The rest of the engine works with Knowledge Objects and never touches the format directly. This is deliberate risk containment: OKF is pre-1.0 (v0.2), and §12 permits a major version to rename required fields or change reserved filenames. Keeping the format behind one module makes a spec revision a contained change to one file instead of a search across the codebase, and it is the reason we can adopt a young standard without betting the engine on it.
 
 These conventions describe the code as it stands; they change when a decision changes, and a change worth keeping becomes an ADR.
@@ -216,7 +225,7 @@ Local-first constrains *where the data and compute live* — on the user's machi
 - **Chat / agent (MCP)** — the user "just talks to" OpenKOS from an AI client. For some non-technical users this is the lowest-friction interface of all.
 - **CLI** — for technical users and automation.
 
-The key architectural point: all of these are **thin adapters over the same local engine**. Today `cli` and `mcp` both exist; a local `api` is planned with the desktop app (MVP 6). The application services under `application/` are what let `mcp` be a thin adapter rather than a second implementation of the CLI's read verbs — the same reason a future `api` would extract nothing new. Adding a front-end never touches the core; UIs stack on top of one engine. For non-technical users the likely order is desktop app first, then chat/MCP, then an editor plugin.
+The key architectural point: all of these are **thin adapters over the same local engine**. Today `cli` and `mcp` both exist; the in-process Python `api` exists too, and a local HTTP API is planned with the desktop app (MVP 6). The application services under `application/` are what let `mcp` and `api` be thin adapters rather than second implementations of the CLI's verbs — the same reason a local HTTP API would extract nothing new. Adding a front-end never touches the core; UIs stack on top of one engine. For non-technical users the likely order is desktop app first, then chat/MCP, then an editor plugin.
 
 The one thing outside the local-first spirit is a **cloud-hosted, multi-tenant** service holding users' knowledge. A legitimate middle ground is **self-hosting** — the user runs the local web UI on their *own* server or VPS: still their data and their machine, just remote, rather than someone else's cloud.
 
@@ -226,12 +235,15 @@ Nothing in this section exists yet. It is kept separate from everything above so
 a reader can never mistake a plan for a module, and it is deliberately short —
 dates and scope belong to [`roadmap.md`](roadmap.md), not here.
 
-- **`api/` (MVP 6).** A thin async adapter over the synchronous application
-  services, following the same pattern `mcp/` already ships: an adapter built
-  on Typer command internals would duplicate behaviour and drift.
+- **The local HTTP API (MVP 6).** A thin async adapter over the public
+  `openkos.api` facade, following the same pattern `mcp/` already ships: an
+  adapter built on Typer command internals would duplicate behaviour and
+  drift. It owns what the facade deliberately does not: a loopback-only
+  listener, per-launch authentication, the sensitivity disclosure gate, and a
+  worker thread per operation.
 - **A published extension surface.** `Producer`/`Consumer` interfaces and an
   entry-point group for third-party ingesters and exporters are a Horizon item
-  (the stable Python API they build on is MVP 6). No interface, protocol, or entry point for them exists
+  (they build on the stable Python API, which now covers the review queue only). No interface, protocol, or entry point for them exists
   today, and adopting one would need its own ADR.
 - **Format and store options.** A second vector backend and memory
   projections (Horizon) are named in the roadmap and unbuilt.
