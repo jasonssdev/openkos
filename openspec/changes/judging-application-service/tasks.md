@@ -519,22 +519,22 @@ Independent mutation: in the relation run, drop the `max_calls=chunk_size` argum
 Goal: `volatility` quote and run over `suggest_volatility_service`. It has no
 `CostQuote`, so the judging surface builds the quote from its own partition.
 
-- [ ] S3b.1 RED then GREEN: the volatility quote built by the judging surface from its
+- [x] S3b.1 RED then GREEN: the volatility quote built by the judging surface from its
   own partition (`suggest_volatility_service` has no `CostQuote`), reusing
   `max_calls` and `deferred`; kind-tagged; binds model, backend, locality and the
   confidential flag; servable answers count as `served`. Satisfies: J17, J2, J3.
-- [ ] S3b.2 RED then GREEN: `run_judging` for `volatility` with
+- [x] S3b.2 RED then GREEN: `run_judging` for `volatility` with
   `VOLATILITY_CHUNK_SIZE` (fixed in S3a.1), ceiling, `not_in_quote`, `QuoteStale`,
   progress and typed outcome. Satisfies: J17, J7, J8, J11, J13.
-- [ ] S3b.3 RED then GREEN: "A volatility run stops at a chunk boundary": a stop in the
+- [x] S3b.3 RED then GREEN: "A volatility run stops at a chunk boundary": a stop in the
   first chunk persists it and defers the remaining items. Satisfies: J17, J10.
-- [ ] S3b.4 Update the module docstring's latency statement with the measured per-kind
+- [x] S3b.4 Update the module docstring's latency statement with the measured per-kind
   worst cases from S3a.1, and widen `_EXPECTED_SERVICE_TASKS` for the volatility task
   (sets). Files: `src/openkos/application/judging.py`,
   `tests/unit/cli/test_chat_timeout_wiring.py`. Satisfies: J10, J1.
-- [ ] S3b.5 Confirm `suggest-volatility` goldens and tests are unchanged and GREEN;
+- [x] S3b.5 Confirm `suggest-volatility` goldens and tests are unchanged and GREEN;
   mutate one patched line, confirm a test reddens. Satisfies: J18.
-- [ ] S3b.6 Run the five gates. Satisfies: J18.
+- [x] S3b.6 Run the five gates. Satisfies: J18.
 
 Gates: the five gates above.
 Forecast: ~250 authored lines.

@@ -4,9 +4,11 @@ S2b and S2c; ADR-0059).
 Judging is the model-backed step that turns an unjudged item into one a human
 can decide. The surface is a quote, consent, run protocol: a caller asks for an
 LLM-free `JudgingQuote`, the human consents to it by handing back its
-`QuoteToken`, and `run_judging` judges at most what was quoted. Identity and
-relation type are the kinds covered so far; relation type runs the existing
-`suggest_relations_service` once per chunk (see `_run_relations`).
+`QuoteToken`, and `run_judging` judges at most what was quoted. Identity,
+relation type and volatility are the kinds it covers; relation type and
+volatility run the existing `suggest_relations_service` and
+`suggest_volatility_service` once per chunk (see `_run_relations` and
+`_run_volatility`).
 
 The surface is plain data. It never prompts, prints, reads a terminal or raises
 `typer.Exit`; everything a client renders reaches it as returned data or as
@@ -31,9 +33,14 @@ Stopping. A `StopToken` is observed between chunks and nothing preempts a
 model call (ADR-0021), so a stop takes effect no later than the end of the chunk
 in flight: the worst-case latency is that chunk's model calls times the
 configured per-call `chat_timeout` (600 s by default) -- one call for an
-identity chunk of one group, `RELATION_CHUNK_SIZE` calls for a relation chunk --
-plus one persist, whose wait is bounded by the
-commit section the caller supplies. A stopped run reports what it did not reach
+identity chunk of one group, `RELATION_CHUNK_SIZE` calls (4) for a relation chunk,
+`VOLATILITY_CHUNK_SIZE` calls (1) for a volatility chunk of one concept type --
+so at the default `chat_timeout` of 600 s the bound is 600 s for identity and
+volatility and 2400 s for relation type -- plus one persist, whose wait is
+bounded by the commit section the caller supplies. Each volatility chunk
+re-invokes the service, whose LLM-free concept-type sample was measured at 3 ms
+(8 concepts) to 109 ms (800 concepts) per invocation, so one type per chunk
+costs a stop no more than that on top of the one call. A stopped run reports what it did not reach
 as `deferred`; what was persisted stays.
 
 A busy workspace is retried (`PERSIST_ATTEMPTS`, `PERSIST_BACKOFF_SECONDS`;
@@ -954,7 +961,7 @@ makes it about a minute and a half. The measurement script is not part of the
 repository; the numbers above are its output."""
 
 VOLATILITY_CHUNK_SIZE: Final = 1
-"""Concept types sampled per chunk for `volatility` (consumed by S3b). The
+"""Concept types asked per chunk for `volatility`. The
 volatility service has no graph walk, only a concept-type sample over the bundle:
 measured with an instantly answering stub, one invocation costs 3.3 ms on the
 good-life-demo, 7.0 ms at 50 concepts, 27 ms at 200 and 109 ms at 800, and an
