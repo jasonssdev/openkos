@@ -88,6 +88,9 @@ class ProducerResult:
     suppressed: int
     retired: int
     complete: bool
+    amended: int = 0
+    """Open rows whose payload changed over unchanged inputs (a judge's verdict
+    carried in or out) and were updated in place: neither new nor stale."""
 
 
 def _canonical(value: object) -> str:
@@ -107,6 +110,7 @@ def publish(
     commit_section: CommitSection,
     bundle_dir: Path,
     clock: Callable[[], datetime] | None = None,
+    amend_same_inputs: bool = False,
 ) -> ProducerResult:
     """Upsert every proposal, then retire the kind's unseen rows when the run
     was `complete`. The one place the three queue properties are applied, so no
@@ -120,6 +124,7 @@ def publish(
                 proposal,
                 commit_section=commit_section,
                 bundle_dir=bundle_dir,
+                amend_same_inputs=amend_same_inputs,
                 **clock_kwargs,
             )
         ] += 1
@@ -140,6 +145,7 @@ def publish(
         suppressed=counts[pq.UpsertOutcome.SUPPRESSED],
         retired=retired,
         complete=complete,
+        amended=counts[pq.UpsertOutcome.AMENDED],
     )
 
 
@@ -333,6 +339,9 @@ def enqueue_identity(
         commit_section=commit_section,
         bundle_dir=bundle_dir,
         clock=clock,
+        # A verdict carried in or out changes the payload, not the inputs it was
+        # computed from: the row is amended, so a pass never inflates `stale`.
+        amend_same_inputs=True,
     )
 
 
