@@ -46,6 +46,7 @@ as a returned `failure`.
 """
 
 import contextlib
+import dataclasses
 import hashlib
 import sqlite3
 import time
@@ -966,6 +967,7 @@ as identity: one `chat_timeout` (600 s by default) plus one persist."""
 _CHUNK_SIZES: Final = {
     "identity": IDENTITY_CHUNK_SIZE,
     "relation_type": RELATION_CHUNK_SIZE,
+    "volatility": VOLATILITY_CHUNK_SIZE,
 }
 """The default chunk size per runnable kind."""
 
@@ -1123,9 +1125,9 @@ def run_judging(
     in quote order; each chunk is judged with no lock held and persisted in its
     own commit section before the next begins. `stop` is observed between
     chunks. `chunk_size` defaults per kind (`IDENTITY_CHUNK_SIZE`,
-    `RELATION_CHUNK_SIZE`). Raises `JudgingRefused` when `root` is not a readable
-    workspace and `ValueError` for a `chunk_size` below one or a kind this stage
-    does not run yet."""
+    `RELATION_CHUNK_SIZE`, `VOLATILITY_CHUNK_SIZE`). Raises `JudgingRefused` when `root` is not a readable
+    workspace and `ValueError` for a `chunk_size` below one or a kind this surface
+    does not run."""
     if token is None:
         return RunRefused("no_quote_token")
     kind = token.binding.kind
@@ -1149,6 +1151,18 @@ def run_judging(
     if kind == "relation_type":
         return _run_relations(
             root, layout, token, context, size=size, stop=stop, ports=ports, guard=guard
+        )
+    if kind == "volatility":
+        return _run_volatility(
+            root,
+            layout,
+            cfg,
+            token,
+            context,
+            size=size,
+            stop=stop,
+            ports=ports,
+            guard=guard,
         )
     return _run_identity(
         layout, token, context, size=size, stop=stop, ports=ports, guard=guard
@@ -1499,6 +1513,242 @@ def _run_relations(
         unpersisted_cause=cause,
         dropped=dropped,
         deferred=len(judge) - reached - vanished,
+        not_in_quote=not_in_quote,
+        settled_since_quote=settled + vanished,
+        failure=failure,
+        failed_at=failed_at,
+        observer_failed=guard.failed,
+    )
+
+
+class _VolatilityChunk:
+    """The typing port one volatility invocation is given. It narrows the
+    service's own leaf to the types of the chunk (`only_types`), so the service
+    never asks a type the quote did not cover, and it keeps the persist of the
+    service honest: the digest of every concept a prompt carried is pinned
+    before the call and re-read after it, and an answer about a concept edited,
+    raised or forgotten in between is removed from what the service persists
+    (the leaf keys a stored answer on the exact prompt, so such a row would
+    never be served and would only keep a forgotten concept's text)."""
+
+    def __init__(
+        self,
+        layout: config.WorkspaceLayout,
+        ports: JudgingPorts,
+        chunk: Sequence[WorkItem],
+    ) -> None:
+        self._layout = layout
+        self._ports = ports
+        self.types = {item.work_key for item in chunk}
+        refs = {ref for item in chunk for ref, _digest in item.member_digests}
+        current = application_pending.current_finding_digest(layout.bundle_dir)
+        self._pinned = {ref: current(ref) for ref in refs}
+        self.stale: set[str] = set()
+        self.computed: dict[str, volatility_typing.ComputedTier] = {}
+        """Every type the model was asked, before the stale ones were withheld."""
+
+    def suggest_volatility(
+        self, bundle_dir: Path, **kwargs: object
+    ) -> volatility_typing.TierSuggestionBatch:
+        batch = self._ports.suggest_volatility(
+            bundle_dir, only_types=self.types, **kwargs
+        )
+        self.computed = dict(batch.computed)
+        current = application_pending.current_finding_digest(self._layout.bundle_dir)
+        kept: dict[str, volatility_typing.ComputedTier] = {}
+        for type_name, computed in batch.computed.items():
+            if any(
+                self._pinned.get(ref) != current(ref) for ref in computed.input_refs
+            ):
+                self.stale.add(type_name)
+            else:
+                kept[type_name] = computed
+        return dataclasses.replace(batch, computed=kept)
+
+
+class _VolatilityObserver:
+    """The volatility service's observer, reduced to forwarding each typed
+    type to `on_progress`."""
+
+    def __init__(
+        self,
+        *,
+        on_progress: Callable[[int, int, volatility_typing.TierSuggestion], None],
+    ) -> None:
+        self._on_progress = on_progress
+
+    def walk_incomplete(
+        self, bundle_dir: Path, *, include_confidential: bool, local_exemption: bool
+    ) -> None:
+        return None
+
+    def progress_callback(
+        self,
+    ) -> Callable[[int, int, volatility_typing.TierSuggestion], None]:
+        return self._on_progress
+
+
+def _volatility_progress_hook(
+    guard: _ObserverGuard, *, before: int, total: int
+) -> Callable[[int, int, volatility_typing.TierSuggestion], None]:
+    """The service's per-type progress rebased to the run: the index continues
+    from `before` and the total is the run's, not the invocation's. Verdict
+    only, never the rationale; a type the model could not tier reports
+    `degraded`."""
+
+    def on_progress(
+        index: int, count: int, suggestion: volatility_typing.TierSuggestion
+    ) -> None:
+        guard.progress(
+            JudgingProgress(
+                index=before + index,
+                total=total,
+                work_key=suggestion.type_name,
+                verdict=suggestion.suggested_tier or "degraded",
+            )
+        )
+
+    return on_progress
+
+
+def _classify_volatility_chunk(
+    layout: config.WorkspaceLayout,
+    cfg: config.Config,
+    model: str,
+    fresh: Sequence[volatility_typing.TierSuggestion],
+    computed: Mapping[str, volatility_typing.ComputedTier],
+    *,
+    stale: set[str],
+) -> _ChunkStored:
+    """Read the outcome of the service's own persist off the store, not off its
+    advisory log line. An answer with no tier is a failure rather than an answer
+    and is never stored; one about a concept that changed during the call was
+    withheld from the persist (`_VolatilityChunk`); the rest are stored if and
+    only if the store now serves the exact question they answered."""
+    served = volatility.cached_answers(layout, model, cfg.type_tiers)
+    persisted = dropped = unpersisted = 0
+    for suggestion in fresh:
+        if suggestion.suggested_tier is None or suggestion.type_name in stale:
+            dropped += 1
+        elif served(suggestion.type_name, computed[suggestion.type_name].prompt_digest):
+            persisted += 1
+        else:
+            unpersisted += 1
+    return _ChunkStored(persisted, dropped, unpersisted)
+
+
+def _run_volatility(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    cfg: config.Config,
+    token: QuoteToken,
+    context: _Context,
+    *,
+    size: int,
+    stop: StopToken,
+    ports: JudgingPorts,
+    guard: _ObserverGuard,
+) -> JudgingOutcome:
+    """The volatility run: the volatility service, re-invoked once per chunk.
+
+    Each invocation is bound to `size` model calls and is narrowed to the types
+    of its chunk, so what the service asks, caches and persists is its own; this
+    run adds the ceiling, the stop between chunks, the retry of a busy workspace
+    and the typed outcome around it. The service re-walks the bundle on every
+    invocation (measured, see `VOLATILITY_CHUNK_SIZE`)."""
+    plan = _volatility_plan(
+        layout,
+        cfg,
+        context,
+        include_confidential=token.include_confidential,
+        ports=ports,
+    )
+    digest_of = application_pending.current_finding_digest(layout.bundle_dir)
+    now_items = [_volatility_item(p, digest_of) for p in plan if not p.answered]
+    now_set = set(now_items)
+    quoted = set(token.work)
+    judge = [item for item in token.work if item in now_set]
+    not_in_quote = tuple(item.work_key for item in now_items if item not in quoted)
+    settled = sum(1 for item in token.work if item not in now_set)
+
+    counted = _CeilingClient(context.client, token.calls)
+    section = _RetryingSection(ports)
+    judged = persisted = dropped = unpersisted = vanished = 0
+    failure: BackendError | None = None
+    failed_at: int | None = None
+    cause: Literal["workspace_busy", "store_error"] | None = None
+    status: Literal["completed", "stopped", "failed", "unpersisted"] = "completed"
+    for start in range(0, len(judge), size):
+        if stop.is_set():
+            status = "stopped"
+            break
+        chunk_items = judge[start : start + size]
+        chunk = _VolatilityChunk(layout, ports, chunk_items)
+        outcome = volatility.suggest_volatility_tiers(
+            root,
+            volatility.VolatilityRequest(
+                include_confidential=token.include_confidential,
+                max_calls=size,
+                use_cache=True,
+            ),
+            volatility.VolatilityPorts(
+                chat_client=lambda cfg_, task: cast(LLMBackend, counted),
+                resolve_local_exemption=lambda client, cfg_: context.local_exemption,
+                suggest_volatility=chunk.suggest_volatility,
+                commit_section=section,
+            ),
+            _VolatilityObserver(
+                on_progress=_volatility_progress_hook(
+                    guard, before=judged, total=len(judge)
+                )
+            ),
+        )
+        batch = outcome.batch
+        before = judged + vanished
+        fresh = [r for r in batch.results if r.type_name in chunk.computed]
+        # A hit the store served by now was answered elsewhere, and a type that
+        # stopped being a question is gone: both are settled, not left undone.
+        if batch.failure is None:
+            vanished += len(chunk_items) - len(fresh)
+        else:
+            vanished += len(batch.results) - len(fresh)
+        judged += len(fresh)
+        failure = batch.failure
+        if failure is not None:
+            failed_at = before + (batch.failed_index or 1)
+        kept = _classify_volatility_chunk(
+            layout,
+            cfg,
+            context.binding.model,
+            fresh,
+            chunk.computed,
+            stale=chunk.stale,
+        )
+        dropped += kept.dropped
+        if kept.unpersisted:
+            cause = "workspace_busy" if section.busy else "store_error"
+            unpersisted = kept.unpersisted
+            status = "unpersisted"
+            break
+        persisted += kept.persisted
+        if fresh:
+            guard.chunk_persisted(persisted)
+        if failure is not None:
+            if isinstance(failure, BackendUnavailable | BackendModelNotFound):
+                raise failure
+            status = "failed"
+            break
+    reached = judged + vanished if failed_at is None else failed_at
+    return JudgingOutcome(
+        kind="volatility",
+        status=status,
+        judged=judged,
+        calls=counted.calls,
+        persisted=persisted,
+        unpersisted=unpersisted,
+        unpersisted_cause=cause,
+        dropped=dropped,
+        deferred=len(judge) - reached,
         not_in_quote=not_in_quote,
         settled_since_quote=settled + vanished,
         failure=failure,
