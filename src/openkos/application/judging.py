@@ -578,6 +578,46 @@ between chunks, so a larger chunk would multiply the worst-case stop latency
 without saving anything a call costs."""
 
 
+RELATION_CHUNK_SIZE: Final = 4
+"""Edges typed per chunk for `relation_type`: each chunk re-invokes the existing
+relations service, so each one repeats its LLM-free walk (graph build, candidate
+edges, the persisted-suggestion read and an endpoint hash per filtered edge) and
+then persists. Measured (S3a.1, macOS, stub chat that answers instantly, so only
+the walk and the persist are timed):
+
+    bundle (concepts / candidate edges)   walk only   one chunk, 8 filtered edges
+    good-life-demo (8 / 14)                  3.5 ms        6.9 ms
+    synthetic (50 / 150)                     8.0 ms        9.8 ms
+    synthetic (200 / 600)                   30.0 ms       32.3 ms
+    synthetic (800 / 2400)                 121.8 ms      126.4 ms
+    synthetic (800 / 2400, store holds
+      2400 rows, `fresh=False`)                           279.3 ms
+
+The walk grows about linearly with the bundle (about 0.15 ms per concept, and
+about 0.35 ms per concept once the store is read and hashed), so per-chunk
+invocation is workable: against even a 5 s model call, four edges per chunk keep
+the largest measured overhead at about 1.4 % of the chunk's model time, where
+one edge per chunk would be 5.6 % and eight would still be under 1 % but double
+the stop latency. The size is therefore set by latency, not overhead: the
+smallest size that keeps the overhead under 5 % of a 5 s call at 800 concepts
+is two, and four leaves a margin for a bundle about four times larger. Worst-case
+stop latency is `RELATION_CHUNK_SIZE` model calls times the per-call
+`chat_timeout` (4 x 600 s by default) plus one persist; a typical local call
+makes it about a minute and a half. The measurement script is not part of the
+repository; the numbers above are its output."""
+
+VOLATILITY_CHUNK_SIZE: Final = 1
+"""Concept types sampled per chunk for `volatility` (consumed by S3b). The
+volatility service has no graph walk, only a concept-type sample over the bundle:
+measured with an instantly answering stub, one invocation costs 3.3 ms on the
+good-life-demo, 7.0 ms at 50 concepts, 27 ms at 200 and 109 ms at 800, and an
+invocation that makes no call costs the same, so the overhead is the walk and not
+the call. A workspace has a few dozen concept types at most, so one type per
+chunk is at most a few dozen invocations (about 3 s of walk at 800 concepts)
+against a model call of seconds, and it gives the same worst-case stop latency
+as identity: one `chat_timeout` (600 s by default) plus one persist."""
+
+
 PERSIST_BACKOFF_SECONDS: Final = (1.0, 2.0)
 PERSIST_ATTEMPTS: Final = len(PERSIST_BACKOFF_SECONDS) + 1
 """How long the run sleeps between attempts to persist a chunk into a busy
