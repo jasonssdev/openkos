@@ -394,65 +394,65 @@ cancellation, progress, bounded persist retry and the typed outcome, plus the
 equivalence test. Over the heuristic by design: the run, its retry and its
 equivalence are one behavior.
 
-- [ ] S2c.1 Measure before fixing `PERSIST_ATTEMPTS` (3) and the backoff (1.0 s, 2.0
+- [x] S2c.1 Measure before fixing `PERSIST_ATTEMPTS` (3) and the backoff (1.0 s, 2.0
   s): time `lock_wait.locked_commit_section` under contention (a held lock released
   after a known delay) and record the observed wait distribution in the PR body and
   the constant's comment. The constants stay UNMEASURED placeholders until this is
   recorded. Files: none beyond the constant's comment. Satisfies: J12.
-- [ ] S2c.2 RED then GREEN: `run_judging(token=None)` returns
+- [x] S2c.2 RED then GREEN: `run_judging(token=None)` returns
   `RunRefused("no_quote_token")` before the config is read, with no client built and
   no write. Satisfies: J6.
-- [ ] S2c.3 RED then GREEN: a changed model, backend, locality, rubric or confidential
+- [x] S2c.3 RED then GREEN: a changed model, backend, locality, rubric or confidential
   flag returns `QuoteStale` naming each changed field, with no chat call and no
   write; a work-set change alone is not stale; an old token over unchanged state is
   not stale. Satisfies: J8, J3.
-- [ ] S2c.4 RED then GREEN: the binding ceiling. Re-partition LLM-free into `judge`,
+- [x] S2c.4 RED then GREEN: the binding ceiling. Re-partition LLM-free into `judge`,
   `not_in_quote`, `settled_since_quote` by `(work_key, member_digests)`; judge only
   `needed ∩ token.work` in quote order; a counting client wrapper asserts calls
   never exceed `token.calls` (an excess is an internal `AssertionError`); an edited
   member lands in `not_in_quote` and `settled_since_quote`; a group served elsewhere,
   vanished or kept-distinct is settled and not judged; a default token never judges
   uncertain items; the `not_in_quote` outcome names the work keys. Satisfies: J7, J4.
-- [ ] S2c.5 RED then GREEN: the chunk loop (`IDENTITY_CHUNK_SIZE = 1`, `chunk_size`
+- [x] S2c.5 RED then GREEN: the chunk loop (`IDENTITY_CHUNK_SIZE = 1`, `chunk_size`
   override validated `>= 1`): check stop, pin member digests,
   `adjudicate_candidates([group])`, persist one chunk inside `ports.commit_section()`.
   Tests: a chunk persists before the next chunk's call (section fake records order);
   a stop signalled from inside the fake chat call lets the in-flight chunk persist and
   defers the rest; a stop before the first chunk makes no call and defers everything;
   a re-quote after a stop shows the persisted chunks as `served`. Satisfies: J9, J10, J14.
-- [ ] S2c.6 RED then GREEN: wire `persist_adjudications(..., write_through=True)` so
+- [x] S2c.6 RED then GREEN: wire `persist_adjudications(..., write_through=True)` so
   the section writes the store, resolves DIFFERENT rows as `declined` (no decision
   sidecar), then calls `curate_queue.set_identity_verdicts` in the same section. Tests:
   a verdict about content edited during the call is dropped; an unreadable-member
   result is not persisted; a SAME verdict is never merged and both concepts stay
   unchanged. Files: `src/openkos/application/identity_adjudication.py`,
   `src/openkos/application/judging.py`. Satisfies: J9, J16, D1.
-- [ ] S2c.7 RED then GREEN: progress. The leaf's `on_progress(index, total, result)`
+- [x] S2c.7 RED then GREEN: progress. The leaf's `on_progress(index, total, result)`
   is wrapped; indices are rebased to the run and `total = len(judge)`; the observer
   receives `progress(JudgingProgress)` (verdict only, never the rationale) and
   `chunk_persisted(n)`. Test: events run 1..3 with `total` 3. Satisfies: J11, J19.
-- [ ] S2c.8 RED then GREEN: observer guard. Every observer call goes through one guard
+- [x] S2c.8 RED then GREEN: observer guard. Every observer call goes through one guard
   catching `Exception` (`# noqa: BLE001 -- an observer is the client's callback; its
   failure must not cost paid work`), sets `observer_failed` and stops calling the
   observer. Test: an observer raising on the second event leaves every earlier chunk
   stored and the chunk in flight persisted. Satisfies: J11.
-- [ ] S2c.9 RED then GREEN: persist retry and the `unpersisted` outcome. Enter the
+- [x] S2c.9 RED then GREEN: persist retry and the `unpersisted` outcome. Enter the
   section up to `PERSIST_ATTEMPTS` times on `WorkspaceBusyError`, `ports.sleep(1.0)`
   then `ports.sleep(2.0)` between attempts, no lock held between attempts. A transient
   busy is absorbed; a persistent busy ends with `status="unpersisted"`,
   `unpersisted` count, `unpersisted_cause`, the rest `deferred`; a store error is the
   `store_error` cause. Satisfies: J12, J1.
-- [ ] S2c.10 RED then GREEN: typed backend failures. A non-availability `BackendError`
+- [x] S2c.10 RED then GREEN: typed backend failures. A non-availability `BackendError`
   persists the prefix, ends with `status="failed"`, `failure` set and `failed_at` as
   the 1-based run index (not the chunk index); `BackendUnavailable` and
   `BackendModelNotFound` are re-raised unchanged after the prefix persists and after
   `chunk_persisted` was delivered (see Conflicts, item 2). Satisfies: J13.
-- [ ] S2c.11 RED then GREEN: lock and daemon guarantees. A section fake records entry
+- [x] S2c.11 RED then GREEN: lock and daemon guarantees. A section fake records entry
   and exit around the fake chat and asserts no section is open during a chat call; a
   workspace whose `jobs.db` shows an in-progress job still runs; a run takes no lease
   and does not count against `max_calls_per_day`; a run and a daemon pass both
   persisting one group leave a servable verdict and one open row. Satisfies: J14, J15.
-- [ ] S2c.12 Equivalence test `tests/unit/application/test_judging_equivalence.py`
+- [x] S2c.12 Equivalence test `tests/unit/application/test_judging_equivalence.py`
   per the design: four two-member groups (`g1` SAME, `g2` DIFFERENT, `g3` UNCERTAIN
   each with an open `pending_evaluation` row; `g4` with a servable stored verdict and
   no row), judge stub keyed by member ids, `--auto-merge` off, the walk answers `s`.
@@ -461,7 +461,7 @@ equivalence are one behavior.
   (curate leaves `g1`/`g3` null and inserts `g4`'s verdict row; the service amends
   `g1`/`g3` and writes no `g4` row), then one daemon identity pass on each copy and
   the queue verdicts are equal. Satisfies: J9, J16, P1.
-- [ ] S2c.13 Document the worst-case stop latency in the `judging.py` module
+- [x] S2c.13 Document the worst-case stop latency in the `judging.py` module
   docstring (one in-flight chat call plus one persist, bounded by `cfg.chat_timeout`
   plus the persist's bounded wait; nothing preempts a call). Mutate one patched line,
   confirm a test reddens, run the five gates. Satisfies: J10, J18.

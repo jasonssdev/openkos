@@ -315,3 +315,159 @@ unreadable digest `""` to `"x"`.
 - A default client in the tests is non-local: a local client turns the exemption on and the
   effective confidential bit with it, so stored `include_confidential=False` verdicts would
   not serve.
+
+## S2c: Identity run, retry, outcome, equivalence (complete, 13/13)
+
+Branch `feat/judging-s2c`, stacked-to-main on S0a through S2b (all merged). No golden or
+fixture edited; the S0a goldens pass unchanged. Strict TDD, test first for every
+behavior below except the rows marked otherwise.
+
+### API added (`application/judging.py`)
+
+- `run_judging(root, token: QuoteToken | None, *, stop: StopToken, ports: JudgingPorts,
+  observer: JudgingObserver | None = None, chunk_size: int | None = None) ->
+  JudgingOutcome | QuoteStale | RunRefused`
+- `JudgingOutcome(kind, status, judged, calls, persisted, unpersisted, unpersisted_cause,
+  dropped, deferred, not_in_quote, settled_since_quote, failure=None, failed_at=None,
+  observer_failed=False)`; `RunRefused(reason: Literal["no_quote_token"])`
+- `IDENTITY_CHUNK_SIZE = 1`, `PERSIST_BACKOFF_SECONDS = (1.0, 2.0)`,
+  `PERSIST_ATTEMPTS = len(PERSIST_BACKOFF_SECONDS) + 1` (3), both UNMEASURED (below)
+- private: `_context`, `_partition_identity`, `_open_workspace` (the quote now uses them too),
+  `_CeilingClient`, `_ObserverGuard`, `_persist_chunk`
+- `identity_adjudication.persist_adjudications(..., write_through=True)` now writes each
+  persisted SAME or UNCERTAIN verdict through `curate_queue.set_identity_verdicts` inside the
+  one section (amend-only; the amendment is handed `contextlib.nullcontext` because the lock
+  is not re-entrant).
+
+### Tasks
+
+- [x] S2c.1 Measured, constants kept UNMEASURED (below).
+- [x] S2c.2 `RunRefused("no_quote_token")` before the config is read or a client built.
+- [x] S2c.3 `QuoteStale` per field; moved work set and an old token are not stale.
+- [x] S2c.4 Binding ceiling: `judge` / `not_in_quote` / `settled_since_quote` by
+  `(work_key, member_digests)`; `_CeilingClient` refuses the call past `token.calls`.
+- [x] S2c.5 Chunk loop, stop between chunks, `chunk_size` override (`>= 1`).
+- [x] S2c.6 Write-through wired in `persist_adjudications` (the S1 `NotImplementedError` is gone).
+- [x] S2c.7 Progress: run-wide index, `total = len(judge)`, verdict only.
+- [x] S2c.8 Observer guard (`# noqa: BLE001`), `observer_failed`.
+- [x] S2c.9 Bounded retry, `unpersisted` with `workspace_busy` / `store_error`.
+- [x] S2c.10 Typed backend failures; `BackendUnavailable` / `BackendModelNotFound` re-raised.
+- [x] S2c.11 Lock, daemon and silence guarantees.
+- [x] S2c.12 `tests/unit/application/test_judging_equivalence.py`.
+- [x] S2c.13 Module docstring states the stop latency; patched-line mutation; gates.
+
+### TDD Cycle Evidence (RED observed before GREEN)
+
+| Behavior (tasks) | Test(s) | Observed RED | GREEN |
+|---|---|---|---|
+| Write-through in persist (S2c.6) | 7 `test_write_through_*` in `test_identity_adjudication.py` | 7 failed: `NotImplementedError: write-through persistence arrives with the run` | 50 passed |
+| Refusal and staleness (S2c.2, S2c.3) | `test_a_run_without_a_token_is_refused...`, `test_a_moved_binding_field_is_stale...[5 fields]`, `..._moved_onto_this_machine...`, `..._moved_work_set_alone...`, `..._old_token...`, `..._not_a_workspace_is_refused_by_a_run` | 10 failed: `AttributeError: module 'openkos.application.judging' has no attribute 'run_judging'` | with the next row |
+| Ceiling, chunks, stop, queue effect, dropped (S2c.4, S2c.5, S2c.6) | the "binding ceiling", "chunks, persistence and cancellation" and "what a persisted verdict does to the queue" groups in `test_judging.py` | 28 failed in all (the 10 above plus 18), every one the same `AttributeError ... run_judging` | 85 passed. One test helper was wrong (`PendingItem` has no `key`; it keys on `targets`); fixed in the test, not a RED |
+| Progress and observer guard (S2c.7, S2c.8) | `test_progress_*`, `test_an_observer_that_raises_loses_no_paid_work[1,2]` | 4 failed: `assert [] == [(1, 3), (2, 3), (3, 3)]`, `assert [] == [(1, 5), ...]`, `assert False is True` (`observer_failed`) | 90 passed. A ghost loop was found in the rationale test (`all()` over an empty list) and `assert len(...) == 5` added before it |
+| Retry and `unpersisted` (S2c.9) | 4 tests in "a busy workspace" | 4 failed: `assert 'completed' == 'unpersisted'` (x2), `assert ('completed', 4, 0) == ('completed', 5, 0)`, `['chat', 'chat', ...] == ['chat', 'sleep', ...]` | 94 passed. mypy then asked for two restructurings (closure name shadowing a local, a possibly-undefined `result`), behavior unchanged |
+| Backend errors (S2c.10) | 5 tests in "backend errors" | 6 failed: `Failed: DID NOT RAISE BackendUnavailable` (x2), `DID NOT RAISE BackendModelNotFound`, `assert 'completed' == 'failed'`, `assert None == 4`, `assert None is BackendGenerationCapped(...)` | 98 passed, 2 failed `[1, 2, 2] == [1, 2]` (a chunk that produced nothing still emitted `chunk_persisted`); fixed with `if batch.results:` -> 100 passed |
+| Lock free during a call, engine active, silence (S2c.11) | 4 tests in "locks, the daemon and silence" | **Not observed RED**: written after the code that satisfies them. Mutation instead: the chat call wrapped in `with ports.commit_section():` fails `test_the_workspace_lock_is_free_during_every_model_call` and `test_no_section_is_ever_open_while_a_chat_call_runs` (2 failed); a `print` to stderr in the run fails `test_a_run_writes_nothing_to_a_stream` (AssertionError); a row inserted into `jobs.db` fails `test_an_active_engine_does_not_block_a_run_and_its_records_are_untouched` (AssertionError) | 104 passed |
+| Equivalence (S2c.12) | 2 tests in `test_judging_equivalence.py` | **Not observed RED**: an integration pin over code already written, green first run. Mutation instead (below) | 2 passed |
+
+### Mutations (applied, run, restored from a byte copy, `__pycache__` purged)
+
+`test_judging.py` (first failure shown; `git status` clean afterwards):
+
+| Mutation | Result |
+|---|---|
+| chat call wrapped in the commit section | `test_each_chunk_persists_before_the_next_chunk_is_judged` (and the two lock tests) fail |
+| ceiling `>=` -> `>` | `test_a_call_past_the_ceiling_is_refused_before_it_is_made` fails |
+| stop check -> `if False` | `test_a_stop_from_inside_a_call_lets_that_chunk_persist_and_defers_the_rest` fails |
+| judge set iterates the current needed set instead of `token.work` | `test_new_work_is_not_judged_and_is_named` fails |
+| `failed_at` chunk-relative | `test_a_failed_item_ends_the_run_with_its_prefix_kept` fails |
+| backoff sleep removed | `test_a_transient_busy_workspace_is_absorbed_and_the_run_continues` fails |
+| `write_through=False` | `test_a_run_amends_open_rows_declines_different_and_never_merges` fails |
+| `not_in_quote` by work key only | `test_a_member_edited_since_the_quote_is_no_longer_the_quoted_item` fails |
+| observer not silenced after its failure | `test_an_observer_that_raises_loses_no_paid_work[1]` fails |
+| `None` token no longer refused | `test_a_run_without_a_token_is_refused_before_anything_is_built` fails |
+| stale check -> `if False` | `test_a_moved_binding_field_is_stale...[model]` fails |
+| only `BackendUnavailable` re-raised | `test_an_availability_error_propagates_after_the_prefix_is_persisted[error1]` fails |
+| `chunk_persisted(result.persisted)` (not cumulative) | `test_progress_events_carry_the_run_index_and_total` fails |
+| `deferred` ignores `failed_at` | `test_a_failed_item_ends_the_run_with_its_prefix_kept` fails |
+
+`test_judging_equivalence.py`:
+
+| Mutation | Result |
+|---|---|
+| service `write_through=False` | both tests fail |
+| daemon `adjudicated=()` | both tests fail |
+| DIFFERENT never resolved (`if False`) | the convergence test fails |
+| service persists `include_confidential=False` | both tests fail |
+
+Patched-line mutation (S2c.13): `cli/main.py` `_persist_adjudications` delegator
+`include_confidential=include_confidential` -> `not include_confidential`: 3 failed
+(`test_identity_model_disclosure_names_a_keyed_stage_model`,
+`test_declining_the_gate_with_real_probes_spends_nothing` and a delegator test); restored from
+a byte copy, 21 passed.
+
+### S2c.1 measurement (not a tuning)
+
+Script run over a temp workspace on macOS (60 persists of one chunk with write-through, real
+`lock.workspace_lock`, `locked_commit_section`):
+
+- persist lock hold: median 1.0 ms, p95 1.2 ms, max 4.3 ms (n=60);
+- a contender waiting on a held lock acquired it 0.05 s to 0.09 s after the release
+  (holders of 0.05, 0.25, 1.0 s; `acquire_with_backoff`'s own jittered backoff);
+- `wait_seconds=0` against a held lock refuses in 0.4 ms.
+
+That bounds this surface's own contribution to contention. It does not measure the thing the
+retry is for: how long the daemon's or an ingest's commit section holds the lock (a git
+autocommit runs inside it), and no such workload was run. So `PERSIST_ATTEMPTS` (3) and the
+backoff (1.0 s, 2.0 s) stay UNMEASURED placeholders, labelled so in the constants' docstring and
+the module docstring; no tuned value was invented. Follow-up: time the real contenders before
+the app adapter picks its `wait_seconds`.
+
+### Deviations from the design text (and why)
+
+- **`JudgingOutcome.dropped` added.** Verdicts dropped on purpose (member edited, raised,
+  forgotten or unreadable) are neither persisted nor unpersisted; without a field the counts do
+  not close: `judged == persisted + dropped + unpersisted`.
+- **`deferred` excludes the failed item.** A failed item was reached; `failed_at` names it and
+  `deferred = len(judge) - failed_at`. For stopped and unpersisted runs it is
+  `len(judge) - judged`.
+- **Persist failure wins over a backend failure in one chunk.** With `chunk_size > 1` a chunk can
+  hold results and a failure; if its persist cannot complete the outcome is `unpersisted` (with
+  `failure` and `failed_at` still set) even for an availability error, so the lost paid work is
+  reported instead of being hidden by a raise. At the default chunk size a failing chunk has no
+  results, so this never arises.
+- **The ceiling refuses the call, not the total.** `_CeilingClient` raises `AssertionError`
+  before the call that would pass `token.calls`, rather than asserting at the end after the
+  spend. Same exception, strictly earlier.
+- **`chunk_persisted` fires only for a chunk that produced results**, with the cumulative
+  persisted count.
+- **`PERSIST_ATTEMPTS` is derived** (`len(PERSIST_BACKOFF_SECONDS) + 1`) so the two cannot
+  disagree.
+- **Refactor under green.** The quote's client/binding, workspace opening and partition moved
+  into `_context`, `_open_workspace` and `_partition_identity` so the quote and the run derive
+  them one way. The 57 S2b quote tests were unchanged and stayed green.
+- **Equivalence walk answers `n`, not `s`.** The Identity walk reads both as a skip, but the
+  other stages' `[y/N]` prompts accept only y/n and re-ask forever on `s` (the first run hung
+  for that reason). Nothing is written to `bundle/` either way. The run side uses the quote's
+  real leaf (so `calls` is priced) and the keyed `_Judge` stub only as the run's
+  `adjudicate_candidates` port, so the stub never chats and the equivalence outcome has
+  `calls == 0`; the ceiling itself is covered in `test_judging.py`.
+- The chat-timeout AST guard needed no change: `judging.py` still names exactly `adjudication`
+  (the one `chat_client` call is in `_context`).
+
+### Existing tests modified
+
+- `tests/unit/application/test_identity_adjudication.py`:
+  `test_persist_write_through_is_not_available_until_the_run_exists` (asserted the S1
+  `NotImplementedError`) is replaced by seven write-through tests. S1 declared that refusal as
+  temporary ("until the run exists"); this slice is the run.
+- No other existing test was edited. `test_judging.py` gained imports (`contextlib`, `json`,
+  `lock`, `StopToken`, the leaf types and backend errors) and the run tests; its S2b tests are
+  untouched.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `uv run pytest tests/unit/application/test_judging.py tests/unit/application/test_judging_equivalence.py tests/unit/application/test_identity_adjudication.py`: green |
+| Runtime harness | the equivalence fixture: curate's real Identity stage in one copy, the service in the other, then one real daemon identity pass each |
+| Rollback boundary | revert removes `run_judging` and its types and restores the `NotImplementedError` in `persist_adjudications`; the quote stays valid |
