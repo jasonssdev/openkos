@@ -1199,7 +1199,7 @@ def test_the_identity_stage_is_silent_when_the_cap_did_not_bind(
     assert seen == []
 
 
-# --- a judged-SAME row survives a daemon pass (RED until the fix) -------------
+# --- a judged-SAME row survives a daemon pass -------------
 
 
 _SEEDED_SAME = {"verdict": "same", "confidence": 0.9, "rationale": "r"}
@@ -1309,19 +1309,220 @@ def judged_same_after_a_pass(root: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     return root
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "the identity stage re-enqueues every group with adjudication=None, so a "
-        "judged-SAME open row is retired and replaced by an unjudged one; "
-        "fixed by the judging-application-service change"
-    ),
-)
 def test_a_judged_same_row_survives_a_daemon_identity_pass(
     judged_same_after_a_pass: Path,
 ) -> None:
     assert _open_identity_adjudication(judged_same_after_a_pass) == _SEEDED_SAME
+
+
+def _identity_pass(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    queue_verdict: adjudication.Verdict | None,
+    stored: dict[str, Any] | None,
+    edit_b_after_seeding: bool = False,
+) -> tuple[config.WorkspaceLayout, list[object]]:
+    """Seed one identity group, optionally judged in the queue row and optionally
+    stored in the adjudications store, then run one `_identity_stage` pass.
+    Returns the layout and the chat-client calls (which must stay empty)."""
+    from openkos.application import backends, queue_producers
+    from openkos.state import adjudications as store
+
+    write_doc(root, "concepts/a", {"type": "Concept", "title": "Alpha"})
+    write_doc(root, "concepts/b", {"type": "Concept", "title": "Alpha"})
+    layout = config.WorkspaceLayout(root)
+    members = ("concepts/a", "concepts/b")
+    group = cand.CandidateGroup(
+        okf_type="Concept", member_ids=members, tier=cand.Tier.HIGH, trigger="alpha"
+    )
+    monkeypatch.setattr(
+        "openkos.resolution.find_candidates_report",
+        lambda bundle_dir, **kw: cand.CandidateGroupReport(
+            groups=(group,), produced=1, retained=1
+        ),
+    )
+    chat_calls: list[object] = []
+    monkeypatch.setattr(
+        backends, "chat_client", lambda *a, **k: chat_calls.append((a, k))
+    )
+    digest_of = application_pending.current_finding_digest(layout.bundle_dir)
+    seeded = queue_producers.identity_group_proposal(
+        group,
+        current_digest=digest_of,
+        result=None
+        if queue_verdict is None
+        else adjudication.AdjudicatedCandidate(group, queue_verdict, 0.9, "r"),
+    )
+    assert seeded is not None
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        pq.ensure_schema(conn)
+        pq.upsert_proposal(
+            conn,
+            seeded,
+            commit_section=_unlocked_section,
+            bundle_dir=layout.bundle_dir,
+        )
+        if stored is not None:
+            store.record_adjudications(
+                conn,
+                [
+                    store.Adjudication(
+                        member_ids=members,
+                        verdict=stored.get("verdict", "same"),
+                        confidence=0.9,
+                        rationale="r",
+                        include_confidential=stored.get("include_confidential", False),
+                        input_digests=tuple(
+                            store.InputDigest(m, str(digest_of(m))) for m in members
+                        ),
+                        rubric_digest=stored.get(
+                            "rubric", adjudication.rubric_digest()
+                        ),
+                    )
+                ],
+            )
+    finally:
+        conn.close()
+    if edit_b_after_seeding:
+        write_doc(root, "concepts/b", {"type": "Concept", "title": "Alpha edited"})
+    _run_identity_stage(root)
+    return layout, chat_calls
+
+
+def _run_identity_stage(root: Path) -> None:
+    layout = config.WorkspaceLayout(root)
+    ctx = _stage_ctx(root, [])
+    queue_conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        pq.ensure_schema(queue_conn)
+        daemon_module._identity_stage(
+            dataclasses.replace(ctx, queue=lambda: queue_conn)
+        )
+    finally:
+        queue_conn.close()
+
+
+def _identity_statuses(root: Path) -> list[str]:
+    conn = sqlite3.connect(config.WorkspaceLayout(root).findings_db_path)
+    try:
+        return [i.status for i in pq.all_items(conn) if i.kind == "identity"]
+    finally:
+        conn.close()
+
+
+def test_a_servable_stored_verdict_is_carried_into_an_unjudged_row(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, chat_calls = _identity_pass(
+        root, monkeypatch, queue_verdict=None, stored={"verdict": "same"}
+    )
+
+    assert _open_identity_adjudication(root) == _SEEDED_SAME
+    assert _identity_statuses(root) == ["pending"]
+    assert chat_calls == []
+
+
+def test_an_uncertain_stored_verdict_is_carried_too(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _identity_pass(
+        root, monkeypatch, queue_verdict=None, stored={"verdict": "uncertain"}
+    )
+
+    assert _open_identity_adjudication(root) == {**_SEEDED_SAME, "verdict": "uncertain"}
+
+
+def test_an_old_rubric_verdict_amends_the_row_to_null_without_retiring_it(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _identity_pass(
+        root,
+        monkeypatch,
+        queue_verdict=adjudication.Verdict.SAME,
+        stored={"verdict": "same", "rubric": "an-older-rubric"},
+    )
+
+    assert _open_identity_adjudication(root) is None
+    assert _identity_statuses(root) == ["pending"]
+
+
+def test_an_edited_member_carries_nothing_and_retires_the_old_row(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _identity_pass(
+        root,
+        monkeypatch,
+        queue_verdict=adjudication.Verdict.SAME,
+        stored={"verdict": "same"},
+        edit_b_after_seeding=True,
+    )
+
+    assert _open_identity_adjudication(root) is None
+    assert _identity_statuses(root) == ["stale", "pending"]
+
+
+@pytest.mark.parametrize("include_confidential", [False, True])
+def test_a_verdict_judged_under_either_confidential_inclusion_is_carried(
+    root: Path, monkeypatch: pytest.MonkeyPatch, include_confidential: bool
+) -> None:
+    _, chat_calls = _identity_pass(
+        root,
+        monkeypatch,
+        queue_verdict=None,
+        stored={"verdict": "same", "include_confidential": include_confidential},
+    )
+
+    assert _open_identity_adjudication(root) == _SEEDED_SAME
+    assert chat_calls == []
+
+
+def test_the_pass_leaves_the_adjudications_store_untouched(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.state import adjudications as store
+
+    def stored_rows() -> list[store.Adjudication]:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            return list(store.open_adjudications(conn))
+        finally:
+            conn.close()
+
+    layout = config.WorkspaceLayout(root)
+    # Seed first, snapshot, then run a second pass over the same workspace.
+    _identity_pass(root, monkeypatch, queue_verdict=None, stored={"verdict": "same"})
+    before = stored_rows()
+    _run_identity_stage(root)
+
+    assert before
+    assert stored_rows() == before
+
+
+def test_a_second_pass_over_unchanged_inputs_moves_only_last_seen(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout, _ = _identity_pass(
+        root, monkeypatch, queue_verdict=None, stored={"verdict": "same"}
+    )
+
+    def snapshot() -> tuple[list[Any], list[Any]]:
+        conn = sqlite3.connect(layout.findings_db_path)
+        try:
+            return (
+                pq.kind_stats(conn),
+                conn.execute(
+                    "SELECT id, status, created_at, payload_digest FROM pending_items"
+                ).fetchall(),
+            )
+        finally:
+            conn.close()
+
+    before = snapshot()
+    _run_identity_stage(root)
+
+    assert snapshot() == before
 
 
 def _open_identity_payloads(root: Path) -> list[dict[str, Any]]:
