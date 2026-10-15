@@ -49,7 +49,7 @@ import contextlib
 import hashlib
 import sqlite3
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -60,6 +60,7 @@ from openkos.application import backends as application_backends
 from openkos.application import identity_adjudication
 from openkos.application import pending as application_pending
 from openkos.application import suggest_relations_service as relations
+from openkos.application import suggest_volatility_service as volatility
 from openkos.application.lock_wait import CommitSection
 from openkos.application.runtime import StopToken
 from openkos.graph import proximity, sqlite_graph
@@ -72,7 +73,7 @@ from openkos.llm.base import (
     Message,
 )
 from openkos.resolution import adjudication as leaf
-from openkos.resolution import edge_typing
+from openkos.resolution import edge_typing, volatility_typing
 from openkos.resolution.candidates import (
     CandidateGroup,
     CandidateGroupReport,
@@ -89,8 +90,8 @@ additive."""
 ChangedField = Literal["model", "backend", "locality", "confidential", "rubric"]
 """The binding fields `QuoteStale` names when they moved."""
 
-_KINDS: Final = ("identity", "relation_type")
-"""The kinds this stage quotes and runs; `volatility` arrives with S3b."""
+_KINDS: Final = ("identity", "relation_type", "volatility")
+"""The kinds this surface quotes and runs."""
 
 _NUL = "\x00"
 
@@ -308,6 +309,15 @@ class JudgingPorts:
     """The relation_type kind's seams, the same four the relations service has;
     each defaults to the real implementation."""
 
+    plan_volatility_types: Callable[..., tuple[volatility_typing.PlannedType, ...]] = (
+        volatility_typing.plan_types
+    )
+    suggest_volatility: Callable[..., volatility_typing.TierSuggestionBatch] = (
+        volatility_typing.suggest_volatility
+    )
+    """The volatility kind's seams: the LLM-free planning a quote and a run
+    partition by, and the typing the volatility service drives."""
+
     now: Callable[[], datetime] = _utc_now
 
 
@@ -452,6 +462,9 @@ def _context(
     if kind == "relation_type":
         client = ports.chat_client(cfg, "edge_typing")
         task = "edge_typing"
+    elif kind == "volatility":
+        client = ports.chat_client(cfg, "volatility_typing")
+        task = "volatility_typing"
     else:
         client = ports.chat_client(cfg, "adjudication")
         task = "adjudication"
@@ -732,6 +745,86 @@ def _quote_relations(
     )
 
 
+def _volatility_plan(
+    layout: config.WorkspaceLayout,
+    cfg: config.Config,
+    context: _Context,
+    *,
+    include_confidential: bool,
+    ports: JudgingPorts,
+    only_types: Collection[str] | None = None,
+) -> tuple[volatility_typing.PlannedType, ...]:
+    """The LLM-free plan the volatility service itself makes: the same leaf
+    function over the same arguments (the model that keys the serve lookup, the
+    workspace's tier overrides and rationale language, the locality verdict the
+    binding was derived from), so a quote and a run agree with it about what a
+    model must be asked."""
+    return ports.plan_volatility_types(
+        layout.bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=context.local_exemption,
+        rationale_language=cfg.rationale_language,
+        served=volatility.cached_answers(layout, context.binding.model, cfg.type_tiers),
+        type_tiers=cfg.type_tiers or None,
+        only_types=only_types,
+    )
+
+
+def _volatility_item(
+    planned: volatility_typing.PlannedType,
+    current_digest: Callable[[str], str | None],
+) -> WorkItem:
+    return WorkItem(
+        work_key=planned.type_name,
+        member_digests=tuple(
+            (ref, current_digest(ref) or "") for ref in sorted(planned.input_refs)
+        ),
+    )
+
+
+def _quote_volatility(
+    layout: config.WorkspaceLayout,
+    cfg: config.Config,
+    context: _Context,
+    *,
+    include_confidential: bool,
+    ports: JudgingPorts,
+) -> JudgingQuote:
+    """The volatility quote, built from the leaf's own plan because the volatility
+    service states no `CostQuote`. Every type the model must still be asked costs
+    exactly one chat call and none short-circuits, so the bound is the work."""
+    binding = context.binding
+    plan = _volatility_plan(
+        layout, cfg, context, include_confidential=include_confidential, ports=ports
+    )
+    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
+    work = tuple(_volatility_item(p, current_digest) for p in plan if not p.answered)
+    notices: list[QuoteNotice] = [
+        QuoteNotice("model", model=binding.model, backend=cfg.backend)
+    ]
+    unattended = _unattended_notice(layout, cfg, ports.now())
+    if unattended is not None:
+        notices.append(unattended)
+    token = QuoteToken(
+        binding=binding,
+        include_confidential=include_confidential,
+        include_uncertain=False,
+        work=work,
+        calls=len(work),
+    )
+    return JudgingQuote(
+        kind="volatility",
+        total=len(plan),
+        served=sum(1 for p in plan if p.answered),
+        uncertain=0,
+        to_judge=len(work),
+        calls=len(work),
+        binding=binding,
+        notices=tuple(notices),
+        token=token,
+    )
+
+
 def quote_judging(
     root: Path,
     kind: JudgingKind,
@@ -748,10 +841,10 @@ def quote_judging(
     how many calls it would make. Judged-uncertain items are left out of
     `to_judge` and `calls` unless `include_uncertain`. Raises `JudgingRefused`
     when `root` is not a readable workspace and `ValueError` for a kind this
-    stage does not quote yet. `include_uncertain` is an identity notion: a
-    relation_type quote ignores it."""
+    surface does not know. `include_uncertain` is an identity notion: a
+    relation_type or volatility quote ignores it."""
     if kind not in _KINDS:
-        raise ValueError(f"judging kind {kind!r} cannot be quoted yet")
+        raise ValueError(f"judging kind {kind!r} is not a kind this surface quotes")
     layout, cfg = _open_workspace(root, "quote")
     context = _context(
         cfg, kind, include_confidential=include_confidential, ports=ports
@@ -764,6 +857,10 @@ def quote_judging(
             context,
             include_confidential=include_confidential,
             ports=ports,
+        )
+    if kind == "volatility":
+        return _quote_volatility(
+            layout, cfg, context, include_confidential=include_confidential, ports=ports
         )
     binding = context.binding
     local_exemption = context.local_exemption
@@ -1032,7 +1129,7 @@ def run_judging(
     if token is None:
         return RunRefused("no_quote_token")
     kind = token.binding.kind
-    if kind not in _KINDS:
+    if kind not in _CHUNK_SIZES:
         raise ValueError(f"judging kind {kind!r} cannot be run yet")
     size = _CHUNK_SIZES[kind] if chunk_size is None else chunk_size
     if size < 1:
