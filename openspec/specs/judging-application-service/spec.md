@@ -11,6 +11,11 @@ verdicts incrementally, reports progress and can be cancelled. A run ends at
 persisted verdicts and at queue rows that carry them, so the item becomes decidable
 through the `curate-decisions` surface.
 
+Known limitation: a judged item becomes listable by `curate-decisions` only once a
+producer pass (today the daemon) has enqueued or amended its queue row. Identity
+write-through is amend-only, and `relation_type` and `volatility` runs write no
+queue row. An app-callable refresh is tracked in issue #1391.
+
 The surface covers three kinds: `identity` first, then `relation_type` and
 `volatility`. Contradictions and decision revisions are not covered. The quote
 carries its kind, so adding a kind later is additive.
@@ -58,8 +63,10 @@ client as returned data or as observer events, never as direct output.
 A quote MUST be computed without calling a model and without spend, so it MUST
 succeed when the model backend is unreachable. A quote MUST carry its kind and
 MUST report `total` (the items considered), `served` (items already answered by a
-persisted, still-servable verdict), `to_judge` (items a run would judge) and
-`calls` (the model calls a run would make). A group or item that needs no model
+persisted, still-servable SAME or DIFFERENT verdict), `uncertain` (items holding a
+servable UNCERTAIN verdict, in `to_judge` only when opted in), `fresh` (the rest,
+with no servable stored verdict), `to_judge` (items a run would judge) and `calls`
+(the model calls a run would make), so that `total == served + uncertain + fresh`. A group or item that needs no model
 call, such as an identity group with no readable member, MUST cost no call. A quote
 MUST also carry the resolved per-task model, the backend and its locality, the
 effective confidential flag, and the judgment rubric digest of the kind where the
@@ -106,8 +113,9 @@ An item whose stored verdict is not servable MUST count in `to_judge`.
 A quote MUST return a token that binds its kind, the resolved model, the backend
 and its locality, the effective confidential flag, the rubric digest where the
 kind has one, whether judged-uncertain items were opted in, and the set of work
-items with each item's member content digests. The token MUST be opaque to the
-caller. The quote has no time limit: the token MUST NOT expire with elapsed time,
+items with each item's member content digests. The token MUST be an immutable value
+the caller hands back unchanged; its fields are read-only data and a client MUST NOT
+construct or alter one. The quote has no time limit: the token MUST NOT expire with elapsed time,
 and whether it is still usable MUST be decided only by comparing what it binds
 with the current state.
 
@@ -132,7 +140,9 @@ item is not judged and paid for again. Such an item MUST be reported to the call
 as left out (its count, so a client can offer the choice). A caller MAY explicitly
 opt in to include judged-uncertain items; when it does, those items MUST count in
 `to_judge` and their cost MUST appear in `calls` in the quote, before any consent.
-The opt-in MUST be bound into the token. A content edit to a member changes its
+The opt-in MUST be bound into the token. The opt-in applies to identity only: a
+`relation_type` or `volatility` quote MUST ignore it and bind `include_uncertain=false`,
+because those kinds have no UNCERTAIN verdict. A content edit to a member changes its
 digest, which MUST return the item to pending judging automatically, whether or not
 the opt-in is set.
 
@@ -164,7 +174,8 @@ the opt-in is set.
 ### Requirement: A Quote Carries Its Notices As Data
 
 A quote MUST carry as returned data: a truncation notice when the candidate set was
-capped, a quarantine notice when members were quarantined, a model notice naming
+capped (a count for identity, rendered `text` for `relation_type`), a quarantine
+notice for `relation_type` when edges were quarantined (identity has no quarantine), a model notice naming
 the model and backend the run would use, and an unattended notice when the
 unattended engine has recent job activity recorded in the workspace's job records,
 meaning a job in progress or one that started within a recent window (the window is
@@ -402,14 +413,20 @@ MUST NOT hold the workspace lock between attempts.
 
 ### Requirement: The Run Outcome Is Typed
 
-A run MUST return a typed outcome with the counts `judged`, `persisted`, `deferred`,
-`not_in_quote` and `unpersisted`, the count of quoted items settled since the quote (`settled_since_quote`), and a
-typed `failure` when a backend error ended the run. A backend error that is not an
+A run MUST return a typed outcome with the counts `judged`, `persisted`, `dropped`,
+`deferred`, `unpersisted` and `settled_since_quote` (the count of quoted items settled
+since the quote), and `not_in_quote` (the work keys needed now that the quote did not
+cover; its length is the count), with `judged == persisted + dropped + unpersisted`.
+`dropped` counts verdicts withheld on purpose (member edited, raised, forgotten,
+unreadable, or a degraded reply). The outcome also carries a typed `failure` when a
+backend error ended the run, and `observer_failed`, set when the progress observer raised. A backend error that is not an
 availability error MUST return the `failure` outcome with the 1-based run position it failed at
-and the persisted prefix intact. `BackendUnavailable` and `BackendModelNotFound`
-MUST propagate to the caller as raised, with the verdicts of every completed chunk
-already persisted; the counts of the completed chunks reach the caller through the
-progress observer's per-chunk events, not through a returned outcome.
+and the persisted prefix intact. `BackendUnavailable` MUST propagate to the caller as raised once the completed chunks
+are persisted; if that chunk's own persist fails, the typed `unpersisted` outcome is
+returned with `failure` set instead. `BackendModelNotFound` MUST propagate to the caller
+as raised, with the verdicts of every completed chunk already persisted. When either
+is raised, the counts of the completed chunks reach the caller through the progress
+observer's per-chunk events, not through a returned outcome.
 
 #### Scenario: A failed item ends the run with the prefix kept
 
@@ -485,8 +502,12 @@ bind the resolved model, the backend locality and the effective confidential fla
 Their runs MUST honor the binding ceiling, `not_in_quote`, `QuoteStale`,
 cancellation at chunk boundaries, progress, per-chunk persistence and the typed
 outcome. For these kinds the unit judged is the unit the shipped suggestion
-services use, and the shipped `max_calls` and `deferred` semantics MUST be kept.
-Items already answered by a servable persisted answer MUST count as `served`.
+services use, and the shipped `max_calls` and `deferred` semantics MUST be kept:
+the surface exposes a per-chunk size and the quote's ceiling rather than a
+`max_calls` parameter, and passes the chunk size as each chunk's `max_calls`.
+Items already answered by a servable persisted answer MUST count as `served`. A
+`relation_type` or `volatility` answer whose sampled concepts or endpoints changed
+during the call MUST be dropped, not stored (reported as `dropped`).
 
 #### Scenario: A relation-type quote is kind-tagged
 

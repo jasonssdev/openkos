@@ -97,4 +97,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0056](0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md) | The engine ships frozen with PyInstaller one-directory under Contents/Resources, deep ad-hoc signed | Proposed | 2026-10-14 |
 | [0057](0057-the-first-model-runtime-is-a-user-installed-ollama-behind-a-guided-setup.md) | The first model runtime is a user-installed Ollama behind a guided setup | Proposed | 2026-10-14 |
 | [0058](0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md) | The local API is loopback HTTP with a per-launch bearer token and Host/Origin checks | Proposed | 2026-10-14 |
-| [0059](0059-judging-is-a-quote-bound-application-surface-that-persists-per-chunk-and-never-merges.md) | Judging is a quote-bound application surface that persists per chunk and never merges | Proposed | 2026-10-15 |
+| [0059](0059-judging-is-a-quote-bound-application-surface-that-persists-per-chunk-and-never-merges.md) | Judging is a quote-bound application surface that persists per chunk and never merges | Accepted | 2026-10-15 |

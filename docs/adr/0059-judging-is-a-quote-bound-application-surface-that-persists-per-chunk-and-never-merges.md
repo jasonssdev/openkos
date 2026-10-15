@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0059: Judging is a quote-bound application surface that persists per chunk and never merges"
 description: Judging runs as an application surface on a quote, consent and run protocol; the token binds the model, backend, locality, confidential inclusion, rubric and work set, a run never exceeds its quote, verdicts persist per chunk, a stop takes effect at a chunk boundary, the app and the daemon coexist without a lease, and the surface ends at persisted verdicts.
-status: Proposed
+status: Accepted
 date: 2026-10-15
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0059: Judging is a quote-bound application surface that persists per chunk and never merges
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
 
 ## Context

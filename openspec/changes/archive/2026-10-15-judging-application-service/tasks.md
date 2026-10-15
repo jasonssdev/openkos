@@ -547,35 +547,35 @@ instead of `served`; the volatility quote partition test must fail.
 
 Goal: close the change. Docs only; no source, golden or fixture edit.
 
-- [ ] S4.1 Merge the three delta specs into `openspec/specs/`: new
+- [x] S4.1 Merge the three delta specs into `openspec/specs/`: new
   `openspec/specs/judging-application-service/spec.md`; MODIFIED and ADDED
   requirements into `openspec/specs/curate-decisions/spec.md`; ADDED requirements into
   `openspec/specs/pending-work/spec.md`. Name-match every requirement heading against
   the main specs (4 had drifted in a previous change). Satisfies: all requirements.
-- [ ] S4.2 Hand-fix the `curate-decisions` Purpose paragraph in
+- [x] S4.2 Hand-fix the `curate-decisions` Purpose paragraph in
   `openspec/specs/curate-decisions/spec.md`, which still calls judging a "separate,
   required follow-up"; it now names `judging-application-service` as the place a
   pending-evaluation item becomes decidable. Satisfies: D3.
-- [ ] S4.3 ADR-0059 status Proposed -> Accepted in all three places: the ADR file
+- [x] S4.3 ADR-0059 status Proposed -> Accepted in all three places: the ADR file
   `docs/adr/0059-judging-is-a-quote-bound-application-surface-that-persists-per-chunk-and-never-merges.md`,
   the `docs/adr/README.md` index row, and any status-keeping test input. Do not edit
   any other accepted ADR (append-only). Satisfies: J-all (decision record).
-- [ ] S4.4 Docs: update `docs/architecture.md` only if the general shape changed (a new
+- [x] S4.4 Docs: update `docs/architecture.md` only if the general shape changed (a new
   application module pair); otherwise record "no shape change" in the PR. Do not add
   counts or "since #NNN". Satisfies: J1.
-- [ ] S4.5 Check each requirement against shipped code, not the task list (a passing
+- [x] S4.5 Check each requirement against shipped code, not the task list (a passing
   spec is not a met goal): confirm the Purpose paragraph and the issue text agree with
   behavior; list any requirement the code does not meet and any overstatement.
   Satisfies: all requirements.
-- [ ] S4.6 Record the open follow-ups in the archive report (not blocking): curate's
+- [x] S4.6 Record the open follow-ups in the archive report (not blocking): curate's
   `_serve_identity_rows` serves queue verdicts without a rubric check; token
   serialization belongs to the MVP 6 API stage (ADR-0039); contradictions and
   revisions judging.
-- [ ] S4.7 Archive: move (not copy) `openspec/changes/judging-application-service/`
+- [x] S4.7 Archive: move (not copy) `openspec/changes/judging-application-service/`
   to `openspec/changes/archive/<date>-judging-application-service/`, including
   `exploration.md`, and write `archive-report.md`. Diff against a sibling archive and
   check the disk: the archive agent has overclaimed completion before.
-- [ ] S4.8 Run the five gates plus the ADR-status test. Satisfies: J18.
+- [x] S4.8 Run the five gates plus the ADR-status test. Satisfies: J18.
 
 Gates: the five gates above.
 Forecast: ~150 authored lines (specs merged and docs).
