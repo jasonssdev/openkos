@@ -778,7 +778,7 @@ def _run(
         fx.root,
         token,
         stop=stop or StopToken(),
-        ports=dataclasses.replace(fx.ports(), sleep=sleep, **ports),  # type: ignore[arg-type]
+        ports=dataclasses.replace(fx.ports(), **{"sleep": sleep, **ports}),  # type: ignore[arg-type]
         observer=observer or judging.JudgingObserver(),
         chunk_size=chunk_size,
     )
@@ -1277,3 +1277,95 @@ def test_an_observer_that_raises_loses_no_paid_work(
     assert (outcome.status, outcome.judged, outcome.persisted) == ("completed", 5, 5)
     assert [e.index for e in observer.progress_events] == [1, 2]
     assert _stored_keys(fx) == {_key(g.member_ids) for g in fx.groups}
+
+
+# -- the run: a busy workspace ------------------------------------------------ #
+
+
+def test_a_transient_busy_workspace_is_absorbed_and_the_run_continues(
+    fx: _Fixture,
+) -> None:
+    log: list[str] = []
+    sections = _Sections(log, busy=1)
+    sleeps: list[float] = []
+
+    outcome = _outcome(
+        _run(
+            fx,
+            fx.quote().token,
+            judge=_Judge(log=log),
+            commit_section=sections,
+            sleeps=sleeps,
+        )
+    )
+
+    assert (outcome.status, outcome.persisted, outcome.unpersisted) == (
+        "completed",
+        5,
+        0,
+    )
+    assert sleeps == [1.0]
+    assert sections.attempts == 6
+
+
+def test_a_persistently_busy_workspace_stops_the_spend_and_says_so(
+    fx: _Fixture,
+) -> None:
+    log: list[str] = []
+    sections = _Sections(log, always_busy=True)
+    sleeps: list[float] = []
+    judge = _Judge(log=log)
+    observer = _Recorder()
+
+    outcome = _outcome(
+        _run(
+            fx,
+            fx.quote().token,
+            judge=judge,
+            commit_section=sections,
+            sleeps=sleeps,
+            observer=observer,
+        )
+    )
+
+    assert outcome.status == "unpersisted"
+    assert outcome.unpersisted_cause == "workspace_busy"
+    assert (outcome.judged, outcome.persisted, outcome.unpersisted) == (1, 0, 1)
+    assert (outcome.deferred, outcome.calls) == (4, 1)
+    assert judge.calls == 1
+    assert sections.attempts == judging.PERSIST_ATTEMPTS == 3
+    assert sleeps == [1.0, 2.0]
+    assert observer.persisted == []
+    assert not fx.layout.findings_db_path.exists()
+
+
+def test_no_lock_is_held_while_the_run_waits_between_attempts(fx: _Fixture) -> None:
+    log: list[str] = []
+    sections = _Sections(log, busy=2)
+
+    _run(
+        fx,
+        fx.quote().token,
+        judge=_Judge(log=log),
+        commit_section=sections,
+        sleep=lambda seconds: log.append("sleep"),
+    )
+
+    assert log[:5] == ["chat", "sleep", "sleep", "enter", "exit"]
+
+
+def test_a_store_error_is_reported_as_unpersisted_with_its_cause(
+    fx: _Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(store, "record_adjudications", _boom)
+    judge = _Judge()
+
+    outcome = _outcome(_run(fx, fx.quote().token, judge=judge))
+
+    assert outcome.status == "unpersisted"
+    assert outcome.unpersisted_cause == "store_error"
+    assert (outcome.unpersisted, outcome.persisted, outcome.deferred) == (1, 0, 4)
+    assert judge.calls == 1

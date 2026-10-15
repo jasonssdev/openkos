@@ -24,7 +24,7 @@ import contextlib
 import hashlib
 import sqlite3
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -549,6 +549,25 @@ between chunks, so a larger chunk would multiply the worst-case stop latency
 without saving anything a call costs."""
 
 
+PERSIST_BACKOFF_SECONDS: Final = (1.0, 2.0)
+PERSIST_ATTEMPTS: Final = len(PERSIST_BACKOFF_SECONDS) + 1
+"""How long the run sleeps between attempts to persist a chunk into a busy
+workspace (through `ports.sleep`, with no lock held), and so how many attempts
+it makes: one more than there are waits. UNMEASURED: both are placeholders, not
+tuned values.
+
+What was measured (S2c.1, macOS, 60 persists of one chunk through the real lock
+and `locked_commit_section`): the persist holds the lock for about 1 ms (median
+1.0, p95 1.2, max 4.3), a contender waiting on a held lock acquires it within
+0.05-0.09 s of the release, and `wait_seconds=0` refuses in under a millisecond.
+That bounds this surface's own contribution to contention, not a competitor's:
+the hold time of the daemon's or an ingest's commit section (a git autocommit
+inside it) was not measured, so whether 1 s then 2 s outlasts a real contender
+is unknown. The sections the app passes may also wait on their own
+(`locked_commit_section(wait_seconds=...)`); these attempts bound the service,
+that wait bounds each attempt."""
+
+
 @dataclass(frozen=True)
 class RunRefused:
     """No model call was made and nothing was written."""
@@ -635,6 +654,37 @@ class _ObserverGuard:
             self.failed = True
 
 
+def _persist_chunk(
+    layout: config.WorkspaceLayout,
+    results: Sequence[leaf.AdjudicatedCandidate],
+    *,
+    effective: bool,
+    pinned: Mapping[str, str | None],
+    ports: JudgingPorts,
+) -> identity_adjudication.PersistResult:
+    """Persist one chunk, retrying a busy workspace up to `PERSIST_ATTEMPTS`
+    times with the backoff between attempts. The lock is held only inside an
+    attempt, never while sleeping."""
+
+    def attempt() -> identity_adjudication.PersistResult:
+        return identity_adjudication.persist_adjudications(
+            layout,
+            results,
+            include_confidential=effective,
+            judged_digests=pinned,
+            commit_section=ports.commit_section,
+            write_through=True,
+        )
+
+    result = attempt()
+    for backoff in PERSIST_BACKOFF_SECONDS:
+        if result.busy is None:
+            return result
+        ports.sleep(backoff)
+        result = attempt()
+    return result
+
+
 def run_judging(
     root: Path,
     token: QuoteToken | None,
@@ -684,7 +734,8 @@ def run_judging(
 
     counted = _CeilingClient(context.client, token.calls)
     guard = _ObserverGuard(observer if observer is not None else JudgingObserver())
-    judged = persisted = 0
+    judged = persisted = dropped = unpersisted = 0
+    cause: Literal["workspace_busy", "store_error"] | None = None
     status: Literal["completed", "stopped", "failed", "unpersisted"] = "completed"
     for start in range(0, len(judge), size):
         if stop.is_set():
@@ -696,7 +747,7 @@ def run_judging(
             member: current(member) for group in chunk for member in group.member_ids
         }
 
-        def report(
+        def on_progress(
             index: int,
             total: int,
             result: leaf.AdjudicatedCandidate,
@@ -720,17 +771,18 @@ def run_judging(
             llm=cast(LLMBackend, counted),
             include_confidential=token.include_confidential,
             local_exemption=context.local_exemption,
-            on_progress=report,
+            on_progress=on_progress,
         )
         judged += len(batch.results)
-        result = identity_adjudication.persist_adjudications(
-            layout,
-            batch.results,
-            include_confidential=effective,
-            judged_digests=pinned,
-            commit_section=ports.commit_section,
-            write_through=True,
+        result = _persist_chunk(
+            layout, batch.results, effective=effective, pinned=pinned, ports=ports
         )
+        dropped += result.dropped
+        if result.busy is not None or result.store_error is not None:
+            cause = "workspace_busy" if result.busy is not None else "store_error"
+            unpersisted = len(batch.results) - result.dropped
+            status = "unpersisted"
+            break
         persisted += result.persisted
         guard.chunk_persisted(persisted)
     return JudgingOutcome(
@@ -739,9 +791,9 @@ def run_judging(
         judged=judged,
         calls=counted.calls,
         persisted=persisted,
-        unpersisted=0,
-        unpersisted_cause=None,
-        dropped=judged - persisted,
+        unpersisted=unpersisted,
+        unpersisted_cause=cause,
+        dropped=dropped,
         deferred=len(judge) - judged,
         not_in_quote=not_in_quote,
         settled_since_quote=settled,
