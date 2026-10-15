@@ -201,37 +201,37 @@ Goal: persisted edge suggestions and cached volatility answers become the same
 proposals the producers publish, with no client. Satisfies: R1, R3, R4.
 Depends on: none.
 
-- [ ] S2.1 RED: in `tests/unit/application/test_stored_builders.py` (new) test
+- [x] S2.1 RED: in `tests/unit/application/test_stored_builders.py` (new) test
   `servable_edge_suggestion(stored, edge, current_digest, *, include_confidential)`:
   refuses each failed check (missing endpoint digest, extra digest, changed digest,
   invalid type); with `include_confidential=None` the confidential bit is not
   compared. Observe RED (function missing). Satisfies: R1.
-- [ ] S2.2 GREEN: in `src/openkos/application/suggest_relations_service.py` extract
+- [x] S2.2 GREEN: in `src/openkos/application/suggest_relations_service.py` extract
   `servable_edge_suggestion` from the per-row check of
   `partition_edge_suggestion_serves`; the partition calls it unchanged. Existing
   partition and suggest-relations characterization tests stay green unchanged.
   Satisfies: R1.
-- [ ] S2.3 RED then GREEN: `stored_edge_suggestions(layout)` (latest row per
+- [x] S2.3 RED then GREEN: `stored_edge_suggestions(layout)` (latest row per
   directed pair, `Edge(source_id, target_id)` untyped, `corrected_edge`
   reconstructed from the stored rationale). Test: payloads are byte-equal to the
   daemon's `relation_proposals` payload for the same stored row
   (`pq.Proposal.payload` equality); an edge typed, unlinked or forgotten since is
   not served. Files: `src/openkos/application/suggest_relations_service.py`,
   `tests/unit/application/test_stored_builders.py`. Satisfies: R1, R4.
-- [ ] S2.4 RED: the disjunction pin. In `tests/unit/application/test_stored_builders.py`
+- [x] S2.4 RED: the disjunction pin. In `tests/unit/application/test_stored_builders.py`
   assert that `sensitivity` treats `(include_confidential=True,
   local_exemption=False)` and `(False, True)` identically when planning with
   `volatility_typing.plan_types`. This must be green before the builder relies on
   it; if it is red, stop and report to the orchestrator (the design's Assumption
   to pin). Satisfies: R1.
-- [ ] S2.5 RED then GREEN: `stored_volatility_answers(layout, cfg)` in
+- [x] S2.5 RED then GREEN: `stored_volatility_answers(layout, cfg)` in
   `src/openkos/application/suggest_volatility_service.py`. Plans both regimes with
   `plan_types`, reads `cached_answers` under the task model keyed by the exact
   prompt digest. Tests: a type answered in one regime is served; answered
   identically in both is served once; answered differently in both is skipped and
   counted ambiguous; another model's rows are ignored; a type equal to its current
   effective tier yields no proposal. Satisfies: R1.
-- [ ] S2.6 RED then GREEN: `enqueue_stored_relations(conn, suggestions, *,
+- [x] S2.6 RED then GREEN: `enqueue_stored_relations(conn, suggestions, *,
   current_digest, bundle_dir, commit_section, clock=None)` and
   `enqueue_stored_volatility(conn, answers, *, bundle_dir, commit_section,
   clock=None)` in `src/openkos/application/queue_producers.py`, reusing
@@ -240,11 +240,11 @@ Depends on: none.
   `tests/unit/application/test_queue_producers.py`: they never retire
   (`complete=False`); a changed payload over equal inputs amends; the daemon's
   `enqueue_relations`/`enqueue_volatility` are unchanged. Satisfies: R3, R4.
-- [ ] S2.7 Survival: existing partition and suggest-relations/volatility tests pass
+- [x] S2.7 Survival: existing partition and suggest-relations/volatility tests pass
   unchanged. Mutate the `include_confidential` comparison in
   `servable_edge_suggestion` (invert it) and observe both the partition tests and
   the new test redden; revert, purge, GREEN. Satisfies: R1.
-- [ ] S2.8 Run the five gates; commit with `Refs #1391`. Satisfies: R1, R3, R4.
+- [x] S2.8 Run the five gates; commit with `Refs #1391`. Satisfies: R1, R3, R4.
 
 Branch/PR: `feat/stored-verdict-builders`. Independent mutation: make
 `enqueue_stored_volatility` pass `complete=True`; the "never retire" test must
