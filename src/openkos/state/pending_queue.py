@@ -138,6 +138,7 @@ class UpsertOutcome(StrEnum):
     UNCHANGED = "unchanged"
     REPLACED = "replaced"
     SUPPRESSED = "suppressed"
+    AMENDED = "amended"
 
 
 @dataclass(frozen=True)
@@ -342,6 +343,56 @@ def _insert(
     )
 
 
+AmendOutcome = Literal[
+    "amended", "unchanged", "no_open_row", "inputs_changed", "suppressed"
+]
+"""What `amend_open_proposal` did. It never inserts, so there is no `inserted`."""
+
+
+def _same_inputs(conn: sqlite3.Connection, item_id: int, proposal: Proposal) -> bool:
+    """Whether the open row was computed from exactly the proposal's inputs:
+    the same refs, the same digests, in the same order."""
+    return item_input_digests(conn, item_id) == proposal.input_digests
+
+
+def _amend_open_in_transaction(
+    conn: sqlite3.Connection,
+    proposal: Proposal,
+    digest: str,
+    now: str,
+    open_row: tuple[int, str],
+) -> Literal["amended", "unchanged", "inputs_changed"]:
+    """Update an open row in place when it was computed from the proposal's
+    inputs: `payload`, `payload_digest` and `last_seen_at` move; `id`, `status`,
+    `claimed_by`, `created_at`, the targets and the input digests do not. The
+    one helper under both public entry points, so write-through and the
+    producers can never disagree about what an amendment is. Call it inside
+    `_transaction`, after the decline check."""
+    item_id, stored_digest = open_row
+    if not _same_inputs(conn, item_id, proposal):
+        return "inputs_changed"
+    if stored_digest == digest:
+        conn.execute(
+            "UPDATE pending_items SET last_seen_at = ? WHERE id = ?", (now, item_id)
+        )
+        return "unchanged"
+    conn.execute(
+        "UPDATE pending_items SET payload = ?, payload_digest = ?, last_seen_at = ?"
+        " WHERE id = ?",
+        (proposal.payload, digest, now, item_id),
+    )
+    return "amended"
+
+
+def _open_row(conn: sqlite3.Connection, proposal: Proposal) -> tuple[int, str] | None:
+    row = conn.execute(
+        "SELECT id, payload_digest FROM pending_items"
+        " WHERE decision_key = ? AND status IN ('pending','claimed')",
+        (proposal.decision_key,),
+    ).fetchone()
+    return None if row is None else (row[0], row[1])
+
+
 def upsert_proposal(
     conn: sqlite3.Connection,
     proposal: Proposal,
@@ -349,11 +400,17 @@ def upsert_proposal(
     commit_section: CommitSection,
     bundle_dir: Path,
     clock: Callable[[], datetime] = _now,
+    amend_same_inputs: bool = False,
 ) -> UpsertOutcome:
     """Enqueue `proposal`: nothing when a decline is in force; refresh the
     last-seen time of an open row with the same digest; retire an open row
     with a different digest as `stale` and insert a new `pending` one; else
-    insert. At most one open row per key (the unique partial index)."""
+    insert. At most one open row per key (the unique partial index).
+
+    With `amend_same_inputs`, an open row with a different digest whose recorded
+    inputs equal the proposal's is amended in place instead (`AMENDED`): the
+    payload changed, not what it was computed from, so it is neither a new nor a
+    stale proposal. A real input change still retires."""
     if proposal.kind not in KINDS:
         raise ValueError(f"unknown pending-work kind: {proposal.kind!r}")
     # Read the decline outside the DB transaction; it lives in the bundle.
@@ -363,11 +420,7 @@ def upsert_proposal(
     with _transaction(conn, commit_section):
         if suppressed:
             return UpsertOutcome.SUPPRESSED
-        open_row = conn.execute(
-            "SELECT id, payload_digest FROM pending_items"
-            " WHERE decision_key = ? AND status IN ('pending','claimed')",
-            (proposal.decision_key,),
-        ).fetchone()
+        open_row = _open_row(conn, proposal)
         if open_row is None:
             _insert(conn, proposal, digest, now)
             return UpsertOutcome.INSERTED
@@ -377,6 +430,12 @@ def upsert_proposal(
                 (now, open_row[0]),
             )
             return UpsertOutcome.UNCHANGED
+        if (
+            amend_same_inputs
+            and _amend_open_in_transaction(conn, proposal, digest, now, open_row)
+            == "amended"
+        ):
+            return UpsertOutcome.AMENDED
         conn.execute(
             "UPDATE pending_items SET status='stale', resolution='stale',"
             " claimed_by=NULL, resolved_at=? WHERE id = ?",
@@ -384,6 +443,40 @@ def upsert_proposal(
         )
         _insert(conn, proposal, digest, now)
         return UpsertOutcome.REPLACED
+
+
+def amend_open_proposal(
+    conn: sqlite3.Connection,
+    proposal: Proposal,
+    *,
+    commit_section: CommitSection,
+    bundle_dir: Path,
+    clock: Callable[[], datetime] = _now,
+) -> AmendOutcome:
+    """Write `proposal`'s payload through to its key's open row, in place, and
+    nowhere else. Never inserts, never reopens an `applied`, `declined` or
+    `stale` row, and never creates the queue: an absent queue, a key with no open
+    row, and an open row computed from other inputs all write nothing. Replacing
+    a row whose inputs moved is a producer's job, not a judge's.
+
+    Shares the decline check with `upsert_proposal`, and the in-place update with
+    its `amend_same_inputs` path, so `pending --stats` cannot tell an amendment
+    happened."""
+    if proposal.kind not in KINDS:
+        raise ValueError(f"unknown pending-work kind: {proposal.kind!r}")
+    # An absent queue is not an empty one, and a write path must not create it.
+    if not queue_exists(conn):
+        return "no_open_row"
+    suppressed = decline_in_force(bundle_dir, proposal)
+    digest = payload_digest_for(proposal)
+    now = clock().isoformat()
+    with _transaction(conn, commit_section):
+        if suppressed:
+            return "suppressed"
+        open_row = _open_row(conn, proposal)
+        if open_row is None:
+            return "no_open_row"
+        return _amend_open_in_transaction(conn, proposal, digest, now, open_row)
 
 
 def retire_unseen(
