@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0053: Curation decisions are an application surface applied through a two-phase preview and commit"
 description: Open curation decisions are listed across all six queue kinds and applied one item at a time by decision_key and a version token re-validated inside the commit section; consent and bulk eligibility are data, identity merges are never bulk-eligible, and the surface never computes a judgment.
-status: Proposed
+status: Accepted
 date: 2026-10-14
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0053: Curation decisions are an application surface applied through a two-phase preview and commit
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-14
 
 ## Context
