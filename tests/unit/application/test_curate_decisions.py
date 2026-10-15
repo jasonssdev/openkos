@@ -13,6 +13,7 @@ import contextlib
 import dataclasses
 import hashlib
 import inspect
+import itertools
 import json
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, date, datetime
@@ -33,6 +34,7 @@ from openkos.application import pending as application_pending
 from openkos.application.curate_decisions import (
     Action,
     Applied,
+    BulkEligibility,
     ConfigCommitRefusal,
     DecisionItem,
     DecisionObserver,
@@ -45,6 +47,9 @@ from openkos.application.curate_decisions import (
     Stale,
     TierDecisionPreview,
     WithheldAction,
+    item_consent,
+    spend_consent,
+    write_walk_consent,
 )
 from openkos.bundle import bundle
 from openkos.bundle import decisions as bundle_decisions
@@ -3613,3 +3618,181 @@ def test_actionable_kinds_keep_a_computed_freshness(tmp_path: Path) -> None:
     assert _only(layout).fresh is True
     _edit(layout, _SURVIVOR)
     assert _only(layout).fresh is False
+
+
+# --------------------------------------------------------------------------- #
+# Consent and bulk eligibility as data (S4b)
+# --------------------------------------------------------------------------- #
+
+_KINDS = (
+    "identity",
+    "relation_type",
+    "volatility",
+    "contradiction",
+    "revision",
+    "watch_refusal",
+)
+
+
+def test_the_bulk_eligibility_table_is_pinned() -> None:
+    table = curate_decisions.BULK_ELIGIBILITY
+
+    assert dict(table) == {
+        "identity": BulkEligibility.NEVER,
+        "relation_type": BulkEligibility.SYMMETRIC_ONLY,
+        "volatility": BulkEligibility.ALWAYS,
+        "contradiction": BulkEligibility.NEVER,
+        "revision": BulkEligibility.NEVER,
+        "watch_refusal": BulkEligibility.NEVER,
+    }
+    assert set(table) == set(_KINDS)  # every kind decided, none omitted
+
+
+def test_the_bulk_eligibility_table_is_read_only() -> None:
+    with pytest.raises(TypeError):
+        curate_decisions.BULK_ELIGIBILITY["identity"] = (  # type: ignore[index]
+            BulkEligibility.ALWAYS
+        )
+
+
+class _Terminal:
+    """A TTY thunk that records how often the terminal was consulted."""
+
+    def __init__(self, value: bool) -> None:
+        self.value = value
+        self.reads = 0
+
+    def __call__(self) -> bool:
+        self.reads += 1
+        return self.value
+
+
+@pytest.mark.parametrize(
+    ("auto", "tty", "expected", "reads"),
+    [
+        (True, True, "granted", 0),  # --auto never looks at the terminal
+        (True, False, "granted", 0),
+        (False, True, "ask", 1),
+        (False, False, "refused", 1),
+    ],
+)
+def test_spend_consent_follows_auto_then_the_terminal(
+    auto: bool, tty: bool, expected: str, reads: int
+) -> None:
+    terminal = _Terminal(tty)
+
+    assert spend_consent(auto=auto, interactive=terminal) == expected
+    assert terminal.reads == reads
+
+
+@pytest.mark.parametrize(
+    ("writes", "tty", "accepted", "unattended", "expected"),
+    [
+        (row, tty, accepted, unattended, expected)
+        for row, tty, accepted, unattended, expected in [
+            (False, False, False, False, "walk"),  # a read-only stage never refuses
+            (False, True, False, False, "walk"),
+            (True, True, False, False, "walk"),  # a terminal can ask per item
+            (True, False, False, False, "refused"),  # a pipe has no channel
+            (True, False, True, False, "walk"),  # --accept names the consent
+            (True, False, False, True, "walk"),  # the unattended identity pass
+            (True, False, True, True, "walk"),
+            (True, True, True, True, "walk"),
+        ]
+    ],
+)
+def test_write_walk_consent_refuses_only_a_write_on_a_pipe_with_no_channel(
+    writes: bool, tty: bool, accepted: bool, unattended: bool, expected: str
+) -> None:
+    terminal = _Terminal(tty)
+
+    assert (
+        write_walk_consent(
+            writes=writes,
+            interactive=terminal,
+            accepted=accepted,
+            unattended_identity=unattended,
+        )
+        == expected
+    )
+    assert terminal.reads == (1 if writes else 0)  # read-only stages never probe
+
+
+@pytest.mark.parametrize(
+    ("kind", "accepted", "asymmetric", "tty", "expected", "reads"),
+    [
+        # Not accepted: always ask, never look at the terminal.
+        ("volatility", False, False, True, "ask", 0),
+        ("relation_type", False, True, False, "ask", 0),
+        # Accepted and bulk-eligible: the answer is bulk.
+        ("volatility", True, False, True, "bulk", 0),
+        ("volatility", True, False, False, "bulk", 0),
+        ("relation_type", True, False, True, "bulk", 0),
+        ("relation_type", True, False, False, "bulk", 0),
+        # Accepted but exempt (an asymmetric relation): ask on a terminal,
+        # withheld on a pipe, because there is no channel to ask on.
+        ("relation_type", True, True, True, "ask", 1),
+        ("relation_type", True, True, False, "withheld", 1),
+        # The per-item exemption (#508) holds for an always-bulk kind too.
+        ("volatility", True, True, True, "ask", 1),
+        ("volatility", True, True, False, "withheld", 1),
+        # A kind that is never bulk is never bulk, accepted or not.
+        ("contradiction", True, False, True, "ask", 1),
+        ("revision", True, False, False, "withheld", 1),
+    ],
+)
+def test_item_consent_table(
+    kind: str,
+    accepted: bool,
+    asymmetric: bool,
+    tty: bool,
+    expected: str,
+    reads: int,
+) -> None:
+    terminal = _Terminal(tty)
+
+    assert (
+        item_consent(
+            kind,  # type: ignore[arg-type]
+            accepted=accepted,
+            asymmetric=asymmetric,
+            interactive=terminal,
+        )
+        == expected
+    )
+    assert terminal.reads == reads
+
+
+@pytest.mark.parametrize(
+    ("accepted", "asymmetric", "tty"),
+    list(itertools.product((True, False), repeat=3)),
+)
+def test_identity_is_always_asked_whatever_is_set(
+    accepted: bool, asymmetric: bool, tty: bool
+) -> None:
+    terminal = _Terminal(tty)
+
+    assert (
+        item_consent(
+            "identity",
+            accepted=accepted,
+            asymmetric=asymmetric,
+            interactive=terminal,
+        )
+        == "ask"
+    )
+    assert terminal.reads == 0  # the verdict is data; the terminal is not needed
+
+
+@pytest.mark.parametrize(
+    ("accepted", "tty"), list(itertools.product((True, False), repeat=2))
+)
+def test_an_asymmetric_relation_is_never_bulk(accepted: bool, tty: bool) -> None:
+    verdict = item_consent(
+        "relation_type",
+        accepted=accepted,
+        asymmetric=True,
+        interactive=_Terminal(tty),
+    )
+
+    assert verdict in {"ask", "withheld"}
