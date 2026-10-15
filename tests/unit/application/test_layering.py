@@ -211,16 +211,27 @@ def test_shared_write_helpers_are_never_forked() -> None:
         "_refresh_derived_after_write",
         "_echo_commit_disclosure",
         "snapshot_read",
+        "plan_config_edit",
+        "commit_config_edit",
     }
-    homes: dict[str, list[str]] = {name: [] for name in shared}
+    # `commit_paths` is the one shared name with TWO legitimate homes: the git
+    # primitive in `vcs/git.py` and the print-free, outcome-returning core in
+    # `vcs/autocommit.py` that wraps it. A third definition is a fork.
+    commit_paths_homes = ["src/openkos/vcs/autocommit.py", "src/openkos/vcs/git.py"]
+    tracked = shared | {"commit_paths"}
+    homes: dict[str, list[str]] = {name: [] for name in tracked}
     for path in (_REPO_ROOT / "src").rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if (
                 isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-                and node.name in shared
+                and node.name in tracked
             ):
                 homes[node.name].append(path.relative_to(_REPO_ROOT).as_posix())
-    counts = {name: len(paths) for name, paths in homes.items()}
+    assert sorted(homes["commit_paths"]) == commit_paths_homes, (
+        f"commit_paths must be defined exactly in {commit_paths_homes}; "
+        f"found: {homes['commit_paths']}"
+    )
+    counts = {name: len(homes[name]) for name in shared}
     assert counts == dict.fromkeys(shared, 1), (
         f"each shared write helper must keep exactly one definition; found: {homes}"
     )

@@ -320,7 +320,7 @@ of `openkos.cli.main.vcs_git.<name>` keep intercepting), `openkos.config` and
 `openkos.graph`, `openkos.application`, `openkos.cli`, `openkos.mcp`, `typer` or
 `rich`.
 
-- [ ] S4.1 Pre-flight check (no code): confirm `openkos.config` and `openkos.model.okf`
+- [x] S4.1 Pre-flight check (no code): confirm `openkos.config` and `openkos.model.okf`
   do not import `openkos.vcs` (no cycle) and that `tests/unit/vcs/test_layering.py`
   (`test_canonical_layer_does_not_import_vcs`: model/bundle/state may not import
   `vcs`) and `tests/unit/resolution/test_layering.py` stay valid with `vcs`
@@ -330,12 +330,15 @@ of `openkos.cli.main.vcs_git.<name>` keep intercepting), `openkos.config` and
   (for example a config-side module). Default is the design's placement; do not
   redesign. If any layering guard rejects the placement, stop and raise it to the
   orchestrator instead of relocating silently. Satisfies: A5.
-- [ ] S4.2 RED: extend `tests/unit/vcs/test_layering.py` with an AST assertion that
+  Finding (applied): no cycle (`config`, `fsio`, `model.okf` import nothing from `vcs`);
+  the `vcs` guards only bar `model`/`bundle`/`state` importing `vcs`, so
+  `plan_config_edit` stays in `vcs/autocommit.py` as designed.
+- [x] S4.2 RED: extend `tests/unit/vcs/test_layering.py` with an AST assertion that
   `src/openkos/vcs/autocommit.py` imports only the allowed set above and never
   `openkos.state`, `openkos.retrieval`, `openkos.graph`, `openkos.application`,
   `openkos.cli`, `openkos.mcp`, `typer` or `rich`. Observe RED (module missing).
   Satisfies: A5.
-- [ ] S4.3 RED: create `tests/unit/vcs/test_autocommit.py`. Threat-matrix rows
+- [x] S4.3 RED: create `tests/unit/vcs/test_autocommit.py`. Threat-matrix rows
   (Git repository selection): (1) a workspace nested in an outer repository commits
   only the listed paths; (2) a non-repository returns `skipped="not_a_repository"`
   and writes no `.git`. (Commit state): (1) a pre-staged unrelated file is neither
@@ -347,11 +350,15 @@ of `openkos.cli.main.vcs_git.<name>` keep intercepting), `openkos.config` and
   `includes_confidential` is true only for an explicit `confidential`;
   `plan_config_edit` returns `None` on a clean file and a plan on unrelated dirty
   edits. Satisfies: A11.
-- [ ] S4.4 RED: widen `test_shared_write_helpers_are_never_forked` in
+- [x] S4.4 RED: widen `test_shared_write_helpers_are_never_forked` in
   `tests/unit/application/test_layering.py` with `commit_paths`, `plan_config_edit`
   and `commit_config_edit` (one definition each, never under `application/`).
   Observe RED. Satisfies: A5.
-- [ ] S4.5 GREEN: create `src/openkos/vcs/autocommit.py` per the design: `CommitOutcome`,
+  Deviation (applied): `vcs/git.py` already defines `commit_paths`, so "one
+  definition" cannot hold for that name; the guard asserts exactly two homes
+  (`vcs/git.py`, `vcs/autocommit.py`), never under `application/`, and one
+  definition each for `plan_config_edit` and `commit_config_edit`.
+- [x] S4.5 GREEN: create `src/openkos/vcs/autocommit.py` per the design: `CommitOutcome`,
   `paths_include_confidential`, `commit_paths(root, paths, message,
   *, has_confidential=paths_include_confidential)`, `ConfigCommitPlan`,
   `ConfigEditConflict`, `plan_config_edit`, `commit_config_edit`. Bodies are
@@ -360,18 +367,18 @@ of `openkos.cli.main.vcs_git.<name>` keep intercepting), `openkos.config` and
   through `vcs.git` module attributes; pathspecs are workspace-relative and literal;
   `git add -- <paths>` then `git commit -- <paths>`, never `-a`/`-A`; no `-C`
   override and no `Path.cwd()` use. Satisfies: A11.
-- [ ] S4.6 GREEN: in `src/openkos/cli/main.py` turn `_autocommit`,
+- [x] S4.6 GREEN: in `src/openkos/cli/main.py` turn `_autocommit`,
   `_commit_has_confidential`, `_decide_config_commit`, `_autocommit_config_edit`
   and `_ConfigCommitPlan` (alias) into delegators that print the exact lines they
   print today from `CommitOutcome`; `_autocommit` passes
   `has_confidential=lambda r, p: _commit_has_confidential(r, p)` so a patch of
   that name keeps working. Locate the helpers by name, not by line. Satisfies: A15
   (CLI byte-identity).
-- [ ] S4.7 Byte-identity survival: `tests/unit/cli/test_main_autocommit.py`,
+- [x] S4.7 Byte-identity survival: `tests/unit/cli/test_main_autocommit.py`,
   `test_config_commit_decision.py`, `test_curate_decision_ports.py` and every CLI
   golden pass unchanged. Mutate one echoed line in a delegator and observe a test
   redden; revert, purge, GREEN. Satisfies: A15.
-- [ ] S4.8 Run the five gates; commit. Satisfies: A5, A11.
+- [x] S4.8 Run the five gates; commit. Satisfies: A5, A11.
 
 Branch/PR: `feat/print-free-autocommit`. Independent mutation: in `commit_paths`
 replace `git add -- <paths>` with `git add -A`; the pre-staged-file row must fail.
