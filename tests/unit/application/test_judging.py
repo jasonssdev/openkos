@@ -2087,6 +2087,17 @@ def test_a_relation_call_past_the_ceiling_is_refused_before_it_is_made(
     assert judge.calls == 2
 
 
+def test_a_run_of_a_kind_this_stage_does_not_run_yet_is_refused(
+    rel: _RelFixture,
+) -> None:
+    token = _token(binding=_binding(kind="volatility"))
+
+    with pytest.raises(ValueError, match="volatility"):
+        _rel_run(rel, token)
+
+    assert rel.tasks == []
+
+
 def test_a_relation_run_without_a_token_is_refused_before_anything_is_built(
     rel: _RelFixture,
 ) -> None:
