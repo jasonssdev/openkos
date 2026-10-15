@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from openkos import config
+from openkos.application import pending as application_pending
 from openkos.application import queue_producers
 from openkos.state import derived
 from openkos.state import jobs as jobs_store
@@ -41,8 +42,18 @@ def enqueue(
     payload: dict[str, object],
     targets: tuple[str, ...],
     producer: str,
+    fresh: bool = False,
 ) -> None:
+    """Write one proposal through the real queue API. `fresh` records the
+    targets' current bytes as the inputs the proposal was computed from, as a
+    producer does, so the row is not reported as `row_inputs_changed`."""
     layout = config.WorkspaceLayout(root)
+    digests: tuple[pq.InputDigest, ...] = ()
+    if fresh:
+        current = application_pending.current_finding_digest(layout.bundle_dir)
+        digests = tuple(
+            pq.InputDigest(ref, digest) for ref in targets if (digest := current(ref))
+        )
     conn = derived.open_derived_connection(layout.findings_db_path)
     try:
         pq.ensure_schema(conn)
@@ -54,6 +65,7 @@ def enqueue(
                 producer=producer,
                 payload=json.dumps(payload, sort_keys=True),
                 targets=targets,
+                input_digests=digests,
             ),
             commit_section=contextlib.nullcontext,
             bundle_dir=layout.bundle_dir,
@@ -69,6 +81,7 @@ def enqueue_identity(
     verdict: str | None = None,
     rationale: str = "Same entity.",
     tier: str = "high",
+    fresh: bool = False,
 ) -> None:
     adjudication = (
         None
@@ -89,11 +102,16 @@ def enqueue_identity(
         },
         targets=members,
         producer=queue_producers.PRODUCER_IDENTITY,
+        fresh=fresh,
     )
 
 
 def enqueue_volatility(
-    root: Path, type_name: str = "Person", suggested: str = "static"
+    root: Path,
+    type_name: str = "Person",
+    suggested: str = "static",
+    *,
+    current_default: str = "slow",
 ) -> None:
     enqueue(
         root,
@@ -101,7 +119,7 @@ def enqueue_volatility(
         key_body=pq.volatility_key(type_name),
         payload={
             "type_name": type_name,
-            "current_default": "slow",
+            "current_default": current_default,
             "suggested_tier": suggested,
             "rationale": "Names do not change.",
         },
@@ -136,6 +154,7 @@ def enqueue_relation(
     *,
     suggested: str = "member_of",
     rationale: str = "A reason.",
+    fresh: bool = False,
 ) -> None:
     enqueue(
         root,
@@ -152,4 +171,5 @@ def enqueue_relation(
         },
         targets=(source, target),
         producer=queue_producers.PRODUCER_RELATIONS,
+        fresh=fresh,
     )

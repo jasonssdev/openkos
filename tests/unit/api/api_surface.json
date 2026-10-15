@@ -36,6 +36,32 @@
       "kind": "dataclass",
       "members": {}
     },
+    "Applied": {
+      "fields": [
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "decision_key"
+        },
+        {
+          "annotation": "Action",
+          "default": false,
+          "name": "action"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "commit_sha"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ApplyOutcome": {
+      "kind": "alias",
+      "value": "Applied | NotApplied | Stale"
+    },
     "BackendError": {
       "bases": [
         "OpenKosError"
@@ -123,6 +149,61 @@
     "DecisionKind": {
       "kind": "alias",
       "value": "Literal['identity', 'relation_type', 'volatility', 'contradiction', 'revision', 'watch_refusal']"
+    },
+    "DecisionPreview": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "decision_key"
+        },
+        {
+          "annotation": "Action",
+          "default": false,
+          "name": "action"
+        },
+        {
+          "annotation": "MergePlan | RelatePlan | TierPlan | KeepDistinctPlan",
+          "default": false,
+          "name": "plan"
+        },
+        {
+          "annotation": "DecisionVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "DecisionVersion": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "decision_key"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "payload_digest"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {
+        "token": {
+          "kind": "method",
+          "parameters": [],
+          "returns": "str"
+        }
+      }
     },
     "DriftDetected": {
       "bases": [
@@ -280,6 +361,18 @@
       "kind": "exception",
       "members": {}
     },
+    "KeepDistinctPlan": {
+      "fields": [
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "member_ids"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "KindCounts": {
       "fields": [
         {
@@ -316,6 +409,65 @@
           "annotation": "int",
           "default": false,
           "name": "open"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "MergePlan": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "absorbed_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_criterion"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "files_rewritten"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "cross_source_same_pair"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "cross_type_concern"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "NotApplied": {
+      "fields": [
+        {
+          "annotation": "Action",
+          "default": false,
+          "name": "action"
+        },
+        {
+          "annotation": "Literal['skipped', 'member_missing', 'record_failed', 'not_mergeable', 'not_offered']",
+          "default": false,
+          "name": "reason"
+        },
+        {
+          "annotation": "str | None",
+          "default": true,
+          "name": "detail"
         }
       ],
       "frozen": true,
@@ -418,6 +570,28 @@
       "kind": "exception",
       "members": {}
     },
+    "RelatePlan": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "source_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "target_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "relation_type"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "RelationDetail": {
       "fields": [
         {
@@ -455,6 +629,23 @@
       "kind": "dataclass",
       "members": {}
     },
+    "Stale": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "decision_key"
+        },
+        {
+          "annotation": "Literal['content_changed', 'row_resolved', 'row_superseded', 'row_inputs_changed']",
+          "default": false,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "TierDetail": {
       "fields": [
         {
@@ -476,6 +667,23 @@
           "annotation": "str",
           "default": false,
           "name": "rationale"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "TierPlan": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "type_name"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "tier"
         }
       ],
       "frozen": true,
@@ -662,6 +870,42 @@
       "kind": "exception",
       "members": {}
     },
+    "apply_decision": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "DecisionVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "Action",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "action"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "Applied | NotApplied | Stale"
+    },
     "list_decisions": {
       "kind": "function",
       "parameters": [
@@ -685,6 +929,30 @@
         }
       ],
       "returns": "PendingReport"
+    },
+    "preview_decision": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "decision_key"
+        },
+        {
+          "annotation": "Action",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "action"
+        }
+      ],
+      "returns": "DecisionPreview | NotApplied | Stale"
     },
     "status": {
       "kind": "function",

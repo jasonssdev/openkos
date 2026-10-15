@@ -29,13 +29,21 @@ package and everything under `openkos.application` are not.
 from typing import Final as _Final
 
 from openkos.api._decisions import (
+    ApplyOutcome,
     Decision,
     DecisionKind,
+    DecisionPreview,
     Evaluation,
     IdentityDetail,
+    KeepDistinctPlan,
+    MergePlan,
+    RelatePlan,
     RelationDetail,
     TierDetail,
+    TierPlan,
+    apply_decision,
     list_decisions,
+    preview_decision,
 )
 from openkos.api._reads import (
     ActivityEntry,
@@ -49,7 +57,14 @@ from openkos.api._reads import (
     status,
 )
 from openkos.api._workspace import Workspace, WorkspaceNotFound, WorkspaceUnreadable
-from openkos.application.curate_decisions import Action, WithheldAction
+from openkos.application.curate_decisions import (
+    Action,
+    Applied,
+    DecisionVersion,
+    NotApplied,
+    Stale,
+    WithheldAction,
+)
 from openkos.application.judging import JudgingRefused
 from openkos.application.pending_queue_report import QueueUnavailableError
 from openkos.application.queue_refresh import QueueRefreshRefused
@@ -75,27 +90,37 @@ __all__ = [
     "API_VERSION",
     "Action",
     "ActivityEntry",
+    "Applied",
+    "ApplyOutcome",
     "BackendError",
     "BackendGenerationCapped",
     "BackendModelNotFound",
     "BackendUnavailable",
     "Decision",
     "DecisionKind",
+    "DecisionPreview",
+    "DecisionVersion",
     "DriftDetected",
     "Evaluation",
     "HealthCounts",
     "IdentityDetail",
     "JobSummary",
     "JudgingRefused",
+    "KeepDistinctPlan",
     "KindCounts",
+    "MergePlan",
+    "NotApplied",
     "OpenKosError",
     "PendingReport",
     "PendingRow",
     "QueueRefreshRefused",
     "QueueUnavailableError",
     "Refused",
+    "RelatePlan",
     "RelationDetail",
+    "Stale",
     "TierDetail",
+    "TierPlan",
     "WithheldAction",
     "Workspace",
     "WorkspaceBusyError",
@@ -105,7 +130,9 @@ __all__ = [
     "WorkspaceUnreadable",
     "WriteFailed",
     "WriteRefused",
+    "apply_decision",
     "list_decisions",
     "pending_report",
+    "preview_decision",
     "status",
 ]

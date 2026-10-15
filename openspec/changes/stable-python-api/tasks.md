@@ -494,7 +494,7 @@ Goal: preview and apply one decision, with the API's own commit wiring over
 `vcs/autocommit.py`. Satisfies: A11, A5. Depends on: S4, S5. S6b depends on this
 slice (serialized because both regenerate `tests/unit/api/api_surface.json`).
 
-- [ ] S6a.1 RED: `tests/unit/api/test_decisions_apply.py`: `preview_decision` writes
+- [x] S6a.1 RED: `tests/unit/api/test_decisions_apply.py`: `preview_decision` writes
   nothing (bundle and queue byte-identical) and returns API plans (`MergePlan`,
   `RelatePlan`, `TierPlan`, `KeepDistinctPlan`) with no `PreparedMerge`; `apply`
   of one of two open decisions leaves the other open and the applied row
@@ -504,16 +504,16 @@ slice (serialized because both regenerate `tests/unit/api/api_surface.json`).
   workspace returns `Applied(commit_sha=None)` and calls `on_warning` once; a
   held lock with `wait_seconds=0` raises `WorkspaceBusyError` and writes nothing.
   Observe RED. Satisfies: A11.
-- [ ] S6a.2 RED (threat matrix, Git repository selection row 3): the API apply from a
+- [x] S6a.2 RED (threat matrix, Git repository selection row 3): the API apply from a
   process whose cwd is a different repository commits in the workspace's
   repository, never the cwd's. Also assert the API never reads `Path.cwd()`
   (AST check in `tests/unit/api/test_api_guards.py`). Satisfies: A11, A5.
-- [ ] S6a.3 GREEN: extend `src/openkos/api/_decisions.py` with `DecisionPreview`,
+- [x] S6a.3 GREEN: extend `src/openkos/api/_decisions.py` with `DecisionPreview`,
   the four plan types, `preview_decision` and `apply_decision` (policy
   `DecisionPolicy(no_reconcile=True)` on both, `ApplyOutcome = Applied | NotApplied
   | Stale`, `wait_seconds` validated against `lock_wait.MAX_WAIT_SECONDS`).
   Satisfies: A11.
-- [ ] S6a.4 GREEN: create `src/openkos/api/_wiring.py` (commit section via
+- [x] S6a.4 GREEN: create `src/openkos/api/_wiring.py` (commit section via
   `lock_wait.locked_commit_section(ws.root, wait_seconds=...)`; auto-commit port
   `autocommit=lambda root, paths, message: _commit(...)` over
   `vcs.autocommit.commit_paths`; `plan_config_commit` mapping `ConfigEditConflict`
@@ -522,12 +522,12 @@ slice (serialized because both regenerate `tests/unit/api/api_surface.json`).
   wording and `Applied.commit_sha=None`). The module imports
   `openkos.vcs.autocommit` (allowed by the S5 allowlist) and no printing code.
   Satisfies: A11, A5.
-- [ ] S6a.5 Regenerate `tests/unit/api/api_surface.json`
+- [x] S6a.5 Regenerate `tests/unit/api/api_surface.json`
   (`uv run python -m tests.unit.api.surface --write`); the classified diff must be
   additive only and `API_VERSION` stays 1. Satisfies: A3, A4.
-- [ ] S6a.6 Mutation: in the apply path drop the `on_warning` call for a skipped
+- [x] S6a.6 Mutation: in the apply path drop the `on_warning` call for a skipped
   commit; the non-repository test must redden. Revert, purge, GREEN. Satisfies: A11.
-- [ ] S6a.7 Run the five gates; commit. Satisfies: A11.
+- [x] S6a.7 Run the five gates; commit. Satisfies: A11.
 
 Branch/PR: `feat/python-api-decisions-apply`. Independent mutation: pass
 `policy=None` (allow reconcile) to apply but not preview; the preview/apply
