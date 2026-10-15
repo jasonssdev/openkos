@@ -23,6 +23,7 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config, logsetup, userstate
+from openkos.application import pending as application_pending
 from openkos.application import runner
 from openkos.application.runtime import StopToken
 from openkos.cli import daemon as daemon_module
@@ -31,7 +32,7 @@ from openkos.cli.main import app
 from openkos.resolution import adjudication
 from openkos.resolution import candidates as cand
 from openkos.resolution.volatility_typing import TierSuggestion, TierSuggestionBatch
-from openkos.state import jobs
+from openkos.state import derived, jobs
 from openkos.state import pending_queue as pq
 from tests.unit.cli.commit_phase_support import lock_is_free, write_doc
 
@@ -1196,6 +1197,154 @@ def test_the_identity_stage_is_silent_when_the_cap_did_not_bind(
     daemon_module._identity_stage(_stage_ctx(root, seen))
 
     assert seen == []
+
+
+# --- a judged-SAME row survives a daemon pass (RED until the fix) -------------
+
+
+_SEEDED_SAME = {"verdict": "same", "confidence": 0.9, "rationale": "r"}
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        pytest.fail(f"precondition failed: {message}", pytrace=False)
+
+
+@pytest.fixture
+def judged_same_after_a_pass(root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Seed a judged-SAME open identity row plus its servable store row, run one
+    `_identity_stage` pass, and return the workspace.
+
+    Every precondition goes through `_require`, which raises `pytest.fail`'s
+    `Failed` -- not an `AssertionError`. pytest applies an xfail marker to the
+    setup phase too, but `raises=AssertionError` only absorbs an AssertionError,
+    so a setup error is a hard failure and never passes as the expected XFAIL."""
+    from openkos.application import backends, queue_producers
+    from openkos.state import adjudications as store
+
+    write_doc(root, "concepts/a", {"type": "Concept", "title": "Alpha"})
+    write_doc(root, "concepts/b", {"type": "Concept", "title": "Alpha"})
+    layout = config.WorkspaceLayout(root)
+    members = ("concepts/a", "concepts/b")
+    group = cand.CandidateGroup(
+        okf_type="Concept", member_ids=members, tier=cand.Tier.HIGH, trigger="alpha"
+    )
+    monkeypatch.setattr(
+        "openkos.resolution.find_candidates_report",
+        lambda bundle_dir, **kw: cand.CandidateGroupReport(
+            groups=(group,), produced=1, retained=1
+        ),
+    )
+    chat_calls: list[object] = []
+    monkeypatch.setattr(
+        backends, "chat_client", lambda *a, **k: chat_calls.append((a, k))
+    )
+    digest_of = application_pending.current_finding_digest(layout.bundle_dir)
+    judged = adjudication.AdjudicatedCandidate(
+        group, adjudication.Verdict.SAME, 0.9, "r"
+    )
+    seeded = queue_producers.identity_group_proposal(
+        group, current_digest=digest_of, result=judged
+    )
+    assert seeded is not None
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        pq.ensure_schema(conn)
+        outcome = pq.upsert_proposal(
+            conn,
+            seeded,
+            commit_section=_unlocked_section,
+            bundle_dir=layout.bundle_dir,
+        )
+        store.record_adjudications(
+            conn,
+            [
+                store.Adjudication(
+                    member_ids=members,
+                    verdict="same",
+                    confidence=0.9,
+                    rationale="r",
+                    include_confidential=False,
+                    input_digests=tuple(
+                        store.InputDigest(m, str(digest_of(m))) for m in members
+                    ),
+                    rubric_digest=adjudication.rubric_digest(),
+                )
+            ],
+        )
+        stored = store.open_adjudications(conn)
+    finally:
+        conn.close()
+
+    _require(outcome is pq.UpsertOutcome.INSERTED, "seed row was not inserted")
+    _require(len(stored) == 1, "expected exactly one stored adjudication")
+    row = stored[0]
+    _require(row.verdict == "same", "stored verdict is not SAME")
+    _require(
+        row.rubric_digest == adjudication.rubric_digest(), "stored rubric is stale"
+    )
+    _require(
+        {d.input_ref: d.digest for d in row.input_digests}
+        == {m: digest_of(m) for m in members},
+        "stored input digests are stale",
+    )
+    _require(
+        _open_identity_adjudication(root) == _SEEDED_SAME,
+        "open row does not carry the seeded SAME verdict",
+    )
+
+    ctx = _stage_ctx(root, [])
+    queue_conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        pq.ensure_schema(queue_conn)
+        result = daemon_module._identity_stage(
+            dataclasses.replace(ctx, queue=lambda: queue_conn)
+        )
+    finally:
+        queue_conn.close()
+
+    _require(result == runner.StageResult(), "the stage did not complete")
+    _require(chat_calls == [], "the identity stage called the chat stub")
+    _require(len(_open_identity_payloads(root)) == 1, "no single open identity row")
+    return root
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "the identity stage re-enqueues every group with adjudication=None, so a "
+        "judged-SAME open row is retired and replaced by an unjudged one; "
+        "fixed by the judging-application-service change"
+    ),
+)
+def test_a_judged_same_row_survives_a_daemon_identity_pass(
+    judged_same_after_a_pass: Path,
+) -> None:
+    assert _open_identity_adjudication(judged_same_after_a_pass) == _SEEDED_SAME
+
+
+def _open_identity_payloads(root: Path) -> list[dict[str, Any]]:
+    import json
+
+    conn = sqlite3.connect(config.WorkspaceLayout(root).findings_db_path)
+    try:
+        return [
+            json.loads(i.payload)
+            for i in pq.all_items(conn)
+            if i.kind == "identity" and i.status in ("pending", "claimed")
+        ]
+    finally:
+        conn.close()
+
+
+def _open_identity_adjudication(root: Path) -> object:
+    (payload,) = _open_identity_payloads(root)
+    return payload["adjudication"]
+
+
+def _unlocked_section(*args: Any, **kwargs: Any) -> Any:
+    return contextlib.nullcontext()
 
 
 def test_the_relations_and_revisions_observers_disclose_their_caps() -> None:
