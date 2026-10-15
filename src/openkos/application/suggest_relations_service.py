@@ -396,6 +396,49 @@ def reassemble_edge_suggestions(
     return rebuilt
 
 
+def servable_edge_suggestion(
+    stored: edge_suggestions_store.PersistedEdgeSuggestion,
+    edge: Edge,
+    current_digest: Callable[[str], str | None],
+    *,
+    include_confidential: bool | None,
+) -> EdgeSuggestion | None:
+    """The suggestion a persisted row serves for `edge`, or `None` when it must
+    be re-typed (#799).
+
+    The row is SERVED iff it carries a digest row for BOTH current endpoints and
+    no others, every stored digest equals the endpoint's CURRENT content hash,
+    and the stored type still validates. `include_confidential` is the run's
+    EFFECTIVE bit and must equal the row's; `None` skips that comparison, for a
+    caller that holds no client and so cannot resolve the bit (a store-only
+    refresh), mirroring `servable_verdict`'s precedent.
+
+    The suggestion is reconstructed from the PERSISTED rationale (#991 R4), never
+    by re-reading the bundle: a re-read can fail transiently and disagree with
+    the disclosure already frozen at fresh time."""
+    if (
+        include_confidential is not None
+        and stored.include_confidential != include_confidential
+    ):
+        return None
+    endpoints = {edge.source_id, edge.target_id}
+    if {digest.input_ref for digest in stored.input_digests} != endpoints or any(
+        current_digest(digest.input_ref) != digest.digest
+        for digest in stored.input_digests
+    ):
+        return None
+    try:
+        validate_relation_type(stored.suggested_type)
+    except ValueError:
+        return None
+    return EdgeSuggestion(
+        edge=edge,
+        suggested_type=stored.suggested_type,
+        rationale=stored.rationale,
+        corrected_edge=corrected_edge_from_rationale(edge, stored.rationale),
+    )
+
+
 def partition_edge_suggestion_serves(
     layout: config.WorkspaceLayout,
     edges: list[Edge],
@@ -442,31 +485,58 @@ def partition_edge_suggestion_serves(
     for edge in edges:
         key = edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id)
         stored = latest.get(key)
-        if stored is None or stored.include_confidential != include_confidential:
-            to_type.append(edge)
-            continue
-        endpoints = {edge.source_id, edge.target_id}
-        if {digest.input_ref for digest in stored.input_digests} != endpoints or any(
-            current_digest(digest.input_ref) != digest.digest
-            for digest in stored.input_digests
-        ):
-            to_type.append(edge)
-            continue
-        try:
-            validate_relation_type(stored.suggested_type)
-        except ValueError:
-            to_type.append(edge)
-            continue
-        # #991 R4: reconstructed from the PERSISTED rationale, never by
-        # re-reading the bundle -- a re-read can fail transiently and disagree
-        # with the disclosure already frozen at fresh time.
-        served[key] = EdgeSuggestion(
-            edge=edge,
-            suggested_type=stored.suggested_type,
-            rationale=stored.rationale,
-            corrected_edge=corrected_edge_from_rationale(edge, stored.rationale),
+        suggestion = (
+            None
+            if stored is None
+            else servable_edge_suggestion(
+                stored,
+                edge,
+                current_digest,
+                include_confidential=include_confidential,
+            )
         )
+        if suggestion is None:
+            to_type.append(edge)
+            continue
+        served[key] = suggestion
     return EdgeSuggestionServes(served, to_type, store_read=True)
+
+
+def stored_edge_suggestions(layout: config.WorkspaceLayout) -> list[EdgeSuggestion]:
+    """Every persisted edge-typing suggestion that is still servable, with no
+    client, no backend and no walk of the candidate graph (#1391).
+
+    One suggestion per directed pair, from the pair's LATEST row (the
+    partition's own rule), each checked by `servable_edge_suggestion` with the
+    confidential bit NOT compared: a store-only caller holds no client and so
+    cannot resolve the effective bit. An edge that was typed, unlinked or
+    forgotten since changed an endpoint's bytes, so its row is not served.
+
+    Fail-open: a missing or unreadable store serves nothing."""
+    if not layout.findings_db_path.exists():
+        return []
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            persisted = edge_suggestions_store.open_edge_suggestions(conn)
+        finally:
+            conn.close()
+    except OSError, sqlite3.Error:
+        return []
+    latest: dict[str, edge_suggestions_store.PersistedEdgeSuggestion] = {}
+    for row in persisted:
+        latest[edge_suggestions_store.pair_key_for(row.source_id, row.target_id)] = row
+    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
+    suggestions = (
+        servable_edge_suggestion(
+            row,
+            Edge(row.source_id, row.target_id),
+            current_digest,
+            include_confidential=None,
+        )
+        for row in latest.values()
+    )
+    return [suggestion for suggestion in suggestions if suggestion is not None]
 
 
 def persist_edge_suggestions(
