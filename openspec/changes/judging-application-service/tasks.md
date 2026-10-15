@@ -480,7 +480,7 @@ the "new work is not judged" / `not_in_quote` test must fail.
 Goal: `relation_type` quote and run over `suggest_relations_service`, reusing
 `max_calls`, `deferred` and the relations `CostQuote`.
 
-- [ ] S3a.1 Measure first: time the per-invocation overhead of one
+- [x] S3a.1 Measure first: time the per-invocation overhead of one
   `suggest_relations_service` call (the LLM-free candidate/graph walk) and of one
   `suggest_volatility_service` call, over a representative fixture and the
   `examples/good-life-demo/` workspace. Record the numbers, then fix
@@ -488,24 +488,24 @@ Goal: `relation_type` quote and run over `suggest_relations_service`, reusing
   and state each worst-case stop latency (chunk size times `chat_timeout`). Both
   constants are fixed here; S3b only consumes its. Files: `judging.py` constant
   comments only. Satisfies: J10, J17.
-- [ ] S3a.2 RED then GREEN: widen `_EXPECTED_SERVICE_TASKS` so `judging.py` names the
+- [x] S3a.2 RED then GREEN: widen `_EXPECTED_SERVICE_TASKS` so `judging.py` names the
   relation task as well as `adjudication` (values stay sets). Files:
   `tests/unit/cli/test_chat_timeout_wiring.py`. Satisfies: J1, J17.
-- [ ] S3a.3 RED then GREEN: `quote_judging(root, "relation_type", ...)` returns a
+- [x] S3a.3 RED then GREEN: `quote_judging(root, "relation_type", ...)` returns a
   kind-tagged quote binding model, backend, locality and the confidential flag
   (rubric digest `None`), `served` for edges with a servable persisted suggestion,
   `to_judge` for the rest, and the one `model` notice. Satisfies: J17, J2, J3.
-- [ ] S3a.4 RED then GREEN: `run_judging` for `relation_type`: re-invokes the existing
+- [x] S3a.4 RED then GREEN: `run_judging` for `relation_type`: re-invokes the existing
   service with `max_calls=chunk_size` and a candidate port filtered to the remaining
   quoted keys; the service's own persist runs per invocation; honors the ceiling,
   `not_in_quote`, `QuoteStale`, stop at chunk boundaries, progress, the typed outcome
   and the `deferred` semantics of the shipped service. Satisfies: J17, J7, J8, J10, J11, J13.
-- [ ] S3a.5 RED then GREEN: a stop signalled during the first relation chunk persists
+- [x] S3a.5 RED then GREEN: a stop signalled during the first relation chunk persists
   that chunk and reports the rest `deferred`; a re-quote shows it `served`. Satisfies:
   J17, J9.
-- [ ] S3a.6 Confirm `suggest-relations` goldens (S0a.7) and its tests are unchanged
+- [x] S3a.6 Confirm `suggest-relations` goldens (S0a.7) and its tests are unchanged
   and GREEN; mutate one patched line, confirm a test reddens. Satisfies: J18.
-- [ ] S3a.7 Run the five gates. Satisfies: J18.
+- [x] S3a.7 Run the five gates. Satisfies: J18.
 
 Gates: the five gates above.
 Forecast: ~300 authored lines.

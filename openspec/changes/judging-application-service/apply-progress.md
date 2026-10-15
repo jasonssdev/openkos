@@ -471,3 +471,163 @@ the app adapter picks its `wait_seconds`.
 | Focused test command | `uv run pytest tests/unit/application/test_judging.py tests/unit/application/test_judging_equivalence.py tests/unit/application/test_identity_adjudication.py`: green |
 | Runtime harness | the equivalence fixture: curate's real Identity stage in one copy, the service in the other, then one real daemon identity pass each |
 | Rollback boundary | revert removes `run_judging` and its types and restores the `NotImplementedError` in `persist_adjudications`; the quote stays valid |
+
+## S3a: `relation_type` on the protocol (complete, 7/7)
+
+Branch `feat/judging-s3a`, stacked-to-main on S0a through S2c (all merged). No golden or
+fixture edited; the S0a and `suggest-relations` goldens pass unchanged. No monkeypatched name
+moved (nothing was renamed or relocated; the service module is untouched).
+
+### API added (`application/judging.py`)
+
+- `quote_judging(root, "relation_type", include_confidential=..., ports=...)` and
+  `run_judging(root, token, ...)` now accept the kind. The signatures are unchanged.
+- `RELATION_CHUNK_SIZE = 4`, `VOLATILITY_CHUNK_SIZE = 1` (measured, below); `_CHUNK_SIZES` maps
+  each runnable kind to its default.
+- `JudgingPorts` gained `open_proximity`, `build_graph`, `candidate_edges` and
+  `suggest_edge_types`, the relations service's four seams, each defaulting to the real one.
+- `QuoteNotice.text`: the relations service's own truncation and quarantine notice, carried as
+  data for `relation_type` (the service already restricts them to what the caller may see and
+  derives no count this surface could repeat).
+- private: `_run_relations`, `_quote_relations`, `_walk_relations`, `_RelationsObserver`,
+  `_relations_ports`, `_ChunkTyping`, `_RetryingSection`, `_classify_chunk`, `_progress_hook`,
+  `_edge_item`, `_partition_relations`; the identity run moved unchanged into `_run_identity`.
+- How it reuses the service: the quote asks `suggest_relations_service.suggest_relations` to
+  price and its observer declines the cost question (no model, no write), reading the candidate
+  edges off its candidate port; the counts are the service's own `partition_edge_suggestion_serves`
+  (the same function) and a test pins them equal to the `CostQuote` the service states for the
+  same state. A run re-invokes the service per chunk with `max_calls=chunk_size` and a candidate
+  port narrowed to the remaining quoted edges; the service's own persist stores each chunk.
+
+### S3a.1 measurement (LLM-free, instantly answering stub chat, macOS)
+
+Per invocation, median of 5-7 runs; the script was run from the scratchpad and is not in the repo.
+
+| Bundle (concepts / candidate edges) | Relations walk only (declined) | Relations, one chunk of 8 edges (persist) | Volatility, zero-call invocation | Volatility, chunk of 4 |
+|---|---|---|---|---|
+| good-life-demo (8 / 14) | 3.5 ms | 6.9 ms (chunk of 1: 4.3 ms) | 3.3 ms | 3.3 ms |
+| synthetic 50 / 150 | 8.0 ms | 9.8 ms | 7.0 ms | 7.2 ms |
+| synthetic 200 / 600 | 30.0 ms | 32.3 ms | 27.2 ms | 27.0 ms |
+| synthetic 800 / 2400 | 121.8 ms | 126.4 ms | 109.0 ms | 109.7 ms |
+| synthetic 800 / 2400, store holds all 2400 rows, serve partition on (`fresh=False`), 8 edges filtered | | 279.3 ms | | |
+
+Steady state at 200 concepts is 42.5 ms and at 50 concepts 9.6 ms. The walk is linear in the
+bundle (about 0.15 ms per concept), and the store read plus endpoint hash adds up to about 0.35
+ms per concept at 800. Per-chunk invocation is therefore workable (not the STOP condition): the
+overhead is two to three orders of magnitude under a model call and does not compound with the
+run, only with the bundle.
+
+Chosen: `RELATION_CHUNK_SIZE = 4` (placeholder was 8). The overhead criterion is at most 5 % of
+a chunk's model time against a 5 s call floor at the largest measured bundle: that needs at least
+2 edges (0.28 s over 10 s is 2.8 %); 4 leaves a margin for a bundle about 4x larger (1.4 % at
+800 concepts) and halves the worst-case stop latency the placeholder 8 would have had.
+`VOLATILITY_CHUNK_SIZE = 1` (placeholder was 4): the volatility service has no graph walk, a
+workspace has a few dozen concept types at most, so one type per chunk is at most a few dozen
+invocations (about 3 s of walk at 800 concepts) and gives the same latency as identity. Worst-case
+stop latency: relation_type `4 x chat_timeout` (4 x 600 s by default, typically about 80 s at
+20 s per call) plus one persist; volatility `1 x chat_timeout` plus one persist. S3b.4 carries
+the volatility figure into the module docstring.
+
+### Tasks
+
+- [x] S3a.1 Measured; both constants fixed from the table (comments in `judging.py` only).
+- [x] S3a.2 `_EXPECTED_SERVICE_TASKS["judging.py"]` is `{"adjudication", "edge_typing"}`.
+- [x] S3a.3 The quote: kind-tagged, binds the `edge_typing` model, backend, locality and the
+  effective confidential bit (rubric digest `None`), served versus to-judge from the shared
+  partition, one `model` notice plus the carried `truncated` / `quarantined` / `unattended_active`.
+  This also delivers the `quarantined` notice S2b deferred.
+- [x] S3a.4 The run: ceiling, `not_in_quote`, `settled_since_quote`, `QuoteStale`, stop between
+  chunks, progress, observer guard, bounded retry of a busy workspace, `unpersisted`, typed backend
+  failures and `failed_at`, all with identity's semantics.
+- [x] S3a.5 A stop during the first chunk persists it and defers the rest; a re-quote shows it served.
+- [x] S3a.6 The `suggest-relations` goldens and tests are unchanged and green; one patched line
+  (the service's busy advisory `re-type them` to `retype them`) reddens
+  `test_suggest_relations_busy_workspace_costs_the_persist_an_advisory` and
+  `test_structure_busy_workspace_costs_the_persist_an_advisory`; restored from a byte copy, 53 passed.
+- [x] S3a.7 The five gates (below).
+
+### TDD Cycle Evidence (RED observed before GREEN)
+
+| Behavior (tasks) | Test(s) | Observed RED | GREEN |
+|---|---|---|---|
+| Guard widening (S3a.2) | `test_the_extracted_verbs_still_resolve_their_own_task_model` | `AssertionError`: `('judging.py', {'adjudication'})` against the widened `{"adjudication", "edge_typing"}` | passes once `_context` names `edge_typing` |
+| The quote (S3a.3) | 15 `relation` / `two_directions` / `edited_endpoint` / `confidential_bit` quote tests in `test_judging.py` | 15 failed, each `TypeError: JudgingPorts.__init__() got an unexpected keyword argument 'candidate_edges'` | 120 passed |
+| The run (S3a.4, S3a.5) | 35 relation run tests | 35 failed, each `ValueError: judging kind 'relation_type' cannot be run yet` (the no-token and `chunk_size < 1` tests passed by construction: both refuse before the kind check) | first GREEN attempt: 13 failed for a TEST defect, not a code one: the shared `_Judge` answers an identity verdict by default, so every edge degraded and was dropped. Fixed with `_edge_judge` in the test; 157 passed |
+| `local backend serves a suggestion stored under the effective bit` | one test | **Not observed RED.** Written after a mutation (`effective=include_confidential` in the quote's partition) SURVIVED the first suite; with the test, the same mutation fails it | passes |
+| `a run of a kind this stage does not run yet` | one test | **Not observed RED.** It covers the new kind check (a line the first coverage run reported uncovered); mutating the check to admit `volatility` fails it | passes |
+
+Existing tests modified: see below. The `_Judge` helper gained a `default_reply` argument
+(additive, defaults to the identity reply); `_seed_job` gained a union annotation.
+
+### Mutations (applied, `test_judging.py` run, restored from a byte copy, `__pycache__` purged)
+
+| Mutation | First failure |
+|---|---|
+| drop `max_calls=size` | `test_each_relation_chunk_persists_before_the_next_chunk_is_typed` |
+| drop the remaining-edges filter (`if True`) | `test_a_relation_edge_added_since_the_quote_is_named_and_never_typed` |
+| drop the pinned-digest check | `test_a_relation_verdict_about_content_edited_during_the_call_is_dropped` |
+| `cause` always `store_error` | `test_a_persistently_busy_relation_workspace_stops_the_spend_and_says_so` |
+| `vanished = 0` | `test_a_relation_stop_that_leaves_every_remaining_edge_settled_ends_the_run` |
+| service handed the raw client instead of the ceiling client | `test_a_relation_call_past_the_ceiling_is_refused_before_it_is_made` |
+| progress `before=0` | `test_relation_progress_events_carry_the_run_index_total_edge_and_type` |
+| classification partition under `not effective` | relation run tests (7 failed) |
+| retry sleep removed | `test_a_transient_busy_relation_workspace_is_absorbed` |
+| `failed_at` chunk-relative | `test_a_relation_failed_at_is_the_run_position_not_the_chunk_position` |
+| `chunk_persisted` fires on an empty chunk | `test_a_relation_availability_error_on_the_first_call_writes_nothing` |
+| `deferred` ignores `vanished` | the same settled test |
+| degraded result counted persisted | `test_a_relation_reply_that_degrades_is_judged_but_never_persisted` |
+| `judge` iterates the current needed set instead of `token.work` | `test_a_relation_edge_added_since_the_quote_is_named_and_never_typed` |
+| quote: served from `len(walk.edges)`, `calls` from the total, rubric always set, task always `adjudication`, effective bit from the request | each fails its quote test (the last survived until the local-backend pin was added) |
+
+### Existing tests modified
+
+- `tests/unit/application/test_judging.py::test_an_unsupported_kind_is_refused` used
+  `relation_type` as its example of a kind a quote refuses. That kind is now supported, so it uses
+  `volatility` (S3b will have to move it once more).
+- `tests/unit/cli/test_chat_timeout_wiring.py`: `_EXPECTED_SERVICE_TASKS["judging.py"]` widened to
+  `{"adjudication", "edge_typing"}` (task S3a.2; widened, not bypassed).
+- No golden or fixture file was touched.
+
+### Deviations from the design text (and why)
+
+- **Chunk sizes changed from the placeholders** (8 and 4 to 4 and 1), as the measurement allows.
+- **The quote's counts come from the shared serve partition, not the `CostQuote` object.** The
+  service is asked to price and declines, which gives the walk, the candidate edges and the notices;
+  the work set needs keys and digests the `CostQuote` does not carry, so the partition is called
+  directly (the same function the service calls) and a test pins the counts equal to the service's
+  `CostQuote` for the same state. A second store read happens in that window; a write between the
+  two reads would be a quote no worse than one a moment later.
+- **`QuoteNotice.text`** carries the service's rendered notice for `truncated` and `quarantined`
+  rather than a count; the visible counts are derived through the sensitivity walk inside the
+  service, and repeating that here would fork it.
+- **`include_uncertain` is ignored for `relation_type`** and recorded `False` in the token (no
+  uncertain state exists), so the flag cannot make two tokens differ for no reason.
+- **Persist classification reads the store, not the service's advisory text.** After each
+  invocation every fresh suggestion lands in exactly one bucket: no type or edited since the pin
+  (`dropped`), served by the store now (`persisted`), else `unpersisted`; the cause is
+  `workspace_busy` when the retrying section exhausted its attempts, else `store_error`. The pin is
+  taken inside the typing port, microseconds after the service's own pin, not before the call.
+- **The service's raise-path refusals (`BackendNotReachable` and friends) are not mapped back.** They
+  fire only for a backend that raises outside the typing seam's own guard, which the shipped typing
+  never does; a backend error raised by `chat` comes back inside the batch and is typed as for identity.
+- **Progress verdict** for `relation_type` is the suggested type, or `degraded`; never the rationale.
+- **Retry lives in the commit section handed to the service** (it enters the section once per
+  persist), not in a persist wrapper, so the service's own fail-open persist is reused as is.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `uv run pytest tests/unit/application/test_judging.py -k relation`: green (and the whole file, 159 tests) |
+| Runtime harness | the shipped service, graph build, serve partition and persist run for real over a workspace made by `init`; only the candidate walk is a fixed list and the model is a scripted stub |
+| Rollback boundary | revert removes the relation functions and the two chunk-size constants; the identity quote and run are untouched (the identity run only moved into `_run_identity`) |
+
+### Gates (after the last source change)
+
+- `uv run ruff check .`: All checks passed
+- `uv run ruff format --check .`: 602 files already formatted
+- `uv run mypy .`: Success, no issues found in 602 source files
+- `uv run pytest --cov`: 12440 passed, 6 skipped in 888.80 s, total coverage 96.59 % (required 90 %);
+  `application/judging.py` 98 %. One later test-only addition (the unsupported-run-kind test) ran
+  with the judging and wiring files: 184 passed; ruff and mypy re-run clean.
+- `uv run python evals/run_self_tests.py`: 57 of 57 harness self-tests run, 0 failing
