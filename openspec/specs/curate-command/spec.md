@@ -102,7 +102,8 @@ without running Identity or any later stage.
 ### Requirement: Identity Stage Reuses Merge Cores
 
 Identity MUST call `find_candidates` then `adjudicate_candidates`, then
-apply each accepted pair via `_prepare_one_merge`/`_commit_one_merge`,
+apply each accepted pair through the identity merge of the `curate-decisions`
+surface, which runs the same prepare and commit merge cores as `merge`,
 auto-committing per merge. N>2 groups MUST NOT be auto-merged; `curate`
 MUST print the exact pairwise `openkos merge` commands per group.
 When `--auto-merge` is passed and the run is eligible, Identity MUST run the
@@ -121,13 +122,16 @@ that already gates Identity's cost line and consent flow (curate-command:
 Per-Stage Cost Gate) is unchanged; only the upstream group count it reads
 from `probe.llm_calls` is bounded. A group beyond that cap is not seen by the
 automatic pass in that run, and the existing cap disclosure still applies.
+(Previously: each accepted pair was applied by the walk itself via
+`_prepare_one_merge`/`_commit_one_merge`; the sequencing now lives behind the
+`curate-decisions` surface and the command renders its returned data.)
 
 #### Scenario: Accepted pair is committed per-item
 
 - GIVEN one accepted duplicate pair
 - WHEN Identity applies it
-- THEN `_prepare_one_merge`/`_commit_one_merge` run and the bundle
-  auto-commits before the next item
+- THEN the merge runs through the same prepare and commit merge cores as
+  `merge` and the bundle auto-commits before the next item
 
 #### Scenario: N>2 group prints pairwise commands, never auto-merges
 
@@ -165,11 +169,29 @@ automatic pass in that run, and the existing cap disclosure still applies.
 - WHEN `curate --auto --auto-merge` runs
 - THEN that group is not merged in this run and the cap disclosure is printed
 
+#### Scenario: A drifted target still ends the run
+
+- GIVEN an accepted Identity pair whose member bytes changed between the
+  prompt and the write
+- WHEN Identity applies it
+- THEN nothing is written, the drift is reported, and `curate` exits 3 with no
+  later item or stage run, exactly as before the surface existed
+
+#### Scenario: A write failure still exits 1
+
+- GIVEN an accepted Identity pair whose write fails
+- WHEN Identity applies it
+- THEN `curate` discloses what it already applied and exits 1, exactly as
+  before the surface existed
+
 ### Requirement: Structure Stage Writes Through The Relate Core
 
 Structure MUST call `suggest_edge_types` with `on_progress`, and MUST
-write each accepted suggestion through the extracted `relate` core.
+write each accepted suggestion through the relation apply of the
+`curate-decisions` surface, which runs the extracted `relate` core.
 Declined and skipped suggestions MUST be skipped without a write.
+(Previously: the walk wrote each accepted suggestion by calling the extracted
+`relate` core directly.)
 
 #### Scenario: Accepted suggestion writes via the extracted core
 
@@ -194,9 +216,12 @@ Declined and skipped suggestions MUST be skipped without a write.
 ### Requirement: Metadata Stage Writes Tiers, Reports Sensitivity
 
 Metadata MUST call `suggest_volatility` with `on_progress` and write
-accepted tiers through the extracted `set-volatility` core. Sensitivity
+accepted tiers through the tier apply of the `curate-decisions` surface,
+which runs the extracted `set-volatility` core. Sensitivity
 gaps surfaced in the same pass MUST be reported only; Metadata MUST NOT
 write sensitivity.
+(Previously: the walk wrote accepted tiers by calling the extracted
+`set-volatility` core directly.)
 
 #### Scenario: Accepted tier writes via the extracted core
 
@@ -769,13 +794,23 @@ presents: `applied` (as proposed or modified) when the item is written,
 `declined` when the operator declines it through a surface that records the
 decline. A row presented and neither written nor declined MUST return to
 `pending`. The Contradictions stage stays report-only: it enqueues and
-never applies.
+never applies. A row that a write resolves MUST be resolved by the
+`curate-decisions` apply that performed the write, in the same action, not by
+a separate step in the command.
+(Previously: the requirement did not say where the resolution is performed.)
 
 #### Scenario: An accepted relation resolves its row
 
 - GIVEN an open relation-type row
 - WHEN the operator accepts it in the Structure stage
 - THEN the relation is written and the row is `applied` as proposed
+
+#### Scenario: A skipped item returns to pending
+
+- GIVEN an open Identity row presented in the walk
+- WHEN the operator answers `s`
+- THEN nothing is written and the row is `pending` after the run
+
 ### Requirement: Identity Prompt Separates Skip From A Keep-Distinct Ruling
 
 The Identity stage's per-item merge prompt MUST be exactly the prompt
