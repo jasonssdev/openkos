@@ -63,9 +63,14 @@ def test_application_directory_is_scanned_completely() -> None:
     exists, so a future reader trusts the OTHER two tests in this file
     actually looked at it rather than silently scanning zero files."""
     modules = {path.name for path in _application_modules()}
-    assert modules >= {"query.py", "ingest.py", "identity_stage.py"}, (
-        f"expected 'query.py', 'ingest.py' and 'identity_stage.py' among "
-        f"scanned application modules; found: {modules}"
+    assert modules >= {
+        "query.py",
+        "ingest.py",
+        "identity_stage.py",
+        "queue_refresh.py",
+    }, (
+        f"expected 'query.py', 'ingest.py', 'identity_stage.py' and "
+        f"'queue_refresh.py' among scanned application modules; found: {modules}"
     )
 
 

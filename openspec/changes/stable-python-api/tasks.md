@@ -257,11 +257,11 @@ fail.
 Goal: a model-free `refresh_decision_queue` application service and the
 `OpenKosError` root module. Satisfies: R1, R2, R3, R4, R5. Depends on: S1, S2.
 
-- [ ] S3.1 RED: create `tests/unit/test_errors.py`: `errors.py` imports nothing from
+- [x] S3.1 RED: create `tests/unit/test_errors.py`: `errors.py` imports nothing from
   `openkos` (AST walk). Observe RED (module missing). Satisfies: A8.
-- [ ] S3.2 GREEN: create `src/openkos/errors.py` with `class OpenKosError(Exception)`
+- [x] S3.2 GREEN: create `src/openkos/errors.py` with `class OpenKosError(Exception)`
   and its docstring (catch-compatible root). Satisfies: A8.
-- [ ] S3.3 RED: create `tests/unit/application/test_queue_refresh.py`. With a chat
+- [x] S3.3 RED: create `tests/unit/application/test_queue_refresh.py`. With a chat
   factory and `application.backends.chat_client` patched to fail: judged identity,
   relation and volatility verdicts become open rows; a second refresh leaves
   `kind_stats` identical for all three kinds; a changed member retires the old row
@@ -274,13 +274,13 @@ Goal: a model-free `refresh_decision_queue` application service and the
   disagreeing-regime volatility types are skipped and counted in
   `volatility_ambiguous`; `QueueRefreshRefused` on an unreadable workspace with
   nothing written. Satisfies: R1, R3, R4.
-- [ ] S3.4 RED: lock tests in the same file: a recording commit section proves every
+- [x] S3.4 RED: lock tests in the same file: a recording commit section proves every
   write happened inside a section and the compute phase held none (a lock taken by
   another process via `lock.workspace_lock` during compute does not block it);
   a section that raises busy surfaces `WorkspaceBusyError` unchanged with
   already-upserted rows kept; the queue schema is created only inside one section.
   Satisfies: R2.
-- [ ] S3.5 GREEN: create `src/openkos/application/queue_refresh.py`:
+- [x] S3.5 GREEN: create `src/openkos/application/queue_refresh.py`:
   `QueueRefreshRefused(OpenKosError)`, `RefreshOutcome`, and
   `refresh_decision_queue(root, *, commit_section, clock=None,
   find_candidates_report=<call-time lambda>)`. Compute all three outcomes first
@@ -289,13 +289,13 @@ Goal: a model-free `refresh_decision_queue` application service and the
   schema inside one `commit_section()`, publish identity, relation_type, then
   volatility. Imports `openkos.errors` (leaf) only for the refusal base; never
   imports client builders. Satisfies: R1, R2, R3, R4, R5.
-- [ ] S3.6 Layering: extend `test_application_directory_is_scanned_completely` in
+- [x] S3.6 Layering: extend `test_application_directory_is_scanned_completely` in
   `tests/unit/application/test_layering.py` to assert `identity_stage.py` and
   `queue_refresh.py` are scanned (the glob already covers them). Satisfies: A5.
-- [ ] S3.7 Survival and mutation: run existing producer/daemon tests unchanged
+- [x] S3.7 Survival and mutation: run existing producer/daemon tests unchanged
   (GREEN). Mutate `complete=` in the relation publish to `True` and observe the
   "stays open" test redden; revert, purge, GREEN. Satisfies: R4.
-- [ ] S3.8 Run the five gates; commit with `Refs #1391`. Satisfies: R1..R5.
+- [x] S3.8 Run the five gates; commit with `Refs #1391`. Satisfies: R1..R5.
 
 Branch/PR: `feat/queue-refresh-service`. Independent mutation: call `publish` with
 `amend_same_inputs=False` for identity; the second-refresh stats test must fail.
