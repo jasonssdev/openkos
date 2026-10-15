@@ -212,6 +212,11 @@ class PendingReport:
     types (a cross-type identity row has its own resolving command)."""
 
 
+def open_items(report: PendingReport) -> tuple[pq.PendingItem, ...]:
+    """The report's rows still awaiting a decision, in stored order."""
+    return tuple(i for i in report.items if i.status in pq.OPEN_STATUSES)
+
+
 def _read_inbox(layout: WorkspaceLayout) -> Path | None:
     try:
         return config.read_config(layout.root).unattended.inbox

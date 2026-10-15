@@ -26,7 +26,7 @@ Only names listed in `__all__` are public; the underscore modules of this
 package and everything under `openkos.application` are not.
 """
 
-from typing import Final
+from typing import Final as _Final
 
 from openkos.api._decisions import (
     Decision,
@@ -68,7 +68,7 @@ from openkos.llm.base import (
 )
 from openkos.lock import WorkspaceBusyError, WorkspaceLockUnavailableError
 
-API_VERSION: Final = 1
+API_VERSION: _Final = 1
 """The compatibility version of this surface, independent of the package version."""
 
 __all__ = [

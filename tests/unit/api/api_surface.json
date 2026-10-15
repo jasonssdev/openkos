@@ -1,0 +1,702 @@
+{
+  "api_version": 1,
+  "names": {
+    "API_VERSION": {
+      "kind": "constant",
+      "type": "int"
+    },
+    "Action": {
+      "bases": [
+        "enum.StrEnum"
+      ],
+      "kind": "enum",
+      "members": {
+        "KEEP_DISTINCT": "keep_distinct",
+        "MERGE": "merge",
+        "RELATE": "relate",
+        "RELATE_REVERSED": "relate_reversed",
+        "SET_TIER": "set_tier",
+        "SKIP": "skip"
+      }
+    },
+    "ActivityEntry": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "date"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "text"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "BackendError": {
+      "bases": [
+        "OpenKosError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "BackendGenerationCapped": {
+      "bases": [
+        "BackendError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "BackendModelNotFound": {
+      "bases": [
+        "BackendError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "BackendUnavailable": {
+      "bases": [
+        "BackendError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "Decision": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "decision_key"
+        },
+        {
+          "annotation": "Literal['identity', 'relation_type', 'volatility', 'contradiction', 'revision', 'watch_refusal']",
+          "default": false,
+          "name": "kind"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "targets"
+        },
+        {
+          "annotation": "bool | None",
+          "default": false,
+          "name": "fresh"
+        },
+        {
+          "annotation": "Literal['judged_same', 'judged_different', 'judged_uncertain', 'pending_evaluation', 'not_applicable']",
+          "default": false,
+          "name": "evaluation"
+        },
+        {
+          "annotation": "tuple[Action, ...]",
+          "default": false,
+          "name": "actions"
+        },
+        {
+          "annotation": "tuple[WithheldAction, ...]",
+          "default": false,
+          "name": "withheld"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "resolves_via"
+        },
+        {
+          "annotation": "IdentityDetail | RelationDetail | TierDetail | None",
+          "default": false,
+          "name": "detail"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "DecisionKind": {
+      "kind": "alias",
+      "value": "Literal['identity', 'relation_type', 'volatility', 'contradiction', 'revision', 'watch_refusal']"
+    },
+    "DriftDetected": {
+      "bases": [
+        "WriteRefused"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "Evaluation": {
+      "kind": "alias",
+      "value": "Literal['judged_same', 'judged_different', 'judged_uncertain', 'pending_evaluation', 'not_applicable']"
+    },
+    "HealthCounts": {
+      "fields": [
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "dangling"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "unextracted"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "unjudged"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "unevidenced"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "staging_dropped"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "below_source_sensitivity"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "dangling_provenance"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "unbacked_provenance"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "exact_title_groups"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "open_contradictions"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "stale_contradictions"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "IdentityDetail": {
+      "fields": [
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "member_ids"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "okf_type"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "tier"
+        },
+        {
+          "annotation": "Literal['same', 'different', 'uncertain'] | None",
+          "default": false,
+          "name": "verdict"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "rationale"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "JobSummary": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "kind"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "started_at"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "ended_at"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "outcome"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "detail_code"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "units_deferred"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "needs_attention"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "JudgingRefused": {
+      "bases": [
+        "OpenKosError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "KindCounts": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "kind"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "enqueued"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "applied_as_proposed"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "applied_modified"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "declined"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "stale"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "open"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "OpenKosError": {
+      "bases": [
+        "Exception"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "PendingReport": {
+      "fields": [
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "queue_computed"
+        },
+        {
+          "annotation": "tuple[PendingRow, ...]",
+          "default": false,
+          "name": "open_rows"
+        },
+        {
+          "annotation": "tuple[KindCounts, ...]",
+          "default": false,
+          "name": "stats"
+        },
+        {
+          "annotation": "tuple[JobSummary, ...]",
+          "default": false,
+          "name": "attention"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "jobs_unreadable"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "PendingRow": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "decision_key"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "kind"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "targets"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "subject"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "resolving_command"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "QueueRefreshRefused": {
+      "bases": [
+        "OpenKosError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "QueueUnavailableError": {
+      "bases": [
+        "OpenKosError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "Refused": {
+      "bases": [
+        "WriteRefused"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "RelationDetail": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "source_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "target_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "effective_source_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "effective_target_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "suggested_type"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "rationale"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "TierDetail": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "type_name"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "current_default"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "suggested_tier"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "rationale"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "WithheldAction": {
+      "fields": [
+        {
+          "annotation": "Action",
+          "default": false,
+          "name": "action"
+        },
+        {
+          "annotation": "Literal['pending_evaluation', 'judged_different', 'judged_uncertain', 'cross_type', 'more_than_two_members', 'no_valid_suggestion']",
+          "default": false,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "Workspace": {
+      "fields": [
+        {
+          "annotation": "pathlib.Path",
+          "default": false,
+          "name": "root"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {
+        "open": {
+          "kind": "classmethod",
+          "parameters": [
+            {
+              "annotation": "str | os.PathLike[str]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "path"
+            }
+          ],
+          "returns": "Workspace"
+        }
+      }
+    },
+    "WorkspaceBusyError": {
+      "bases": [
+        "RuntimeError",
+        "OpenKosError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "WorkspaceLockUnavailableError": {
+      "bases": [
+        "RuntimeError",
+        "OpenKosError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "WorkspaceNotFound": {
+      "bases": [
+        "OpenKosError"
+      ],
+      "fields": {
+        "path": "pathlib.Path",
+        "reason": "str"
+      },
+      "kind": "exception",
+      "members": {}
+    },
+    "WorkspaceStatus": {
+      "fields": [
+        {
+          "annotation": "pathlib.Path",
+          "default": false,
+          "name": "root"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "sources"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "concepts"
+        },
+        {
+          "annotation": "Mapping[str, int]",
+          "default": false,
+          "name": "concepts_by_type"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "conformance_findings"
+        },
+        {
+          "annotation": "tuple[ActivityEntry, ...] | None",
+          "default": false,
+          "name": "recent_activity"
+        },
+        {
+          "annotation": "HealthCounts",
+          "default": false,
+          "name": "health"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "vectors_missing"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "stale_indexes"
+        },
+        {
+          "annotation": "tuple[int, int] | None",
+          "default": false,
+          "name": "edges"
+        },
+        {
+          "annotation": "Literal['present', 'absent', 'unreadable']",
+          "default": false,
+          "name": "queue"
+        },
+        {
+          "annotation": "Mapping[str, int]",
+          "default": false,
+          "name": "open_decisions_by_kind"
+        },
+        {
+          "annotation": "JobSummary | None",
+          "default": false,
+          "name": "last_job"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "jobs_unreadable"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "warnings"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "WorkspaceUnreadable": {
+      "bases": [
+        "OpenKosError"
+      ],
+      "fields": {
+        "path": "pathlib.Path",
+        "reason": "str"
+      },
+      "kind": "exception",
+      "members": {}
+    },
+    "WriteFailed": {
+      "bases": [
+        "Refused"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "WriteRefused": {
+      "bases": [
+        "OpenKosError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "list_decisions": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "tuple[Decision, ...]"
+    },
+    "pending_report": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "PendingReport"
+    },
+    "status": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "WorkspaceStatus"
+    }
+  }
+}

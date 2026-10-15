@@ -200,6 +200,23 @@ def test_the_report_lists_open_rows_with_subject_and_resolving_command(
     assert rows["volatility"].targets == ()
 
 
+def test_a_resolved_row_is_not_listed_as_open(root: Path) -> None:
+    support.enqueue_identity(root, ("concepts/a", "concepts/b"))
+    support.enqueue_identity(root, ("concepts/c", "concepts/d"))
+    conn = sqlite3.connect(config.WorkspaceLayout(root).findings_db_path)
+    conn.execute(
+        "UPDATE pending_items SET status = 'declined' "
+        "WHERE decision_key = (SELECT MAX(decision_key) FROM pending_items)"
+    )
+    conn.commit()
+    conn.close()
+
+    report = pending_report(Workspace.open(root))
+
+    assert len(report.open_rows) == 1
+    assert sum(s.enqueued for s in report.stats) == 2
+
+
 def test_the_report_carries_lifetime_counts_per_kind(root: Path) -> None:
     support.enqueue_identity(root, ("concepts/a", "concepts/b"))
 

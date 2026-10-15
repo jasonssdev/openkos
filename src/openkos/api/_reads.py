@@ -11,13 +11,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal
+from typing import Literal, Protocol
 
 from openkos.api._workspace import Workspace
 from openkos.application import pending_queue_report
 from openkos.application import status as application_status
-from openkos.state import jobs
-from openkos.state import pending_queue as pq
 
 
 @dataclass(frozen=True)
@@ -120,7 +118,25 @@ class PendingReport:
     jobs_unreadable: bool
 
 
-def _job_summary(job: jobs.JobRecord) -> JobSummary:
+class _JobFields(Protocol):
+    """The fields of an engine job record the summary reads. Structural, so the
+    facade names no `state` type."""
+
+    @property
+    def kind(self) -> str: ...
+    @property
+    def started_at(self) -> str: ...
+    @property
+    def ended_at(self) -> str | None: ...
+    @property
+    def outcome(self) -> str | None: ...
+    @property
+    def detail_code(self) -> str | None: ...
+    @property
+    def units_deferred(self) -> int: ...
+
+
+def _job_summary(job: _JobFields) -> JobSummary:
     return JobSummary(
         kind=job.kind,
         started_at=job.started_at,
@@ -194,8 +210,7 @@ def pending_report(workspace: Workspace) -> PendingReport:
                 item, raw.inbox, raw.bundle_dir
             ),
         )
-        for item in raw.items
-        if item.status in pq.OPEN_STATUSES
+        for item in pending_queue_report.open_items(raw)
     )
     return PendingReport(
         queue_computed=raw.queue_present,
