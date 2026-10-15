@@ -62,7 +62,9 @@ WRITE_CORE_RESOLUTIONS: Final = {
         "resolve_declined_contradiction"
     ),
     "openkos.application.ingest_service.ingest_source": "resolve_watch_refusals",
-    "openkos.cli.main._persist_adjudications": "resolve_judged_different",
+    "openkos.application.identity_adjudication.persist_adjudications": (
+        "resolve_judged_different"
+    ),
 }
 """Fully qualified write core -> the `queue_resolution` function it must call."""
 

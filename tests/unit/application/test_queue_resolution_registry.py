@@ -119,3 +119,14 @@ def test_no_resolver_is_orphaned() -> None:
         if name.startswith("resolve_") and callable(getattr(queue_resolution, name))
     }
     assert public == set(queue_resolution.WRITE_CORE_RESOLUTIONS.values())
+
+
+def test_the_adjudication_persist_core_is_registered_at_its_application_home() -> None:
+    """The persist moved out of `cli/main.py` (the `judging-application-service`
+    change); the registry names it where it now lives, so a stale CLI key cannot
+    quietly keep the guard green over a function that no longer exists."""
+    new_home = "openkos.application.identity_adjudication.persist_adjudications"
+    assert (
+        queue_resolution.WRITE_CORE_RESOLUTIONS[new_home] == "resolve_judged_different"
+    )
+    assert "openkos.cli.main._persist_adjudications" not in REGISTERED

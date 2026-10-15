@@ -1,6 +1,7 @@
 """A persisted DIFFERENT adjudication settles the identity row it answers
 (#1226): `adjudicate` and `curate` persist verdicts through
-`cli.main._persist_adjudications`, which closes the matching open row so
+`identity_adjudication.persist_adjudications` (behind the CLI's
+`_persist_adjudications` delegator), which closes the matching open row so
 `openkos pending` stops offering a pair the model already judged distinct.
 """
 
