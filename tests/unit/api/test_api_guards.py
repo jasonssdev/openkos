@@ -91,7 +91,13 @@ def _api_modules() -> dict[str, str]:
 def test_the_api_package_has_modules_to_scan() -> None:
     names = set(_api_modules())
 
-    assert {"__init__.py", "_workspace.py", "_reads.py", "_decisions.py"} <= names
+    assert {
+        "__init__.py",
+        "_workspace.py",
+        "_reads.py",
+        "_decisions.py",
+        "_wiring.py",
+    } <= names
 
 
 def test_every_api_module_imports_only_the_allowlist() -> None:
@@ -219,3 +225,47 @@ def test_importing_the_api_never_loads_the_cli_or_typer() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+# -- the API never depends on the process's working directory -------------------- #
+
+_CWD_CALLS = {"cwd", "getcwd", "chdir"}
+
+
+def _cwd_reads(source: str) -> list[str]:
+    """The `Path.cwd()`, `os.getcwd()` and `os.chdir()` spellings a source file
+    uses, as written. A workspace is addressed by its root alone."""
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Attribute) and node.attr in _CWD_CALLS:
+            found.append(ast.unparse(node))
+        elif isinstance(node, ast.Name) and node.id in _CWD_CALLS:
+            found.append(node.id)
+    return found
+
+
+def test_no_api_module_reads_or_changes_the_working_directory() -> None:
+    offenders = {
+        name: reads
+        for name, source in _api_modules().items()
+        if (reads := _cwd_reads(source))
+    }
+
+    assert len(_api_modules()) >= 5  # the scan is not vacuous
+    assert offenders == {}
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("from pathlib import Path\nroot = Path.cwd()\n", ["Path.cwd"]),
+        ("import os\nroot = os.getcwd()\n", ["os.getcwd"]),
+        ("from os import getcwd\nroot = getcwd()\n", ["getcwd"]),
+        ("import os\nos.chdir('/')\n", ["os.chdir"]),
+        ("from pathlib import Path\nroot = Path('.').absolute()\n", []),
+    ],
+)
+def test_every_spelling_of_reading_the_cwd_is_caught(
+    source: str, expected: list[str]
+) -> None:
+    assert _cwd_reads(source) == expected

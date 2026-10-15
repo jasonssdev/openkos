@@ -85,6 +85,10 @@ NON_RESOLVING_CORES: Final = {
         "only dispatches to the commit_*_decision functions, whose write cores "
         "each resolve the row; it writes nothing itself"
     ),
+    "openkos.api._decisions.apply_decision": (
+        "the Python API's wrapper over curate_decisions.apply_decision; it "
+        "binds ports and delegates, and writes nothing itself"
+    ),
 }
 """Fully qualified `*_core` that resolves no row, with the reason."""
 
