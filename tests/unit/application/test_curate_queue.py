@@ -10,8 +10,14 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
+
 from openkos import config
-from openkos.application import curate_queue
+from openkos.application import curate_queue, queue_producers
+from openkos.application import pending as application_pending
+from openkos.model import okf
+from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
+from openkos.resolution.candidates import CandidateGroup, Tier
 from openkos.state import derived
 from openkos.state import pending_queue as pq
 
@@ -202,3 +208,151 @@ def test_row_is_fresh_and_its_alias_agree_for_every_kind_the_list_reads(
         identity, current.get, ("concepts/a", "concepts/never-recorded")
     )
     assert curate_queue.row_is_fresh(volatility, current.get, ())
+
+
+# -- set_identity_verdicts: the amend-only write-through (judging, S2a) -------
+
+
+def _write_concept(layout: config.WorkspaceLayout, concept_id: str, body: str) -> None:
+    path = layout.bundle_dir / f"{concept_id}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        okf.dump_frontmatter({"type": "Concept", "title": concept_id}, body),
+        encoding="utf-8",
+    )
+
+
+_MEMBERS = ("concepts/a", "concepts/b")
+
+
+def _group() -> CandidateGroup:
+    return CandidateGroup(
+        okf_type="Concept", member_ids=_MEMBERS, tier=Tier.HIGH, trigger="alpha"
+    )
+
+
+def _judged(verdict: Verdict) -> AdjudicatedCandidate:
+    return AdjudicatedCandidate(_group(), verdict, 0.8, "Because.")
+
+
+def _identity_layout(tmp_path: Path, *, seed_open_row: bool = True):  # type: ignore[no-untyped-def]
+    layout = _layout(tmp_path)
+    for member in _MEMBERS:
+        _write_concept(layout, member, f"# {member}\n")
+    if seed_open_row:
+        proposal = queue_producers.identity_group_proposal(
+            _group(),
+            current_digest=application_pending.current_finding_digest(
+                layout.bundle_dir
+            ),
+        )
+        assert proposal is not None
+        _enqueue(layout, proposal)
+    return layout
+
+
+def _identity_items(layout: config.WorkspaceLayout) -> list[pq.PendingItem]:
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        return pq.all_items(conn)
+    finally:
+        conn.close()
+
+
+def _stats(layout: config.WorkspaceLayout) -> list[pq.KindStats]:
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        return pq.kind_stats(conn)
+    finally:
+        conn.close()
+
+
+def _set(
+    layout: config.WorkspaceLayout,
+    results: list[AdjudicatedCandidate],
+    pinned: dict[str, str | None] | None = None,
+) -> None:
+    curate_queue.set_identity_verdicts(
+        layout, results, pinned=pinned or {}, commit_section=_section
+    )
+
+
+@pytest.mark.parametrize("verdict", [Verdict.SAME, Verdict.UNCERTAIN])
+def test_a_same_or_uncertain_verdict_amends_the_open_row_in_place(
+    tmp_path: Path, verdict: Verdict
+) -> None:
+    layout = _identity_layout(tmp_path)
+    (before,) = _identity_items(layout)
+    stats = _stats(layout)
+
+    _set(layout, [_judged(verdict)])
+
+    (after,) = _identity_items(layout)
+    assert (after.id, after.status, after.created_at) == (
+        before.id,
+        before.status,
+        before.created_at,
+    )
+    assert json.loads(after.payload)["adjudication"] == {
+        "verdict": verdict.value,
+        "confidence": 0.8,
+        "rationale": "Because.",
+    }
+    assert _stats(layout) == stats
+
+
+def test_a_group_with_no_open_row_writes_nothing(tmp_path: Path) -> None:
+    layout = _identity_layout(tmp_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        pq.resolve_open_by_key(
+            conn,
+            f"identity:{pq.identity_key(_MEMBERS)}",
+            resolution=lambda _item: "declined",
+            resolved_by="curate",
+            commit_section=_section,
+        )
+    finally:
+        conn.close()
+    before = _identity_items(layout)
+
+    _set(layout, [_judged(Verdict.SAME)])
+
+    assert _identity_items(layout) == before
+
+
+def test_an_absent_queue_is_never_created(tmp_path: Path) -> None:
+    layout = _identity_layout(tmp_path, seed_open_row=False)
+
+    _set(layout, [_judged(Verdict.SAME)])
+
+    assert not layout.findings_db_path.exists()
+
+
+def test_a_result_whose_member_moved_since_it_was_pinned_is_not_written(
+    tmp_path: Path,
+) -> None:
+    layout = _identity_layout(tmp_path)
+    before = _identity_items(layout)
+    pinned: dict[str, str | None] = {"concepts/a": "digest-from-before-the-model-call"}
+
+    _set(layout, [_judged(Verdict.SAME)], pinned)
+
+    assert _identity_items(layout) == before
+
+
+def test_a_different_verdict_never_touches_the_row(tmp_path: Path) -> None:
+    layout = _identity_layout(tmp_path)
+    before = _identity_items(layout)
+
+    _set(layout, [_judged(Verdict.DIFFERENT)])
+
+    assert _identity_items(layout) == before
+
+
+def test_an_unreadable_queue_is_left_alone_without_raising(tmp_path: Path) -> None:
+    layout = _identity_layout(tmp_path, seed_open_row=False)
+    layout.findings_db_path.parent.mkdir(parents=True, exist_ok=True)
+    layout.findings_db_path.write_bytes(b"not a database" * 100)
+
+    _set(layout, [_judged(Verdict.SAME)])
