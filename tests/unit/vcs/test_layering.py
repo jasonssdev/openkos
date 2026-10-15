@@ -50,3 +50,65 @@ def test_cli_main_imports_vcs_git() -> None:
         module == "openkos.vcs" or module.startswith("openkos.vcs.")
         for module in modules
     ), "expected cli/main.py to import openkos.vcs"
+
+
+_AUTOCOMMIT_PATH = _SRC_ROOT / "vcs" / "autocommit.py"
+_AUTOCOMMIT_FORBIDDEN = (
+    "openkos.state",
+    "openkos.retrieval",
+    "openkos.graph",
+    "openkos.application",
+    "openkos.cli",
+    "openkos.mcp",
+    "typer",
+    "rich",
+)
+_AUTOCOMMIT_ALLOWED_OPENKOS = {
+    "openkos.vcs",
+    "openkos.vcs.git",
+    "openkos.config",
+    "openkos.model",
+    "openkos.model.okf",
+}
+
+
+def _imported_names(source: str) -> set[str]:
+    """Like `_collect_imported_modules`, but a `from pkg import name` also
+    contributes `pkg.name`, so `from openkos import state` is seen as
+    `openkos.state` and cannot slip past a prefix check."""
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module)
+            names.update(f"{node.module}.{alias.name}" for alias in node.names)
+    return names
+
+
+def _is_under(module: str, prefix: str) -> bool:
+    return module == prefix or module.startswith(prefix + ".")
+
+
+def test_autocommit_imports_only_the_allowed_set() -> None:
+    """The print-free commit core may reach the standard library, `vcs.git`,
+    `openkos.config` and `openkos.model.okf` and nothing that prints, prompts,
+    or sits in the derived/application/adapter layers."""
+    modules = _imported_names(_AUTOCOMMIT_PATH.read_text())
+
+    assert modules, "autocommit.py imports nothing: the guard would be vacuous"
+    forbidden = {
+        module
+        for module in modules
+        if any(_is_under(module, prefix) for prefix in _AUTOCOMMIT_FORBIDDEN)
+    }
+    assert not forbidden, f"autocommit.py imports forbidden modules: {forbidden}"
+    stray = {
+        module
+        for module in modules
+        if _is_under(module, "openkos")
+        and module != "openkos"
+        and module not in _AUTOCOMMIT_ALLOWED_OPENKOS
+    }
+    assert not stray, f"autocommit.py imports outside the allowed set: {stray}"
+    assert any(_is_under(module, "openkos.vcs") for module in modules)

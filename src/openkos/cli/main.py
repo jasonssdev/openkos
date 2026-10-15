@@ -163,6 +163,7 @@ from openkos.state import revision_findings as revision_findings_store
 from openkos.state import volatility_suggestions as volatility_suggestions_store
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import open_vector_store
+from openkos.vcs import autocommit as vcs_autocommit
 from openkos.vcs import git as vcs_git
 
 _T = TypeVar("_T")
@@ -797,21 +798,7 @@ def _commit_has_confidential(root: Path, paths: Sequence[str]) -> bool:
     frontmatter), any path under `raw/` (source copies, not concept
     documents), and any path missing on disk (a staged deletion has
     nothing to read) are all skipped without raising."""
-    reserved = {"bundle/index.md", "bundle/log.md"}
-    for rel_path in paths:
-        if rel_path in reserved or rel_path.startswith("raw/"):
-            continue
-        file_path = root / rel_path
-        if not file_path.is_file():
-            continue
-        try:
-            text = file_path.read_text(encoding="utf-8")
-            metadata, _ = okf.load_frontmatter(text)
-        except OSError, ValueError:
-            continue
-        if str(metadata.get("sensitivity", "")).strip() == okf.SENSITIVITY_ORDER[-1]:
-            return True
-    return False
+    return vcs_autocommit.paths_include_confidential(root, paths)
 
 
 def _snapshot_read(path: Path) -> tuple[bytes, str]:
@@ -1455,6 +1442,30 @@ def _echo_orphaned_raw_disclosure(
         )
 
 
+def _warn_commit_skipped(outcome: vcs_autocommit.CommitOutcome) -> None:
+    """The stderr WARNING for a commit the core skipped, worded exactly as the
+    CLI has always worded it. `nothing_to_commit` and a landed commit say
+    nothing."""
+    if outcome.skipped == "not_a_repository":
+        typer.echo(
+            "openkos: WARNING -- not a git repository; skipped auto-commit "
+            "(writes are on disk).",
+            err=True,
+        )
+    elif outcome.skipped == "identity_unset":
+        typer.echo(
+            "openkos: WARNING -- git identity unset; skipped auto-commit "
+            "(writes are on disk).",
+            err=True,
+        )
+    elif outcome.skipped == "failed":
+        typer.echo(
+            f"openkos: WARNING -- auto-commit did not complete ({outcome.detail}); "
+            "run `git status` to inspect.",
+            err=True,
+        )
+
+
 def _autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
     """Best-effort, non-fatal auto-commit after a mutating verb's Phase B
     (git-lifecycle Slice 2), structurally cloned from `init`'s own
@@ -1485,48 +1496,24 @@ def _autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
     there is no commit to name, so a caller must print nothing rather than
     invent one. Every pre-existing caller ignores the return value, so this
     is purely additive."""
-    repo = vcs_git.repo_root(root)
-    if repo is None:
-        typer.echo(
-            "openkos: WARNING -- not a git repository; skipped auto-commit "
-            "(writes are on disk).",
-            err=True,
-        )
-        return None
-    if not vcs_git.has_git_identity(root):
-        typer.echo(
-            "openkos: WARNING -- git identity unset; skipped auto-commit "
-            "(writes are on disk).",
-            err=True,
-        )
-        return None
-    try:
-        sha = vcs_git.commit_paths(root, paths, message)
-    except (vcs_git.GitError, OSError) as exc:
-        typer.echo(
-            f"openkos: WARNING -- auto-commit did not complete ({exc}); "
-            "run `git status` to inspect.",
-            err=True,
-        )
-        return None
-    if _commit_has_confidential(root, paths):
+    outcome = vcs_autocommit.commit_paths(
+        root,
+        paths,
+        message,
+        has_confidential=lambda r, p: _commit_has_confidential(r, p),
+    )
+    _warn_commit_skipped(outcome)
+    if outcome.includes_confidential:
         typer.echo(
             "openkos: NOTICE -- this commit includes content marked "
             "'sensitivity: confidential'. openkos commits to LOCAL git "
             "only and never pushes to a remote.",
             err=True,
         )
-    return sha
+    return outcome.sha
 
 
-@dataclass(frozen=True)
-class _ConfigCommitPlan:
-    """How a config-rewriting verb's commit is made when `openkos.yaml`
-    already carries uncommitted edits (#1330): `apply` is the verb's own
-    change as a function of the file's bytes, applied to the COMMITTED
-    version so the user's edits stay out of the commit."""
-
-    apply: Callable[[bytes], bytes]
+_ConfigCommitPlan = vcs_autocommit.ConfigCommitPlan
 
 
 def _decide_config_commit(
@@ -1550,27 +1537,8 @@ def _decide_config_commit(
     `set_type_tier` can edit. It reads git and nothing else: it never prints
     and never exits, so the curation decision surface can reach it as a port;
     `_plan_config_commit` is the exit wrapper."""
-    try:
-        if not vcs_git.paths_dirty(root, ["openkos.yaml"]):
-            return None
-        head = vcs_git.head_file_bytes(root, "openkos.yaml")
-    except vcs_git.GitError:
-        return None
-    if head is None:
-        return None
-
-    def apply(content: bytes) -> bytes:
-        text = content.decode("utf-8")
-        return config.set_type_tier(text, concept_type, tier).encode("utf-8")
-
-    try:
-        same_entry = config.type_tier_entry(
-            head.decode("utf-8"), concept_type
-        ) == config.type_tier_entry(baseline.decode("utf-8"), concept_type)
-        apply(head)
-    except ValueError:
-        same_entry = False
-    if not same_entry:
+    decision = vcs_autocommit.plan_config_edit(root, concept_type, tier, baseline)
+    if isinstance(decision, vcs_autocommit.ConfigEditConflict):
         return curate_decisions.ConfigCommitRefusal(
             f"openkos {verb}: refusing to write -- openkos.yaml has "
             f"uncommitted changes to the {concept_type!r} tier entry (or a "
@@ -1578,7 +1546,7 @@ def _decide_config_commit(
             "the change cannot be committed on its own; commit or stash "
             "them, then try again."
         )
-    return _ConfigCommitPlan(apply=apply)
+    return decision
 
 
 def _plan_config_commit(
@@ -1610,32 +1578,12 @@ def _autocommit_config_edit(
     leaving the user's uncommitted edits in the working tree; a degradation
     is reported exactly as `_autocommit` reports it."""
     if plan is None:
-        try:
-            if not vcs_git.paths_dirty(root, ["openkos.yaml"]):
-                return None
-        except vcs_git.GitError:
-            pass  # let `_autocommit` report the real condition
+        if not vcs_autocommit.config_edit_pending(root):
+            return None
         return _autocommit(root, ["openkos.yaml"], message)
-    if not vcs_git.has_git_identity(root):
-        typer.echo(
-            "openkos: WARNING -- git identity unset; skipped auto-commit "
-            "(writes are on disk).",
-            err=True,
-        )
-        return None
-    try:
-        return vcs_git.commit_transformed_file(
-            root, "openkos.yaml", plan.apply, message
-        )
-    except (vcs_git.GitError, OSError) as exc:
-        if str(exc).endswith("nothing to commit"):
-            return None  # the committed file already holds this tier
-        typer.echo(
-            f"openkos: WARNING -- auto-commit did not complete ({exc}); "
-            "run `git status` to inspect.",
-            err=True,
-        )
-        return None
+    outcome = vcs_autocommit.commit_config_edit(root, message, plan)
+    _warn_commit_skipped(outcome)
+    return outcome.sha
 
 
 @app.command(
