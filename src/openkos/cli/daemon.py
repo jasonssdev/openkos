@@ -51,8 +51,7 @@ from openkos import config, logsetup, resolution
 from openkos.application import (
     contradictions_service,
     digest,
-    duplicates_service,
-    identity_adjudication,
+    identity_stage,
     pending_queue_report,
     reindex_service,
     revisions,
@@ -252,40 +251,19 @@ def _raise_failure(failure: BaseException | None) -> None:
 
 
 def _identity_stage(ctx: StageContext) -> StageResult:
-
-    report = duplicates_service.report_duplicates(
+    report = identity_stage.identity_report(
         ctx.root,
-        include_deprecated=False,
+        ctx.layout,
+        # Late-bound, so a patch of `openkos.resolution.find_candidates_report`
+        # keeps intercepting.
         find_candidates_report=lambda *a, **k: resolution.find_candidates_report(
             *a, **k
         ),
     )
-    # #1226: a group the model judged DIFFERENT (verdict still servable) is
-    # settled; leaving it out lets the complete pass retire its open row.
-    judged_different = application_pending.judged_different_groups(ctx.layout)
-    report = dataclasses.replace(
-        report,
-        groups=tuple(
-            group
-            for group in report.groups
-            if tuple(sorted(group.member_ids)) not in judged_different
-        ),
-    )
+    # Disclose BEFORE the enqueue: a busy commit still announces the cap.
     _disclose(ctx.notify, "identity", report.truncation_notice)
-    producers.enqueue_identity(
-        ctx.queue(),
-        report,
-        current_digest=application_pending.current_finding_digest(
-            ctx.layout.bundle_dir
-        ),
-        bundle_dir=ctx.layout.bundle_dir,
-        commit_section=ctx.commit_section,
-        # Carry the latest servable stored verdict (rubric, members and digests
-        # checked), so a pass never replaces a judged row with an unjudged one.
-        # Store-only: no client is built and no model is called.
-        adjudicated=identity_adjudication.servable_stored_verdicts(
-            ctx.layout, report.groups
-        ),
+    identity_stage.enqueue_identity_report(
+        ctx.queue(), ctx.layout, report, commit_section=ctx.commit_section
     )
     return StageResult()
 

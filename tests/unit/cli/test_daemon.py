@@ -1199,6 +1199,33 @@ def test_the_identity_stage_is_silent_when_the_cap_did_not_bind(
     assert seen == []
 
 
+def test_the_identity_stage_discloses_the_cap_before_a_busy_enqueue_raises(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Order pin (characterization, green by design): the truncation notice is
+    announced BEFORE the enqueue, so a commit that finds the workspace busy has
+    still told the user the list was capped."""
+    from openkos import lock
+    from openkos.application import duplicates_service, queue_producers
+
+    monkeypatch.setattr(
+        duplicates_service,
+        "report_duplicates",
+        lambda *a, **k: duplicates_service.DuplicatesReport((), 0, _CAP_NOTICE),
+    )
+
+    def busy(*a: object, **k: object) -> None:
+        raise lock.WorkspaceBusyError("busy")
+
+    monkeypatch.setattr(queue_producers, "enqueue_identity", busy)
+    seen: list[str] = []
+
+    with pytest.raises(lock.WorkspaceBusyError):
+        daemon_module._identity_stage(_stage_ctx(root, seen))
+
+    assert seen == [f"identity: {_CAP_NOTICE}"]
+
+
 # --- a judged-SAME row survives a daemon pass -------------
 
 

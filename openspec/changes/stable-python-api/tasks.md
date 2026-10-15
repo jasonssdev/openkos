@@ -152,25 +152,25 @@ Goal: `application/identity_stage.py` owns `identity_report` and
 today's exact order and behavior. Satisfies: R5 (and groundwork for A14).
 Depends on: none.
 
-- [ ] S1.1 RED: create `tests/unit/application/test_identity_stage.py` (module
+- [x] S1.1 RED: create `tests/unit/application/test_identity_stage.py` (module
   missing, ImportError RED). Tests: `identity_report` drops a judged-different
   group and preserves `truncation_notice`; it never builds a client
   (`application.backends.chat_client` patched to fail); `enqueue_identity_report`
   carries a servable stored verdict and amends an open unjudged row
   (`ProducerResult.amended == 1`, `inserted == 0`); a second call is `unchanged`
   and `kind_stats` is identical. Satisfies: R5, R3.
-- [ ] S1.2 GREEN: create `src/openkos/application/identity_stage.py` with
+- [x] S1.2 GREEN: create `src/openkos/application/identity_stage.py` with
   `identity_report(root, layout, *, find_candidates_report)` (LLM-free:
   `duplicates_service.report_duplicates` reached through the module attribute, then
   drop judged-different groups) and `enqueue_identity_report(conn, layout, report,
   *, commit_section, clock=None)` (`servable_stored_verdicts`, then
   `queue_producers.enqueue_identity`). No client is built in either half.
   Satisfies: R5.
-- [ ] S1.3 RED: in `tests/unit/cli/test_daemon.py` add one test that the truncation
+- [x] S1.3 RED: in `tests/unit/cli/test_daemon.py` add one test that the truncation
   notice is announced when the enqueue raises `WorkspaceBusyError` (today's
   order: disclose, then enqueue). Observe it green on the current tree (it
   characterizes existing behavior) and keep it as the order pin. Satisfies: R5.
-- [ ] S1.4 GREEN: in `src/openkos/cli/daemon.py` rewrite `_identity_stage(ctx)` to
+- [x] S1.4 GREEN: in `src/openkos/cli/daemon.py` rewrite `_identity_stage(ctx)` to
   call `identity_stage.identity_report(ctx.root, ctx.layout,
   find_candidates_report=lambda *a, **k: resolution.find_candidates_report(*a,
   **k))` (call-time lambda so the `openkos.resolution.find_candidates_report`
@@ -178,16 +178,16 @@ Depends on: none.
   report.truncation_notice)`, then `enqueue_identity_report(ctx.queue(),
   ctx.layout, report, commit_section=ctx.commit_section)`; return `StageResult()`.
   Keep `uses_model=False` on the registration. Satisfies: R5.
-- [ ] S1.5 Widen `tests/unit/application/test_layering.py`:
+- [x] S1.5 Widen `tests/unit/application/test_layering.py`:
   `test_application_directory_is_scanned_completely` asserts `identity_stage.py` is
   scanned (and gains `queue_refresh.py` in S3). Satisfies: A5.
-- [ ] S1.6 REFACTOR and survival: run the existing identity tests in
+- [x] S1.6 REFACTOR and survival: run the existing identity tests in
   `tests/unit/cli/test_daemon.py` (13 references to `_identity_stage`)
   unchanged and observe GREEN; confirm the patches of `report_duplicates` and
   `find_candidates_report` still intercept. Mutate the disclose/enqueue order in
   `_identity_stage` and observe the S1.3 test redden; revert, purge, GREEN.
   Satisfies: R5.
-- [ ] S1.7 Run the five gates; commit with `Refs #1391`. Satisfies: R5.
+- [x] S1.7 Run the five gates; commit with `Refs #1391`. Satisfies: R5.
 
 Branch/PR: `feat/identity-stage-lift`; commits `test(cli): ...`, `refactor(cli):
 ...`. Independent mutation: swap the disclose and enqueue lines in
