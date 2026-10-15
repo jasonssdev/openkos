@@ -27,8 +27,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from openkos import config
+from openkos import config, resolution
 from openkos.application import identity_stage, queue_producers
 from openkos.application import pending as application_pending
 from openkos.application import suggest_relations_service as relations_service
@@ -36,7 +37,6 @@ from openkos.application import suggest_volatility_service as volatility_service
 from openkos.application.curate_queue import queue_present
 from openkos.application.lock_wait import CommitSection
 from openkos.errors import OpenKosError
-from openkos.resolution import find_candidates_report as _find_candidates_report
 from openkos.resolution.candidates import CandidateGroupReport
 from openkos.state import derived
 from openkos.state import pending_queue as pq
@@ -59,10 +59,10 @@ class RefreshOutcome:
     identity_truncation_notice: str | None
 
 
-def _default_find_candidates_report(*args: object, **kwargs: object) -> object:
+def _default_find_candidates_report(*args: Any, **kwargs: Any) -> CandidateGroupReport:
     # Late-bound, so a patch of `openkos.resolution.find_candidates_report`
     # keeps intercepting.
-    return _find_candidates_report(*args, **kwargs)  # type: ignore[arg-type]
+    return resolution.find_candidates_report(*args, **kwargs)
 
 
 def _nothing(kind: str, *, complete: bool) -> queue_producers.ProducerResult:
@@ -84,7 +84,7 @@ def refresh_decision_queue(
     clock: Callable[[], datetime] | None = None,
     find_candidates_report: Callable[
         ..., CandidateGroupReport
-    ] = _default_find_candidates_report,  # type: ignore[assignment]
+    ] = _default_find_candidates_report,
 ) -> RefreshOutcome:
     """Publish every servable persisted verdict as an open row of its kind.
 

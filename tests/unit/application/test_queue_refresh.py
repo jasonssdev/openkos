@@ -643,3 +643,18 @@ def test_the_queue_schema_is_created_only_inside_the_first_section(
     assert section.queue_existed_at_entry[0] is False
     assert all(section.queue_existed_at_entry[1:])
     assert section.writes[0] == ["ensure_schema"]
+
+
+def test_the_default_candidate_walk_is_late_bound(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A patch of `openkos.resolution.find_candidates_report` reaches the default,
+    # as it reaches the daemon's identity stage.
+    _record_all(root)
+    monkeypatch.setattr(
+        "openkos.resolution.find_candidates_report", _finder(_group(*MEMBERS))
+    )
+
+    outcome = queue_refresh.refresh_decision_queue(root, commit_section=_section)
+
+    assert outcome.identity.inserted == 1
