@@ -1,0 +1,169 @@
+{
+  "adjudicate_persist_busy": {
+    "adjudications": [],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [],
+    "stderr": "openkos adjudicate: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos adjudicate: warning -- the workspace is busy, so the adjudication verdicts were not persisted (another OpenKOS process is modifying this workspace right now; nothing was read or written by this run -- wait for that command to finish and try again); the next run will re-judge them.\n",
+    "stdout": "openkos adjudicate: workspace at <ROOT>\n\nadjudicated 1: 0 SAME, 1 DIFFERENT\nLegend: [tier] type -- trigger, then verdict and rationale. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[HIGH] Concept -- key\n  - concepts/foo\n  - concepts/foo-2\n  verdict: DIFFERENT\n  rationale: stub\n\nNext: openkos merge <survivor> <absorbed>\n"
+  },
+  "adjudicate_persist_failure": {
+    "adjudications": [],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [],
+    "stderr": "openkos adjudicate: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos adjudicate: warning -- failed to persist adjudication verdicts (disk I/O error); the next run will re-judge them.\n",
+    "stdout": "openkos adjudicate: workspace at <ROOT>\n\nadjudicated 1: 0 SAME, 1 DIFFERENT\nLegend: [tier] type -- trigger, then verdict and rationale. The tier is the MATCH METHOD, not a strength ranking: HIGH = exact normalized key, LOW = weakest per-token match of the smaller title (1.000 = every token matched, NOT identical titles).\n[HIGH] Concept -- key\n  - concepts/foo\n  - concepts/foo-2\n  verdict: DIFFERENT\n  rationale: stub\n\nNext: openkos merge <survivor> <absorbed>\n"
+  },
+  "curate_persist_busy": {
+    "adjudications": [],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n1 candidate group(s) -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: warning -- the workspace is busy, so the adjudication verdicts were not persisted (another OpenKOS process is modifying this workspace right now; nothing was read or written by this run -- wait for that command to finish and try again); the next run will re-judge them.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "Preconditions: empty\nIdentity: applied 0, skipped 0.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "curate_persist_failure": {
+    "adjudications": [],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n1 candidate group(s) -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 0 of 1 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos curate: warning -- failed to persist adjudication verdicts (disk I/O error); the next run will re-judge them.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "Preconditions: empty\nIdentity: applied 0, skipped 0.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "identity_cost_line_served": {
+    "adjudications": [
+      [
+        "different",
+        "cached"
+      ],
+      [
+        "different",
+        "stub"
+      ]
+    ],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n2 candidate group(s), 1 served -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Identity: 1 of 2 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "Preconditions: empty\nIdentity: applied 0, skipped 0.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "identity_gate_declined": {
+    "adjudications": [
+      [
+        "different",
+        "cached"
+      ]
+    ],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n2 candidate group(s), 1 served -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'gemma4:26b-a4b'.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "Proceed? [y/N]: n\nPreconditions: empty\nIdentity: declined -- no LLM calls made.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "identity_model_disclosure": {
+    "adjudications": [
+      [
+        "different",
+        "cached"
+      ],
+      [
+        "different",
+        "stub"
+      ]
+    ],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\n2 candidate group(s), 1 served -> 1 LLM call(s)\nopenkos curate: Identity: this stage runs on 'other-model:1b'.\nopenkos curate: Identity: 1 of 2 candidate group(s) served from persisted adjudications; 1 judged fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "Preconditions: empty\nIdentity: applied 0, skipped 0.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "metadata_partial_batch": {
+    "adjudications": [],
+    "commits": [
+      "openkos: set-volatility Concept -> volatile"
+    ],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [
+      [
+        "volatility",
+        "applied",
+        "as_proposed"
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Metadata: checking...\n2 concept type(s), 1 served -> 1 LLM call(s)\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n[volatile] Concept\n  rationale: stub rationale\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: not reviewed this run -- no relation suggestions are waiting; `openkos curate --structure` computes and reviews them.\nMetadata: unavailable -- connection refused. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment. Already applied 1, skipped 0 before the failure.\nContradictions: No candidate pairs found.\n"
+  },
+  "structure_partial_batch": {
+    "adjudications": [],
+    "commits": [
+      "openkos: relate concepts/foo -> concepts/bar (references)"
+    ],
+    "edge_suggestions": [
+      [
+        "concepts/foo\nconcepts/bar",
+        "references"
+      ]
+    ],
+    "exit_code": 0,
+    "queue_rows": [
+      [
+        "relation_type",
+        "applied",
+        "as_proposed"
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n2 untyped edge(s) -> 2 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: 0 of 2 candidate edge(s) served from persisted suggestions; 2 typed fresh.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n\ropenkos curate: embedding doc 1/1 - 0s...\n",
+    "stdout": "\n[references] concepts/foo -> concepts/bar\n  rationale: stub rationale\n  committed as <SHA> -- `git revert <SHA>` undoes it only while it is the latest commit.\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: unavailable -- connection refused. Start it with `ollama serve`, then try again. Or run `openkos doctor` to diagnose the environment. Already applied 1, skipped 0 before the failure.\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "structure_persist_busy": {
+    "adjudications": [],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n1 untyped edge(s) -> 1 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: 0 of 1 candidate edge(s) served from persisted suggestions; 1 typed fresh.\nopenkos curate: warning -- the workspace is busy, so the edge suggestions were not persisted (another OpenKOS process is modifying this workspace right now; nothing was read or written by this run -- wait for that command to finish and try again); the next run will re-type them.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n[references] concepts/foo -> concepts/bar\n  rationale: stub rationale\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: applied 0, skipped 1.\n  declined: concepts/foo -> concepts/bar [references]\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "structure_persist_failure": {
+    "adjudications": [],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [
+      [
+        "relation_type",
+        "pending",
+        null
+      ]
+    ],
+    "stderr": "openkos curate: Preconditions: checking...\nopenkos curate: Identity: checking...\nopenkos curate: Structure: checking...\n1 untyped edge(s) -> 1 LLM call(s)\nopenkos curate: Structure: runs on 'qwen3:8b'; the measured optional upgrade is 'gemma2:27b' -- set `models: {edge_typing: gemma2:27b}` in openkos.yaml (a 15.6 GB pull; see docs/cli.md).\nopenkos curate: Structure: 0 of 1 candidate edge(s) served from persisted suggestions; 1 typed fresh.\nopenkos curate: warning -- failed to persist edge suggestions (disk I/O error); the next run will re-type them.\nopenkos curate: Metadata: checking...\nopenkos curate: Contradictions: checking...\n",
+    "stdout": "\n[references] concepts/foo -> concepts/bar\n  rationale: stub rationale\nPreconditions: empty\nIdentity: No candidate groups found.\nStructure: applied 0, skipped 1.\n  declined: concepts/foo -> concepts/bar [references]\nMetadata: No concept types found.\nContradictions: No candidate pairs found.\n"
+  },
+  "suggest_relations_persist_busy": {
+    "adjudications": [],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [],
+    "stderr": "openkos suggest-relations: warning -- the workspace is busy, so the edge suggestions were not persisted (another OpenKOS process is modifying this workspace right now; nothing was read or written by this run -- wait for that command to finish and try again); the next run will re-type them.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: stub rationale\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  },
+  "suggest_relations_persist_failure": {
+    "adjudications": [],
+    "commits": [],
+    "edge_suggestions": [],
+    "exit_code": 0,
+    "queue_rows": [],
+    "stderr": "openkos suggest-relations: warning -- failed to persist edge suggestions (disk I/O error); the next run will re-type them.\n",
+    "stdout": "openkos suggest-relations: workspace at <ROOT>\n\n[references] concepts/a -> concepts/b\n  rationale: stub rationale\n\nNext: openkos suggest-relations --apply (per-item consent), or openkos relate <source> <type> <target>\n"
+  }
+}

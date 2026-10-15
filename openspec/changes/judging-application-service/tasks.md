@@ -120,31 +120,31 @@ heuristic.
 Goal: pin the unpinned `curate` / `adjudicate` spend-path output byte for byte
 before anything moves. Green by design; no source change.
 
-- [ ] S0a.1 Create `tests/unit/cli/test_judging_characterization.py` with the
+- [x] S0a.1 Create `tests/unit/cli/test_judging_characterization.py` with the
   pinned-environment harness: `golden_support.Goldens`, `CliRunner`, `GIT_CONFIG_COUNT`
   pinning, `isatty` patched, no ambient `OLLAMA_HOST`, judge stubbed through the
   existing monkeypatch targets. Reuse the pattern of the existing S0a/S0b goldens
   rather than inventing a new one. Satisfies: J18.
-- [ ] S0a.2 Add the golden for the `curate` Identity cost line with `served > 0`,
+- [x] S0a.2 Add the golden for the `curate` Identity cost line with `served > 0`,
   captured as a full stdout/stderr/exit-code stream (fixture: two groups, one with
   a servable stored verdict). Files: `tests/unit/cli/test_judging_characterization.py`.
   Satisfies: J18.
-- [ ] S0a.3 Add the goldens for the model-disclosure lines inside a full `curate`
+- [x] S0a.3 Add the goldens for the model-disclosure lines inside a full `curate`
   stream (the line the quote's `model` notice mirrors). Same file. Satisfies: J18, J5.
-- [ ] S0a.4 Add the golden for declining at the gate with real probes (the walk
+- [x] S0a.4 Add the golden for declining at the gate with real probes (the walk
   answers no at `gate()`), full stream and exit code. Same file. Satisfies: J18.
-- [ ] S0a.5 Add the goldens for partial-batch failure for Structure and for
+- [x] S0a.5 Add the goldens for partial-batch failure for Structure and for
   Metadata (a backend error mid-batch). Same file. Satisfies: J18.
-- [ ] S0a.6 Add the goldens for the adjudications persist fail-open advisory and
+- [x] S0a.6 Add the goldens for the adjudications persist fail-open advisory and
   the busy advisory, for both `curate` and `adjudicate`. Same file. Satisfies: J18, J12
   (pins the advisories `PersistResult` must reproduce byte for byte in S1).
-- [ ] S0a.7 Add the goldens for the edge-suggestion persist fail-open and busy
+- [x] S0a.7 Add the goldens for the edge-suggestion persist fail-open and busy
   advisories (`suggest-relations`). Same file. Satisfies: J18.
-- [ ] S0a.8 Record the goldens on the current tree: create
+- [x] S0a.8 Record the goldens on the current tree: create
   `tests/unit/cli/fixtures/judging_characterization_goldens.json` and `git add` it.
   Run the test file unchanged twice (record, then compare) and observe GREEN both
   times. This file is never edited in a later slice. Satisfies: J18.
-- [ ] S0a.9 Prove each golden can fail: for each of S0a.2..S0a.7, mutate the one
+- [x] S0a.9 Prove each golden can fail: for each of S0a.2..S0a.7, mutate the one
   source line it pins (for example the cost line's format string in `cli/curate.py`,
   and each advisory string in the persist helpers), observe the specific golden
   FAIL, revert byte-exactly, purge `__pycache__`, observe GREEN. Record the mutated
