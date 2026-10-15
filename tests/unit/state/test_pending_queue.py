@@ -572,3 +572,263 @@ def test_resolution_records_the_verb_and_time_and_never_touches_a_closed_row(
         " FROM pending_items"
     ).fetchone()
     assert row == ("applied", "modified", "relate", T0.isoformat(), None)
+
+
+# -- amend-only write-through and amend_same_inputs (judging, S2a) ------------
+
+
+def _amend(
+    conn: sqlite3.Connection,
+    proposal: pq.Proposal,
+    section: _Section,
+    bundle_dir: Path,
+    minutes: int = 0,
+) -> str:
+    return pq.amend_open_proposal(
+        conn,
+        proposal,
+        commit_section=section,
+        bundle_dir=bundle_dir,
+        clock=lambda: T0 + timedelta(minutes=minutes),
+    )
+
+
+def _full_rows(conn: sqlite3.Connection) -> list[tuple[Any, ...]]:
+    return conn.execute(
+        "SELECT id, decision_key, status, resolution, claimed_by, created_at,"
+        " last_seen_at, resolved_at, payload, payload_digest"
+        " FROM pending_items ORDER BY id"
+    ).fetchall()
+
+
+def _stats(conn: sqlite3.Connection) -> list[pq.KindStats]:
+    return pq.kind_stats(conn)
+
+
+def test_amend_with_no_open_row_creates_nothing(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _upsert(conn, _proposal(key_body="relation_type:other"), section, bundle_dir)
+    before = _full_rows(conn)
+
+    outcome = _amend(conn, _proposal(payload='{"type":"x"}'), section, bundle_dir)
+
+    assert outcome == "no_open_row"
+    assert _full_rows(conn) == before
+
+
+@pytest.mark.parametrize(
+    ("how", "resolution"),
+    [("applied", "as_proposed"), ("declined", "declined"), ("stale", "stale")],
+)
+def test_amend_never_reopens_a_resolved_or_stale_row(
+    conn: sqlite3.Connection,
+    section: _Section,
+    bundle_dir: Path,
+    how: str,
+    resolution: str,
+) -> None:
+    _upsert(conn, _proposal(), section, bundle_dir)
+    conn.execute(
+        "UPDATE pending_items SET status = ?, resolution = ?, resolved_at = ?",
+        (how, resolution, T0.isoformat()),
+    )
+    conn.commit()
+    before = _full_rows(conn)
+
+    outcome = _amend(conn, _proposal(payload='{"type":"x"}'), section, bundle_dir)
+
+    assert outcome == "no_open_row"
+    assert _full_rows(conn) == before
+
+
+def test_amend_on_an_absent_queue_creates_nothing_and_enters_no_section(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    assert _amend(conn, _proposal(), section, bundle_dir) == "no_open_row"
+    assert not pq.queue_exists(conn)
+    assert section.entered == 0
+
+
+def test_amend_with_changed_inputs_writes_nothing(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _upsert(conn, _proposal(), section, bundle_dir)
+    before = _full_rows(conn)
+
+    changed = _proposal(payload='{"type":"x"}', digests=(("concepts/a", "sha-NEW"),))
+    assert _amend(conn, changed, section, bundle_dir) == "inputs_changed"
+    reordered = _proposal(
+        payload='{"type":"x"}',
+        digests=(("concepts/a", "sha-a"), ("concepts/b", "sha-b")),
+    )
+    assert _amend(conn, reordered, section, bundle_dir) == "inputs_changed"
+
+    assert _full_rows(conn) == before
+
+
+def test_amend_with_equal_inputs_updates_the_payload_in_place(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    original = _proposal()
+    _upsert(conn, original, section, bundle_dir)
+    (item,) = pq.open_items(conn)
+    assert pq.claim_item(
+        conn, item.id, claimant=pq.current_claimant(), commit_section=section
+    )
+    before = _full_rows(conn)
+    targets_before = conn.execute(
+        "SELECT item_id, ordinal, concept_id FROM pending_item_targets"
+    ).fetchall()
+    inputs_before = conn.execute(
+        "SELECT item_id, ordinal, input_ref, digest FROM pending_item_input_digests"
+    ).fetchall()
+
+    amended = _proposal(payload='{"type":"works_at","adjudication":"x"}')
+    assert _amend(conn, amended, section, bundle_dir, minutes=5) == "amended"
+
+    (row,) = _full_rows(conn)
+    old = before[0]
+    # id, status, claim, created_at and resolution do not move.
+    assert (row[0], row[1], row[2], row[3], row[4], row[5]) == (
+        old[0],
+        old[1],
+        old[2],
+        old[3],
+        old[4],
+        old[5],
+    )
+    assert row[2] == "claimed"
+    assert row[4] is not None
+    assert row[6] == (T0 + timedelta(minutes=5)).isoformat()
+    assert row[7] is None
+    assert row[8] == amended.payload
+    assert row[9] == pq.payload_digest_for(amended)
+    assert (
+        conn.execute(
+            "SELECT item_id, ordinal, concept_id FROM pending_item_targets"
+        ).fetchall()
+        == targets_before
+    )
+    assert (
+        conn.execute(
+            "SELECT item_id, ordinal, input_ref, digest FROM pending_item_input_digests"
+        ).fetchall()
+        == inputs_before
+    )
+
+
+def test_amend_of_an_identical_payload_is_unchanged(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    proposal = _proposal()
+    _upsert(conn, proposal, section, bundle_dir)
+
+    assert _amend(conn, proposal, section, bundle_dir, minutes=3) == "unchanged"
+
+    (row,) = _rows(conn)
+    assert row[3] == (T0 + timedelta(minutes=3)).isoformat()
+
+
+def test_amend_respects_a_decline_in_force(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    pair = ("people/ana", "people/bo")
+    body = pq.contradiction_key(pair, "people/bo")
+    proposal = _proposal(kind="contradiction", key_body=body, targets=pair)
+    _upsert(conn, proposal, section, bundle_dir)
+    bundle_decisions.write_decisions(
+        pair[0],
+        bundle_dir,
+        records=[
+            bundle_decisions.DecisionRecord(
+                decision_key=body,
+                pair_ids=pair,
+                merged_absorbed_id="people/bo",
+                state="declined",
+                decided_at="2026-01-01T00:00:00+00:00",
+            )
+        ],
+    )
+    before = _full_rows(conn)
+    changed = _proposal(
+        kind="contradiction", key_body=body, targets=pair, payload='{"x":1}'
+    )
+
+    assert _amend(conn, changed, section, bundle_dir) == "suppressed"
+    assert _full_rows(conn) == before
+
+
+def test_an_amendment_leaves_kind_stats_unchanged(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _upsert(conn, _proposal(), section, bundle_dir)
+    before = _stats(conn)
+
+    _amend(conn, _proposal(payload='{"type":"x"}'), section, bundle_dir)
+
+    assert _stats(conn) == before
+    assert len(_full_rows(conn)) == 1
+
+
+def test_amend_same_inputs_amends_instead_of_retiring(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _upsert(conn, _proposal(), section, bundle_dir)
+    before = _stats(conn)
+
+    outcome = pq.upsert_proposal(
+        conn,
+        _proposal(payload='{"type":"x"}'),
+        commit_section=section,
+        bundle_dir=bundle_dir,
+        clock=lambda: T0,
+        amend_same_inputs=True,
+    )
+
+    assert outcome is pq.UpsertOutcome.AMENDED
+    assert [r[1] for r in _rows(conn)] == ["pending"]
+    assert _stats(conn) == before
+
+
+def test_without_the_flag_a_changed_digest_still_retires_and_inserts(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _upsert(conn, _proposal(), section, bundle_dir)
+
+    outcome = _upsert(conn, _proposal(payload='{"type":"x"}'), section, bundle_dir)
+
+    assert outcome is pq.UpsertOutcome.REPLACED
+    assert [r[1] for r in _rows(conn)] == ["stale", "pending"]
+
+
+def test_amend_same_inputs_with_a_real_input_change_still_retires(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _upsert(conn, _proposal(), section, bundle_dir)
+
+    outcome = pq.upsert_proposal(
+        conn,
+        _proposal(payload='{"type":"x"}', digests=(("concepts/a", "sha-NEW"),)),
+        commit_section=section,
+        bundle_dir=bundle_dir,
+        clock=lambda: T0,
+        amend_same_inputs=True,
+    )
+
+    assert outcome is pq.UpsertOutcome.REPLACED
+    assert [r[1] for r in _rows(conn)] == ["stale", "pending"]
+
+
+def test_amend_same_inputs_leaves_the_other_outcomes_alone(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    kwargs: dict[str, Any] = {
+        "commit_section": section,
+        "bundle_dir": bundle_dir,
+        "clock": lambda: T0,
+        "amend_same_inputs": True,
+    }
+    proposal = _proposal()
+    assert pq.upsert_proposal(conn, proposal, **kwargs) is pq.UpsertOutcome.INSERTED
+    assert pq.upsert_proposal(conn, proposal, **kwargs) is pq.UpsertOutcome.UNCHANGED

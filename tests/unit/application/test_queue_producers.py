@@ -814,7 +814,9 @@ def test_identity_adjudication_verdict_rides_in_the_payload_and_changes_the_dige
         adjudicated=(adj.AdjudicatedCandidate(group, adj.Verdict.SAME, 0.9, SENTINEL),),
         **kw,  # type: ignore[arg-type]
     )
-    assert result.replaced == 1
+    # Same inputs, a verdict now rides along: an amendment, not a stale retirement.
+    assert (result.amended, result.replaced, result.inserted) == (1, 0, 0)
+    assert [row[1] for row in _rows(conn, "identity")] == ["pending"]
     (item,) = pq.open_items(conn, kind="identity")
     payload = json.loads(item.payload)
     assert payload["adjudication"] == {
@@ -824,6 +826,31 @@ def test_identity_adjudication_verdict_rides_in_the_payload_and_changes_the_dige
     }
     assert item.targets == ("concepts/a", "concepts/b")
     assert item.decision_key == "identity:" + pq.identity_key(group.member_ids)
+
+
+def test_a_judged_group_whose_member_was_edited_still_retires_as_stale(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    from openkos.resolution import adjudication as adj
+
+    group = cand.CandidateGroup(
+        okf_type="Person",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=cand.Tier.HIGH,
+        trigger="ada",
+    )
+    report = DuplicatesReport(groups=(group,), suppressed=0, truncation_notice=None)
+    common = dict(commit_section=section, bundle_dir=bundle_dir)
+    qp.enqueue_identity(conn, report, current_digest=_digest(1), **common)  # type: ignore[arg-type]
+    result = qp.enqueue_identity(
+        conn,
+        report,
+        current_digest=_digest(2),
+        adjudicated=(adj.AdjudicatedCandidate(group, adj.Verdict.SAME, 0.9, "r"),),
+        **common,  # type: ignore[arg-type]
+    )
+    assert (result.amended, result.replaced) == (0, 1)
+    assert [row[1] for row in _rows(conn, "identity")] == ["stale", "pending"]
 
 
 def test_an_adjudication_verdict_for_another_group_is_ignored(

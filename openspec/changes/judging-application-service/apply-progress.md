@@ -189,3 +189,56 @@ Mutations (applied, test run, reverted byte-exact, `__pycache__` purged):
   entered.
 - A new test file for the delegators was added (not in the task list) to close the
   surviving-mutation gap above.
+
+## S2a: Amend-only write-through, daemon fix, `judged_uncertain` (complete, 11/11)
+
+Branch `feat/judging-s2a`, stacked-to-main on S0a, S0b and S1. No golden or fixture
+edited; the S0a goldens pass unchanged.
+
+### Tasks
+
+- [x] S2a.1/S2a.2 `pq.amend_open_proposal` and `_amend_open_in_transaction`
+  (`UpsertOutcome.AMENDED`). An absent queue returns `no_open_row` before entering the
+  commit section, so nothing is created (the `resolve_open_by_key` precedent).
+- [x] S2a.3/S2a.4 `upsert_proposal(amend_same_inputs=False)` shares the helper.
+- [x] S2a.5 `ProducerResult.amended` and `enqueue_identity(amend_same_inputs=True)`
+  (`publish` gained the same keyword, default off, so no other kind changes).
+- [x] S2a.6 `curate_queue.set_identity_verdicts` (returns the amended count).
+- [x] S2a.7 `identity_adjudication.servable_stored_verdicts`.
+- [x] S2a.8 Daemon `_identity_stage` carries it; the S0b strict xfail marker removed.
+- [x] S2a.9 `judged_uncertain` on `DecisionItem.evaluation` and `WithheldAction.reason`.
+- [x] S2a.10 The S0b.1 pin flipped (see below).
+- [x] S2a.11 Mutations and gates (below, and the slice report).
+
+### TDD Cycle Evidence
+
+| Task | RED | GREEN |
+|------|-----|-------|
+| S2a.1/3 | 13 failed: `AttributeError: ... no attribute 'amend_open_proposal'`, `TypeError: upsert_proposal() got an unexpected keyword argument 'amend_same_inputs'` | 44 passed (one test fixed: an `applied` row's resolution is `as_proposed`) |
+| S2a.5 | 2 failed: `AttributeError` on `result.amended` | 63 passed |
+| S2a.7 | 11 failed: `AttributeError` (no `servable_stored_verdicts`) | 44 passed |
+| S2a.8 | With the carry in place and the marker still on: `[XPASS(strict)] ... fixed by the judging-application-service change`, 1 failed. That strict XPASS is the RED. Marker then removed, assertion untouched | 65 passed. With the kwarg reverted to `adjudicated=()`: 5 failed (the S0b test and the 4 carry tests) |
+| S2a.6 | 7 failed: `AttributeError` (no `set_identity_verdicts`) | 15 passed |
+| S2a.9/10 | 2 failed: `pending_evaluation != judged_uncertain` on the flipped pin | 237 passed |
+
+### Existing tests modified
+
+- `tests/unit/cli/test_daemon.py::test_a_judged_same_row_survives_a_daemon_identity_pass`:
+  only the `xfail` marker removed; the assertion is unchanged.
+- `tests/unit/application/test_curate_decisions.py`: the S0b.1 pin
+  `test_an_identity_judged_uncertain_is_listed_as_pending_evaluation` renamed and flipped
+  to `judged_uncertain` (the curate-decisions delta: an UNCERTAIN verdict, malformed-reply
+  degrade included, lists as `judged_uncertain`). The unjudged and unknown-verdict items
+  still list `pending_evaluation`.
+- `tests/unit/application/test_queue_producers.py::test_identity_adjudication_verdict_rides_in_the_payload_and_changes_the_digest`:
+  asserted `result.replaced == 1` for an unjudged row that gains a verdict over unchanged
+  inputs. Under the pending-work delta that is an amendment, so it now asserts
+  `(amended, replaced, inserted) == (1, 0, 0)` and a single `pending` row.
+
+### Mutations (applied, run, reverted from a byte copy, `__pycache__` purged)
+
+| Mutation | Result |
+|---|---|
+| `_amend_open_in_transaction`: `if not _same_inputs(...)` -> `if False` | 2 failed |
+| `amend_open_proposal`: no open row inserts and reports `amended` | 4 failed (the reopen and no-row tests) |
+| `servable_stored_verdicts`: `include_confidential=None` -> `False` | 2 failed |

@@ -52,6 +52,7 @@ from openkos.application import (
     contradictions_service,
     digest,
     duplicates_service,
+    identity_adjudication,
     pending_queue_report,
     reindex_service,
     revisions,
@@ -279,6 +280,12 @@ def _identity_stage(ctx: StageContext) -> StageResult:
         ),
         bundle_dir=ctx.layout.bundle_dir,
         commit_section=ctx.commit_section,
+        # Carry the latest servable stored verdict (rubric, members and digests
+        # checked), so a pass never replaces a judged row with an unjudged one.
+        # Store-only: no client is built and no model is called.
+        adjudicated=identity_adjudication.servable_stored_verdicts(
+            ctx.layout, report.groups
+        ),
     )
     return StageResult()
 

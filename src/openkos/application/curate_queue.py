@@ -367,6 +367,60 @@ def enqueue_identity(
     _enqueue_missing(layout, proposals, commit_section=commit_section)
 
 
+def set_identity_verdicts(
+    layout: config.WorkspaceLayout,
+    results: Sequence[AdjudicatedCandidate],
+    *,
+    pinned: Mapping[str, str | None],
+    commit_section: CommitSection,
+) -> int:
+    """Write each SAME or UNCERTAIN verdict through to its group's open identity
+    row, in place, and return how many rows were amended.
+
+    Amend-only (`pq.amend_open_proposal`): it never inserts, never reopens a
+    resolved or stale row, never creates the queue, and writes nothing when the
+    row was computed from other inputs. A group with no open row gets its row
+    from the next producer pass, which carries the stored verdict. A result
+    whose members moved since `pinned` is skipped, as `enqueue_identity` skips
+    it, and a DIFFERENT result is left to `resolve_judged_different`. Never
+    raises for a store problem: the queue is derived, and the verdict is already
+    persisted."""
+    current = application_pending.current_finding_digest(layout.bundle_dir)
+    proposals = [
+        proposal
+        for result in results
+        if result.verdict in (Verdict.SAME, Verdict.UNCERTAIN)
+        and _unchanged_since_pinned(pinned, current, result.candidate.member_ids)
+        and (
+            proposal := queue_producers.identity_group_proposal(
+                result.candidate, current_digest=current, result=result
+            )
+        )
+        is not None
+    ]
+    if not proposals or not queue_present(layout):
+        return 0
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+    except sqlite3.Error, OSError:
+        return 0
+    amended = 0
+    try:
+        for proposal in proposals:
+            outcome = pq.amend_open_proposal(
+                conn,
+                proposal,
+                commit_section=commit_section,
+                bundle_dir=layout.bundle_dir,
+            )
+            amended += outcome == "amended"
+    except sqlite3.Error, OSError, lock.WorkspaceBusyError:
+        return amended
+    finally:
+        conn.close()
+    return amended
+
+
 def enqueue_relations(
     layout: config.WorkspaceLayout,
     suggestions: Sequence[EdgeSuggestion],

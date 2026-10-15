@@ -275,6 +275,50 @@ def partition_adjudication_serves(
     return AdjudicationServes(served, to_judge, rubric_stale, store_read=True)
 
 
+def servable_stored_verdicts(
+    layout: config.WorkspaceLayout, groups: Sequence[CandidateGroup]
+) -> list[AdjudicatedCandidate]:
+    """The latest stored verdict of each group that is still servable, for the
+    unattended pass to carry into the proposals it enqueues (Decision 6).
+
+    Reads `.openkos/findings.db` read-only and asks `servable_verdict` -- the
+    rule the serve partition asks -- with `include_confidential=None`: the pass
+    is not judging, it preserves the latest owner-local judgment, and the queue
+    payload is owner-local. It builds no client and calls no model. An absent or
+    unreadable store carries nothing (a pass over it enqueues unjudged groups,
+    as before), and nothing is ever created or written."""
+    if not layout.findings_db_path.exists():
+        return []
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            persisted = adjudications_store.open_adjudications(conn)
+        finally:
+            conn.close()
+    except OSError, sqlite3.Error:
+        return []
+    latest = {
+        adjudications_store.group_key_for(row.member_ids): row for row in persisted
+    }
+    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
+    rubric = rubric_digest()
+    carried: list[AdjudicatedCandidate] = []
+    for group in groups:
+        stored = latest.get(adjudications_store.group_key_for(group.member_ids))
+        if stored is None:
+            continue
+        served = servable_verdict(
+            stored,
+            group,
+            current_digest=current_digest,
+            rubric=rubric,
+            include_confidential=None,
+        )
+        if served is not None:
+            carried.append(served)
+    return carried
+
+
 def persist_adjudications(
     layout: config.WorkspaceLayout,
     results: Sequence[AdjudicatedCandidate],

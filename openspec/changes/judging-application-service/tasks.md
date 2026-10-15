@@ -255,7 +255,7 @@ Goal: a persisted verdict reaches the open queue row without inflating
 `pending --stats`; the daemon stops erasing verdicts; UNCERTAIN is listed as
 `judged_uncertain`. The strict xfail from S0b is removed here.
 
-- [ ] S2a.1 RED: in `tests/unit/state/test_pending_queue.py` add tests for
+- [x] S2a.1 RED: in `tests/unit/state/test_pending_queue.py` add tests for
   `amend_open_proposal`: no open row creates nothing (`no_open_row`); a resolved
   (`applied`, `declined`) or `stale` row keeps its status and no new row appears; an
   absent queue is not created; an open row with differing inputs writes nothing
@@ -264,25 +264,25 @@ Goal: a persisted verdict reaches the open queue row without inflating
   a claimed row keeps its claim; a declined key returns `suppressed`;
   identical payload returns `unchanged`; `kind_stats` is identical before and after
   an amendment. Observe RED. Satisfies: D1, P2.
-- [ ] S2a.2 GREEN: in `src/openkos/state/pending_queue.py` add
+- [x] S2a.2 GREEN: in `src/openkos/state/pending_queue.py` add
   `_amend_open_in_transaction` and the amend-only public `amend_open_proposal`
   (never inserts, shares the decline check with `upsert_proposal`). Add
   `UpsertOutcome.AMENDED`. Satisfies: D1, P2.
-- [ ] S2a.3 RED: tests for `upsert_proposal(amend_same_inputs=True)`: the "open row,
+- [x] S2a.3 RED: tests for `upsert_proposal(amend_same_inputs=True)`: the "open row,
   different digest, same inputs" case returns `AMENDED`; with the flag false (the
   default) the case still retires as `stale` and inserts; a real input change still
   retires the row as `stale` and inserts one new `pending` row; every other outcome
   is unchanged. Observe RED. Files: `tests/unit/state/test_pending_queue.py`.
   Satisfies: P2.
-- [ ] S2a.4 GREEN: add the `amend_same_inputs: bool = False` parameter to
+- [x] S2a.4 GREEN: add the `amend_same_inputs: bool = False` parameter to
   `upsert_proposal` in `src/openkos/state/pending_queue.py`, calling the same
   helper. Satisfies: P2.
-- [ ] S2a.5 RED then GREEN: `ProducerResult.amended: int = 0` and
+- [x] S2a.5 RED then GREEN: `ProducerResult.amended: int = 0` and
   `enqueue_identity` passing `amend_same_inputs=True`. Test in the producers test
   module: a judged-then-unjudged proposal over unchanged inputs counts as amended,
   not retired. Files: `src/openkos/application/queue_producers.py`, its test.
   Satisfies: P1, P2.
-- [ ] S2a.6 RED then GREEN: `curate_queue.set_identity_verdicts(layout, results, *,
+- [x] S2a.6 RED then GREEN: `curate_queue.set_identity_verdicts(layout, results, *,
   pinned, commit_section)`, which builds each SAME or UNCERTAIN result's proposal
   with `queue_producers.identity_group_proposal`, calls `amend_open_proposal`, skips a
   result whose members moved since `pinned`, never touches a DIFFERENT result, and
@@ -290,14 +290,14 @@ Goal: a persisted verdict reaches the open queue row without inflating
   row writes nothing, moved members are not written through, DIFFERENT untouched.
   Files: `src/openkos/application/curate_queue.py`,
   `tests/unit/application/test_curate_queue.py`. Satisfies: D1.
-- [ ] S2a.7 RED then GREEN: `identity_adjudication.servable_stored_verdicts(layout,
+- [x] S2a.7 RED then GREEN: `identity_adjudication.servable_stored_verdicts(layout,
   groups)` reading the adjudications store read-only and applying `servable_verdict`
   with `include_confidential=None`. Tests refuse each failed check (latest row
   missing, rubric differs, member set differs, digest differs), an absent or
   unreadable store carries nothing, no client is built. Files:
   `src/openkos/application/identity_adjudication.py`,
   `tests/unit/application/test_identity_adjudication.py`. Satisfies: P1.
-- [ ] S2a.8 GREEN (the S0b RED turns green): in `src/openkos/cli/daemon.py`
+- [x] S2a.8 GREEN (the S0b RED turns green): in `src/openkos/cli/daemon.py`
   `_identity_stage` pass `adjudicated=identity_adjudication.servable_stored_verdicts(
   ctx.layout, report.groups)`; keep `uses_model=False`. Remove the `xfail` marker
   from the S0b.2 test in `tests/unit/cli/test_daemon.py` (a strict xfail that passes
@@ -307,7 +307,7 @@ Goal: a persisted verdict reaches the open queue row without inflating
   carried and no model is called; the adjudications store is byte-identical after the
   pass; a pass over unchanged inputs yields `UNCHANGED` and only last-seen moves,
   `pending --stats` counts do not move. Satisfies: P1, P2.
-- [ ] S2a.9 RED then GREEN: `judged_uncertain`. In
+- [x] S2a.9 RED then GREEN: `judged_uncertain`. In
   `src/openkos/application/curate_decisions.py` `_identity_actions` maps a row
   verdict `uncertain` (and a malformed-reply degrade) to evaluation
   `judged_uncertain` with keep-distinct and skip and the merge withheld for reason
@@ -315,10 +315,10 @@ Goal: a persisted verdict reaches the open queue row without inflating
   `WithheldAction.reason`; an unknown or missing verdict stays `pending_evaluation`.
   Add the merge-not-applied scenario (`not_mergeable`, nothing written). Satisfies:
   D2, D1.
-- [ ] S2a.10 Flip the S0b.1 pin in `tests/unit/application/test_curate_decisions.py`
+- [x] S2a.10 Flip the S0b.1 pin in `tests/unit/application/test_curate_decisions.py`
   from `pending_evaluation` to `judged_uncertain` (the visible diff the pin was
   created for). This is a test edit, not a golden edit. Satisfies: D2.
-- [ ] S2a.11 Patched-line mutation and the five gates. Run S0a goldens unchanged and
+- [x] S2a.11 Patched-line mutation and the five gates. Run S0a goldens unchanged and
   observe GREEN. Mutate one patched line, confirm a test reddens, revert, purge.
   Satisfies: J18.
 
