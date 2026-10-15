@@ -114,3 +114,91 @@ def test_a_key_without_a_kind_prefix_finds_nothing(tmp_path: Path) -> None:
     _enqueue(layout, _identity_proposal("concepts/a", "concepts/b"))
 
     assert curate_queue.open_row_by_key(layout, "no-colon-here") is None
+
+
+# -- row_is_fresh: the public freshness predicate ----------------------------
+
+
+def _open_row(
+    layout: config.WorkspaceLayout, proposal: pq.Proposal
+) -> curate_queue.OpenRow:
+    _enqueue(layout, proposal)
+    row = curate_queue.open_row_by_key(layout, proposal.decision_key)
+    assert row is not None
+    return row
+
+
+def _with_digests(proposal: pq.Proposal, *digests: tuple[str, str]) -> pq.Proposal:
+    return pq.Proposal(
+        kind=proposal.kind,
+        key_body=proposal.key_body,
+        producer=proposal.producer,
+        payload=proposal.payload,
+        targets=proposal.targets,
+        input_digests=tuple(pq.InputDigest(ref, digest) for ref, digest in digests),
+    )
+
+
+def _volatility_proposal() -> pq.Proposal:
+    return pq.Proposal(
+        kind="volatility",
+        key_body=pq.volatility_key("Person"),
+        producer="suggest-volatility/1",
+        payload=json.dumps({"type_name": "Person", "current_default": "slow"}),
+        targets=(),
+    )
+
+
+def _relation_proposal() -> pq.Proposal:
+    return pq.Proposal(
+        kind="relation_type",
+        key_body=pq.relation_type_key("concepts/a", "concepts/b"),
+        producer="suggest-relations/1",
+        payload=json.dumps({"suggested_type": "related_to"}),
+        targets=("concepts/a", "concepts/b"),
+    )
+
+
+def test_row_is_fresh_is_public_and_the_old_name_is_an_alias() -> None:
+    assert curate_queue.row_is_fresh is curate_queue._fresh
+
+
+def test_row_is_fresh_and_its_alias_agree_for_every_kind_the_list_reads(
+    tmp_path: Path,
+) -> None:
+    layout = _layout(tmp_path)
+    identity = _open_row(
+        layout,
+        _with_digests(
+            _identity_proposal("concepts/a", "concepts/b"),
+            ("concepts/a", "da"),
+            ("concepts/b", "db"),
+        ),
+    )
+    relation = _open_row(
+        layout,
+        _with_digests(_relation_proposal(), ("concepts/a", "da"), ("concepts/b", "db")),
+    )
+    volatility = _open_row(layout, _volatility_proposal())
+    current = {"concepts/a": "da", "concepts/b": "db"}
+    moved = {"concepts/a": "da", "concepts/b": "other"}
+
+    cases = [
+        (identity, current, identity.item.targets),
+        (identity, moved, identity.item.targets),
+        (identity, current, ("concepts/a", "concepts/never-recorded")),
+        (relation, current, relation.item.targets),
+        (relation, moved, relation.item.targets),
+        (volatility, current, ()),
+    ]
+    for row, digests, required in cases:
+        assert curate_queue.row_is_fresh(
+            row, digests.get, required
+        ) == curate_queue._fresh(row, digests.get, required)
+
+    assert curate_queue.row_is_fresh(identity, current.get, identity.item.targets)
+    assert not curate_queue.row_is_fresh(identity, moved.get, identity.item.targets)
+    assert not curate_queue.row_is_fresh(
+        identity, current.get, ("concepts/a", "concepts/never-recorded")
+    )
+    assert curate_queue.row_is_fresh(volatility, current.get, ())

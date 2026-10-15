@@ -412,7 +412,7 @@ class DecisionItem:
     decision_key: str
     kind: DecisionKind
     targets: tuple[str, ...]
-    fresh: bool
+    fresh: bool | None             # None: not computed (kinds with no actions); never means fresh
     evaluation: Literal["judged_same", "judged_different",
                         "pending_evaluation", "not_applicable"]
     actions: tuple[Action, ...]

@@ -29,11 +29,14 @@ from openkos.application import (
     write_gate,
 )
 from openkos.application import lifecycle as application_lifecycle
+from openkos.application import pending as application_pending
 from openkos.application.curate_decisions import (
     Action,
     Applied,
     ConfigCommitRefusal,
+    DecisionItem,
     DecisionObserver,
+    DecisionPolicy,
     DecisionPorts,
     DecisionVersion,
     MergeDecisionPreview,
@@ -41,6 +44,7 @@ from openkos.application.curate_decisions import (
     RelateDecisionPreview,
     Stale,
     TierDecisionPreview,
+    WithheldAction,
 )
 from openkos.bundle import bundle
 from openkos.bundle import decisions as bundle_decisions
@@ -1123,13 +1127,16 @@ def test_a_failing_write_is_a_typed_write_failure_with_its_cause(
 # -- the token path --------------------------------------------------------- #
 
 
-def _identity_proposal(payload: str = "{}") -> pq.Proposal:
+def _identity_proposal(
+    payload: str = "{}", digests: tuple[pq.InputDigest, ...] = ()
+) -> pq.Proposal:
     return pq.Proposal(
         kind="identity",
         key_body=pq.identity_key(_PAIR),
         producer="duplicates/1",
         payload=payload,
         targets=_PAIR,
+        input_digests=digests,
     )
 
 
@@ -1167,7 +1174,9 @@ def _seeded(
     tmp_path: Path,
 ) -> tuple[Path, config.WorkspaceLayout, pq.Proposal, DecisionVersion]:
     root, layout = _merge_workspace(tmp_path)
-    proposal = _identity_proposal(json.dumps({"member_ids": list(_PAIR)}))
+    proposal = _identity_proposal(
+        json.dumps({"member_ids": list(_PAIR)}), _digests(layout, *_PAIR)
+    )
     _enqueue(layout, proposal)
     return root, layout, proposal, _token(root, layout, proposal)
 
@@ -1225,7 +1234,12 @@ def test_a_row_resolved_elsewhere_is_stale_and_writes_nothing(tmp_path: Path) ->
 def test_a_superseded_row_is_stale_and_writes_nothing(tmp_path: Path) -> None:
     root, layout, proposal, version = _seeded(tmp_path)
     preview = _must_preview(root, layout)
-    _enqueue(layout, _identity_proposal(json.dumps({"member_ids": ["different"]})))
+    _enqueue(
+        layout,
+        _identity_proposal(
+            json.dumps({"member_ids": ["different"]}), _digests(layout, *_PAIR)
+        ),
+    )
     before = _snapshot(root)
     recorder = _MergeRecorder()
 
@@ -1886,7 +1900,9 @@ def test_a_failing_relate_write_is_a_typed_write_failure_with_its_cause(
 # -- the relate row resolution --------------------------------------------- #
 
 
-def _relation_proposal(source: str = _SRC, target: str = _TGT) -> pq.Proposal:
+def _relation_proposal(
+    layout: config.WorkspaceLayout, source: str = _SRC, target: str = _TGT
+) -> pq.Proposal:
     return pq.Proposal(
         kind="relation_type",
         key_body=pq.relation_type_key(_SRC, _TGT),
@@ -1899,6 +1915,7 @@ def _relation_proposal(source: str = _SRC, target: str = _TGT) -> pq.Proposal:
             }
         ),
         targets=(_SRC, _TGT),
+        input_digests=_digests(layout, _SRC, _TGT),
     )
 
 
@@ -1923,7 +1940,7 @@ def test_a_relate_commit_resolves_its_row_as_proposed_or_modified(
     tmp_path: Path, reverse: bool, resolution: str
 ) -> None:
     root, layout = _relate_workspace(tmp_path)
-    proposal = _relation_proposal()
+    proposal = _relation_proposal(layout)
     _enqueue(layout, proposal)
 
     _commit_relate(
@@ -1955,7 +1972,7 @@ def _relate_seeded(
     tmp_path: Path,
 ) -> tuple[Path, config.WorkspaceLayout, pq.Proposal, DecisionVersion]:
     root, layout = _relate_workspace(tmp_path)
-    proposal = _relation_proposal()
+    proposal = _relation_proposal(layout)
     _enqueue(layout, proposal)
     return root, layout, proposal, _relate_token(root, layout, proposal)
 
@@ -1974,7 +1991,7 @@ def test_a_current_relate_token_commits_and_resolves_the_row(tmp_path: Path) -> 
 
 def test_a_reversed_relate_token_commits_the_reversed_edge(tmp_path: Path) -> None:
     root, layout = _relate_workspace(tmp_path)
-    proposal = _relation_proposal()
+    proposal = _relation_proposal(layout)
     _enqueue(layout, proposal)
     version = _relate_token(root, layout, proposal, reverse=True)
 
@@ -2033,7 +2050,7 @@ def test_a_relate_row_resolved_elsewhere_is_stale_and_writes_nothing(
 def test_a_superseded_relate_row_is_stale_and_writes_nothing(tmp_path: Path) -> None:
     root, layout, proposal, version = _relate_seeded(tmp_path)
     preview = _must_relate(root, layout)
-    _enqueue(layout, _relation_proposal(source=_TGT, target=_SRC))
+    _enqueue(layout, _relation_proposal(layout, source=_TGT, target=_SRC))
     before = _snapshot(root)
     recorder = _RelateRecorder()
 
@@ -2566,3 +2583,1033 @@ def test_a_move_after_the_tier_token_check_is_drift_never_stale(
         _commit_tier(root, layout, _must_tier(layout), recorder, expected=version)
 
     assert recorder.edit_commits == []
+
+
+# --------------------------------------------------------------------------- #
+# The list: every open decision, as data
+# --------------------------------------------------------------------------- #
+
+
+def _typed_concept(
+    layout: config.WorkspaceLayout, concept_id: str, okf_type: str
+) -> None:
+    path = layout.bundle_dir / f"{concept_id}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        okf.dump_frontmatter(
+            {"type": okf_type, "title": concept_id}, f"# {concept_id}\n\nBody.\n"
+        ),
+        encoding="utf-8",
+    )
+
+
+def _digests(
+    layout: config.WorkspaceLayout, *concept_ids: str
+) -> tuple[pq.InputDigest, ...]:
+    """The input digests a producer records: each concept's current bytes."""
+    current = application_pending.current_finding_digest(layout.bundle_dir)
+    rows = [(concept_id, current(concept_id)) for concept_id in concept_ids]
+    return tuple(pq.InputDigest(ref, digest) for ref, digest in rows if digest)
+
+
+def _identity_row(
+    layout: config.WorkspaceLayout,
+    members: tuple[str, ...] = _PAIR,
+    *,
+    verdict: str | None = "same",
+    confidence: float = 0.9,
+    note: str = "",
+) -> pq.Proposal:
+    adjudication = (
+        None
+        if verdict is None
+        else {"verdict": verdict, "confidence": confidence, "rationale": "r" + note}
+    )
+    return pq.Proposal(
+        kind="identity",
+        key_body=pq.identity_key(members),
+        producer="duplicates/1",
+        payload=json.dumps(
+            {
+                "member_ids": list(members),
+                "member_types": ["Concept"] * len(members),
+                "okf_type": "Concept",
+                "tier": "high",
+                "trigger": "stub",
+                "adjudication": adjudication,
+            }
+        ),
+        targets=members,
+        input_digests=_digests(layout, *members),
+    )
+
+
+def _relation_row(
+    layout: config.WorkspaceLayout,
+    suggested_type: str = "related_to",
+    *,
+    source: str = _SRC,
+    target: str = _TGT,
+) -> pq.Proposal:
+    return pq.Proposal(
+        kind="relation_type",
+        key_body=pq.relation_type_key(source, target),
+        producer="suggest-relations/1",
+        payload=json.dumps(
+            {
+                "source_id": source,
+                "target_id": target,
+                "effective_source_id": source,
+                "effective_target_id": target,
+                "suggested_type": suggested_type,
+                "rationale": "because",
+            }
+        ),
+        targets=(source, target),
+        input_digests=_digests(layout, source, target),
+    )
+
+
+def _volatility_row(tier: str = "volatile", default: str = "slow") -> pq.Proposal:
+    return pq.Proposal(
+        kind="volatility",
+        key_body=pq.volatility_key(_TYPE),
+        producer="suggest-volatility/1",
+        payload=json.dumps(
+            {
+                "type_name": _TYPE,
+                "current_default": default,
+                "suggested_tier": tier,
+                "rationale": "because",
+            }
+        ),
+        targets=(),
+    )
+
+
+def _contradiction_row() -> pq.Proposal:
+    return pq.Proposal(
+        kind="contradiction",
+        key_body=pq.contradiction_key(_PAIR, None),
+        producer="contradictions/1",
+        payload=json.dumps(
+            {"pair_ids": list(_PAIR), "confidence": 0.5, "rationale": "r"}
+        ),
+        targets=_PAIR,
+    )
+
+
+def _revision_row() -> pq.Proposal:
+    return pq.Proposal(
+        kind="revision",
+        key_body=pq.revision_key(_PAIR),
+        producer="revisions/1",
+        payload=json.dumps({"pair_ids": list(_PAIR)}),
+        targets=_PAIR,
+    )
+
+
+def _watch_row() -> pq.Proposal:
+    return pq.Proposal(
+        kind="watch_refusal",
+        key_body=pq.watch_refusal_key("notes/big.md"),
+        producer="watch/1",
+        payload=json.dumps({"inbox_path": "notes/big.md", "reason": "too big"}),
+        targets=(),
+    )
+
+
+def _list(layout: config.WorkspaceLayout) -> tuple[DecisionItem, ...]:
+    return curate_decisions.list_open_decisions(layout)
+
+
+def _only(layout: config.WorkspaceLayout) -> DecisionItem:
+    items = _list(layout)
+    assert len(items) == 1
+    return items[0]
+
+
+def test_every_kind_is_listed_in_kinds_order_then_queue_order(tmp_path: Path) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+    _concept(layout, "concepts/d", "Another.")
+    first = _identity_row(layout, _PAIR)
+    second = _identity_row(layout, ("concepts/c", "concepts/d"))
+    rows = [
+        _watch_row(),
+        _revision_row(),
+        _contradiction_row(),
+        _volatility_row(),
+        _relation_row(layout),
+        first,
+        second,
+    ]
+    for row in rows:
+        _enqueue(layout, row)
+
+    items = _list(layout)
+
+    assert [item.kind for item in items] == [
+        "identity",
+        "identity",
+        "relation_type",
+        "volatility",
+        "contradiction",
+        "revision",
+        "watch_refusal",
+    ]
+    assert [item.decision_key for item in items[:2]] == [
+        first.decision_key,
+        second.decision_key,
+    ]
+    assert {item.kind for item in items} == set(pq.KINDS)
+
+
+def test_an_item_carries_the_handle_the_payload_and_where_it_resolves(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+    row = _identity_row(layout)
+    _enqueue(layout, row)
+
+    item = _only(layout)
+
+    assert item.decision_key == row.decision_key
+    assert item.kind == "identity"
+    assert item.targets == _PAIR
+    assert item.fresh is True
+    assert item.evaluation == "judged_same"
+    assert item.payload == json.loads(row.payload)
+    assert item.payload_digest == pq.payload_digest_for(row)
+    assert item.resolves_via == "openkos adjudicate --apply"
+    assert dataclasses.is_dataclass(item)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        item.fresh = False  # type: ignore[misc]
+
+
+def test_an_empty_queue_lists_nothing_and_creates_nothing(tmp_path: Path) -> None:
+    root, layout = _merge_workspace(tmp_path)
+    before = _snapshot(root)
+
+    assert _list(layout) == ()
+
+    assert _snapshot(root) == before
+    assert not layout.findings_db_path.exists()
+
+
+def test_listing_writes_nothing_prints_nothing_and_needs_no_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from openkos.application import backends
+
+    root, layout = _merge_workspace(tmp_path)
+    for row in (_identity_row(layout), _relation_row(layout), _volatility_row()):
+        _enqueue(layout, row)
+    monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:1")
+
+    def _no_client(*args: object, **kwargs: object) -> object:
+        raise AssertionError("listing must not construct a model client")
+
+    monkeypatch.setattr(backends, "chat_client", _no_client)
+    before = _snapshot(root)
+    capsys.readouterr()
+
+    items = _list(layout)
+
+    assert len(items) == 3
+    assert _snapshot(root) == before
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+# -- the action table: one test per row ------------------------------------- #
+
+
+def _listed(layout: config.WorkspaceLayout, row: pq.Proposal) -> DecisionItem:
+    _enqueue(layout, row)
+    return _only(layout)
+
+
+def test_an_identity_judged_same_offers_merge_keep_distinct_and_skip(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(layout, _identity_row(layout))
+
+    assert item.actions == (Action.MERGE, Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.withheld == ()
+    assert item.evaluation == "judged_same"
+
+
+def test_an_identity_without_a_judgment_is_pending_evaluation(tmp_path: Path) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(layout, _identity_row(layout, verdict=None))
+
+    assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.withheld == (WithheldAction(Action.MERGE, "pending_evaluation"),)
+    assert item.evaluation == "pending_evaluation"
+
+
+def test_an_identity_judged_different_withholds_the_merge(tmp_path: Path) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(layout, _identity_row(layout, verdict="different"))
+
+    assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.withheld == (WithheldAction(Action.MERGE, "judged_different"),)
+    assert item.evaluation == "judged_different"
+
+
+def test_a_cross_type_identity_withholds_the_merge_and_names_the_command(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+    _typed_concept(layout, "concepts/e", "Other")
+
+    item = _listed(layout, _identity_row(layout, ("concepts/a", "concepts/e")))
+
+    assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.withheld == (WithheldAction(Action.MERGE, "cross_type"),)
+    assert "merge --include-cross-type" in item.resolves_via
+
+
+def test_an_identity_of_more_than_two_members_withholds_the_merge(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(
+        layout, _identity_row(layout, ("concepts/a", "concepts/b", "concepts/c"))
+    )
+
+    assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.withheld == (WithheldAction(Action.MERGE, "more_than_two_members"),)
+
+
+def test_a_symmetric_relation_offers_relate_and_skip_only(tmp_path: Path) -> None:
+    _root, layout = _relate_workspace(tmp_path)
+
+    item = _listed(layout, _relation_row(layout, "related_to"))
+
+    assert item.actions == (Action.RELATE, Action.SKIP)
+    assert item.withheld == ()
+    assert item.evaluation == "not_applicable"
+
+
+def test_an_asymmetric_relation_also_offers_the_reversed_edge(tmp_path: Path) -> None:
+    _root, layout = _relate_workspace(tmp_path)
+
+    item = _listed(layout, _relation_row(layout, "part_of"))
+
+    assert item.actions == (Action.RELATE, Action.RELATE_REVERSED, Action.SKIP)
+
+
+def test_a_supersedes_relation_has_no_actions_and_resolves_via_relate(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _relate_workspace(tmp_path)
+
+    item = _listed(layout, _relation_row(layout, "supersedes"))
+
+    assert item.actions == ()
+    assert item.withheld == ()
+    assert item.resolves_via == f"openkos relate {_SRC} supersedes {_TGT}"
+
+
+def test_a_relation_with_an_invalid_type_offers_nothing(tmp_path: Path) -> None:
+    _root, layout = _relate_workspace(tmp_path)
+
+    item = _listed(layout, _relation_row(layout, "   "))
+
+    assert item.actions == ()
+    assert item.withheld == (WithheldAction(Action.RELATE, "no_valid_suggestion"),)
+
+
+def test_a_volatility_with_a_valid_tier_offers_set_tier_and_skip(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _tier_workspace(tmp_path)
+
+    item = _listed(layout, _volatility_row())
+
+    assert item.actions == (Action.SET_TIER, Action.SKIP)
+    assert item.withheld == ()
+    assert item.targets == ()
+    assert item.fresh is True
+
+
+def test_a_volatility_with_an_invalid_tier_offers_nothing(tmp_path: Path) -> None:
+    _root, layout = _tier_workspace(tmp_path)
+
+    item = _listed(layout, _volatility_row(tier="glacial"))
+
+    assert item.actions == ()
+    assert item.withheld == (WithheldAction(Action.SET_TIER, "no_valid_suggestion"),)
+
+
+def test_a_contradiction_has_no_actions_and_names_where_it_resolves(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(layout, _contradiction_row())
+
+    assert item.actions == ()
+    assert item.withheld == ()
+    for place in (
+        "openkos contradictions --decline",
+        "openkos reconcile",
+        "openkos unmerge",
+    ):
+        assert place in item.resolves_via
+
+
+def test_a_revision_has_no_actions_and_names_its_producer(tmp_path: Path) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(layout, _revision_row())
+
+    assert item.actions == ()
+    assert item.resolves_via == "openkos revisions"
+
+
+def test_a_watch_refusal_has_no_actions_and_names_ingest(tmp_path: Path) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(layout, _watch_row())
+
+    assert item.actions == ()
+    assert item.resolves_via.startswith("openkos ingest ")
+    assert "big.md" in item.resolves_via
+
+
+# -- staleness is marked, never hidden -------------------------------------- #
+
+
+def test_an_identity_whose_member_was_edited_is_listed_and_marked_stale(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+    _enqueue(layout, _identity_row(layout))
+    _edit(layout, _SURVIVOR)
+
+    item = _only(layout)
+
+    assert item.fresh is False
+    assert item.actions == (Action.MERGE, Action.KEEP_DISTINCT, Action.SKIP)
+
+
+def test_a_relation_whose_endpoint_was_edited_is_listed_and_marked_stale(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _relate_workspace(tmp_path)
+    _enqueue(layout, _relation_row(layout))
+    _edit(layout, _TGT)
+
+    assert _only(layout).fresh is False
+
+
+def test_a_volatility_whose_effective_tier_moved_is_listed_and_marked_stale(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _tier_workspace(tmp_path)
+    _enqueue(layout, _volatility_row())
+    _move_effective_tier(layout)
+
+    assert _only(layout).fresh is False
+
+
+# -- confidence is data, never a ranking or a trust signal ------------------ #
+
+
+@pytest.mark.parametrize("confidences", [(0.1, 0.9), (0.9, 0.1)])
+def test_the_list_order_does_not_depend_on_confidence(
+    tmp_path: Path, confidences: tuple[float, float]
+) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+    _concept(layout, "concepts/d", "Another.")
+    low_high = [
+        _identity_row(layout, _PAIR, confidence=confidences[0]),
+        _identity_row(layout, ("concepts/c", "concepts/d"), confidence=confidences[1]),
+    ]
+    for row in low_high:
+        _enqueue(layout, row)
+
+    items = _list(layout)
+
+    assert [item.decision_key for item in items] == [r.decision_key for r in low_high]
+    assert [item.payload["adjudication"]["confidence"] for item in items] == list(  # type: ignore[index]
+        confidences
+    )
+
+
+def test_no_field_presents_confidence_as_a_trust_or_recommendation() -> None:
+    names = {field.name for field in dataclasses.fields(DecisionItem)}
+
+    assert names == {
+        "decision_key",
+        "kind",
+        "targets",
+        "fresh",
+        "evaluation",
+        "actions",
+        "withheld",
+        "resolves_via",
+        "payload",
+        "payload_digest",
+    }
+
+
+# --------------------------------------------------------------------------- #
+# The token path: preview_decision and apply_decision
+# --------------------------------------------------------------------------- #
+
+
+def _must_decision_preview(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    decision_key: str,
+    action: Action,
+    **kwargs: object,
+) -> curate_decisions.DecisionPreview:
+    result = curate_decisions.preview_decision(
+        root,
+        layout,
+        decision_key,
+        action,
+        **kwargs,  # type: ignore[arg-type]
+    )
+    assert isinstance(result, curate_decisions.DecisionPreview)
+    return result
+
+
+def _apply(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    version: DecisionVersion,
+    action: Action,
+    recorder: _Recorder,
+    **kwargs: object,
+) -> curate_decisions.ApplyOutcome:
+    return curate_decisions.apply_decision(
+        root,
+        layout,
+        version,
+        action,
+        ports=recorder.ports(),
+        observer=DecisionObserver(),
+        surface="curate",
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def _identity_seeded(
+    tmp_path: Path, **row: object
+) -> tuple[Path, config.WorkspaceLayout, pq.Proposal]:
+    root, layout = _merge_workspace(tmp_path)
+    proposal = _identity_row(layout, **row)  # type: ignore[arg-type]
+    _enqueue(layout, proposal)
+    return root, layout, proposal
+
+
+def test_preview_decision_returns_the_matching_preview_and_its_version(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+
+    result = _must_decision_preview(root, layout, proposal.decision_key, Action.MERGE)
+
+    assert isinstance(result.preview, MergeDecisionPreview)
+    assert result.version == curate_decisions.version_of(
+        result.preview, layout=layout, payload_digest=pq.payload_digest_for(proposal)
+    )
+    assert result.version.decision_key == proposal.decision_key
+
+
+def test_preview_decision_covers_relate_reversed_and_set_tier(tmp_path: Path) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    relation = _relation_row(layout, "part_of")
+    tier = _volatility_row()
+    _enqueue(layout, relation)
+    _enqueue(layout, tier)
+
+    forward = _must_decision_preview(root, layout, relation.decision_key, Action.RELATE)
+    reversed_ = _must_decision_preview(
+        root, layout, relation.decision_key, Action.RELATE_REVERSED
+    )
+    set_tier = _must_decision_preview(root, layout, tier.decision_key, Action.SET_TIER)
+
+    assert isinstance(forward.preview, RelateDecisionPreview)
+    assert (forward.preview.source_id, forward.preview.target_id) == (_SRC, _TGT)
+    assert isinstance(reversed_.preview, RelateDecisionPreview)
+    assert (reversed_.preview.source_id, reversed_.preview.target_id) == (_TGT, _SRC)
+    assert isinstance(set_tier.preview, TierDecisionPreview)
+    assert (set_tier.preview.type_name, set_tier.preview.tier) == (_TYPE, "volatile")
+    assert forward.version.content_digest != reversed_.version.content_digest
+
+
+def test_preview_decision_refuses_what_the_item_does_not_offer(tmp_path: Path) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path, verdict=None)
+
+    unjudged = curate_decisions.preview_decision(
+        root, layout, proposal.decision_key, Action.MERGE
+    )
+    skipped = curate_decisions.preview_decision(
+        root, layout, proposal.decision_key, Action.SKIP
+    )
+    wrong_kind = curate_decisions.preview_decision(
+        root, layout, proposal.decision_key, Action.SET_TIER
+    )
+
+    assert unjudged == NotApplied(Action.MERGE, "not_mergeable")
+    assert skipped == NotApplied(Action.SKIP, "skipped")
+    assert wrong_kind == NotApplied(Action.SET_TIER, "not_offered")
+
+
+def test_previewing_a_decision_with_no_open_row_is_stale_as_resolved(
+    tmp_path: Path,
+) -> None:
+    root, layout = _merge_workspace(tmp_path)
+    key = pq.stored_decision_key("identity", pq.identity_key(_PAIR))
+
+    result = curate_decisions.preview_decision(root, layout, key, Action.MERGE)
+
+    assert result == Stale(key, "row_resolved")
+
+
+def test_the_policy_defaults_and_none_of_its_fields_enters_the_token(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+
+    assert DecisionPolicy() == DecisionPolicy(
+        no_reconcile=False, reconcile=False, now=None
+    )
+    plain = _must_decision_preview(root, layout, proposal.decision_key, Action.MERGE)
+    forced = _must_decision_preview(
+        root,
+        layout,
+        proposal.decision_key,
+        Action.MERGE,
+        policy=DecisionPolicy(reconcile=True, now=_NOW),
+    )
+    skipped = _must_decision_preview(
+        root,
+        layout,
+        proposal.decision_key,
+        Action.MERGE,
+        policy=DecisionPolicy(no_reconcile=True),
+    )
+
+    assert isinstance(forced.preview, MergeDecisionPreview)
+    assert forced.preview.reconcile_planned
+    assert not plain.preview.reconcile_planned  # type: ignore[union-attr]
+    assert plain.version == forced.version == skipped.version
+    assert plain.version.token() == forced.version.token()
+
+
+# -- apply: the stateless round trip ---------------------------------------- #
+
+
+def test_a_caller_holding_only_the_token_key_and_action_commits_a_merge(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+    issued = _must_decision_preview(root, layout, proposal.decision_key, Action.MERGE)
+    held = (
+        issued.version.decision_key,
+        issued.version.payload_digest,
+        issued.version.content_digest,
+    )
+    del issued  # nothing from the preview survives but the three strings
+    recorder = _Recorder()
+
+    outcome = curate_decisions.apply_decision(
+        root,
+        layout,
+        DecisionVersion(*held),
+        Action.MERGE,
+        ports=recorder.ports(),
+        observer=DecisionObserver(),
+        surface="curate",
+    )
+
+    assert outcome == Applied(proposal.decision_key, Action.MERGE, "abc1234")
+    assert not _absorbed_exists(layout)
+    assert curate_queue.open_row_by_key(layout, proposal.decision_key) is None
+    assert _row_resolution(layout, proposal)[0] == "applied"
+
+
+def test_a_token_commits_a_relation_forward_and_reversed(tmp_path: Path) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    proposal = _relation_row(layout, "part_of")
+    _enqueue(layout, proposal)
+    version = _must_decision_preview(
+        root, layout, proposal.decision_key, Action.RELATE_REVERSED
+    ).version
+
+    outcome = _apply(root, layout, version, Action.RELATE_REVERSED, _Recorder())
+
+    assert outcome == Applied(proposal.decision_key, Action.RELATE_REVERSED, "abc1234")
+    assert _relations_of(layout, _TGT) != []
+    assert _relations_of(layout, _SRC) == []
+    assert _row_resolution(layout, proposal) == ("applied", "modified")
+
+
+def test_a_token_sets_a_tier(tmp_path: Path) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    proposal = _volatility_row()
+    _enqueue(layout, proposal)
+    version = _must_decision_preview(
+        root, layout, proposal.decision_key, Action.SET_TIER
+    ).version
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.SET_TIER, recorder)
+
+    assert outcome == Applied(proposal.decision_key, Action.SET_TIER, "abc1234")
+    assert recorder.commits == [
+        (("openkos.yaml",), f"openkos: set-volatility {_TYPE} -> volatile")
+    ]
+    assert _row_resolution(layout, proposal) == ("applied", "as_proposed")
+
+
+def test_a_token_records_keep_distinct_and_resolves_the_row(tmp_path: Path) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path, verdict=None)
+    version = _must_decision_preview(
+        root, layout, proposal.decision_key, Action.KEEP_DISTINCT
+    ).version
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.KEEP_DISTINCT, recorder)
+
+    assert outcome == Applied(proposal.decision_key, Action.KEEP_DISTINCT, "abc1234")
+    assert recorder.commits == [
+        (recorder.commits[0][0], "openkos: keep distinct concepts/a/concepts/b")
+    ]
+    assert curate_queue.open_row_by_key(layout, proposal.decision_key) is None
+    assert _absorbed_exists(layout)
+
+
+# -- apply: what is refused before anything is previewed -------------------- #
+
+
+def test_a_merge_on_an_unjudged_item_is_not_mergeable_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path, verdict=None)
+    version = DecisionVersion(
+        proposal.decision_key, pq.payload_digest_for(proposal), "x"
+    )
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.MERGE, recorder)
+
+    assert outcome == NotApplied(Action.MERGE, "not_mergeable")
+    assert recorder.events == []
+    assert _snapshot(root) == before
+
+
+@pytest.mark.parametrize("withheld", ["different", "cross_type", "three_members"])
+def test_every_withheld_merge_is_not_mergeable(tmp_path: Path, withheld: str) -> None:
+    root, layout = _merge_workspace(tmp_path)
+    _typed_concept(layout, "concepts/e", "Other")
+    row = {
+        "different": _identity_row(layout, verdict="different"),
+        "cross_type": _identity_row(layout, ("concepts/a", "concepts/e")),
+        "three_members": _identity_row(layout, (*_PAIR, "concepts/c")),
+    }[withheld]
+    _enqueue(layout, row)
+    version = DecisionVersion(row.decision_key, pq.payload_digest_for(row), "x")
+
+    outcome = _apply(root, layout, version, Action.MERGE, _Recorder())
+
+    assert outcome == NotApplied(Action.MERGE, "not_mergeable")
+
+
+@pytest.mark.parametrize(
+    ("row", "action"),
+    [
+        (lambda layout: _relation_row(layout), Action.MERGE),
+        (lambda layout: _relation_row(layout), Action.SET_TIER),
+        (lambda layout: _relation_row(layout, "related_to"), Action.RELATE_REVERSED),
+        (lambda layout: _relation_row(layout, "supersedes"), Action.RELATE),
+        (lambda layout: _volatility_row(), Action.KEEP_DISTINCT),
+        (lambda layout: _contradiction_row(), Action.SKIP),
+        (lambda layout: _revision_row(), Action.MERGE),
+        (lambda layout: _watch_row(), Action.KEEP_DISTINCT),
+    ],
+)
+def test_an_action_outside_the_item_set_is_not_offered_and_writes_nothing(
+    tmp_path: Path, row: Callable[[config.WorkspaceLayout], pq.Proposal], action: Action
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    _concept(layout, "concepts/c", "x")
+    proposal = row(layout)
+    _enqueue(layout, proposal)
+    version = DecisionVersion(
+        proposal.decision_key, pq.payload_digest_for(proposal), "x"
+    )
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, action, recorder)
+
+    assert outcome == NotApplied(action, "not_offered")
+    assert recorder.events == []
+    assert _snapshot(root) == before
+
+
+def test_skip_writes_nothing_and_leaves_the_row_pending(tmp_path: Path) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+    version = DecisionVersion(
+        proposal.decision_key, pq.payload_digest_for(proposal), "x"
+    )
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.SKIP, recorder)
+
+    assert outcome == NotApplied(Action.SKIP, "skipped")
+    assert recorder.events == []
+    assert _snapshot(root) == before
+    assert _row_resolution(layout, proposal)[0] == "pending"
+
+
+# -- apply: a stale token writes nothing ------------------------------------ #
+
+
+def test_a_stale_token_writes_no_concept_no_queue_row_and_no_commit(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+    version = _must_decision_preview(
+        root, layout, proposal.decision_key, Action.MERGE
+    ).version
+    _edit(layout, _SURVIVOR)
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.MERGE, recorder)
+
+    assert outcome == Stale(proposal.decision_key, "content_changed")
+    assert _snapshot(root) == before  # no concept, no findings.db row, no sidecar
+    assert recorder.commits == []
+    assert recorder.events == []
+
+
+def test_a_row_resolved_since_the_token_is_stale_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+    version = _must_decision_preview(
+        root, layout, proposal.decision_key, Action.MERGE
+    ).version
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        conn.execute(
+            "UPDATE pending_items SET status = 'declined', resolution = 'declined'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.MERGE, recorder)
+
+    assert outcome == Stale(proposal.decision_key, "row_resolved")
+    assert recorder.commits == []
+    assert _snapshot(root) == before
+
+
+def test_a_row_superseded_since_the_token_is_stale_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+    version = _must_decision_preview(
+        root, layout, proposal.decision_key, Action.MERGE
+    ).version
+    _enqueue(layout, _identity_row(layout, note=" revised"))
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.MERGE, recorder)
+
+    assert outcome == Stale(proposal.decision_key, "row_superseded")
+    assert recorder.commits == []
+    assert recorder.events == ["enter", "exit"]
+    assert _snapshot(root) == before
+
+
+def test_a_row_whose_inputs_changed_is_stale_and_writes_nothing(tmp_path: Path) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+    _edit(layout, _SURVIVOR)  # the row was computed against the unedited member
+    version = _must_decision_preview(
+        root, layout, proposal.decision_key, Action.MERGE
+    ).version
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.MERGE, recorder)
+
+    assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
+    assert recorder.commits == []
+    assert _snapshot(root) == before
+
+
+def test_a_member_edited_after_a_keep_distinct_token_is_stale_before_the_section(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path, verdict=None)
+    version = _must_decision_preview(
+        root, layout, proposal.decision_key, Action.KEEP_DISTINCT
+    ).version
+    _edit(layout, _ABSORBED)
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.KEEP_DISTINCT, recorder)
+
+    assert outcome == Stale(proposal.decision_key, "content_changed")
+    assert recorder.events == []
+    assert _snapshot(root) == before
+
+
+def test_a_keep_distinct_token_for_a_row_with_stale_inputs_is_stale(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path, verdict=None)
+    _edit(layout, _ABSORBED)
+    version = _must_decision_preview(
+        root, layout, proposal.decision_key, Action.KEEP_DISTINCT
+    ).version
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.KEEP_DISTINCT, recorder)
+
+    assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
+    assert recorder.commits == []
+    assert recorder.events == ["enter", "exit"]
+    assert _snapshot(root) == before
+
+
+# -- row_inputs_changed on every commit path -------------------------------- #
+
+
+def test_a_merge_commit_with_a_token_for_a_row_with_stale_inputs_is_stale(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+    _edit(layout, _ABSORBED)
+    version = _token(root, layout, proposal)
+    before = _snapshot(root)
+    recorder = _MergeRecorder()
+
+    outcome = _commit(
+        root, layout, _must_preview(root, layout), recorder, expected=version
+    )
+
+    assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
+    assert recorder.events == ["enter", "exit"]
+    assert _snapshot(root) == before
+
+
+def test_a_relate_commit_with_a_token_for_a_row_with_stale_inputs_is_stale(
+    tmp_path: Path,
+) -> None:
+    root, layout = _relate_workspace(tmp_path)
+    proposal = _relation_row(layout)
+    _enqueue(layout, proposal)
+    _edit(layout, _TGT)
+    version = _relate_token(root, layout, proposal)
+    before = _snapshot(root)
+    recorder = _RelateRecorder()
+
+    outcome = _commit_relate(
+        root, layout, _must_relate(root, layout), recorder, expected=version
+    )
+
+    assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
+    assert recorder.events == ["enter", "exit"]
+    assert _snapshot(root) == before
+
+
+def test_a_tier_commit_with_a_token_for_a_row_whose_default_moved_is_stale(
+    tmp_path: Path,
+) -> None:
+    root, layout = _tier_workspace(tmp_path)
+    proposal = _volatility_row()
+    _enqueue(layout, proposal)
+    _move_effective_tier(layout)  # the row proposed from "slow"; it is "static" now
+    version = curate_decisions.version_of(
+        _must_tier(layout),
+        layout=layout,
+        payload_digest=pq.payload_digest_for(proposal),
+    )
+    before = _snapshot(root)
+    recorder = _TierRecorder()
+
+    outcome = _commit_tier(root, layout, _must_tier(layout), recorder, expected=version)
+
+    assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
+    assert recorder.events == ["enter", "exit"]
+    assert _snapshot(root) == before
+
+
+# -- no judgment ------------------------------------------------------------- #
+
+
+def test_skip_and_listing_succeed_with_no_model_and_start_no_judging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.application import backends
+    from openkos.resolution import adjudication
+
+    def _forbidden(*args: object, **kwargs: object) -> object:
+        raise AssertionError("the surface must not judge or reach a model")
+
+    monkeypatch.setattr(backends, "chat_client", _forbidden)
+    monkeypatch.setattr(adjudication, "adjudicate_candidates", _forbidden)
+    monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:1")
+    root, layout, proposal = _identity_seeded(tmp_path, verdict=None)
+
+    item = _only(layout)
+    outcome = _apply(
+        root,
+        layout,
+        DecisionVersion(proposal.decision_key, pq.payload_digest_for(proposal), "x"),
+        Action.SKIP,
+        _Recorder(),
+    )
+
+    assert item.evaluation == "pending_evaluation"
+    assert outcome == NotApplied(Action.SKIP, "skipped")
+    assert _only(layout).evaluation == "pending_evaluation"  # still unjudged
+
+
+@pytest.mark.parametrize(
+    "row", [_contradiction_row, _revision_row, _watch_row], ids=lambda f: f.__name__
+)
+def test_a_kind_with_no_actions_reports_freshness_as_not_computed(
+    tmp_path: Path, row: Callable[[], pq.Proposal]
+) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(layout, row())
+
+    assert item.actions == ()
+    assert item.fresh is None  # never True: nothing was checked
+
+
+def test_actionable_kinds_keep_a_computed_freshness(tmp_path: Path) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+    _enqueue(layout, _identity_row(layout))
+
+    assert _only(layout).fresh is True
+    _edit(layout, _SURVIVOR)
+    assert _only(layout).fresh is False

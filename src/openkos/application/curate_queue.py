@@ -124,19 +124,26 @@ def open_row_by_key(
     )
 
 
-def _fresh(
+def row_is_fresh(
     row: OpenRow,
     current_digest: Callable[[str], str | None],
     required: Iterable[str],
 ) -> bool:
     """Every input the row was computed from, and every concept it names, still
     hashes to what was recorded. A row with no recorded digest for a concept it
-    names cannot be told stale, so it is not served."""
+    names cannot be told stale, so it is not served.
+
+    The one predicate the typed readers below and the decision list share, so a
+    client and `curate` never disagree about which rows are stale."""
     recorded = {entry.input_ref: entry.digest for entry in row.inputs}
     for concept_id in required:
         if concept_id not in recorded:
             return False
     return all(current_digest(ref) == digest for ref, digest in recorded.items())
+
+
+_fresh = row_is_fresh
+"""The name the typed readers were written against; kept as an alias."""
 
 
 # -- identity ---------------------------------------------------------------
@@ -222,16 +229,31 @@ def relation_suggestions(
 # -- volatility ---------------------------------------------------------------
 
 
+def _type_tiers(layout: config.WorkspaceLayout) -> Mapping[str, str]:
+    try:
+        return config.read_config(layout.root).type_tiers
+    except OSError, ValueError:
+        return {}
+
+
+def volatility_row_is_fresh(layout: config.WorkspaceLayout, row: OpenRow) -> bool:
+    """Whether the tier a volatility row was computed against is still its
+    type's EFFECTIVE tier. A row that does not say is not fresh. Volatility
+    rows carry no input digests, so this stands where `row_is_fresh` cannot."""
+    type_name = row.payload.get("type_name")
+    default = row.payload.get("current_default")
+    if not (isinstance(type_name, str) and isinstance(default, str)):
+        return False
+    return default == effective_tier(type_name, _type_tiers(layout))
+
+
 def volatility_suggestions(
     layout: config.WorkspaceLayout,
 ) -> dict[str, TierSuggestion]:
     """Fresh open volatility rows, keyed on type. A row is fresh while the
     tier it was computed against is still the type's EFFECTIVE tier (the
     workspace's `type_tiers` override, else the registry default)."""
-    try:
-        type_tiers = config.read_config(layout.root).type_tiers
-    except OSError, ValueError:
-        type_tiers = {}
+    type_tiers = _type_tiers(layout)
     served: dict[str, TierSuggestion] = {}
     for row in read_open_rows(layout, "volatility"):
         payload = row.payload
