@@ -4,8 +4,9 @@ S2b and S2c; ADR-0059).
 Judging is the model-backed step that turns an unjudged item into one a human
 can decide. The surface is a quote, consent, run protocol: a caller asks for an
 LLM-free `JudgingQuote`, the human consents to it by handing back its
-`QuoteToken`, and `run_judging` judges at most what was quoted. Identity is the
-kind covered so far.
+`QuoteToken`, and `run_judging` judges at most what was quoted. Identity and
+relation type are the kinds covered so far; relation type runs the existing
+`suggest_relations_service` once per chunk (see `_run_relations`).
 
 The surface is plain data. It never prompts, prints, reads a terminal or raises
 `typer.Exit`; everything a client renders reaches it as returned data or as
@@ -57,8 +58,11 @@ from openkos import config
 from openkos.application import backends as application_backends
 from openkos.application import identity_adjudication
 from openkos.application import pending as application_pending
+from openkos.application import suggest_relations_service as relations
 from openkos.application.lock_wait import CommitSection
 from openkos.application.runtime import StopToken
+from openkos.graph import proximity, sqlite_graph
+from openkos.graph.base import Edge
 from openkos.llm.base import (
     BackendError,
     BackendModelNotFound,
@@ -67,12 +71,14 @@ from openkos.llm.base import (
     Message,
 )
 from openkos.resolution import adjudication as leaf
+from openkos.resolution import edge_typing
 from openkos.resolution.candidates import (
     CandidateGroup,
     CandidateGroupReport,
     find_candidates_report,
 )
 from openkos.state import adjudications as adjudications_store
+from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import jobs
 
 JudgingKind = Literal["identity", "relation_type", "volatility"]
@@ -81,6 +87,9 @@ additive."""
 
 ChangedField = Literal["model", "backend", "locality", "confidential", "rubric"]
 """The binding fields `QuoteStale` names when they moved."""
+
+_KINDS: Final = ("identity", "relation_type")
+"""The kinds this stage quotes and runs; `volatility` arrives with S3b."""
 
 _NUL = "\x00"
 
@@ -218,6 +227,12 @@ class QuoteNotice:
     backend: str | None = None
     """model only: `cfg.backend`."""
 
+    text: str | None = None
+    """relation_type `truncated` and `quarantined`: the relations service's own
+    notice, already restricted to what the caller may see. It carries no count
+    because the service derives the visible counts through the sensitivity walk
+    and renders them; this surface does not repeat that derivation."""
+
 
 @dataclass(frozen=True)
 class JudgingQuote:
@@ -226,7 +241,8 @@ class JudgingQuote:
     """Candidate groups considered, kept-distinct ones already dropped."""
 
     served: int
-    """Decided (SAME, DIFFERENT) verdicts served with no call."""
+    """Persisted answers served with no call: decided (SAME, DIFFERENT) verdicts
+    for identity, a servable stored suggestion for relation_type."""
 
     uncertain: int
     """Servable UNCERTAIN verdicts. In `to_judge` only when opted in."""
@@ -279,6 +295,17 @@ class JudgingPorts:
     )
     sleep: Callable[[float], None] = time.sleep
     """The retry backoff's wait (S2c); a quote never sleeps."""
+
+    open_proximity: Callable[[Path], proximity.VectorProximitySource | None] = (
+        proximity.open_proximity_source
+    )
+    build_graph: Callable[..., sqlite_graph.SqliteGraphStore] = sqlite_graph.build_graph
+    candidate_edges: Callable[..., list[Edge]] = edge_typing.candidate_edges
+    suggest_edge_types: Callable[..., edge_typing.EdgeSuggestionBatch] = (
+        edge_typing.suggest_edge_types
+    )
+    """The relation_type kind's seams, the same four the relations service has;
+    each defaults to the real implementation."""
 
     now: Callable[[], datetime] = _utc_now
 
@@ -421,17 +448,22 @@ def _context(
     ways."""
     # The literal task name, at the call: `test_chat_timeout_wiring` reads it
     # off the AST so a refactor cannot silently drop the `models:` override.
-    client = ports.chat_client(cfg, "adjudication")
+    if kind == "relation_type":
+        client = ports.chat_client(cfg, "edge_typing")
+        task = "edge_typing"
+    else:
+        client = ports.chat_client(cfg, "adjudication")
+        task = "adjudication"
     local_exemption = ports.resolve_local_exemption(
         cast(application_backends.HasLocality, client), cfg
     )
     binding = QuoteBinding(
         kind=kind,
-        model=config.resolve_task_model(cfg, "adjudication"),
+        model=config.resolve_task_model(cfg, task),
         backend=cfg.backend,
         is_local=cast(application_backends.HasLocality, client).locality.is_local,
         effective_confidential=include_confidential or local_exemption,
-        rubric_digest=leaf.rubric_digest(),
+        rubric_digest=leaf.rubric_digest() if kind == "identity" else None,
     )
     return _Context(client, binding, local_exemption)
 
@@ -493,6 +525,207 @@ def _partition_identity(
     )
 
 
+# -- relation_type ------------------------------------------------------------ #
+#
+# The unit judged is the unit the shipped relations service uses: one untyped,
+# DIRECTED edge, one chat call. A quote and a run reach that service rather than
+# restate it: the quote asks it to price and declines, the run re-invokes it per
+# chunk with a bound and a candidate port narrowed to the quoted edges.
+
+
+class _RelationsObserver:
+    """The relations service's observer, reduced to what judging needs: it keeps
+    the two candidate notices the service renders, declines the cost question
+    (a quote spends nothing) and forwards each typed edge to `on_progress`."""
+
+    def __init__(
+        self,
+        *,
+        on_progress: Callable[[int, int, edge_typing.EdgeSuggestion], None]
+        | None = None,
+    ) -> None:
+        self.truncation: str | None = None
+        self.quarantine: str | None = None
+        self._on_progress = on_progress
+
+    def walk_incomplete(
+        self, bundle_dir: Path, *, include_confidential: bool, local_exemption: bool
+    ) -> None:
+        return None
+
+    def workspace_header(self, root: Path) -> None:
+        return None
+
+    def empty_window(self, edge_offset: int) -> None:
+        return None
+
+    def candidate_notices(self, truncation: str | None, quarantine: str | None) -> None:
+        self.truncation = truncation
+        self.quarantine = quarantine
+
+    def no_candidates(self, message: str) -> None:
+        return None
+
+    def warn(self, message: str) -> None:
+        return None
+
+    def serve_split(self, served: int, total: int, fresh: int) -> None:
+        return None
+
+    def confirm_cost(self, quote: relations.CostQuote) -> bool:
+        return False
+
+    def edge_progress(
+        self, index: int, count: int, suggestion: edge_typing.EdgeSuggestion
+    ) -> None:
+        if self._on_progress is not None:
+            self._on_progress(index, count, suggestion)
+
+
+def _relations_ports(
+    context: _Context,
+    ports: JudgingPorts,
+    *,
+    client: LLMBackend,
+    candidate_edges: Callable[..., list[Edge]],
+    commit_section: CommitSection = contextlib.nullcontext,
+) -> relations.SuggestRelationsPorts:
+    """The relations service's ports over this surface's. The client and the
+    local exemption are the ones the binding was derived from, so the service
+    cannot resolve either a second way; the adapter-side effects (the cost
+    question's zero-state wording, the auto-commit, the derived refresh) belong
+    to `--apply` and the CLI and are inert here."""
+    return relations.SuggestRelationsPorts(
+        chat_client=lambda cfg, task: client,
+        zero_state_message=lambda layout, store, embeddings_missing: "",
+        autocommit=lambda root, paths, message: None,
+        refresh_derived=lambda layout: None,
+        resolve_local_exemption=lambda client, cfg: context.local_exemption,
+        open_proximity=ports.open_proximity,
+        build_graph=ports.build_graph,
+        candidate_edges=candidate_edges,
+        suggest_edge_types=ports.suggest_edge_types,
+        commit_section=commit_section,
+    )
+
+
+@dataclass(frozen=True)
+class _Walk:
+    edges: list[Edge]
+    """Every candidate edge the service walked, in candidate order."""
+
+    truncation: str | None
+    quarantine: str | None
+
+
+def _walk_relations(
+    root: Path,
+    context: _Context,
+    *,
+    include_confidential: bool,
+    ports: JudgingPorts,
+) -> _Walk:
+    """The LLM-free candidate walk, run by the service itself: it is asked to
+    price and its observer declines, so no model is reached and nothing is
+    written. The candidate edges are read off the service's own candidate port."""
+    seen: list[Edge] = []
+
+    def capture(bundle_dir: Path, **kwargs: object) -> list[Edge]:
+        edges = ports.candidate_edges(bundle_dir, **kwargs)
+        seen[:] = edges
+        return edges
+
+    observer = _RelationsObserver()
+    relations.suggest_relations(
+        root,
+        relations.SuggestRelationsRequest(include_confidential=include_confidential),
+        _relations_ports(
+            context, ports, client=context.client, candidate_edges=capture
+        ),
+        observer,
+    )
+    return _Walk(list(seen), observer.truncation, observer.quarantine)
+
+
+def _edge_item(edge: Edge, current_digest: Callable[[str], str | None]) -> WorkItem:
+    return WorkItem(
+        work_key=edge_suggestions_store.pair_key_for(edge.source_id, edge.target_id),
+        member_digests=tuple(
+            (endpoint, current_digest(endpoint) or "")
+            for endpoint in sorted({edge.source_id, edge.target_id})
+        ),
+    )
+
+
+def _partition_relations(
+    layout: config.WorkspaceLayout,
+    edges: list[Edge],
+    *,
+    effective: bool,
+) -> relations.EdgeSuggestionServes:
+    """The LLM-free serve split the relations service itself makes (the same
+    function), so a quote and a run agree with it about what a model must type."""
+    return relations.partition_edge_suggestion_serves(
+        layout,
+        edges,
+        include_confidential=effective,
+        on_warning=None,
+        surface="judging",
+    )
+
+
+def _quote_relations(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    cfg: config.Config,
+    context: _Context,
+    *,
+    include_confidential: bool,
+    ports: JudgingPorts,
+) -> JudgingQuote:
+    binding = context.binding
+    walk = _walk_relations(
+        root, context, include_confidential=include_confidential, ports=ports
+    )
+    serves = _partition_relations(
+        layout, walk.edges, effective=binding.effective_confidential
+    )
+    current_digest = application_pending.current_finding_digest(layout.bundle_dir)
+    work = tuple(_edge_item(edge, current_digest) for edge in serves.to_type)
+
+    notices: list[QuoteNotice] = [
+        QuoteNotice("model", model=binding.model, backend=cfg.backend)
+    ]
+    if walk.truncation is not None:
+        notices.append(QuoteNotice("truncated", text=walk.truncation))
+    if walk.quarantine is not None:
+        notices.append(QuoteNotice("quarantined", text=walk.quarantine))
+    unattended = _unattended_notice(layout, cfg, ports.now())
+    if unattended is not None:
+        notices.append(unattended)
+
+    # Every edge costs exactly one chat call and none short-circuits, so the
+    # bound is the work itself.
+    token = QuoteToken(
+        binding=binding,
+        include_confidential=include_confidential,
+        include_uncertain=False,
+        work=work,
+        calls=len(work),
+    )
+    return JudgingQuote(
+        kind="relation_type",
+        total=len(walk.edges),
+        served=len(serves.served),
+        uncertain=0,
+        to_judge=len(work),
+        calls=len(work),
+        binding=binding,
+        notices=tuple(notices),
+        token=token,
+    )
+
+
 def quote_judging(
     root: Path,
     kind: JudgingKind,
@@ -509,13 +742,23 @@ def quote_judging(
     how many calls it would make. Judged-uncertain items are left out of
     `to_judge` and `calls` unless `include_uncertain`. Raises `JudgingRefused`
     when `root` is not a readable workspace and `ValueError` for a kind this
-    stage does not quote yet."""
-    if kind != "identity":
+    stage does not quote yet. `include_uncertain` is an identity notion: a
+    relation_type quote ignores it."""
+    if kind not in _KINDS:
         raise ValueError(f"judging kind {kind!r} cannot be quoted yet")
     layout, cfg = _open_workspace(root, "quote")
     context = _context(
         cfg, kind, include_confidential=include_confidential, ports=ports
     )
+    if kind == "relation_type":
+        return _quote_relations(
+            root,
+            layout,
+            cfg,
+            context,
+            include_confidential=include_confidential,
+            ports=ports,
+        )
     binding = context.binding
     local_exemption = context.local_exemption
 

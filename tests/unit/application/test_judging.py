@@ -18,7 +18,10 @@ import pytest
 from openkos import config, lock
 from openkos.application import judging
 from openkos.application import pending as application_pending
+from openkos.application import suggest_relations_service as relations
 from openkos.application.runtime import StopToken
+from openkos.graph import sqlite_graph
+from openkos.graph.base import Edge
 from openkos.llm.base import (
     BackendGenerationCapped,
     BackendHostLocality,
@@ -36,6 +39,7 @@ from openkos.resolution.adjudication import (
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.state import adjudications as store
 from openkos.state import derived, jobs
+from openkos.state import edge_suggestions as edge_store
 from tests.unit.application.curation_support import make_workspace
 
 _RUBRIC = rubric_digest()
@@ -427,8 +431,8 @@ def test_a_group_whose_members_are_all_confidential_adds_nothing_to_calls(
 
 def test_an_unsupported_kind_is_refused() -> None:
     ports = judging.JudgingPorts(chat_client=lambda cfg, task: _Client())
-    with pytest.raises(ValueError, match="relation_type"):
-        judging.quote_judging(Path(), "relation_type", ports=ports)
+    with pytest.raises(ValueError, match="volatility"):
+        judging.quote_judging(Path(), "volatility", ports=ports)
 
 
 def test_a_root_that_is_not_a_workspace_is_refused(tmp_path: Path) -> None:
@@ -705,7 +709,9 @@ class _Judge:
         is_local: bool = False,
         on_chat: Callable[[int], None] | None = None,
         log: list[str] | None = None,
+        default_reply: str | None = None,
     ) -> None:
+        self.default_reply = default_reply
         self.script = list(script)
         self.is_local = is_local
         self.on_chat = on_chat
@@ -724,7 +730,9 @@ class _Judge:
         step = self.script[self.calls - 1] if self.calls <= len(self.script) else None
         if isinstance(step, Exception):
             raise step
-        return step if step is not None else _reply()
+        if step is not None:
+            return step
+        return self.default_reply if self.default_reply is not None else _reply()
 
 
 class _Sections:
@@ -1519,3 +1527,414 @@ def test_a_run_writes_nothing_to_a_stream(
 
     captured = capsys.readouterr()
     assert (captured.out, captured.err) == ("", "")
+
+
+# -- relation_type: the fixture ------------------------------------------------ #
+
+
+def _edge_reply(kind: str = "references") -> str:
+    return json.dumps({"type": kind, "rationale": "Typed."})
+
+
+class _RelFixture:
+    """Five untyped edges between readable private concepts. The candidate walk
+    is injected (a fixed, mutable list); the typing, the graph, the serve
+    partition and the persist are the shipped ones."""
+
+    def __init__(self, root: Path, edges: list[Edge]) -> None:
+        self.root = root
+        self.layout = config.WorkspaceLayout(root)
+        self.edges = edges
+        self.client: _Judge = _Judge(default_reply=_edge_reply())
+        self.tasks: list[str | None] = []
+        self.graphs = 0
+
+    def _chat_client(self, cfg: config.Config, task: str | None) -> _Judge:
+        self.tasks.append(task)
+        return self.client
+
+    def _build_graph(self, *args: object, **kwargs: object) -> object:
+        self.graphs += 1
+        return sqlite_graph.build_graph(*args, **kwargs)  # type: ignore[arg-type]
+
+    def ports(self, **over: object) -> judging.JudgingPorts:
+        return dataclasses.replace(
+            judging.JudgingPorts(
+                chat_client=self._chat_client,
+                candidate_edges=lambda bundle_dir, **_: list(self.edges),
+                open_proximity=lambda path: None,
+                build_graph=self._build_graph,  # type: ignore[arg-type]
+                now=lambda: _NOW,
+                sleep=lambda seconds: None,
+            ),
+            **over,  # type: ignore[arg-type]
+        )
+
+    def quote(
+        self, *, include_confidential: bool = False, **over: object
+    ) -> judging.JudgingQuote:
+        return judging.quote_judging(
+            self.root,
+            "relation_type",
+            include_confidential=include_confidential,
+            ports=self.ports(**over),
+        )
+
+    def seed(
+        self,
+        edge: Edge,
+        *,
+        kind: str = "references",
+        include_confidential: bool = False,
+    ) -> None:
+        """Persist a servable suggestion for `edge`."""
+        current = application_pending.current_finding_digest(self.layout.bundle_dir)
+        conn = derived.open_derived_connection(self.layout.findings_db_path)
+        try:
+            edge_store.record_edge_suggestions(
+                conn,
+                [
+                    edge_store.PersistedEdgeSuggestion(
+                        source_id=edge.source_id,
+                        target_id=edge.target_id,
+                        suggested_type=kind,
+                        rationale="Stored.",
+                        include_confidential=include_confidential,
+                        input_digests=tuple(
+                            edge_store.InputDigest(
+                                input_ref=ref, digest=current(ref) or ""
+                            )
+                            for ref in (edge.source_id, edge.target_id)
+                        ),
+                    )
+                ],
+            )
+        finally:
+            conn.close()
+
+    def stored(self) -> dict[str, str]:
+        """The persisted suggestions: directed key -> suggested type."""
+        if not self.layout.findings_db_path.exists():
+            return {}
+        conn = derived.open_derived_connection(self.layout.findings_db_path)
+        try:
+            return {
+                edge_store.pair_key_for(row.source_id, row.target_id): (
+                    row.suggested_type
+                )
+                for row in edge_store.open_edge_suggestions(conn)
+            }
+        finally:
+            conn.close()
+
+    def edit(self, concept_id: str) -> None:
+        path = self.layout.bundle_dir / f"{concept_id}.md"
+        path.write_text(path.read_text(encoding="utf-8") + "\nEdited.\n", "utf-8")
+
+
+def _edge_key(edge: Edge) -> str:
+    return edge_store.pair_key_for(edge.source_id, edge.target_id)
+
+
+@pytest.fixture
+def rel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _RelFixture:
+    root = make_workspace(tmp_path, monkeypatch)
+    edges = [
+        Edge(source_id=f"concepts/r{n}-a", target_id=f"concepts/r{n}-b")
+        for n in range(5)
+    ]
+    for edge in edges:
+        _write(root, edge.source_id)
+        _write(root, edge.target_id)
+    return _RelFixture(root, edges)
+
+
+# -- relation_type: the quote -------------------------------------------------- #
+
+
+def test_a_relation_quote_is_kind_tagged_and_splits_served_from_to_judge(
+    rel: _RelFixture,
+) -> None:
+    rel.seed(rel.edges[0])
+    rel.seed(rel.edges[1])
+
+    quote = rel.quote()
+
+    assert quote.kind == "relation_type"
+    assert (quote.total, quote.served, quote.to_judge, quote.calls) == (5, 2, 3, 3)
+    assert quote.uncertain == 0
+    assert quote.token.calls == 3
+
+
+def test_a_relation_quote_binds_the_edge_typing_model_and_no_rubric(
+    rel: _RelFixture,
+) -> None:
+    (rel.root / "openkos.yaml").write_text(
+        (rel.root / "openkos.yaml").read_text(encoding="utf-8")
+        + "models:\n  edge_typing: edge-model\n  adjudication: judge-model\n",
+        encoding="utf-8",
+    )
+
+    quote = rel.quote()
+
+    assert quote.binding.kind == "relation_type"
+    assert quote.binding.model == "edge-model"
+    assert quote.binding.rubric_digest is None
+    assert set(rel.tasks) == {"edge_typing"}
+    [model_notice] = [n for n in quote.notices if n.code == "model"]
+    assert model_notice.model == "edge-model"
+
+
+def test_a_relation_quote_makes_no_model_call_and_writes_nothing(
+    rel: _RelFixture,
+) -> None:
+    rel.client = _Judge([BackendUnavailable("the backend is down")])
+
+    quote = rel.quote()
+
+    assert quote.to_judge == 5
+    assert rel.client.calls == 0
+    assert not rel.layout.findings_db_path.exists()
+
+
+def test_a_relation_quote_states_what_the_shipped_cost_question_states(
+    rel: _RelFixture,
+) -> None:
+    """The counts are the relations service's own `CostQuote`: the same edges
+    asked the same question price the same under either surface."""
+    rel.seed(rel.edges[2])
+    asked: list[relations.CostQuote] = []
+
+    class _Decline(_NoRelationsObserver):
+        def confirm_cost(self, quote: relations.CostQuote) -> bool:
+            asked.append(quote)
+            return False
+
+    ports = rel.ports()
+    relations.suggest_relations(
+        rel.root,
+        relations.SuggestRelationsRequest(),
+        relations.SuggestRelationsPorts(
+            chat_client=lambda cfg, task: rel.client,
+            zero_state_message=lambda *_: "",
+            autocommit=lambda *_: None,
+            refresh_derived=lambda layout: None,
+            resolve_local_exemption=lambda client, cfg: False,
+            open_proximity=ports.open_proximity,
+            candidate_edges=ports.candidate_edges,
+        ),
+        _Decline(),
+    )
+
+    quote = rel.quote()
+
+    [cost] = asked
+    assert (quote.total, quote.served, quote.to_judge) == (
+        cost.total,
+        cost.served,
+        cost.to_type,
+    )
+
+
+class _NoRelationsObserver:
+    """A relations observer that says nothing and answers no to the cost."""
+
+    def walk_incomplete(self, bundle_dir: Path, **kwargs: object) -> None: ...
+
+    def workspace_header(self, root: Path) -> None: ...
+
+    def empty_window(self, edge_offset: int) -> None: ...
+
+    def candidate_notices(self, truncation: object, quarantine: object) -> None: ...
+
+    def no_candidates(self, message: str) -> None: ...
+
+    def warn(self, message: str) -> None: ...
+
+    def serve_split(self, served: int, total: int, fresh: int) -> None: ...
+
+    def confirm_cost(self, quote: relations.CostQuote) -> bool:
+        return False
+
+    def edge_progress(self, index: int, count: int, suggestion: object) -> None: ...
+
+
+def test_a_relation_work_item_is_the_directed_edge_with_its_endpoint_digests(
+    rel: _RelFixture,
+) -> None:
+    rel.seed(rel.edges[0])
+    current = application_pending.current_finding_digest(rel.layout.bundle_dir)
+
+    quote = rel.quote()
+
+    assert [item.work_key for item in quote.token.work] == [
+        _edge_key(edge) for edge in rel.edges[1:]
+    ]
+    first = quote.token.work[0]
+    assert first.member_digests == tuple(
+        sorted(
+            (ref, current(ref) or "")
+            for ref in (rel.edges[1].source_id, rel.edges[1].target_id)
+        )
+    )
+
+
+def test_the_two_directions_of_one_pair_are_two_questions(rel: _RelFixture) -> None:
+    forward = rel.edges[0]
+    backward = Edge(source_id=forward.target_id, target_id=forward.source_id)
+    rel.edges[:] = [forward, backward]
+    rel.seed(forward)
+
+    quote = rel.quote()
+
+    assert (quote.served, quote.to_judge) == (1, 1)
+    assert [item.work_key for item in quote.token.work] == [_edge_key(backward)]
+
+
+def test_an_edited_endpoint_returns_a_relation_to_judge(rel: _RelFixture) -> None:
+    for edge in rel.edges:
+        rel.seed(edge)
+    assert rel.quote().to_judge == 0
+
+    rel.edit(rel.edges[3].target_id)
+    quote = rel.quote()
+
+    assert (quote.served, quote.to_judge) == (4, 1)
+    assert quote.token.work[0].work_key == _edge_key(rel.edges[3])
+
+
+def test_a_suggestion_stored_under_another_confidential_bit_is_not_served(
+    rel: _RelFixture,
+) -> None:
+    for edge in rel.edges:
+        rel.seed(edge, include_confidential=False)
+
+    exempt = rel.quote(include_confidential=True)
+
+    assert (exempt.served, exempt.to_judge) == (0, 5)
+    assert exempt.binding.effective_confidential is True
+    assert exempt.token.include_confidential is True
+
+
+def test_a_local_backend_makes_the_effective_confidential_bit_true(
+    rel: _RelFixture,
+) -> None:
+    rel.client = _Judge(is_local=True)
+
+    quote = rel.quote()
+
+    assert quote.binding.is_local is True
+    assert quote.binding.effective_confidential is True
+    assert quote.token.include_confidential is False
+
+
+def test_a_local_backend_serves_a_suggestion_stored_under_the_effective_bit(
+    rel: _RelFixture,
+) -> None:
+    """A local backend turns the exemption on, so the effective bit is true and
+    a suggestion stored under it is served even though the caller asked for
+    nothing; one stored under the other bit is not."""
+    rel.client = _Judge(is_local=True)
+    rel.seed(rel.edges[0], include_confidential=True)
+    rel.seed(rel.edges[1], include_confidential=False)
+
+    quote = rel.quote()
+
+    assert quote.binding.effective_confidential is True
+    assert (quote.served, quote.to_judge) == (1, 4)
+    assert _edge_key(rel.edges[0]) not in [i.work_key for i in quote.token.work]
+
+
+def test_a_relation_quote_ignores_the_uncertain_opt_in(rel: _RelFixture) -> None:
+    """Nothing here is judged-uncertain, so the flag prices nothing and is not
+    bound into the token as though it did."""
+    plain = rel.quote()
+    opted = judging.quote_judging(
+        rel.root, "relation_type", include_uncertain=True, ports=rel.ports()
+    )
+
+    assert (opted.calls, opted.to_judge, opted.uncertain) == (5, 5, 0)
+    assert opted.token.include_uncertain is False
+    assert opted.token.digest() == plain.token.digest()
+
+
+def test_a_relation_quote_over_no_candidates_quotes_zero(rel: _RelFixture) -> None:
+    rel.edges.clear()
+
+    quote = rel.quote()
+
+    assert (quote.total, quote.served, quote.to_judge, quote.calls) == (0, 0, 0, 0)
+    assert quote.token.work == ()
+
+
+def test_a_relation_quote_carries_the_models_notice_once_and_no_serve_notice(
+    rel: _RelFixture,
+) -> None:
+    quote = rel.quote()
+
+    assert [n.code for n in quote.notices] == ["model"]
+    assert quote.notices[0].backend == "ollama"
+
+
+def _report_graph(
+    report: sqlite_graph.CandidateReport,
+) -> Callable[..., sqlite_graph.SqliteGraphStore]:
+    def build(*args: object, **kwargs: object) -> sqlite_graph.SqliteGraphStore:
+        graph = sqlite_graph.build_graph(*args, **kwargs)  # type: ignore[arg-type]
+        graph.candidate_report = report
+        return graph
+
+    return build
+
+
+def test_a_capped_relation_walk_carries_the_truncation_notice_as_data(
+    rel: _RelFixture,
+) -> None:
+    pairs = tuple(
+        tuple(sorted((edge.source_id, edge.target_id))) for edge in rel.edges[:3]
+    )
+    report = sqlite_graph.CandidateReport(
+        produced=3,
+        retained=1,
+        pairs=pairs,  # type: ignore[arg-type]
+    )
+
+    quote = rel.quote(build_graph=_report_graph(report))
+
+    [notice] = [n for n in quote.notices if n.code == "truncated"]
+    assert notice.text == "1 of 3 candidate edge(s) shown (cap reached)"
+    assert not rel.layout.findings_db_path.exists()
+
+
+def test_a_quarantined_relation_walk_carries_the_quarantine_notice_as_data(
+    rel: _RelFixture,
+) -> None:
+    withheld = sqlite_graph.WithheldCandidate(
+        pair=(rel.edges[0].source_id, rel.edges[0].target_id),
+        source_ids=("sources/s1",),
+    )
+    report = sqlite_graph.CandidateReport(quarantine_withheld=(withheld,))
+
+    quote = rel.quote(build_graph=_report_graph(report))
+
+    [notice] = [n for n in quote.notices if n.code == "quarantined"]
+    assert notice.text is not None
+    assert "1 candidate edge(s) withheld" in notice.text
+    assert "sources/s1" in notice.text
+
+
+def test_a_relation_notice_never_changes_price_or_token(rel: _RelFixture) -> None:
+    plain = rel.quote()
+    report = sqlite_graph.CandidateReport(
+        quarantine_withheld=(
+            sqlite_graph.WithheldCandidate(
+                pair=(rel.edges[0].source_id, rel.edges[0].target_id),
+                source_ids=("sources/s1",),
+            ),
+        )
+    )
+
+    noisy = rel.quote(build_graph=_report_graph(report))
+
+    assert (noisy.calls, noisy.to_judge) == (plain.calls, plain.to_judge)
+    assert noisy.token.digest() == plain.token.digest()
