@@ -32,7 +32,12 @@ both regimes. A type answered in one regime, or answered identically in both,
 MUST be published once. A type answered in both regimes with different answers
 MUST NOT be published (the engine never guesses between them) and MUST be
 counted in the result as ambiguous. An absent queue with nothing to publish MUST
-NOT be created by a refresh.
+NOT be created by a refresh. With today's store (`state/volatility_suggestions.py`,
+keyed by `type_name` as primary key, one row per type) this count is always 0:
+both regimes can only resolve to the same single stored row, so at most one
+distinct answer is ever held. The rule is a guard for a future store that keeps
+one row per type and regime; it is kept, not deleted, and the behaviour above is
+unchanged.
 
 #### Scenario: A judged item appears with no daemon pass
 
@@ -63,7 +68,9 @@ NOT be created by a refresh.
 #### Scenario: Two regimes that disagree are skipped and counted
 
 - GIVEN a volatility type whose cached answers differ between the two
-  confidentiality regimes
+  confidentiality regimes (reachable only through a store that holds more than
+  one answer per type; today's store holds one row per type, so this cannot
+  occur and the ambiguous count is always 0)
 - WHEN a refresh runs
 - THEN no row is published for that type and the volatility result counts it as
   ambiguous

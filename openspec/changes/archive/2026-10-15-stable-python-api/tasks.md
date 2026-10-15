@@ -605,7 +605,7 @@ R1..R5. Depends on: S6a and S6b (both merged).
   for the review queue and that ingest, query, doctor and setup are later slices.
   `src/openkos/application/__init__.py` docstring: the package stays internal;
   the public edge is `openkos.api`. Satisfies: A1.
-- [ ] S7.3 Merge delta specs: `openspec/specs/pending-work/spec.md` (ADDED R1..R5 with
+- [x] S7.3 Merge delta specs: `openspec/specs/pending-work/spec.md` (ADDED R1..R5 with
   every heading name-matched against the main spec; four had drifted in a previous
   change) and new `openspec/specs/stable-python-api/spec.md`. Satisfies: all.
 - [x] S7.4 ADR-0060 status Proposed -> Accepted in all three places: the ADR file, the
@@ -614,11 +614,11 @@ R1..R5. Depends on: S6a and S6b (both merged).
 - [x] S7.5 Check each requirement against shipped code, not the task list (a passing
   spec is not a met goal): read the spec Purposes and the issue text; list any
   requirement the code does not meet. Satisfies: all.
-- [ ] S7.6 Record open follow-ups in the archive report: the `insecure_key_warning`
+- [x] S7.6 Record open follow-ups in the archive report: the `insecure_key_warning`
   notice the API does not carry; whether the CLI later delegates to
   `api/_wiring.py`; the volatility two-regime walk cost not measured on large
   bundles; lint findings as counts only in v1.
-- [ ] S7.7 Archive: move (not copy) `openspec/changes/stable-python-api/` to
+- [x] S7.7 Archive: move (not copy) `openspec/changes/stable-python-api/` to
   `openspec/changes/archive/<date>-stable-python-api/`, including any
   exploration file, and write `archive-report.md`. Diff against a sibling archive
   and check the disk: the archive agent has overclaimed completion before.
