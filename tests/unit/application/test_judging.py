@@ -30,6 +30,7 @@ from openkos.llm.base import (
     Message,
 )
 from openkos.model import okf
+from openkos.resolution import edge_typing
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
     AdjudicationBatch,
@@ -547,7 +548,7 @@ def test_a_capped_candidate_set_carries_the_truncation_notice(fx: _Fixture) -> N
 
 
 def _seed_job(
-    fx: _Fixture, *, started: datetime, ended: datetime | None = None
+    fx: _Fixture | _RelFixture, *, started: datetime, ended: datetime | None = None
 ) -> None:
     conn = jobs.open_jobs(fx.layout.jobs_db_path)
     try:
@@ -1536,6 +1537,13 @@ def _edge_reply(kind: str = "references") -> str:
     return json.dumps({"type": kind, "rationale": "Typed."})
 
 
+def _edge_judge(*args: object, **kwargs: object) -> _Judge:
+    """A scripted client that types an edge `references` once its script runs
+    out, where `_Judge` would answer an identity verdict."""
+    kwargs.setdefault("default_reply", _edge_reply())
+    return _Judge(*args, **kwargs)  # type: ignore[arg-type]
+
+
 class _RelFixture:
     """Five untyped edges between readable private concepts. The candidate walk
     is injected (a fixed, mutable list); the typing, the graph, the serve
@@ -1545,7 +1553,7 @@ class _RelFixture:
         self.root = root
         self.layout = config.WorkspaceLayout(root)
         self.edges = edges
-        self.client: _Judge = _Judge(default_reply=_edge_reply())
+        self.client: _Judge = _edge_judge()
         self.tasks: list[str | None] = []
         self.graphs = 0
 
@@ -1688,7 +1696,7 @@ def test_a_relation_quote_binds_the_edge_typing_model_and_no_rubric(
 def test_a_relation_quote_makes_no_model_call_and_writes_nothing(
     rel: _RelFixture,
 ) -> None:
-    rel.client = _Judge([BackendUnavailable("the backend is down")])
+    rel.client = _edge_judge([BackendUnavailable("the backend is down")])
 
     quote = rel.quote()
 
@@ -1819,7 +1827,7 @@ def test_a_suggestion_stored_under_another_confidential_bit_is_not_served(
 def test_a_local_backend_makes_the_effective_confidential_bit_true(
     rel: _RelFixture,
 ) -> None:
-    rel.client = _Judge(is_local=True)
+    rel.client = _edge_judge(is_local=True)
 
     quote = rel.quote()
 
@@ -1834,7 +1842,7 @@ def test_a_local_backend_serves_a_suggestion_stored_under_the_effective_bit(
     """A local backend turns the exemption on, so the effective bit is true and
     a suggestion stored under it is served even though the caller asked for
     nothing; one stored under the other bit is not."""
-    rel.client = _Judge(is_local=True)
+    rel.client = _edge_judge(is_local=True)
     rel.seed(rel.edges[0], include_confidential=True)
     rel.seed(rel.edges[1], include_confidential=False)
 
@@ -1938,3 +1946,633 @@ def test_a_relation_notice_never_changes_price_or_token(rel: _RelFixture) -> Non
 
     assert (noisy.calls, noisy.to_judge) == (plain.calls, plain.to_judge)
     assert noisy.token.digest() == plain.token.digest()
+
+
+# -- relation_type: the run: support ------------------------------------------- #
+
+
+def _rel_run(
+    rel: _RelFixture,
+    token: judging.QuoteToken | None,
+    *,
+    judge: _Judge | None = None,
+    stop: StopToken | None = None,
+    observer: judging.JudgingObserver | None = None,
+    chunk_size: int | None = None,
+    sleeps: list[float] | None = None,
+    **ports: object,
+) -> judging.JudgingOutcome | judging.QuoteStale | judging.RunRefused:
+    if judge is not None:
+        rel.client = judge
+    sleep = sleeps.append if sleeps is not None else (lambda seconds: None)
+    return judging.run_judging(
+        rel.root,
+        token,
+        stop=stop or StopToken(),
+        ports=rel.ports(**{"sleep": sleep, **ports}),
+        observer=observer or judging.JudgingObserver(),
+        chunk_size=chunk_size,
+    )
+
+
+def _bundle_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        str(path): path.read_bytes()
+        for path in sorted((root / "bundle").rglob("*"))
+        if path.is_file()
+    }
+
+
+def _untyped(rel: _RelFixture, *indexes: int) -> list[str]:
+    return [_edge_key(rel.edges[i]) for i in indexes]
+
+
+# -- relation_type: the run: the binding ceiling ------------------------------- #
+
+
+def test_a_relation_run_types_exactly_the_quoted_edges_and_persists_them(
+    rel: _RelFixture,
+) -> None:
+    rel.seed(rel.edges[0])
+    token = rel.quote().token
+    bundle_before = _bundle_bytes(rel.root)
+    judge = _edge_judge(default_reply=_edge_reply("supports"))
+
+    outcome = _outcome(_rel_run(rel, token, judge=judge))
+
+    assert (outcome.kind, outcome.status) == ("relation_type", "completed")
+    assert (outcome.judged, outcome.calls, outcome.persisted) == (4, 4, 4)
+    assert (outcome.unpersisted, outcome.dropped, outcome.deferred) == (0, 0, 0)
+    assert outcome.not_in_quote == ()
+    assert outcome.settled_since_quote == 0
+    stored = rel.stored()
+    assert stored[_edge_key(rel.edges[0])] == "references", "the served row is kept"
+    assert {stored[key] for key in _untyped(rel, 1, 2, 3, 4)} == {"supports"}
+    assert _bundle_bytes(rel.root) == bundle_before, "a run never writes the bundle"
+
+
+def test_a_relation_run_prices_the_re_quote_after_it_as_all_served(
+    rel: _RelFixture,
+) -> None:
+    _outcome(_rel_run(rel, rel.quote().token, judge=_edge_judge()))
+
+    requote = rel.quote()
+
+    assert (requote.served, requote.to_judge, requote.calls) == (5, 0, 0)
+
+
+def test_a_relation_edge_added_since_the_quote_is_named_and_never_typed(
+    rel: _RelFixture,
+) -> None:
+    token = rel.quote().token
+    extra = Edge(source_id="concepts/x-a", target_id="concepts/x-b")
+    _write(rel.root, extra.source_id)
+    _write(rel.root, extra.target_id)
+    rel.edges.append(extra)
+    judge = _edge_judge()
+
+    outcome = _outcome(_rel_run(rel, token, judge=judge))
+
+    assert outcome.not_in_quote == (_edge_key(extra),)
+    assert (outcome.judged, judge.calls) == (5, 5)
+    assert _edge_key(extra) not in rel.stored()
+
+
+def test_a_relation_edge_answered_elsewhere_is_settled_and_not_paid_for_again(
+    rel: _RelFixture,
+) -> None:
+    token = rel.quote().token
+    rel.seed(rel.edges[2])
+    judge = _edge_judge()
+
+    outcome = _outcome(_rel_run(rel, token, judge=judge))
+
+    assert (outcome.settled_since_quote, outcome.judged, judge.calls) == (1, 4, 4)
+    assert rel.stored()[_edge_key(rel.edges[2])] == "references"
+
+
+def test_a_relation_edge_that_vanished_is_settled_not_typed(rel: _RelFixture) -> None:
+    token = rel.quote().token
+    del rel.edges[1]
+    judge = _edge_judge()
+
+    outcome = _outcome(_rel_run(rel, token, judge=judge))
+
+    assert (outcome.settled_since_quote, outcome.judged, judge.calls) == (1, 4, 4)
+    assert outcome.not_in_quote == ()
+
+
+def test_a_relation_endpoint_edited_since_the_quote_is_no_longer_the_quoted_item(
+    rel: _RelFixture,
+) -> None:
+    token = rel.quote().token
+    rel.edit(rel.edges[1].target_id)
+    judge = _edge_judge()
+
+    outcome = _outcome(_rel_run(rel, token, judge=judge))
+
+    assert outcome.not_in_quote == (_edge_key(rel.edges[1]),)
+    assert (outcome.settled_since_quote, outcome.judged, judge.calls) == (1, 4, 4)
+
+
+def test_a_relation_call_past_the_ceiling_is_refused_before_it_is_made(
+    rel: _RelFixture,
+) -> None:
+    token = dataclasses.replace(rel.quote().token, calls=2)
+    judge = _edge_judge()
+
+    with pytest.raises(AssertionError, match="ceiling of 2"):
+        _rel_run(rel, token, judge=judge, chunk_size=5)
+
+    assert judge.calls == 2
+
+
+def test_a_relation_run_without_a_token_is_refused_before_anything_is_built(
+    rel: _RelFixture,
+) -> None:
+    outcome = _rel_run(rel, None)
+
+    assert outcome == judging.RunRefused("no_quote_token")
+    assert rel.tasks == []
+    assert rel.graphs == 0
+
+
+@pytest.mark.parametrize(
+    ("yaml", "field"),
+    [
+        ("models:\n  edge_typing: another-model\n", "model"),
+        ("backend: openai-compatible\nbase_url: http://x\n", "backend"),
+    ],
+)
+def test_a_moved_relation_binding_is_stale_and_spends_and_writes_nothing(
+    rel: _RelFixture, yaml: str, field: str
+) -> None:
+    token = rel.quote().token
+    path = rel.root / "openkos.yaml"
+    path.write_text(path.read_text(encoding="utf-8") + yaml, encoding="utf-8")
+    judge = _edge_judge()
+
+    result = _rel_run(rel, token, judge=judge)
+
+    assert isinstance(result, judging.QuoteStale)
+    assert result.kind == "relation_type"
+    assert field in result.changed
+    assert judge.calls == 0
+    assert not rel.layout.findings_db_path.exists()
+
+
+def test_a_relation_backend_that_moved_onto_this_machine_is_stale(
+    rel: _RelFixture,
+) -> None:
+    token = rel.quote().token
+
+    result = _rel_run(rel, token, judge=_edge_judge(is_local=True))
+
+    assert isinstance(result, judging.QuoteStale)
+    assert result.changed == ("locality", "confidential")
+
+
+# -- relation_type: the run: chunks, persistence and cancellation -------------- #
+
+
+def test_each_relation_chunk_persists_before_the_next_chunk_is_typed(
+    rel: _RelFixture,
+) -> None:
+    log: list[str] = []
+
+    outcome = _outcome(
+        _rel_run(
+            rel,
+            rel.quote().token,
+            judge=_edge_judge(log=log),
+            commit_section=_Sections(log),
+            chunk_size=2,
+        )
+    )
+
+    assert log == [
+        "chat", "chat", "enter", "exit",
+        "chat", "chat", "enter", "exit",
+        "chat", "enter", "exit",
+    ]  # fmt: skip
+    assert outcome.persisted == 5
+
+
+def test_a_relation_run_is_chunked_by_the_measured_size_by_default(
+    rel: _RelFixture,
+) -> None:
+    log: list[str] = []
+    assert judging.RELATION_CHUNK_SIZE == 4
+
+    _outcome(
+        _rel_run(
+            rel,
+            rel.quote().token,
+            judge=_edge_judge(log=log),
+            commit_section=_Sections(log),
+        )
+    )
+
+    assert log == ["chat"] * 4 + ["enter", "exit", "chat", "enter", "exit"]
+
+
+def test_a_relation_chunk_size_below_one_is_refused(rel: _RelFixture) -> None:
+    with pytest.raises(ValueError, match="chunk_size"):
+        _rel_run(rel, rel.quote().token, chunk_size=0)
+
+
+def test_a_stop_from_inside_a_relation_call_lets_that_chunk_persist_and_defers_the_rest(
+    rel: _RelFixture,
+) -> None:
+    stop = StopToken()
+    token = rel.quote().token
+
+    outcome = _outcome(
+        _rel_run(
+            rel,
+            token,
+            judge=_edge_judge(on_chat=lambda n: stop.set() if n == 1 else None),
+            stop=stop,
+            chunk_size=2,
+        )
+    )
+
+    assert outcome.status == "stopped"
+    assert (outcome.judged, outcome.persisted, outcome.deferred) == (2, 2, 3)
+    assert set(rel.stored()) == set(_untyped(rel, 0, 1))
+    requote = rel.quote()
+    assert (requote.served, requote.to_judge) == (2, 3)
+
+
+def test_a_stop_before_the_first_relation_chunk_makes_no_call(
+    rel: _RelFixture,
+) -> None:
+    stop = StopToken()
+    stop.set()
+    token = rel.quote().token
+    builds_before = rel.graphs
+    judge = _edge_judge()
+
+    outcome = _outcome(_rel_run(rel, token, judge=judge, stop=stop))
+
+    assert (outcome.status, outcome.judged, outcome.deferred) == ("stopped", 0, 5)
+    assert judge.calls == 0
+    assert not rel.layout.findings_db_path.exists()
+    assert rel.graphs == builds_before + 1, "only the walk that partitions the work"
+
+
+def test_a_stop_during_the_last_relation_chunk_still_completes(
+    rel: _RelFixture,
+) -> None:
+    stop = StopToken()
+
+    outcome = _outcome(
+        _rel_run(
+            rel,
+            rel.quote().token,
+            judge=_edge_judge(on_chat=lambda n: stop.set() if n == 5 else None),
+            stop=stop,
+        )
+    )
+
+    assert (outcome.status, outcome.deferred, outcome.persisted) == ("completed", 0, 5)
+
+
+def test_a_relation_chunk_is_bounded_and_filtered_to_the_remaining_quoted_edges(
+    rel: _RelFixture,
+) -> None:
+    """Each invocation of the service sees only the edges still to do and is
+    bound to the chunk: a run over a bundle the quote did not cover never
+    reaches the extra edge, and no invocation types more than its chunk."""
+    token = rel.quote().token
+    extra = Edge(source_id="concepts/x-a", target_id="concepts/x-b")
+    _write(rel.root, extra.source_id)
+    _write(rel.root, extra.target_id)
+    rel.edges.insert(0, extra)
+    seen: list[list[str]] = []
+
+    def spy(to_type: list[Edge], **kwargs: object) -> edge_typing.EdgeSuggestionBatch:
+        seen.append([_edge_key(edge) for edge in to_type])
+        return edge_typing.suggest_edge_types(to_type, **kwargs)  # type: ignore[arg-type]
+
+    _outcome(_rel_run(rel, token, chunk_size=2, suggest_edge_types=spy))
+
+    assert seen == [_untyped(rel, 1, 2), _untyped(rel, 3, 4), _untyped(rel, 5)]
+    assert _edge_key(extra) not in [key for chunk in seen for key in chunk]
+
+
+def test_a_relation_stop_that_leaves_every_remaining_edge_settled_ends_the_run(
+    rel: _RelFixture,
+) -> None:
+    """When the edges still to do stop being candidates mid-run, the walk finds
+    nothing to type: they are settled, not deferred, and the run completes."""
+    token = rel.quote().token
+
+    def vanish(n: int) -> None:
+        if n == 1:
+            rel.edges[:] = rel.edges[:1]
+
+    judge = _edge_judge(on_chat=vanish)
+
+    outcome = _outcome(_rel_run(rel, token, judge=judge, chunk_size=1))
+
+    assert outcome.status == "completed"
+    assert (outcome.judged, outcome.persisted, outcome.deferred) == (1, 1, 0)
+    assert outcome.settled_since_quote == 4
+
+
+# -- relation_type: the run: what is stored ------------------------------------ #
+
+
+def test_a_relation_reply_that_degrades_is_judged_but_never_persisted(
+    rel: _RelFixture,
+) -> None:
+    judge = _edge_judge(["not json at all"], default_reply=_edge_reply())
+
+    outcome = _outcome(_rel_run(rel, rel.quote().token, judge=judge))
+
+    assert (outcome.judged, outcome.persisted, outcome.dropped) == (5, 4, 1)
+    assert _edge_key(rel.edges[0]) not in rel.stored()
+    assert outcome.judged == outcome.persisted + outcome.dropped + outcome.unpersisted
+
+
+def test_a_relation_verdict_about_content_edited_during_the_call_is_dropped(
+    rel: _RelFixture,
+) -> None:
+    token = rel.quote().token
+
+    outcome = _outcome(
+        _rel_run(
+            rel,
+            token,
+            judge=_edge_judge(
+                on_chat=lambda n: rel.edit(rel.edges[1].source_id) if n == 2 else None
+            ),
+        )
+    )
+
+    assert (outcome.judged, outcome.persisted, outcome.dropped) == (5, 4, 1)
+    assert _edge_key(rel.edges[1]) not in rel.stored()
+
+
+# -- relation_type: the run: progress and the observer -------------------------- #
+
+
+def test_relation_progress_events_carry_the_run_index_total_edge_and_type(
+    rel: _RelFixture,
+) -> None:
+    observer = _Recorder()
+    rel.seed(rel.edges[0])
+
+    _outcome(
+        _rel_run(
+            rel,
+            rel.quote().token,
+            judge=_edge_judge(default_reply=_edge_reply("supports")),
+            observer=observer,
+            chunk_size=3,
+        )
+    )
+
+    assert [(e.index, e.total) for e in observer.progress_events] == [
+        (1, 4), (2, 4), (3, 4), (4, 4),
+    ]  # fmt: skip
+    assert [e.work_key for e in observer.progress_events] == _untyped(rel, 1, 2, 3, 4)
+    assert {e.verdict for e in observer.progress_events} == {"supports"}
+    assert observer.persisted == [3, 4]
+
+
+def test_a_relation_progress_event_never_carries_the_rationale(
+    rel: _RelFixture,
+) -> None:
+    observer = _Recorder()
+
+    _outcome(_rel_run(rel, rel.quote().token, judge=_edge_judge(), observer=observer))
+
+    assert len(observer.progress_events) == 5
+    for event in observer.progress_events:
+        assert "Typed." not in repr(event)
+
+
+@pytest.mark.parametrize("fail_on", [1, 3])
+def test_a_relation_observer_that_raises_loses_no_paid_work(
+    rel: _RelFixture, fail_on: int
+) -> None:
+    observer = _Recorder(fail_on_progress=fail_on)
+
+    outcome = _outcome(
+        _rel_run(rel, rel.quote().token, judge=_edge_judge(), observer=observer)
+    )
+
+    assert outcome.observer_failed is True
+    assert (outcome.status, outcome.persisted) == ("completed", 5)
+    assert len(rel.stored()) == 5
+    assert len(observer.progress_events) == fail_on
+
+
+# -- relation_type: the run: a busy workspace ----------------------------------- #
+
+
+def test_a_transient_busy_relation_workspace_is_absorbed(rel: _RelFixture) -> None:
+    log: list[str] = []
+    sleeps: list[float] = []
+
+    outcome = _outcome(
+        _rel_run(
+            rel,
+            rel.quote().token,
+            judge=_edge_judge(log=log),
+            commit_section=_Sections(log, busy=1),
+            sleeps=sleeps,
+            chunk_size=5,
+        )
+    )
+
+    assert (outcome.status, outcome.persisted, outcome.unpersisted) == (
+        "completed",
+        5,
+        0,
+    )
+    assert sleeps == [1.0]
+
+
+def test_a_persistently_busy_relation_workspace_stops_the_spend_and_says_so(
+    rel: _RelFixture,
+) -> None:
+    log: list[str] = []
+    sections = _Sections(log, always_busy=True)
+    sleeps: list[float] = []
+    judge = _edge_judge(log=log)
+    observer = _Recorder()
+
+    outcome = _outcome(
+        _rel_run(
+            rel,
+            rel.quote().token,
+            judge=judge,
+            commit_section=sections,
+            sleeps=sleeps,
+            observer=observer,
+            chunk_size=2,
+        )
+    )
+
+    assert outcome.status == "unpersisted"
+    assert outcome.unpersisted_cause == "workspace_busy"
+    assert (outcome.judged, outcome.unpersisted, outcome.persisted) == (2, 2, 0)
+    assert outcome.deferred == 3
+    assert judge.calls == 2, "nothing further is spent once persistence fails"
+    assert sleeps == [1.0, 2.0]
+    assert sections.attempts == judging.PERSIST_ATTEMPTS
+    assert observer.persisted == []
+    assert "enter" not in log, "no lock is held between attempts"
+
+
+def test_a_relation_store_error_is_reported_as_unpersisted_with_its_cause(
+    rel: _RelFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(edge_store, "record_edge_suggestions", _boom)
+    judge = _edge_judge()
+
+    outcome = _outcome(_rel_run(rel, rel.quote().token, judge=judge, chunk_size=1))
+
+    assert outcome.status == "unpersisted"
+    assert outcome.unpersisted_cause == "store_error"
+    assert (outcome.unpersisted, outcome.persisted, outcome.deferred) == (1, 0, 4)
+    assert judge.calls == 1
+
+
+# -- relation_type: the run: backend errors ------------------------------------- #
+
+
+def test_a_failed_relation_ends_the_run_with_its_prefix_kept(rel: _RelFixture) -> None:
+    judge = _edge_judge([_edge_reply(), BackendGenerationCapped("capped")])
+
+    outcome = _outcome(_rel_run(rel, rel.quote().token, judge=judge, chunk_size=5))
+
+    assert outcome.status == "failed"
+    assert isinstance(outcome.failure, BackendGenerationCapped)
+    assert (outcome.judged, outcome.persisted, outcome.failed_at) == (1, 1, 2)
+    assert outcome.deferred == 3, "the failed edge was reached; three were not"
+    assert set(rel.stored()) == set(_untyped(rel, 0))
+
+
+def test_a_relation_failed_at_is_the_run_position_not_the_chunk_position(
+    rel: _RelFixture,
+) -> None:
+    judge = _edge_judge(
+        [_edge_reply(), _edge_reply(), BackendGenerationCapped("capped")]
+    )
+
+    outcome = _outcome(_rel_run(rel, rel.quote().token, judge=judge, chunk_size=2))
+
+    assert (outcome.status, outcome.failed_at) == ("failed", 3)
+    assert (outcome.judged, outcome.persisted, outcome.deferred) == (2, 2, 2)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [BackendUnavailable("down"), BackendModelNotFound("missing")],
+)
+def test_a_relation_availability_error_propagates_after_the_prefix_is_persisted(
+    rel: _RelFixture, error: Exception
+) -> None:
+    observer = _Recorder()
+    judge = _edge_judge([_edge_reply(), error])
+
+    with pytest.raises(type(error)):
+        _rel_run(rel, rel.quote().token, judge=judge, observer=observer, chunk_size=5)
+
+    assert set(rel.stored()) == set(_untyped(rel, 0))
+    assert observer.persisted == [1]
+
+
+def test_a_relation_availability_error_on_the_first_call_writes_nothing(
+    rel: _RelFixture,
+) -> None:
+    observer = _Recorder()
+
+    with pytest.raises(BackendUnavailable):
+        _rel_run(
+            rel,
+            rel.quote().token,
+            judge=_edge_judge([BackendUnavailable("down")]),
+            observer=observer,
+        )
+
+    assert not rel.layout.findings_db_path.exists()
+    assert observer.persisted == []
+
+
+def test_a_busy_relation_workspace_wins_over_a_backend_failure_in_one_chunk(
+    rel: _RelFixture,
+) -> None:
+    log: list[str] = []
+
+    outcome = _outcome(
+        _rel_run(
+            rel,
+            rel.quote().token,
+            judge=_edge_judge([_edge_reply(), BackendUnavailable("down")], log=log),
+            commit_section=_Sections(log, always_busy=True),
+            chunk_size=5,
+        )
+    )
+
+    assert outcome.status == "unpersisted"
+    assert outcome.unpersisted_cause == "workspace_busy"
+    assert isinstance(outcome.failure, BackendUnavailable)
+    assert (outcome.judged, outcome.unpersisted, outcome.failed_at) == (1, 1, 2)
+
+
+# -- relation_type: the run: locks, the daemon and silence ---------------------- #
+
+
+def test_the_workspace_lock_is_free_during_every_relation_call(
+    rel: _RelFixture,
+) -> None:
+    from openkos.application import lock_wait
+
+    free_during_call: list[bool] = []
+
+    def _probe(n: int) -> None:
+        try:
+            with lock.workspace_lock(rel.root):
+                free_during_call.append(True)
+        except lock.WorkspaceBusyError:
+            free_during_call.append(False)
+
+    outcome = _outcome(
+        _rel_run(
+            rel,
+            rel.quote().token,
+            judge=_edge_judge(on_chat=_probe),
+            commit_section=lock_wait.locked_commit_section(rel.root, wait_seconds=0),
+            chunk_size=2,
+        )
+    )
+
+    assert free_during_call == [True] * 5
+    assert outcome.persisted == 5
+
+
+def test_an_active_engine_does_not_block_a_relation_run(rel: _RelFixture) -> None:
+    _seed_job(rel, started=_NOW - timedelta(days=30))
+    before = rel.layout.jobs_db_path.read_bytes()
+
+    outcome = _outcome(_rel_run(rel, rel.quote().token, judge=_edge_judge()))
+
+    assert (outcome.status, outcome.persisted) == ("completed", 5)
+    assert rel.layout.jobs_db_path.read_bytes() == before
+
+
+def test_a_relation_run_writes_nothing_to_a_stream(
+    rel: _RelFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _outcome(_rel_run(rel, rel.quote().token, judge=_edge_judge()))
+
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
