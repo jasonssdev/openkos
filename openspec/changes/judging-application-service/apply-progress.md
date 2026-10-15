@@ -242,3 +242,76 @@ edited; the S0a goldens pass unchanged.
 | `_amend_open_in_transaction`: `if not _same_inputs(...)` -> `if False` | 2 failed |
 | `amend_open_proposal`: no open row inserts and reports `amended` | 4 failed (the reopen and no-row tests) |
 | `servable_stored_verdicts`: `include_confidential=None` -> `False` | 2 failed |
+
+## S2b: `judging.py` binding, token, identity quote, notices (complete, 9/9)
+
+Branch `feat/judging-s2b`, stacked-to-main on S0a, S0b, S1 and S2a. No golden or fixture
+edited. The surface has no run yet (S2c).
+
+### Tasks
+
+- [x] S2b.1 Guards widened first: `_EXPECTED_SERVICE_TASKS` values are sets and expect
+  `judging.py` to name `adjudication`; the boundary `_TARGET` is the tuple
+  `("curate_decisions", "judging", "identity_adjudication")` with every spelling check run
+  per surface; the `isatty` AST guard in `test_layering.py` is parametrized over
+  `curate_decisions.py` and `judging.py`.
+- [x] S2b.2 `JudgingKind`, `QuoteBinding` (with `digest()`), `WorkItem`, `QuoteToken`
+  (with `digest()`, sorted and NUL-separated), `QuoteStale`, `QuoteNotice`, `JudgingQuote`,
+  `JudgingPorts`, `JudgingObserver`, `JudgingProgress`, `JudgingRefused`.
+- [x] S2b.3 `changed_fields(consented, current)` returns every moved field in a fixed order;
+  the work set is not part of it.
+- [x] S2b.4 `quote_judging(root, "identity", ...)`.
+- [x] S2b.5 Zero-call group: in `work`, adds nothing to `calls` (spec wins over the design's
+  `calls == len(work)`).
+- [x] S2b.6 `include_uncertain`.
+- [x] S2b.7 Notices: one `model`, `truncated`, `rubric_rejudge`, `unattended_active`.
+- [x] S2b.8 Token stability and age (no clock in the token; a quote 400 days later binds the same).
+- [x] S2b.9 Mutations, guard sanity, gates (below and in the slice report).
+
+### TDD Cycle Evidence
+
+| Task | RED | GREEN |
+|------|-----|-------|
+| S2b.1 | `test_the_extracted_verbs_still_resolve_their_own_task_model` and `test_the_owner_local_surfaces_never_read_a_terminal[judging.py]` failed with `FileNotFoundError: .../application/judging.py` | 79 passed after the module existed |
+| S2b.1 boundary | temporary `from openkos.application import judging` appended to `mcp/tools.py`: `test_no_disclosing_adapter_imports_the_decision_surface[mcp]` failed (assertion); the same with `identity_adjudication`: failed. Reverted from a byte copy | 29 passed |
+| S2b.9 isatty / import guards | temporary `sys.stdin.isatty()` in `judging.py`: `test_the_owner_local_surfaces_never_read_a_terminal[judging.py]` failed; temporary `import typer`: `test_application_modules_never_import_cli_typer_or_rich` failed. Reverted byte-exact | pass |
+| S2b.2-S2b.8 | **Not observed RED.** The module was written before its tests, so the tests were green on first run. The substitute is the mutation table below: 16 single-line mutations, each killed | 57 passed |
+
+### Mutations (applied, `test_judging.py` run, restored from a byte copy, `__pycache__` purged)
+
+All 16 failed the suite: `wanted = fresh | uncertain` (unconditional) and `wanted = fresh`
+(never); `model`, `backend`, `locality`, `confidential` and `rubric` comparisons each removed
+or inverted; `calls = len(needed)` (zero-call groups priced); `include_uncertain` dropped from
+the token digest; window comparison flipped; open-job test flipped; kept-distinct filter
+removed; `served` counting uncertain; `rubric_rejudge` notice dropped; truncation `>` to `>=`;
+unreadable digest `""` to `"x"`.
+
+### Existing tests modified
+
+- `tests/unit/cli/test_chat_timeout_wiring.py`: `_EXPECTED_SERVICE_TASKS` becomes set-valued
+  and gains `judging.py` (the design's correction 6); the assertion compares sets.
+- `tests/unit/application/test_curate_decisions_boundary.py`: `_TARGET` is a tuple; the
+  scan matches any member; the spelling test is parametrized over each surface.
+- `tests/unit/application/test_layering.py`: the `isatty` test is parametrized over two files.
+
+### Deviations from the design text (and why)
+
+- **Zero-call determination.** The leaf has no public predicate for it and S2b leaves the
+  leaf unchanged. The quote runs `adjudicate_candidates` once, over the groups a run would
+  judge, with a recording stand-in for the client that counts `chat` calls and returns an
+  empty reply, and reads off which groups called it. The leaf's own short-circuit decides;
+  no model is reached and nothing is written. Cost: one LLM-free sensitivity walk and one
+  read per member for the quote.
+- `QuoteNotice` gained `produced` (truncated only), so a client can render "N of M".
+- `JudgingPorts` gained `now` (the unattended window needs a clock) and defaults every port
+  except `chat_client` to the real implementation, as `SuggestRelationsPorts` does.
+- The identity quote emits no `quarantined` notice: that is pass 3's edge-typing withholding
+  and arrives with `relation_type` (S3a). The literal exists in the type.
+- A quote of an unsupported kind raises `ValueError`; a non-workspace or unreadable
+  configuration raises `JudgingRefused`.
+- `QuoteBinding.digest()` exists alongside `QuoteToken.digest()`.
+- `uncertain` counts servable UNCERTAIN verdicts whether or not the caller opted in; with
+  the opt-in they are also in `to_judge`. `total == served + uncertain + fresh` always.
+- A default client in the tests is non-local: a local client turns the exemption on and the
+  effective confidential bit with it, so stored `include_confidential=False` verdicts would
+  not serve.

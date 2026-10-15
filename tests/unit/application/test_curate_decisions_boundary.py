@@ -2,6 +2,10 @@
 ADR-0053 Decision 8): its payloads can derive from confidential concepts, so no
 adapter that discloses to a third party may import it. `mcp/` keeps its reduced
 `pending` projection, and a future `api/` must bring its own disclosure gate.
+
+The judging surface and the identity-adjudication helpers are owner-local for
+the same reason (`judging-application-service`, ADR-0059): a quote and an
+outcome carry work keys, and the serve helpers read stored rationales.
 """
 
 import ast
@@ -21,23 +25,23 @@ from openkos.state import derived
 from openkos.state import pending_queue as pq
 
 _SRC = Path(__file__).resolve().parents[3] / "src" / "openkos"
-_TARGET = "curate_decisions"
+_TARGET = ("curate_decisions", "judging", "identity_adjudication")
 _ADAPTERS = ("mcp", "api")
 
 
 def _imports_the_surface(tree: ast.AST) -> list[int]:
-    """The line of every import that reaches `curate_decisions`, however
-    spelled: absolute, `from openkos.application import curate_decisions`,
+    """The line of every import that reaches an owner-local surface (`_TARGET`),
+    however spelled: absolute, `from openkos.application import curate_decisions`,
     aliased, or relative."""
     lines: list[int] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            if any(alias.name.split(".")[-1] == _TARGET for alias in node.names):
+            if any(alias.name.split(".")[-1] in _TARGET for alias in node.names):
                 lines.append(node.lineno)
         elif isinstance(node, ast.ImportFrom):
             module = (node.module or "").split(".")
-            if module[-1] == _TARGET or any(
-                alias.name == _TARGET for alias in node.names
+            if module[-1] in _TARGET or any(
+                alias.name in _TARGET for alias in node.names
             ):
                 lines.append(node.lineno)
     return lines
@@ -64,22 +68,24 @@ def test_a_missing_adapter_package_is_tolerated(tmp_path: Path) -> None:
     assert _offenders(tmp_path / "api") == []
 
 
+@pytest.mark.parametrize("surface", _TARGET)
 @pytest.mark.parametrize(
-    "source",
+    "template",
     [
-        "import openkos.application.curate_decisions\n",
-        "import openkos.application.curate_decisions as cd\n",
-        "from openkos.application import curate_decisions\n",
-        "from openkos.application import curate_decisions as cd\n",
-        "from openkos.application.curate_decisions import Action\n",
-        "from ..application import curate_decisions\n",
-        "from ..application.curate_decisions import Action\n",
-        "def f():\n    from openkos.application import curate_decisions\n",
+        "import openkos.application.{s}\n",
+        "import openkos.application.{s} as cd\n",
+        "from openkos.application import {s}\n",
+        "from openkos.application import {s} as cd\n",
+        "from openkos.application.{s} import Action\n",
+        "from ..application import {s}\n",
+        "from ..application.{s} import Action\n",
+        "def f():\n    from openkos.application import {s}\n",
     ],
 )
 def test_the_scan_catches_every_spelling_of_the_import(
-    tmp_path: Path, source: str
+    tmp_path: Path, template: str, surface: str
 ) -> None:
+    source = template.format(s=surface)
     adapter = tmp_path / "api"
     adapter.mkdir()
     (adapter / "route.py").write_text(source, encoding="utf-8")

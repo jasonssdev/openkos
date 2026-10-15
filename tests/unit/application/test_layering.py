@@ -130,15 +130,17 @@ def test_application_modules_bind_no_concrete_llm_backend() -> None:
     )
 
 
-def test_curate_decisions_never_reads_a_terminal() -> None:
-    """The curation decision surface decides nothing from the terminal: a TTY
-    question is the adapter's, passed in as data or as a thunk (ADR-0053).
+@pytest.mark.parametrize("filename", ["curate_decisions.py", "judging.py"])
+def test_the_owner_local_surfaces_never_read_a_terminal(filename: str) -> None:
+    """The curation decision surface and the judging surface decide nothing
+    from the terminal: a TTY question is the adapter's, passed in as data or
+    as a thunk (ADR-0053).
     The import ban above already keeps `typer` and `rich` out; this AST scan
     closes the one door it leaves open, because `sys.stdin.isatty()` needs no
     import beyond `sys`. It matches the CALL by attribute name, so every
     spelling (`sys.stdin.isatty()`, `stream.isatty()`, `os.isatty(fd)`) is
     caught, and a bare-name call (`from os import isatty`) too."""
-    path = _APPLICATION_DIR / "curate_decisions.py"
+    path = _APPLICATION_DIR / filename
     offenders: list[int] = []
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if not isinstance(node, ast.Call):
@@ -154,8 +156,7 @@ def test_curate_decisions_never_reads_a_terminal() -> None:
         if name == "isatty":
             offenders.append(node.lineno)
     assert not offenders, (
-        f"application/curate_decisions.py must never call isatty; found at "
-        f"line(s) {offenders}"
+        f"application/{filename} must never call isatty; found at line(s) {offenders}"
     )
 
 
