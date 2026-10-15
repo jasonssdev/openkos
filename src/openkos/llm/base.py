@@ -36,6 +36,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, TypedDict
 
+from openkos.errors import OpenKosError
+
 
 class Message(TypedDict):
     """One chat turn, forwarded verbatim into the backend's request body."""
@@ -145,7 +147,7 @@ def model_tag_matches(configured: str, installed: list[str]) -> bool:
     return False
 
 
-class BackendError(Exception):
+class BackendError(OpenKosError):
     """The generic failure family for a capability-scoped backend call --
     e.g. a malformed response, or an unexpected status from a REACHABLE
     backend. A concrete backend's own error hierarchy (e.g.

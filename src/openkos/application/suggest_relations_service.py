@@ -49,6 +49,7 @@ from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import pending as application_pending
 from openkos.application.lock_wait import CommitSection
+from openkos.errors import OpenKosError
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import Edge, GraphStore
 from openkos.llm.base import (
@@ -79,7 +80,7 @@ _APPLY_VERB = "suggest-relations --apply"
 # -- Typed refusals ---------------------------------------------------------
 
 
-class SuggestionRefused(Exception):
+class SuggestionRefused(OpenKosError):
     """Base of every refusal the suggestion services raise. `message` is the
     complete, user-facing text (the wording the CLI has always printed), so an
     adapter renders it verbatim and maps the TYPE to an exit code. Deliberately

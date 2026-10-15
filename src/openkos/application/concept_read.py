@@ -19,11 +19,12 @@ from typing import Literal
 
 from openkos import config, lifecycle, read_outcome
 from openkos.application import lifecycle as application_lifecycle
+from openkos.errors import OpenKosError
 from openkos.graph.sqlite_graph import build_graph
 from openkos.model import okf
 
 
-class ConceptNotFound(Exception):
+class ConceptNotFound(OpenKosError):
     """Raised when a caller-supplied concept id fails path-safety validation
     (an absolute id, a `..` segment, a reserved name, a symlink escaping the
     bundle) or does not resolve to a file on disk -- `application_lifecycle.

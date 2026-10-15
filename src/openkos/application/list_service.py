@@ -81,10 +81,11 @@ from dataclasses import dataclass
 from openkos import config, read_outcome
 from openkos.bundle import listing
 from openkos.bundle import provenance as bundle_provenance
+from openkos.errors import OpenKosError
 from openkos.model import okf, types
 
 
-class ListUsageError(Exception):
+class ListUsageError(OpenKosError):
     """Base for `list`'s three pre-workspace, pre-disk argument-validation
     refusals (see module docstring, "Where the five `typer.Exit`s went",
     items 1-3). Never raised for anything workspace- or bundle-related --

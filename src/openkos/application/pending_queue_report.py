@@ -27,6 +27,7 @@ from openkos import config
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application.budget import JOBS_DB_NAME
 from openkos.config import WorkspaceLayout
+from openkos.errors import OpenKosError
 from openkos.graph import sqlite_graph
 from openkos.resolution import candidates
 from openkos.state import jobs
@@ -191,7 +192,7 @@ def row_resolving_command(
     return _RESOLVING_COMMAND[row.kind]
 
 
-class QueueUnavailableError(Exception):
+class QueueUnavailableError(OpenKosError):
     """`findings.db` exists but cannot be read as a queue."""
 
 

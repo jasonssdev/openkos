@@ -29,6 +29,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal
 
+from openkos.errors import OpenKosError
+
 ConfirmationAnswer = Literal["proceed", "declined", "unavailable"]
 """What a confirm callback answers. `"unavailable"` means the question could
 not be asked: the service refuses rather than choosing for the caller."""
@@ -37,7 +39,7 @@ ConfirmCallback = Callable[[str], ConfirmationAnswer]
 """Asks the operator the given prompt text and answers."""
 
 
-class WriteRefused(Exception):
+class WriteRefused(OpenKosError):
     """Base of every gate outcome a curation service raises. `message` is the
     complete, user-facing text (the wording the CLI has always printed), so an
     adapter renders it verbatim and maps the TYPE to an exit code. Not an

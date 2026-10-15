@@ -60,9 +60,10 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from openkos import userstate
+from openkos.errors import OpenKosError
 
 
-class WorkspaceBusyError(RuntimeError):
+class WorkspaceBusyError(RuntimeError, OpenKosError):
     """Another OpenKOS process holds this workspace's mutation lock.
 
     Carries the operator-facing sentence directly, so every call site reports
@@ -70,7 +71,7 @@ class WorkspaceBusyError(RuntimeError):
     """
 
 
-class WorkspaceLockUnavailableError(RuntimeError):
+class WorkspaceLockUnavailableError(RuntimeError, OpenKosError):
     """The lock directory or file cannot be trusted or opened (#1134).
 
     Distinct from `WorkspaceBusyError` on purpose: busy is transient and
