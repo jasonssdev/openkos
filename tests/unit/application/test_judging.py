@@ -5,20 +5,28 @@ Every quote here runs against a client whose `chat` raises: a quote makes no
 model call, so an unreachable backend must not matter.
 """
 
+import contextlib
 import dataclasses
+import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from openkos import config
+from openkos import config, lock
 from openkos.application import judging
 from openkos.application import pending as application_pending
+from openkos.application.runtime import StopToken
 from openkos.llm.base import BackendHostLocality, BackendUnavailable, Message
 from openkos.model import okf
-from openkos.resolution.adjudication import rubric_digest
+from openkos.resolution.adjudication import (
+    AdjudicatedCandidate,
+    AdjudicationBatch,
+    Verdict,
+    rubric_digest,
+)
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.state import adjudications as store
 from openkos.state import derived, jobs
@@ -670,3 +678,518 @@ def test_the_observer_defaults_to_no_ops() -> None:
 def test_a_quote_creates_no_store(fx: _Fixture) -> None:
     fx.quote()
     assert not fx.layout.findings_db_path.exists()
+
+
+# -- the run: support --------------------------------------------------------- #
+
+
+def _reply(verdict: str = "same") -> str:
+    return json.dumps({"verdict": verdict, "confidence": 0.9, "rationale": "Judged."})
+
+
+class _Judge:
+    """A scripted chat client: one reply (or raised error) per call, in order,
+    `same` once the script runs out. `on_chat(n)` runs inside the n-th call, so a
+    test can stop the run, edit a member or log an event from inside a call."""
+
+    def __init__(
+        self,
+        script: Sequence[str | Exception] = (),
+        *,
+        is_local: bool = False,
+        on_chat: Callable[[int], None] | None = None,
+        log: list[str] | None = None,
+    ) -> None:
+        self.script = list(script)
+        self.is_local = is_local
+        self.on_chat = on_chat
+        self.log = log if log is not None else []
+        self.calls = 0
+
+    @property
+    def locality(self) -> BackendHostLocality:
+        return BackendHostLocality(is_local=self.is_local, display_host="localhost")
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls += 1
+        self.log.append("chat")
+        if self.on_chat is not None:
+            self.on_chat(self.calls)
+        step = self.script[self.calls - 1] if self.calls <= len(self.script) else None
+        if isinstance(step, Exception):
+            raise step
+        return step if step is not None else _reply()
+
+
+class _Sections:
+    """A commit-section port that records its entries and exits, and can be
+    busy: `busy` refusals first, or every time with `always_busy`."""
+
+    def __init__(
+        self, log: list[str], *, busy: int = 0, always_busy: bool = False
+    ) -> None:
+        self.log = log
+        self.busy = busy
+        self.always_busy = always_busy
+        self.attempts = 0
+
+    @contextlib.contextmanager
+    def __call__(self) -> Iterator[None]:
+        self.attempts += 1
+        if self.always_busy or self.attempts <= self.busy:
+            raise lock.WorkspaceBusyError("held by another process")
+        self.log.append("enter")
+        try:
+            yield
+        finally:
+            self.log.append("exit")
+
+
+class _Recorder(judging.JudgingObserver):
+    def __init__(self, *, fail_on_progress: int | None = None) -> None:
+        self.fail_on_progress = fail_on_progress
+        self.progress_events: list[judging.JudgingProgress] = []
+        self.persisted: list[int] = []
+
+    def progress(self, event: judging.JudgingProgress) -> None:
+        self.progress_events.append(event)
+        if event.index == self.fail_on_progress:
+            raise RuntimeError("the client's callback failed")
+
+    def chunk_persisted(self, persisted: int) -> None:
+        self.persisted.append(persisted)
+
+
+def _run(
+    fx: _Fixture,
+    token: judging.QuoteToken | None,
+    *,
+    judge: _Judge | None = None,
+    stop: StopToken | None = None,
+    observer: judging.JudgingObserver | None = None,
+    chunk_size: int | None = None,
+    sleeps: list[float] | None = None,
+    **ports: object,
+) -> judging.JudgingOutcome | judging.QuoteStale | judging.RunRefused:
+    if judge is not None:
+        fx.client = judge  # type: ignore[assignment]
+    sleep = sleeps.append if sleeps is not None else (lambda seconds: None)
+    return judging.run_judging(
+        fx.root,
+        token,
+        stop=stop or StopToken(),
+        ports=dataclasses.replace(fx.ports(), sleep=sleep, **ports),  # type: ignore[arg-type]
+        observer=observer or judging.JudgingObserver(),
+        chunk_size=chunk_size,
+    )
+
+
+def _outcome(result: object) -> judging.JudgingOutcome:
+    assert isinstance(result, judging.JudgingOutcome), result
+    return result
+
+
+def _stored_keys(fx: _Fixture) -> set[str]:
+    if not fx.layout.findings_db_path.exists():
+        return set()
+    conn = derived.open_derived_connection(fx.layout.findings_db_path)
+    try:
+        return {
+            store.group_key_for(row.member_ids)
+            for row in store.open_adjudications(conn)
+        }
+    finally:
+        conn.close()
+
+
+# -- the run: consent and staleness ------------------------------------------- #
+
+
+def test_a_run_without_a_token_is_refused_before_anything_is_built(
+    tmp_path: Path,
+) -> None:
+    built: list[object] = []
+
+    def _never(cfg: object, task: object) -> object:
+        built.append(task)
+        raise AssertionError("a refused run builds no client")
+
+    refused = judging.run_judging(
+        tmp_path / "not-even-a-workspace",
+        None,
+        stop=StopToken(),
+        ports=judging.JudgingPorts(chat_client=_never),  # type: ignore[arg-type]
+    )
+
+    assert refused == judging.RunRefused("no_quote_token")
+    assert built == []
+    assert not (tmp_path / "not-even-a-workspace").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "moved"),
+    [
+        ("model", {"model": "an-older-model"}),
+        ("backend", {"backend": "openai-compatible"}),
+        ("locality", {"is_local": True}),
+        ("confidential", {"effective_confidential": True}),
+        ("rubric", {"rubric_digest": "an-older-rubric"}),
+    ],
+)
+def test_a_moved_binding_field_is_stale_and_spends_and_writes_nothing(
+    fx: _Fixture, field: str, moved: dict[str, object]
+) -> None:
+    token = fx.quote().token
+    stale = dataclasses.replace(
+        token,
+        binding=dataclasses.replace(token.binding, **moved),  # type: ignore[arg-type]
+    )
+    judge = _Judge()
+
+    result = _run(fx, stale, judge=judge)
+
+    assert isinstance(result, judging.QuoteStale)
+    assert result.changed == (field,)
+    assert judge.calls == 0
+    assert not fx.layout.findings_db_path.exists()
+
+
+def test_a_backend_that_moved_onto_this_machine_names_locality_and_confidential(
+    fx: _Fixture,
+) -> None:
+    token = fx.quote().token
+
+    result = _run(fx, token, judge=_Judge(is_local=True))
+
+    assert result == judging.QuoteStale("identity", ("locality", "confidential"))
+
+
+def test_a_moved_work_set_alone_is_not_stale(fx: _Fixture) -> None:
+    token = fx.quote().token
+    fx.store(fx.groups[0])
+
+    result = _run(fx, token, judge=_Judge())
+
+    assert isinstance(result, judging.JudgingOutcome)
+
+
+def test_an_old_token_over_unchanged_state_is_not_stale(fx: _Fixture) -> None:
+    token = fx.quote(now=_NOW - timedelta(days=400)).token
+
+    assert isinstance(_run(fx, token, judge=_Judge()), judging.JudgingOutcome)
+
+
+def test_a_root_that_is_not_a_workspace_is_refused_by_a_run(tmp_path: Path) -> None:
+    token = _token()
+
+    with pytest.raises(judging.JudgingRefused):
+        judging.run_judging(
+            tmp_path,
+            token,
+            stop=StopToken(),
+            ports=judging.JudgingPorts(chat_client=lambda cfg, task: _Judge()),
+        )
+
+
+# -- the run: the binding ceiling --------------------------------------------- #
+
+
+def test_a_run_judges_exactly_the_quoted_groups_and_persists_them(fx: _Fixture) -> None:
+    token = fx.quote().token
+    judge = _Judge()
+
+    outcome = _outcome(_run(fx, token, judge=judge))
+
+    assert outcome.status == "completed"
+    assert (outcome.judged, outcome.calls, outcome.persisted) == (5, 5, 5)
+    assert (outcome.deferred, outcome.unpersisted, outcome.not_in_quote) == (0, 0, ())
+    assert judge.calls == 5
+    assert _stored_keys(fx) == {_key(g.member_ids) for g in fx.groups}
+
+
+def test_new_work_is_not_judged_and_is_named(fx: _Fixture) -> None:
+    fx.report = CandidateGroupReport(
+        groups=tuple(fx.groups[:3]), produced=3, retained=3
+    )
+    token = fx.quote().token
+    fx.report = CandidateGroupReport(groups=tuple(fx.groups), produced=5, retained=5)
+    judge = _Judge()
+
+    outcome = _outcome(_run(fx, token, judge=judge))
+
+    assert judge.calls == 3
+    assert outcome.not_in_quote == (
+        _key(fx.groups[3].member_ids),
+        _key(fx.groups[4].member_ids),
+    )
+    assert outcome.settled_since_quote == 0
+    assert _stored_keys(fx) == {_key(g.member_ids) for g in fx.groups[:3]}
+
+
+def test_a_group_answered_elsewhere_is_settled_and_not_paid_for_again(
+    fx: _Fixture,
+) -> None:
+    token = fx.quote().token
+    fx.store(fx.groups[1])
+    judge = _Judge()
+
+    outcome = _outcome(_run(fx, token, judge=judge))
+
+    assert (outcome.settled_since_quote, outcome.judged, judge.calls) == (1, 4, 4)
+    assert outcome.not_in_quote == ()
+
+
+def test_a_vanished_group_is_settled_not_judged(fx: _Fixture) -> None:
+    token = fx.quote().token
+    fx.report = CandidateGroupReport(
+        groups=tuple(fx.groups[:2] + fx.groups[3:]), produced=4, retained=4
+    )
+    judge = _Judge()
+
+    outcome = _outcome(_run(fx, token, judge=judge))
+
+    assert (outcome.settled_since_quote, judge.calls) == (1, 4)
+
+
+def test_a_group_ruled_kept_distinct_since_the_quote_is_settled(
+    fx: _Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = fx.quote().token
+    ruled = fx.groups[2].member_ids
+    monkeypatch.setattr(
+        application_pending,
+        "is_group_kept_distinct",
+        lambda layout, member_ids, **_: tuple(member_ids) == ruled,
+    )
+    judge = _Judge()
+
+    outcome = _outcome(_run(fx, token, judge=judge))
+
+    assert (outcome.settled_since_quote, judge.calls) == (1, 4)
+    assert _key(ruled) not in _stored_keys(fx)
+
+
+def test_a_member_edited_since_the_quote_is_no_longer_the_quoted_item(
+    fx: _Fixture,
+) -> None:
+    token = fx.quote().token
+    fx.edit(fx.groups[0].member_ids[0])
+    judge = _Judge()
+
+    outcome = _outcome(_run(fx, token, judge=judge))
+
+    assert outcome.not_in_quote == (_key(fx.groups[0].member_ids),)
+    assert outcome.settled_since_quote == 1
+    assert judge.calls == 4
+
+
+def test_a_default_token_never_judges_an_uncertain_item(fx: _Fixture) -> None:
+    fx.store(fx.groups[0], verdict="uncertain")
+    token = fx.quote().token
+    judge = _Judge()
+
+    outcome = _outcome(_run(fx, token, judge=judge))
+
+    assert judge.calls == 4
+    assert outcome.settled_since_quote == 0
+    assert outcome.not_in_quote == ()
+
+
+def test_an_opted_in_token_rejudges_an_uncertain_item_and_replaces_its_verdict(
+    fx: _Fixture,
+) -> None:
+    fx.store(fx.groups[0], verdict="uncertain")
+    token = fx.quote(include_uncertain=True).token
+
+    outcome = _outcome(_run(fx, token, judge=_Judge()))
+
+    assert outcome.judged == 5
+    after = fx.quote()
+    assert (after.served, after.uncertain, after.to_judge) == (5, 0, 0)
+
+
+def test_a_group_that_makes_no_call_is_judged_free_and_never_persisted(
+    fx: _Fixture,
+) -> None:
+    ghost = _group("concepts/ghost-a", "concepts/ghost-b")
+    fx.report = CandidateGroupReport(groups=(*fx.groups, ghost), produced=6, retained=6)
+    token = fx.quote().token
+    assert (token.calls, len(token.work)) == (5, 6)
+    judge = _Judge()
+
+    outcome = _outcome(_run(fx, token, judge=judge))
+
+    assert (outcome.judged, outcome.calls, judge.calls) == (6, 5, 5)
+    assert (outcome.persisted, outcome.dropped) == (5, 1)
+
+
+def test_a_call_past_the_ceiling_is_refused_before_it_is_made(fx: _Fixture) -> None:
+    token = fx.quote().token
+    judge = _Judge()
+
+    def _greedy(groups: list[CandidateGroup], *, llm: object, **_: object) -> object:
+        llm.chat([]), llm.chat([])  # type: ignore[attr-defined]
+        return AdjudicationBatch(
+            results=[AdjudicatedCandidate(groups[0], Verdict.SAME, 0.9, "r")]
+        )
+
+    with pytest.raises(AssertionError):
+        _run(fx, token, judge=judge, adjudicate_candidates=_greedy)
+
+    assert judge.calls == token.calls == 5
+
+
+# -- the run: chunks, persistence and cancellation ---------------------------- #
+
+
+def test_each_chunk_persists_before_the_next_chunk_is_judged(fx: _Fixture) -> None:
+    log: list[str] = []
+    token = fx.quote().token
+
+    _run(fx, token, judge=_Judge(log=log), commit_section=_Sections(log))
+
+    assert log == ["chat", "enter", "exit"] * 5
+
+
+def test_a_larger_chunk_judges_its_groups_before_one_persist(fx: _Fixture) -> None:
+    log: list[str] = []
+    token = fx.quote().token
+
+    outcome = _outcome(
+        _run(
+            fx,
+            token,
+            judge=_Judge(log=log),
+            commit_section=_Sections(log),
+            chunk_size=2,
+        )
+    )
+
+    assert log == ["chat", "chat", "enter", "exit"] * 2 + ["chat", "enter", "exit"]
+    assert outcome.persisted == 5
+
+
+def test_a_chunk_size_below_one_is_refused(fx: _Fixture) -> None:
+    with pytest.raises(ValueError, match="chunk_size"):
+        _run(fx, fx.quote().token, chunk_size=0)
+
+
+def test_a_stop_from_inside_a_call_lets_that_chunk_persist_and_defers_the_rest(
+    fx: _Fixture,
+) -> None:
+    stop = StopToken()
+    token = fx.quote().token
+    judge = _Judge(on_chat=lambda n: stop.set() if n == 2 else None)
+
+    outcome = _outcome(_run(fx, token, judge=judge, stop=stop))
+
+    assert outcome.status == "stopped"
+    assert (outcome.judged, outcome.persisted, outcome.deferred) == (2, 2, 3)
+    assert judge.calls == 2
+    assert _stored_keys(fx) == {_key(g.member_ids) for g in fx.groups[:2]}
+    again = fx.quote()
+    assert (again.served, again.to_judge) == (2, 3)
+
+
+def test_a_stop_before_the_first_chunk_makes_no_call(fx: _Fixture) -> None:
+    stop = StopToken()
+    stop.set()
+    judge = _Judge()
+
+    outcome = _outcome(_run(fx, fx.quote().token, judge=judge, stop=stop))
+
+    assert outcome.status == "stopped"
+    assert (outcome.judged, outcome.calls, outcome.deferred) == (0, 0, 5)
+    assert judge.calls == 0
+    assert not fx.layout.findings_db_path.exists()
+
+
+def test_a_stop_during_the_last_chunk_still_completes(fx: _Fixture) -> None:
+    stop = StopToken()
+    judge = _Judge(on_chat=lambda n: stop.set() if n == 5 else None)
+
+    outcome = _outcome(_run(fx, fx.quote().token, judge=judge, stop=stop))
+
+    assert (outcome.status, outcome.deferred, outcome.persisted) == ("completed", 0, 5)
+
+
+# -- the run: what a persisted verdict does to the queue ---------------------- #
+
+
+def _seed_rows(fx: _Fixture) -> None:
+    """An open, unjudged identity row per group, as a daemon pass leaves them."""
+    from openkos.application import queue_producers
+    from openkos.state import pending_queue as pq
+
+    current = application_pending.current_finding_digest(fx.layout.bundle_dir)
+    conn = derived.open_derived_connection(fx.layout.findings_db_path)
+    try:
+        for group in fx.groups:
+            proposal = queue_producers.identity_group_proposal(
+                group, current_digest=current, result=None
+            )
+            assert proposal is not None
+            pq.upsert_proposal(
+                conn,
+                proposal,
+                commit_section=contextlib.nullcontext,
+                bundle_dir=fx.layout.bundle_dir,
+            )
+    finally:
+        conn.close()
+
+
+def _queue(fx: _Fixture) -> dict[tuple[str, ...], tuple[str, object]]:
+    from openkos.state import pending_queue as pq
+
+    conn = derived.open_derived_connection(fx.layout.findings_db_path)
+    try:
+        return {
+            tuple(sorted(item.targets)): (
+                item.status,
+                (json.loads(item.payload)["adjudication"] or {}).get("verdict"),
+            )
+            for item in pq.all_items(conn)
+        }
+    finally:
+        conn.close()
+
+
+def test_a_run_amends_open_rows_declines_different_and_never_merges(
+    fx: _Fixture,
+) -> None:
+    _seed_rows(fx)
+    before = {
+        path.name: path.read_bytes()
+        for path in sorted(fx.layout.bundle_dir.rglob("*.md"))
+    }
+    token = fx.quote().token
+    judge = _Judge([_reply("same"), _reply("different"), _reply("uncertain")])
+
+    outcome = _outcome(_run(fx, token, judge=judge))
+
+    assert outcome.status == "completed"
+    queue = _queue(fx)
+    keys = [tuple(sorted(g.member_ids)) for g in fx.groups]
+    assert queue[keys[0]] == ("pending", "same")
+    assert queue[keys[1]][0] == "declined"
+    assert queue[keys[2]] == ("pending", "uncertain")
+    assert queue[keys[3]] == ("pending", "same")
+    after = {
+        path.name: path.read_bytes()
+        for path in sorted(fx.layout.bundle_dir.rglob("*.md"))
+    }
+    assert after == before
+
+
+def test_a_verdict_about_content_edited_during_the_call_is_dropped(
+    fx: _Fixture,
+) -> None:
+    judge = _Judge(
+        on_chat=lambda n: fx.edit(fx.groups[0].member_ids[0]) if n == 1 else None
+    )
+
+    outcome = _outcome(_run(fx, fx.quote().token, judge=judge))
+
+    assert (outcome.judged, outcome.persisted, outcome.dropped) == (5, 4, 1)
+    assert _key(fx.groups[0].member_ids) not in _stored_keys(fx)
