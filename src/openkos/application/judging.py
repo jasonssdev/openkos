@@ -36,7 +36,13 @@ from openkos.application import identity_adjudication
 from openkos.application import pending as application_pending
 from openkos.application.lock_wait import CommitSection
 from openkos.application.runtime import StopToken
-from openkos.llm.base import BackendError, LLMBackend, Message
+from openkos.llm.base import (
+    BackendError,
+    BackendModelNotFound,
+    BackendUnavailable,
+    LLMBackend,
+    Message,
+)
 from openkos.resolution import adjudication as leaf
 from openkos.resolution.candidates import (
     CandidateGroup,
@@ -735,6 +741,8 @@ def run_judging(
     counted = _CeilingClient(context.client, token.calls)
     guard = _ObserverGuard(observer if observer is not None else JudgingObserver())
     judged = persisted = dropped = unpersisted = 0
+    failure: BackendError | None = None
+    failed_at: int | None = None
     cause: Literal["workspace_busy", "store_error"] | None = None
     status: Literal["completed", "stopped", "failed", "unpersisted"] = "completed"
     for start in range(0, len(judge), size):
@@ -773,7 +781,11 @@ def run_judging(
             local_exemption=context.local_exemption,
             on_progress=on_progress,
         )
+        before = judged
         judged += len(batch.results)
+        failure = batch.failure
+        if failure is not None:
+            failed_at = before + (batch.failed_index or 1)
         result = _persist_chunk(
             layout, batch.results, effective=effective, pinned=pinned, ports=ports
         )
@@ -784,7 +796,13 @@ def run_judging(
             status = "unpersisted"
             break
         persisted += result.persisted
-        guard.chunk_persisted(persisted)
+        if batch.results:
+            guard.chunk_persisted(persisted)
+        if failure is not None:
+            if isinstance(failure, BackendUnavailable | BackendModelNotFound):
+                raise failure
+            status = "failed"
+            break
     return JudgingOutcome(
         kind=token.binding.kind,
         status=status,
@@ -794,8 +812,10 @@ def run_judging(
         unpersisted=unpersisted,
         unpersisted_cause=cause,
         dropped=dropped,
-        deferred=len(judge) - judged,
+        deferred=len(judge) - (judged if failed_at is None else failed_at),
         not_in_quote=not_in_quote,
         settled_since_quote=settled,
+        failure=failure,
+        failed_at=failed_at,
         observer_failed=guard.failed,
     )

@@ -19,7 +19,13 @@ from openkos import config, lock
 from openkos.application import judging
 from openkos.application import pending as application_pending
 from openkos.application.runtime import StopToken
-from openkos.llm.base import BackendHostLocality, BackendUnavailable, Message
+from openkos.llm.base import (
+    BackendGenerationCapped,
+    BackendHostLocality,
+    BackendModelNotFound,
+    BackendUnavailable,
+    Message,
+)
 from openkos.model import okf
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
@@ -1369,3 +1375,75 @@ def test_a_store_error_is_reported_as_unpersisted_with_its_cause(
     assert outcome.unpersisted_cause == "store_error"
     assert (outcome.unpersisted, outcome.persisted, outcome.deferred) == (1, 0, 4)
     assert judge.calls == 1
+
+
+# -- the run: backend errors -------------------------------------------------- #
+
+
+def test_a_failed_item_ends_the_run_with_its_prefix_kept(fx: _Fixture) -> None:
+    capped = BackendGenerationCapped("the reply hit the cap")
+    judge = _Judge([_reply(), _reply(), capped])
+
+    outcome = _outcome(_run(fx, fx.quote().token, judge=judge))
+
+    assert outcome.status == "failed"
+    assert outcome.failure is capped
+    assert outcome.failed_at == 3
+    assert (outcome.judged, outcome.persisted, outcome.deferred) == (2, 2, 2)
+    assert (outcome.calls, judge.calls) == (3, 3)
+    assert _stored_keys(fx) == {_key(g.member_ids) for g in fx.groups[:2]}
+
+
+def test_failed_at_is_the_run_position_not_the_chunk_position(fx: _Fixture) -> None:
+    judge = _Judge([_reply(), _reply(), _reply(), BackendGenerationCapped("cap")])
+
+    outcome = _outcome(_run(fx, fx.quote().token, judge=judge, chunk_size=2))
+
+    assert outcome.failed_at == 4
+    assert (outcome.judged, outcome.persisted, outcome.deferred) == (3, 3, 1)
+    assert _stored_keys(fx) == {_key(g.member_ids) for g in fx.groups[:3]}
+
+
+@pytest.mark.parametrize(
+    "error", [BackendUnavailable("down"), BackendModelNotFound("no such model")]
+)
+def test_an_availability_error_propagates_after_the_prefix_is_persisted(
+    fx: _Fixture, error: Exception
+) -> None:
+    observer = _Recorder()
+    judge = _Judge([_reply(), _reply(), error])
+
+    with pytest.raises(type(error)) as raised:
+        _run(fx, fx.quote().token, judge=judge, observer=observer)
+
+    assert raised.value is error
+    assert _stored_keys(fx) == {_key(g.member_ids) for g in fx.groups[:2]}
+    assert observer.persisted == [1, 2]
+
+
+def test_an_availability_error_on_the_first_call_writes_nothing(fx: _Fixture) -> None:
+    with pytest.raises(BackendUnavailable):
+        _run(fx, fx.quote().token, judge=_Judge([BackendUnavailable("down")]))
+
+    assert not fx.layout.findings_db_path.exists()
+
+
+def test_a_busy_workspace_wins_over_a_backend_failure_in_the_same_chunk(
+    fx: _Fixture,
+) -> None:
+    capped = BackendGenerationCapped("cap")
+    judge = _Judge([_reply(), capped])
+
+    outcome = _outcome(
+        _run(
+            fx,
+            fx.quote().token,
+            judge=judge,
+            chunk_size=2,
+            commit_section=_Sections([], always_busy=True),
+        )
+    )
+
+    assert outcome.status == "unpersisted"
+    assert outcome.failure is capped
+    assert (outcome.failed_at, outcome.unpersisted, outcome.deferred) == (2, 1, 3)
