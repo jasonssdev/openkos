@@ -1193,3 +1193,87 @@ def test_a_verdict_about_content_edited_during_the_call_is_dropped(
 
     assert (outcome.judged, outcome.persisted, outcome.dropped) == (5, 4, 1)
     assert _key(fx.groups[0].member_ids) not in _stored_keys(fx)
+
+
+# -- the run: progress and the observer --------------------------------------- #
+
+
+def test_progress_events_carry_the_run_index_and_total(fx: _Fixture) -> None:
+    fx.report = CandidateGroupReport(
+        groups=tuple(fx.groups[:3]), produced=3, retained=3
+    )
+    token = fx.quote().token
+    observer = _Recorder()
+
+    outcome = _outcome(
+        _run(
+            fx,
+            token,
+            judge=_Judge([_reply("same"), _reply("different"), _reply("uncertain")]),
+            observer=observer,
+        )
+    )
+
+    assert [(e.index, e.total) for e in observer.progress_events] == [
+        (1, 3),
+        (2, 3),
+        (3, 3),
+    ]
+    assert [e.work_key for e in observer.progress_events] == [
+        _key(g.member_ids) for g in fx.groups[:3]
+    ]
+    assert [e.verdict for e in observer.progress_events] == [
+        "same",
+        "different",
+        "uncertain",
+    ]
+    assert observer.persisted == [1, 2, 3]
+    assert outcome.observer_failed is False
+
+
+def test_progress_indices_are_run_wide_across_a_larger_chunk(fx: _Fixture) -> None:
+    observer = _Recorder()
+
+    _run(fx, fx.quote().token, judge=_Judge(), observer=observer, chunk_size=2)
+
+    assert [(e.index, e.total) for e in observer.progress_events] == [
+        (n, 5) for n in range(1, 6)
+    ]
+    assert observer.persisted == [2, 4, 5]
+
+
+def test_a_progress_event_never_carries_the_rationale(fx: _Fixture) -> None:
+    observer = _Recorder()
+
+    _run(fx, fx.quote().token, judge=_Judge(), observer=observer)
+
+    assert {f.name for f in dataclasses.fields(judging.JudgingProgress)} == {
+        "index",
+        "total",
+        "work_key",
+        "verdict",
+    }
+    assert len(observer.progress_events) == 5
+    assert all("Judged." not in repr(e) for e in observer.progress_events)
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2])
+def test_an_observer_that_raises_loses_no_paid_work(
+    fx: _Fixture, chunk_size: int
+) -> None:
+    observer = _Recorder(fail_on_progress=2)
+
+    outcome = _outcome(
+        _run(
+            fx,
+            fx.quote().token,
+            judge=_Judge(),
+            observer=observer,
+            chunk_size=chunk_size,
+        )
+    )
+
+    assert outcome.observer_failed is True
+    assert (outcome.status, outcome.judged, outcome.persisted) == ("completed", 5, 5)
+    assert [e.index for e in observer.progress_events] == [1, 2]
+    assert _stored_keys(fx) == {_key(g.member_ids) for g in fx.groups}

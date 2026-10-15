@@ -609,6 +609,32 @@ class _CeilingClient:
         return self._inner.chat(messages)
 
 
+class _ObserverGuard:
+    """Every observer call goes through here. The observer is the client's
+    callback: its failure must not cost paid work, so the first exception is
+    swallowed, recorded, and the observer is not called again."""
+
+    def __init__(self, observer: JudgingObserver) -> None:
+        self._observer = observer
+        self.failed = False
+
+    def progress(self, event: JudgingProgress) -> None:
+        if self.failed:
+            return
+        try:
+            self._observer.progress(event)
+        except Exception:  # noqa: BLE001 -- an observer is the client's callback; its failure must not cost paid work
+            self.failed = True
+
+    def chunk_persisted(self, persisted: int) -> None:
+        if self.failed:
+            return
+        try:
+            self._observer.chunk_persisted(persisted)
+        except Exception:  # noqa: BLE001 -- an observer is the client's callback; its failure must not cost paid work
+            self.failed = True
+
+
 def run_judging(
     root: Path,
     token: QuoteToken | None,
@@ -657,6 +683,7 @@ def run_judging(
     settled = sum(1 for item in token.work if item not in now_items)
 
     counted = _CeilingClient(context.client, token.calls)
+    guard = _ObserverGuard(observer if observer is not None else JudgingObserver())
     judged = persisted = 0
     status: Literal["completed", "stopped", "failed", "unpersisted"] = "completed"
     for start in range(0, len(judge), size):
@@ -668,12 +695,32 @@ def run_judging(
         pinned = {
             member: current(member) for group in chunk for member in group.member_ids
         }
+
+        def report(
+            index: int,
+            total: int,
+            result: leaf.AdjudicatedCandidate,
+            *,
+            before: int = judged,
+        ) -> None:
+            guard.progress(
+                JudgingProgress(
+                    index=before + index,
+                    total=len(judge),
+                    work_key=adjudications_store.group_key_for(
+                        result.candidate.member_ids
+                    ),
+                    verdict=result.verdict.value,
+                )
+            )
+
         batch = ports.adjudicate_candidates(
             chunk,
             bundle_dir=layout.bundle_dir,
             llm=cast(LLMBackend, counted),
             include_confidential=token.include_confidential,
             local_exemption=context.local_exemption,
+            on_progress=report,
         )
         judged += len(batch.results)
         result = identity_adjudication.persist_adjudications(
@@ -685,6 +732,7 @@ def run_judging(
             write_through=True,
         )
         persisted += result.persisted
+        guard.chunk_persisted(persisted)
     return JudgingOutcome(
         kind=token.binding.kind,
         status=status,
@@ -697,4 +745,5 @@ def run_judging(
         deferred=len(judge) - judged,
         not_in_quote=not_in_quote,
         settled_since_quote=settled,
+        observer_failed=guard.failed,
     )
