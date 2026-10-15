@@ -85,12 +85,22 @@ change.
 - WHEN the snapshot is regenerated
 - THEN the diff is additive and `API_VERSION` may stay unchanged
 
-#### Scenario: A breaking change without a bump fails
+The bump is enforced only locally. The check compares the live surface with the
+snapshot recorded at `git HEAD`. While the regenerated snapshot is uncommitted,
+a breaking change without a bump fails. Once that snapshot is committed, HEAD
+equals the live surface, so in CI the bump half cannot fail; CI enforces only
+snapshot equality (see "A Golden Snapshot Pins The Public Surface"). Until a
+follow-up compares against the base branch's snapshot, the bump is a review
+obligation in CI.
 
-- GIVEN a public function loses a parameter and `API_VERSION` is unchanged
-- WHEN the snapshot test runs
-- THEN the test fails until `API_VERSION` is increased and the snapshot is
-  regenerated in the same change
+#### Scenario: A breaking change without a bump fails locally
+
+- GIVEN a public function loses a parameter, the snapshot is regenerated but not
+  yet committed, and `API_VERSION` is unchanged
+- WHEN the snapshot test runs against the snapshot recorded at `git HEAD`
+- THEN the test fails until `API_VERSION` is increased
+- AND once the regenerated snapshot is committed, the same test passes in CI
+  regardless of the bump, because HEAD then equals the live surface
 
 ### Requirement: A Golden Snapshot Pins The Public Surface
 
@@ -103,7 +113,10 @@ the snapshot and MUST fail on any difference. The snapshot MUST also record the
 compatibility policy MUST additionally require a higher `API_VERSION` than the
 recorded one for the test to pass after regeneration; a purely additive
 difference MUST pass once the snapshot is regenerated and MUST NOT require a
-bump.
+bump. The bump is checked against the snapshot recorded at `git HEAD`, so it
+applies only to an uncommitted regeneration (see "Changes Within A Major Are
+Additive; A Breaking Change Bumps The Version"); CI enforces snapshot equality
+only.
 
 #### Scenario: An untouched surface matches the snapshot
 
@@ -124,12 +137,14 @@ bump.
 - WHEN the snapshot test runs
 - THEN it fails, naming the exception
 
-#### Scenario: A breaking diff regenerated without a bump still fails
+#### Scenario: A breaking diff regenerated without a bump fails locally
 
-- GIVEN a breaking diff and a regenerated snapshot recording the same
-  `API_VERSION` as before
-- WHEN the snapshot test runs
+- GIVEN a breaking diff and a regenerated, uncommitted snapshot recording the
+  same `API_VERSION` as before
+- WHEN the snapshot test runs against the snapshot recorded at `git HEAD`
 - THEN it fails
+- AND after that snapshot is committed, the test no longer detects the missing
+  bump (see the bump requirement)
 
 ### Requirement: An Import Guard Bars Interactive And Disclosing Layers From The API
 

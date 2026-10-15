@@ -593,7 +593,7 @@ inside `refresh_decision_queue`; the no-client test must fail.
 Goal: close the change. Docs only; no source or snapshot edit. Satisfies: A1..A15,
 R1..R5. Depends on: S6a and S6b (both merged).
 
-- [ ] S7.1 `docs/architecture.md`: add `api/`, `errors.py` and `vcs/autocommit.py` to
+- [x] S7.1 `docs/architecture.md`: add `api/`, `errors.py` and `vcs/autocommit.py` to
   the package tree; add `api` to the "each package is a piece of the architecture"
   sentence and `errors` to the leaf-module list; rewrite the stale `api/` future
   async adapter text (around the line cited as `docs/architecture.md:229`, which
@@ -601,28 +601,28 @@ R1..R5. Depends on: S6a and S6b (both merged).
   adapter is "the local HTTP API", built on `openkos.api`; add
   `tests/unit/api/test_api_guards.py` to the AST guard list. No counts, no
   "since #NNN". Satisfies: A1, A5.
-- [ ] S7.2 `docs/roadmap.md`: the MVP 6 "stable Python API" bullet states it exists
+- [x] S7.2 `docs/roadmap.md`: the MVP 6 "stable Python API" bullet states it exists
   for the review queue and that ingest, query, doctor and setup are later slices.
   `src/openkos/application/__init__.py` docstring: the package stays internal;
   the public edge is `openkos.api`. Satisfies: A1.
-- [ ] S7.3 Merge delta specs: `openspec/specs/pending-work/spec.md` (ADDED R1..R5 with
+- [x] S7.3 Merge delta specs: `openspec/specs/pending-work/spec.md` (ADDED R1..R5 with
   every heading name-matched against the main spec; four had drifted in a previous
   change) and new `openspec/specs/stable-python-api/spec.md`. Satisfies: all.
-- [ ] S7.4 ADR-0060 status Proposed -> Accepted in all three places: the ADR file, the
+- [x] S7.4 ADR-0060 status Proposed -> Accepted in all three places: the ADR file, the
   `docs/adr/README.md` row, and any status-keeping test input. Do not edit any
   other accepted ADR (append-only). Satisfies: A1..A15 (decision record).
-- [ ] S7.5 Check each requirement against shipped code, not the task list (a passing
+- [x] S7.5 Check each requirement against shipped code, not the task list (a passing
   spec is not a met goal): read the spec Purposes and the issue text; list any
   requirement the code does not meet. Satisfies: all.
-- [ ] S7.6 Record open follow-ups in the archive report: the `insecure_key_warning`
+- [x] S7.6 Record open follow-ups in the archive report: the `insecure_key_warning`
   notice the API does not carry; whether the CLI later delegates to
   `api/_wiring.py`; the volatility two-regime walk cost not measured on large
   bundles; lint findings as counts only in v1.
-- [ ] S7.7 Archive: move (not copy) `openspec/changes/stable-python-api/` to
+- [x] S7.7 Archive: move (not copy) `openspec/changes/stable-python-api/` to
   `openspec/changes/archive/<date>-stable-python-api/`, including any
   exploration file, and write `archive-report.md`. Diff against a sibling archive
   and check the disk: the archive agent has overclaimed completion before.
-- [ ] S7.8 Run the five gates plus the ADR-status test. Satisfies: all.
+- [x] S7.8 Run the five gates plus the ADR-status test. Satisfies: all.
 
 Branch/PR: `docs/python-api-archive`. Independent mutation: set the ADR README row
 to `Proposed`; the ADR-status test must fail. Rename one merged requirement
