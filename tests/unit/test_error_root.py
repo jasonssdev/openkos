@@ -41,7 +41,7 @@ def _is_subsequence(needle: list[type], haystack: list[type]) -> bool:
 
 
 @pytest.mark.parametrize(
-    "cls, previous", _FAMILIES, ids=lambda v: getattr(v, "__name__", "bases")
+    ("cls", "previous"), _FAMILIES, ids=lambda v: getattr(v, "__name__", "bases")
 )
 def test_a_family_keeps_its_previous_mro_and_gains_the_root(
     cls: type[BaseException], previous: tuple[type, ...]
@@ -55,7 +55,7 @@ def test_a_family_keeps_its_previous_mro_and_gains_the_root(
 
 
 @pytest.mark.parametrize(
-    "child, parent",
+    ("child", "parent"),
     [
         (base.BackendUnavailable, base.BackendError),
         (base.BackendModelNotFound, base.BackendError),
