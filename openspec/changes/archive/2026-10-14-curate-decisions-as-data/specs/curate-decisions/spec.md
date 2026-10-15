@@ -85,8 +85,7 @@ actions, and items of kinds `contradiction`, `revision` and `watch_refusal`
 MUST be listed with an empty action set. The actions MUST be:
 
 - identity: merge, keep-distinct, skip;
-- relation_type: relate as proposed, relate reversed (only for an asymmetric
-  relation type), skip;
+- relation_type: relate as proposed, relate reversed (only for an asymmetric relation type), skip; a row whose suggested type is `supersedes` carries no action and resolves through `openkos relate`;
 - volatility: set the proposed tier, skip.
 
 Skip MUST write nothing and MUST leave the row `pending`. An item with an
@@ -130,8 +129,7 @@ a `revision` by its producer, which retires it; a `watch_refusal` through
 
 ### Requirement: Only Judged-SAME Identity Items Are Mergeable
 
-An identity item MUST carry the merge action only when it holds a persisted
-SAME judgment. An identity item whose adjudication is null MUST be listed as
+An identity item MUST carry the merge action only when it holds a persisted SAME judgment over exactly two members that pass the cross-type check. A judged-DIFFERENT item, a judged-SAME item with more than two members and a cross-type pair carry no merge action and name the reason; every identity item keeps keep-distinct and skip. An identity item whose adjudication is null MUST be listed as
 pending evaluation and MUST carry no merge action. The surface MUST NOT merge
 an unjudged item on a caller's decision alone, and MUST NOT call a model to
 judge it.
@@ -164,8 +162,7 @@ applied silently: an apply against it MUST return the typed Stale result.
 
 Freshness MUST be computed for the kinds that carry actions (`identity`,
 `relation_type` and `volatility`). A kind that carries no actions in this change
-(`contradiction`, `revision` and `watch_refusal`) MUST report freshness as not
-computed, and MUST NOT report it as fresh.
+(`contradiction`, `revision` and `watch_refusal`) MUST report freshness as not computed (`fresh` is `None`, never `True`), while the kinds that carry actions report `True` or `False`.
 
 #### Scenario: A row whose input changed is listed as stale
 
@@ -184,11 +181,9 @@ computed, and MUST NOT report it as fresh.
 
 Applying a write action MUST be two phases. The preview phase MUST return,
 without writing, what the action would do, plus a version token for the item.
-The commit phase MUST take the token the caller holds and MUST re-validate it
-inside the commit section, where the workspace lock is held, before any write.
+The commit phase MUST take the token the caller holds and MUST re-validate it before any write: the content half against a re-preview from current bytes before the commit section opens (a mismatch is the typed Stale result `content_changed`), and the row half re-read inside the commit section, where the workspace lock is held (`row_resolved`, `row_superseded`, `row_inputs_changed`). A change that lands between the two is raised as drift, not returned as Stale. When a reconciliation is planned, a row-level Stale can be returned after the reconciliation port has run.
 The token MUST be derived from the item's payload digest plus its input
-digests; for a volatility item, which carries no input digests, it MUST cover
-the proposed and the currently effective tier. A caller MUST be able to treat
+digests; for a volatility item, which carries no input digests, it MUST cover the proposed tier and the bytes of `openkos.yaml`, which determine the currently effective tier, so any configuration change makes it Stale; inside the commit section the row's recorded tier is also compared with the effective one. A caller MUST be able to treat
 the token as opaque. No lock MUST be held between the two phases.
 
 If the token no longer matches, the commit MUST return the typed Stale result
@@ -254,8 +249,7 @@ the preview read, recompose the catalog, and re-check for read drift, before
 calling the merge write. A vanished member MUST be a returned not-applied
 result. A drifted target, a catalog recompose failure and read drift MUST each
 be raised as the typed drift exception, whose message states which check
-failed. Every failed check MUST write nothing. A write failure MUST be a raised
-typed exception with structured fields. Each typed result MUST carry
+failed. Every failed check MUST write nothing. A write failure MUST be a raised typed exception with structured fields. A tier commit that the adapter refuses to make on its own (uncommitted edits to `openkos.yaml`) is raised as the typed refusal carrying the adapter's text. Each typed result MUST carry
 structured fields; it MUST NOT embed `openkos <verb>:`
 text meant for a terminal.
 
@@ -311,8 +305,7 @@ byte-identical.
 The keep-distinct action on an identity item MUST record the permanent
 keep-distinct ruling and MUST resolve the row `declined`. The surface
 MUST write the ruling sidecar and commit through the injected autocommit port,
-as the walk's decline helper does today. A keep-distinct on an item whose members no longer exist
-MUST NOT record a ruling.
+as the walk's decline helper does today. A keep-distinct on an item whose members no longer exist MUST NOT record a ruling. A failure to record the ruling is fail-open: it is returned as `NotApplied` with reason `record_failed` and notified to the observer, not raised.
 
 #### Scenario: Keep-distinct records the ruling and declines the row
 
@@ -362,16 +355,12 @@ surface.
 
 The surface MUST expose consent as data. Whether a stage can be accepted in
 bulk MUST be a table keyed by kind, not logic spread across callers, with
-these entries: `identity` never; `relation_type` yes, except an asymmetric
-relation type, which is never; `volatility` yes; `contradiction`, `revision`
+these entries: `identity` never; `relation_type` yes, except an asymmetric relation type, which is never; `volatility` yes (the table decides which kinds may be accepted in bulk; a per-item exemption flag, `asymmetric` in `item_consent`, decides which items of an accepted kind still ask, and the shipped command sets it only for asymmetric relations); `contradiction`, `revision`
 and `watch_refusal` have no actions and so are not eligible. Whether a spend
-or a write is consented, given the stage, whether a terminal is present,
-`--auto`, the accepted stages and `--auto-merge`, MUST be answered by a pure
+or a write is consented, given the stage, whether a terminal is present, `--auto`, the accepted stages and whether the unattended identity pass applies (which the adapter derives from `--auto-merge`), MUST be answered by a pure
 function that does not prompt. The outcomes MUST equal those the `curate`
 requirements already define; this requirement MUST NOT add, remove or relax a
-consent rule. The surface offers no bulk apply for identity merges. The
-separate accept-recommended and `--auto-merge` paths keep their own consent
-and still write each merge through the identity merge action.
+consent rule. The surface offers no bulk apply for identity merges. The separate accept-recommended and `--auto-merge` paths keep their own consent and stay outside the table: accept-recommended writes each merge through the identity merge action, while `--auto-merge` keeps the automatic pass (`apply_auto_merges`), which does not use that action and commits once per run.
 
 #### Scenario: Identity is never bulk-eligible
 

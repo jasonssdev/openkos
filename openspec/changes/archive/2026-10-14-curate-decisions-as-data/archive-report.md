@@ -14,21 +14,23 @@
 
 - Verdict: PASS-WITH-CORRECTIONS. 0 CRITICAL, 3 WARNING, 4 SUGGESTION. No code defect.
 - Verify-time results: 521 targeted tests passed; `ruff check`, `ruff format --check` and `mypy .` clean.
-- The verify report is reproduced from #3549 in `verify-report.md`. It is a summary, not the full report.
+- The full verify report is in `verify-report.md`. The archive agent first wrote it from a condensed Engram summary (#3549). The orchestrator then replaced it with the full report.
 
-## Corrections C1-C8: Not Applied
+## Corrections C1-C8: Applied
 
-- The exact old-to-new sentences for C1-C8 are not in the persisted record (#3549 is a summary, and no full verify report exists). Per the phase rule, nothing was guessed or applied.
-- Corrections still open in the main specs:
-  - (a) `--auto-merge` uses `application_auto_merge.apply_auto_merges` (`src/openkos/cli/curate.py:1265`), not the identity merge action. The main spec sentence overstates it (see Open Findings).
-  - (b) `item_consent` asymmetric exemption is set only for asymmetric relations (`curate.py:2261`); Metadata never sets it. The spec is silent.
-  - 1. `supersedes` rows carry no actions (`curate_decisions.py:1123`).
-  - 2. Merge is withheld also for `judged_different`, `cross_type`, `more_than_two_members` (`curate_decisions.py:1085-1103`).
-  - 3. Token content composition and row-level Stale (`curate_decisions.py:619-667`).
-  - 4. Volatility token = proposed tier plus `openkos.yaml` bytes (`curate_decisions.py:495-505`).
-  - 5. `fresh` is `bool | None`.
-  - 6. Keep-distinct failure returns `NotApplied('record_failed')` (`268`); tier config refusal raised as `Refused` (`933`).
-  - 7. Pure consent takes an `unattended_identity` bool, not `--auto-merge`.
+- **Who applied them.** The archive agent could not apply them, because only the condensed summary of the verify report had been persisted. The orchestrator applied all eight from the full report afterwards, in a follow-up commit.
+- **How they were matched.** Each old sentence was matched exactly once, ignoring whitespace. The corrections went to both `openspec/specs/curate-decisions/spec.md` and the archived delta, and the two files remain byte-identical.
+- **What changed.** Spec text only. No requirement heading was renamed, there are still 16 requirements, and no code changed.
+- **The --auto-merge sentence.** The overstated sentence about `--auto-merge` writing through the identity merge action is gone from `openspec/specs/`. `rg` finds no match.
+- **What each correction covers:**
+  - C1: `supersedes` relation rows carry no action.
+  - C2: the merge-withholding conditions.
+  - C3: `fresh` is `None` for action-less kinds.
+  - C4: the two-half token re-validation, and a row-level Stale that can arrive after a planned reconciliation.
+  - C5: the volatility token covers the bytes of `openkos.yaml`.
+  - C6: keep-distinct failure is fail-open, and a tier refusal is raised.
+  - C7: `--auto-merge` keeps `apply_auto_merges`.
+  - C8: the per-item `asymmetric` exemption, and the unattended-identity consent input.
 
 ## Specs Synced
 
@@ -42,9 +44,7 @@
 
 ## Open Findings
 
-- **Overstated sentence in the main spec**: `openspec/specs/curate-decisions/spec.md` line 374 says the `--auto-merge` path "still write[s] each merge through the identity merge action". #3549 (a) and #3547 say this is false. Only accept-recommended uses `commit_merge_decision`. Unresolved.
-- **Per-item exemption**: #3547 asks that the spec mention the per-item `acceptable_in_bulk` exemption (S4b deviation 1). Not addressed.
-- **S5.1 and S5.4 (spec-versus-code check)**: not performed in this phase. The overstatements above remain open.
+- None. Both findings that were open at first archive are resolved by C7 (`--auto-merge` keeps `apply_auto_merges`) and C8 (the per-item exemption). S5.1 and S5.4 were done by the verify phase (`verify-report.md`), which ran a two-way requirement-by-requirement check against the shipped code.
 
 ## Follow-ups (not in this change)
 
@@ -60,5 +60,4 @@
 
 ## tasks.md
 
-- 96 tasks checked, 9 unchecked (S5.1 to S5.9, all unchecked in the archived file). Checkboxes were not rewritten, per archive rules.
-- S5.2, S5.3, S5.5 to S5.9 were performed in this phase. S5.1 (verify) was completed earlier, and its result is the verify report. S5.4 was not performed.
+- All 105 tasks are checked, S5.1–S5.9 included. The orchestrator ticked S5 after the verify, the corrections and this archive were observed. Evidence: `verify-report.md`, the `rg`/`ls`/`diff` checks above, and the gates in the archive commit.

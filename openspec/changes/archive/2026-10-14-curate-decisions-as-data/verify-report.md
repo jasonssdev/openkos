@@ -1,33 +1,76 @@
 # Verify Report: curate-decisions-as-data
 
-**Source**: Engram observation #3549 (`sdd/curate-decisions-as-data/verify-report`, created 2026-10-14 19:39:57).
-**Provenance note**: #3549 is a condensed summary. Its text states "Full report returned to orchestrator"; the full report was not persisted to Engram, and no full copy exists in this change folder. This file reproduces the persisted summary only. It does not add findings.
+**Verdict: PASS-WITH-CORRECTIONS.** The findings are 0 CRITICAL, 3 WARNING and 4 SUGGESTION, and verify found no code defect. The shipped code delivers the Purpose and every Success Criterion in the proposal. The spec text overstated or omitted behaviour in eight places (C1–C8). Each was corrected in the spec text before the archive closed, and none required a code change.
 
-## Verdict
+This verify ran on branch `feat/curate-decisions-s5`, cut from `main` at 7e9c5848 after every implementation slice had merged. Python was 3.14.6.
 
-PASS-WITH-CORRECTIONS: 0 CRITICAL, 3 WARNING, 4 SUGGESTION. No code defect.
+## Checks run
 
-Verification at verify time: 521 targeted tests pass; `ruff check`, `ruff format --check` and `mypy .` clean.
+- **Backing test files:** `uv run pytest -q` over the eight files `test_curate_decisions.py`, `test_curate_decisions_boundary.py`, `test_curate_queue.py`, `test_curate_characterization.py`, `test_curate_consent_matrix.py`, `test_curate_consent_table.py`, `test_set_volatility_output_golden.py` and `test_layering.py`. 521 passed, exit 0.
+- **Static checks:** `ruff check .`, `ruff format --check .` and `mypy .` are clean.
+- **Goldens:** the characterization and consent-matrix goldens were not edited after they were recorded. Only #1370 and #1371 touch them.
 
-## Confirmed Findings
+## Goal check
 
-- (a) `--auto-merge` uses `application_auto_merge.apply_auto_merges` (`src/openkos/cli/curate.py:1265`), not the identity merge action. `accept-recommended` does use `commit_merge_decision` (`curate.py:1516-1530`). The spec sentence overstates the shared path.
-- (b) `item_consent` exempts via an asymmetric flag under every non-NEVER row (`curate_decisions.py:1473-1477`). Production sets it only for asymmetric relations (`curate.py:2261`); Metadata never sets it. The spec is silent on this.
+Every Success Criterion in `proposal.md` is met:
 
-## Other Corrections (from the summary)
+- The goldens and the consent matrix pass unchanged.
+- The module imports none of `typer`, `rich`, `openkos.cli` or `openkos.vcs`, and the layering test passes, including the `isatty` AST assertion.
+- The list returns all six kinds without a model call and marks stale rows.
+- A superseded token returns the typed Stale result.
+- The adapter's commit helpers each have exactly one definition, in `cli/main.py`.
+- The follow-up "Judging as an application service" is named in `docs/roadmap.md` and in ADR-0053.
 
-1. `supersedes` relation rows carry no actions (`curate_decisions.py:1123`).
-2. Merge is withheld also for `judged_different`, `cross_type` and `more_than_two_members` (`curate_decisions.py:1085-1103`).
-3. Token content: the half compared before the section (`619-628`); the row half is inside (`637`, `667`). Row-level Stale can follow a reconcile model call.
-4. Volatility token = proposed tier plus `openkos.yaml` bytes (`495-505`); effective tier is indirect, plus `_stale_inputs`.
-5. `fresh` is `bool | None`.
-6. Keep-distinct record failure returns `NotApplied('record_failed')` (`268`); tier config refusal is raised as `Refused` (`933`).
-7. The pure consent check takes an `unattended_identity` bool, not `--auto-merge`.
+## Requirement-by-requirement (two-way)
 
-## Other Notes
+| # | Requirement | Verdict |
+|---|---|---|
+| 1 | Plain Data, No Interaction | OK |
+| 2 | List Returns Six Kinds | OK (`pq.KINDS` order, no model) |
+| 3 | Each Kind Carries Its Own Action Set | Spec omitted the `supersedes` case (C1) |
+| 4 | Only Judged-SAME Identity Items Are Mergeable | Spec incomplete (C2) |
+| 5 | Staleness Is Marked, Never Hidden | Spec imprecise about `None` (C3) |
+| 6 | Apply Is A Two-Phase Preview And Commit | Spec overstated (C4, C5) |
+| 7 | Merge Preview Discloses Reconciliation | OK |
+| 8 | Commit Re-Checks | OK; tier refusal omitted (C6b) |
+| 9 | Adapter Owns Rendering | OK |
+| 10 | Keep-Distinct Records A Durable Ruling | OK; fail-open omitted (C6a) |
+| 11 | Structure/Metadata Resolve Rows | OK |
+| 12 | Consent And Bulk Eligibility Are Data | Spec overstated (C7, C8) |
+| 13 | No Judgment | OK (only the injected `reconcile` port calls a model) |
+| 14 | Payloads Are Owner-Local | OK (boundary guard; a missing `api/` is tolerated) |
+| 15 | Confidence Is Not A Trust Signal | OK |
+| 16 | Behavior Of The Command Is Unchanged | OK |
 
-- S5.3: `pending-work` spec needs no change.
+The four MODIFIED requirements in the `curate-command` delta match the code. `apply_decision` is registered as a non-resolving core.
 
-## Status of Corrections C1-C8
+## Corrections applied (spec text only)
 
-The exact old-to-new sentences for C1-C8 were not available in the persisted record. They were not applied. See the archive report for the disposition.
+- **C1 (WARNING).** A `relation_type` row whose suggested type is `supersedes` carries no action and resolves through `openkos relate`.
+- **C2 (SUGGESTION).** Merge is offered only when three conditions hold: a persisted SAME judgment, exactly two members, and a passed cross-type check.
+  - When merge is withheld, the item names the reason.
+  - Keep-distinct and skip are always offered.
+- **C3 (SUGGESTION).** Action-less kinds report `fresh` as `None`, never `True`.
+- **C4 (WARNING).** The token is re-validated in two halves:
+  - The content half is compared against a re-preview from current bytes, before the commit section, and fails as `content_changed`.
+  - The row half is re-read inside the section and fails as `row_resolved`, `row_superseded` or `row_inputs_changed`.
+  - A change between the two halves is drift.
+  - A row-level Stale can arrive after a planned reconciliation has already run. That costs one model call but writes nothing, which is why it is not classed as a defect. A pre-section freshness check could remove the call later.
+- **C5 (WARNING).** The volatility token covers the proposed tier plus the bytes of `openkos.yaml`, so any configuration change makes it stale. Inside the section, the recorded tier is also compared with the effective one.
+- **C6 (SUGGESTION).**
+  - (a) A keep-distinct record failure is fail-open: it returns `NotApplied("record_failed")` and notifies the observer.
+  - (b) A tier commit the adapter refuses is raised as the typed refusal.
+- **C7 (WARNING).** Accept-recommended writes through the identity merge action. `--auto-merge` keeps `apply_auto_merges`, does not use that action, and commits once per run (ADR-0049).
+- **C8 (SUGGESTION).** The table decides which kinds may be accepted in bulk. The per-item `asymmetric` flag in `item_consent` decides which items of an accepted kind still ask, and the shipped command sets it only for asymmetric relations. The consent inputs also name the unattended identity pass, which the adapter derives from `--auto-merge`.
+
+## Observation beyond the spec
+
+On a TTY, an accepted Structure run offers `a` (accept every remaining item of this asymmetric type) and `r` (reverse). This is a per-type operator choice in the CLI. It does not conflict with "asymmetric is never bulk-eligible" for `--accept`.
+
+## pending-work spec
+
+`openspec/specs/pending-work/spec.md` needs no change. The list only reads the queue, and no schema, status or resolution rule changed.
+
+## Limitations
+
+The mutation proofs were not re-run during verify; they are recorded per slice in `tasks.md`. Requirements checked by reading the source carry file and line evidence in the Engram copy of this report.
