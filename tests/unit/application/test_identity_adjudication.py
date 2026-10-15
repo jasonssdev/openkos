@@ -350,6 +350,107 @@ def test_servable_verdict_withdraws_a_self_refuting_same(
     assert served.verdict is Verdict.DIFFERENT
 
 
+# --- servable_stored_verdicts (the daemon's read-only carry) ------------------
+
+
+def test_stored_verdicts_carry_a_servable_latest_row(
+    layout: config.WorkspaceLayout,
+) -> None:
+    _stored(layout, verdict="uncertain", rationale="Unclear.")
+
+    (carried,) = ia.servable_stored_verdicts(layout, [_group()])
+
+    assert (carried.candidate, carried.verdict, carried.rationale) == (
+        _group(),
+        Verdict.UNCERTAIN,
+        "Unclear.",
+    )
+
+
+@pytest.mark.parametrize("include_confidential", [False, True])
+def test_stored_verdicts_ignore_the_confidential_bit(
+    layout: config.WorkspaceLayout, include_confidential: bool
+) -> None:
+    _stored(layout, include_confidential=include_confidential)
+
+    assert [r.verdict for r in ia.servable_stored_verdicts(layout, [_group()])] == [
+        Verdict.SAME
+    ]
+
+
+def test_stored_verdicts_carry_only_the_latest_row(
+    layout: config.WorkspaceLayout,
+) -> None:
+    _stored(layout, verdict="same")
+    _stored(layout, verdict="different")
+
+    assert [r.verdict for r in ia.servable_stored_verdicts(layout, [_group()])] == [
+        Verdict.DIFFERENT
+    ]
+
+
+def test_stored_verdicts_refuse_a_group_with_no_row(
+    layout: config.WorkspaceLayout,
+) -> None:
+    _stored(layout)
+    other = _group(("concepts/a", "concepts/c"))
+
+    assert ia.servable_stored_verdicts(layout, [other]) == []
+
+
+def test_stored_verdicts_refuse_another_rubric(
+    layout: config.WorkspaceLayout,
+) -> None:
+    _stored(layout, rubric="not-this-build")
+
+    assert ia.servable_stored_verdicts(layout, [_group()]) == []
+
+
+def test_stored_verdicts_refuse_a_member_set_mismatch(
+    layout: config.WorkspaceLayout,
+) -> None:
+    current = application_pending.current_finding_digest(layout.bundle_dir)
+    _stored(layout, digests={"concepts/a": current("concepts/a") or ""})
+
+    assert ia.servable_stored_verdicts(layout, [_group()]) == []
+
+
+def test_stored_verdicts_refuse_an_edited_member(
+    layout: config.WorkspaceLayout,
+) -> None:
+    _stored(layout)
+    _concept(layout.root, "concepts/b", "Edited since it was judged.")
+
+    assert ia.servable_stored_verdicts(layout, [_group()]) == []
+
+
+def test_stored_verdicts_carry_nothing_and_create_nothing_without_a_store(
+    layout: config.WorkspaceLayout,
+) -> None:
+    assert ia.servable_stored_verdicts(layout, [_group()]) == []
+    assert not layout.findings_db_path.exists()
+
+
+def test_stored_verdicts_carry_nothing_from_an_unreadable_store(
+    layout: config.WorkspaceLayout,
+) -> None:
+    layout.findings_db_path.parent.mkdir(parents=True, exist_ok=True)
+    layout.findings_db_path.write_bytes(b"this is not a sqlite database" * 50)
+
+    assert ia.servable_stored_verdicts(layout, [_group()]) == []
+
+
+def test_stored_verdicts_leave_the_store_untouched(
+    layout: config.WorkspaceLayout,
+) -> None:
+    _stored(layout)
+    before = _rows(layout)
+
+    ia.servable_stored_verdicts(layout, [_group()])
+
+    assert _rows(layout) == before
+
+
 # --- reassemble_adjudications ------------------------------------------------
 
 
