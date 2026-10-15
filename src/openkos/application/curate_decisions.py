@@ -964,6 +964,7 @@ class WithheldAction:
     reason: Literal[
         "pending_evaluation",
         "judged_different",
+        "judged_uncertain",
         "cross_type",
         "more_than_two_members",
         "no_valid_suggestion",
@@ -987,7 +988,11 @@ class DecisionItem:
     `None` means freshness was NOT computed for this kind (one that carries no
     actions here, whose input refs may be synthetic); it never means fresh."""
     evaluation: Literal[
-        "judged_same", "judged_different", "pending_evaluation", "not_applicable"
+        "judged_same",
+        "judged_different",
+        "judged_uncertain",
+        "pending_evaluation",
+        "not_applicable",
     ]
     actions: tuple[Action, ...]
     withheld: tuple[WithheldAction, ...]
@@ -1077,6 +1082,7 @@ def _identity_actions(
         Literal[
             "pending_evaluation",
             "judged_different",
+            "judged_uncertain",
             "cross_type",
             "more_than_two_members",
         ]
@@ -1092,6 +1098,10 @@ def _identity_actions(
             reason = None
     elif verdict == Verdict.DIFFERENT.value:
         evaluation, reason = "judged_different", "judged_different"
+    elif verdict == Verdict.UNCERTAIN.value:
+        # A judgment the model declined to make (a malformed reply degrades to
+        # it too): not a group still waiting for evaluation.
+        evaluation, reason = "judged_uncertain", "judged_uncertain"
     else:
         evaluation, reason = "pending_evaluation", "pending_evaluation"
     if reason is None:

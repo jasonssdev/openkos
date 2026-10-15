@@ -2858,13 +2858,12 @@ def test_an_identity_without_a_judgment_is_pending_evaluation(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize("confidence", [0.5, 0.0], ids=["judged", "degraded"])
-def test_an_identity_judged_uncertain_is_listed_as_pending_evaluation(
+def test_an_identity_judged_uncertain_is_listed_as_judged_uncertain(
     tmp_path: Path, confidence: float
 ) -> None:
-    """Characterization of today's behavior (the `judging-application-service`
-    change flips it to `judged_uncertain`): an UNCERTAIN verdict, including the
-    fail-closed degrade of a malformed reply, is indistinguishable from no
-    verdict and so is listed as pending evaluation."""
+    """An UNCERTAIN verdict, including the fail-closed degrade of a malformed
+    reply, is a judgment the model declined to make: it is listed as
+    `judged_uncertain`, not as a group still waiting for evaluation."""
     _root, layout = _merge_workspace(tmp_path)
 
     item = _listed(
@@ -2872,8 +2871,36 @@ def test_an_identity_judged_uncertain_is_listed_as_pending_evaluation(
     )
 
     assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.withheld == (WithheldAction(Action.MERGE, "judged_uncertain"),)
+    assert item.evaluation == "judged_uncertain"
+
+
+def test_an_identity_with_an_unknown_verdict_stays_pending_evaluation(
+    tmp_path: Path,
+) -> None:
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(layout, _identity_row(layout, verdict="maybe"))
+
     assert item.withheld == (WithheldAction(Action.MERGE, "pending_evaluation"),)
     assert item.evaluation == "pending_evaluation"
+
+
+def test_a_merge_on_an_uncertain_item_is_not_mergeable_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path, verdict="uncertain")
+    version = DecisionVersion(
+        proposal.decision_key, pq.payload_digest_for(proposal), "x"
+    )
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, version, Action.MERGE, recorder)
+
+    assert outcome == NotApplied(Action.MERGE, "not_mergeable")
+    assert recorder.events == []
+    assert _snapshot(root) == before
 
 
 def test_an_identity_judged_different_withholds_the_merge(tmp_path: Path) -> None:
