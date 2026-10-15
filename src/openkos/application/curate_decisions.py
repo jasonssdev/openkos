@@ -1034,7 +1034,7 @@ def _strings(payload: Mapping[str, object], *names: str) -> tuple[str, ...] | No
     return tuple(str(value) for value in values)
 
 
-def _relation_fields(
+def relation_fields(
     payload: Mapping[str, object],
 ) -> tuple[str, str, str, str, str, str] | None:
     """`(source, target, effective source, effective target, type, rationale)`
@@ -1065,11 +1065,59 @@ def _tier_fields(payload: Mapping[str, object]) -> tuple[str, str] | None:
     return fields[0], fields[1]
 
 
-def _identity_members(row: curate_queue.OpenRow) -> tuple[str, ...]:
-    listed = row.payload.get("member_ids")
+def tier_detail_fields(
+    payload: Mapping[str, object],
+) -> tuple[str, str, str, str] | None:
+    """`(type name, current default, proposed tier, rationale)` of a volatility
+    row, or `None` when the row does not carry a usable proposal."""
+    fields = _strings(
+        payload, "type_name", "current_default", "suggested_tier", "rationale"
+    )
+    if fields is None or fields[2] not in model_types.VOLATILITY_TIERS:
+        return None
+    return fields[0], fields[1], fields[2], fields[3]
+
+
+def _members_of(
+    payload: Mapping[str, object], targets: tuple[str, ...]
+) -> tuple[str, ...]:
+    listed = payload.get("member_ids")
     if isinstance(listed, list) and all(isinstance(m, str) for m in listed):
         return tuple(str(m) for m in listed)
-    return row.item.targets
+    return targets
+
+
+def identity_detail_fields(
+    payload: Mapping[str, object], targets: tuple[str, ...]
+) -> tuple[tuple[str, ...], str, str, str | None, str | None] | None:
+    """`(members, type, tier, verdict, rationale)` of an identity row, or
+    `None` when the row does not carry a usable group.
+
+    `members` falls back to the row's `targets` exactly as the actions do. The
+    verdict and rationale are `None` for an unjudged row or one whose stored
+    verdict is not one of the three known. The adjudicator's confidence is
+    deliberately not read: nothing presents it."""
+    okf_type = payload.get("okf_type")
+    if not isinstance(okf_type, str):
+        return None
+    try:
+        tier = Tier(str(payload.get("tier")))
+    except ValueError:
+        return None
+    adjudication = payload.get("adjudication")
+    verdict: str | None = None
+    rationale: str | None = None
+    if isinstance(adjudication, dict):
+        stored = adjudication.get("verdict")
+        if stored in {v.value for v in Verdict}:
+            verdict = str(stored)
+            said = adjudication.get("rationale")
+            rationale = said if isinstance(said, str) else None
+    return _members_of(payload, targets), okf_type, tier.value, verdict, rationale
+
+
+def _identity_members(row: curate_queue.OpenRow) -> tuple[str, ...]:
+    return _members_of(row.payload, row.item.targets)
 
 
 def _identity_actions(
@@ -1121,7 +1169,7 @@ def _actions_of(
     if kind == "identity":
         return _identity_actions(layout, row)
     if kind == "relation_type":
-        fields = _relation_fields(row.payload)
+        fields = relation_fields(row.payload)
         if fields is None:
             return (
                 "not_applicable",
@@ -1285,7 +1333,7 @@ def _build_preview(
             reconcile=policy.reconcile,
         )
     if action in (Action.RELATE, Action.RELATE_REVERSED):
-        fields = _relation_fields(row.payload)
+        fields = relation_fields(row.payload)
         if fields is None:
             return NotApplied(action, "not_offered")
         source, target, eff_source, eff_target, suggested, rationale = fields

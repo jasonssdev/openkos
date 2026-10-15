@@ -27,6 +27,7 @@ from openkos import config
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application.budget import JOBS_DB_NAME
 from openkos.config import WorkspaceLayout
+from openkos.errors import OpenKosError
 from openkos.graph import sqlite_graph
 from openkos.resolution import candidates
 from openkos.state import jobs
@@ -191,7 +192,7 @@ def row_resolving_command(
     return _RESOLVING_COMMAND[row.kind]
 
 
-class QueueUnavailableError(Exception):
+class QueueUnavailableError(OpenKosError):
     """`findings.db` exists but cannot be read as a queue."""
 
 
@@ -209,6 +210,11 @@ class PendingReport:
     bundle_dir: Path | None = None
     """The workspace's bundle, so a row can be classified by its members' OKF
     types (a cross-type identity row has its own resolving command)."""
+
+
+def open_items(report: PendingReport) -> tuple[pq.PendingItem, ...]:
+    """The report's rows still awaiting a decision, in stored order."""
+    return tuple(i for i in report.items if i.status in pq.OPEN_STATUSES)
 
 
 def _read_inbox(layout: WorkspaceLayout) -> Path | None:

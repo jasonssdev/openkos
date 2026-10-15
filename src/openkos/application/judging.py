@@ -71,6 +71,7 @@ from openkos.application import suggest_relations_service as relations
 from openkos.application import suggest_volatility_service as volatility
 from openkos.application.lock_wait import CommitSection
 from openkos.application.runtime import StopToken
+from openkos.errors import OpenKosError
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import Edge
 from openkos.llm.base import (
@@ -104,7 +105,7 @@ _KINDS: Final = ("identity", "relation_type", "volatility")
 _NUL = "\x00"
 
 
-class JudgingRefused(Exception):
+class JudgingRefused(OpenKosError):
     """A quote cannot be made at all: the root is not a workspace or its
     configuration cannot be read. Raised, never printed."""
 

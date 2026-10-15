@@ -1,7 +1,10 @@
 """The curation decision surface is OWNER-LOCAL (`curate-decisions-as-data`,
 ADR-0053 Decision 8): its payloads can derive from confidential concepts, so no
 adapter that discloses to a third party may import it. `mcp/` keeps its reduced
-`pending` projection, and a future `api/` must bring its own disclosure gate.
+`pending` projection, and a future local HTTP adapter must bring its own
+disclosure gate. The scan therefore covers EVERY top-level package except the
+three allowed importers (`application` itself, `cli`, and the owner-local Python
+API `api`), so a package added later is barred by construction.
 
 The judging surface and the identity-adjudication helpers are owner-local for
 the same reason (`judging-application-service`, ADR-0059): a quote and an
@@ -26,7 +29,7 @@ from openkos.state import pending_queue as pq
 
 _SRC = Path(__file__).resolve().parents[3] / "src" / "openkos"
 _TARGET = ("curate_decisions", "judging", "identity_adjudication")
-_ADAPTERS = ("mcp", "api")
+_ALLOWED_IMPORTERS = frozenset({"application", "cli", "api"})
 
 
 def _imports_the_surface(tree: ast.AST) -> list[int]:
@@ -47,6 +50,16 @@ def _imports_the_surface(tree: ast.AST) -> list[int]:
     return lines
 
 
+def _adapters(src_root: Path) -> list[str]:
+    """Every top-level package under `src_root` that is not an allowed
+    importer: the packages that must not reach an owner-local surface."""
+    return sorted(
+        path.name
+        for path in src_root.iterdir()
+        if (path / "__init__.py").is_file() and path.name not in _ALLOWED_IMPORTERS
+    )
+
+
 def _offenders(adapter_root: Path) -> list[str]:
     """`path:line` of every offending import under `adapter_root`; an adapter
     package that does not exist yet has none."""
@@ -59,13 +72,32 @@ def _offenders(adapter_root: Path) -> list[str]:
     return found
 
 
-@pytest.mark.parametrize("adapter", _ADAPTERS)
+@pytest.mark.parametrize("adapter", _adapters(_SRC))
 def test_no_disclosing_adapter_imports_the_decision_surface(adapter: str) -> None:
     assert _offenders(_SRC / adapter) == []
 
 
+def test_the_scan_covers_mcp_and_never_the_three_allowed_importers() -> None:
+    adapters = _adapters(_SRC)
+
+    assert "mcp" in adapters
+    assert len(adapters) >= 8  # not vacuous: the real packages are enumerated
+    assert not set(adapters) & _ALLOWED_IMPORTERS
+
+
+def test_a_package_added_later_is_barred_by_construction(tmp_path: Path) -> None:
+    for name in ("application", "cli", "api", "mcp", "httpapi"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "data").mkdir()  # a directory that is not a package
+    (tmp_path / "lock.py").write_text("", encoding="utf-8")  # a module, not a package
+
+    assert _adapters(tmp_path) == ["httpapi", "mcp"]
+
+
 def test_a_missing_adapter_package_is_tolerated(tmp_path: Path) -> None:
-    assert _offenders(tmp_path / "api") == []
+    assert _offenders(tmp_path / "localapi") == []
 
 
 @pytest.mark.parametrize("surface", _TARGET)
@@ -86,7 +118,7 @@ def test_the_scan_catches_every_spelling_of_the_import(
     tmp_path: Path, template: str, surface: str
 ) -> None:
     source = template.format(s=surface)
-    adapter = tmp_path / "api"
+    adapter = tmp_path / "localapi"
     adapter.mkdir()
     (adapter / "route.py").write_text(source, encoding="utf-8")
 
@@ -94,7 +126,7 @@ def test_the_scan_catches_every_spelling_of_the_import(
 
 
 def test_the_scan_ignores_unrelated_imports(tmp_path: Path) -> None:
-    adapter = tmp_path / "api"
+    adapter = tmp_path / "localapi"
     adapter.mkdir()
     (adapter / "route.py").write_text(
         "from openkos.application import curate_queue, pending\n"

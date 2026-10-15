@@ -3842,3 +3842,127 @@ def test_an_asymmetric_relation_is_never_bulk(accepted: bool, tty: bool) -> None
     )
 
     assert verdict in {"ask", "withheld"}
+
+
+# -- public payload readers (the facade builds typed details from these) ----- #
+
+
+def _relation_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "source_id": "people/ana",
+        "target_id": "teams/core",
+        "effective_source_id": "people/ana",
+        "effective_target_id": "teams/core",
+        "suggested_type": "member_of",
+        "rationale": "Ana sits on the core team.",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_relation_fields_reads_a_valid_payload_and_rejects_unusable_ones() -> None:
+    assert curate_decisions.relation_fields(_relation_payload()) == (
+        "people/ana",
+        "teams/core",
+        "people/ana",
+        "teams/core",
+        "member_of",
+        "Ana sits on the core team.",
+    )
+    assert (
+        curate_decisions.relation_fields(_relation_payload(suggested_type="")) is None
+    )
+    assert curate_decisions.relation_fields(_relation_payload(rationale=7)) is None
+    assert curate_decisions.relation_fields({}) is None
+
+
+def _identity_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "member_ids": ["people/ana", "people/anna"],
+        "member_types": ["Person", "Person"],
+        "okf_type": "Person",
+        "tier": "high",
+        "trigger": "title",
+        "adjudication": {
+            "verdict": "same",
+            "confidence": 0.9,
+            "rationale": "Same Ana.",
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_identity_detail_fields_reads_a_judged_and_an_unjudged_payload() -> None:
+    targets = ("t/one", "t/two")
+
+    assert curate_decisions.identity_detail_fields(_identity_payload(), targets) == (
+        ("people/ana", "people/anna"),
+        "Person",
+        "high",
+        "same",
+        "Same Ana.",
+    )
+    assert curate_decisions.identity_detail_fields(
+        _identity_payload(adjudication=None), targets
+    ) == (("people/ana", "people/anna"), "Person", "high", None, None)
+
+
+def test_identity_detail_fields_falls_back_to_the_row_targets_for_members() -> None:
+    targets = ("t/one", "t/two")
+
+    fields = curate_decisions.identity_detail_fields(
+        _identity_payload(member_ids="not-a-list"), targets
+    )
+
+    assert fields is not None
+    assert fields[0] == targets
+
+
+def test_identity_detail_fields_ignores_an_unknown_verdict_and_never_reads_confidence() -> (
+    None
+):
+    fields = curate_decisions.identity_detail_fields(
+        _identity_payload(adjudication={"verdict": "maybe", "confidence": 0.1}),
+        ("a", "b"),
+    )
+
+    assert fields is not None
+    assert fields[3:] == (None, None)
+    assert len(fields) == 5  # no confidence slot
+
+
+@pytest.mark.parametrize(
+    "overrides", [{"okf_type": 3}, {"tier": "bogus"}, {"tier": None}]
+)
+def test_identity_detail_fields_is_none_for_an_unparsable_payload(
+    overrides: dict[str, object],
+) -> None:
+    assert (
+        curate_decisions.identity_detail_fields(
+            _identity_payload(**overrides), ("a", "b")
+        )
+        is None
+    )
+
+
+def test_tier_detail_fields_reads_a_valid_payload_and_rejects_unusable_ones() -> None:
+    payload: dict[str, object] = {
+        "type_name": "Person",
+        "current_default": "slow",
+        "suggested_tier": "static",
+        "rationale": "Names do not change.",
+    }
+
+    assert curate_decisions.tier_detail_fields(payload) == (
+        "Person",
+        "slow",
+        "static",
+        "Names do not change.",
+    )
+    assert (
+        curate_decisions.tier_detail_fields({**payload, "suggested_tier": "daily"})
+        is None
+    )
+    assert curate_decisions.tier_detail_fields({**payload, "rationale": None}) is None
+    assert curate_decisions.tier_detail_fields({}) is None
