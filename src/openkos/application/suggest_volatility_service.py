@@ -135,6 +135,62 @@ def cached_answers(
     return lookup
 
 
+@dataclass(frozen=True)
+class StoredVolatilityAnswers:
+    """What `stored_volatility_answers` found in the store."""
+
+    answers: tuple[TierSuggestion, ...]
+    """One suggestion per type, in sorted-type order."""
+    ambiguous: int = 0
+    """Types skipped because the two regimes held different answers."""
+
+
+def stored_volatility_answers(
+    layout: config.WorkspaceLayout, cfg: config.Config
+) -> StoredVolatilityAnswers:
+    """The volatility answers `findings.db` already holds, with no client and no
+    backend (#1391).
+
+    The prompt a cached answer is keyed on depends on which concepts were
+    sampled, which depends on the EFFECTIVE confidential bit
+    (`include_confidential or local_exemption`), and resolving the exemption
+    needs a client. So both regimes are planned with the LLM-free `plan_types`:
+    excluded `(False, False)` and included `(True, False)`; `sensitivity` treats
+    the two bits as a disjunction, so the included plan stands for every regime
+    where either bit is set.
+
+    A type answered in one regime is served from that answer. A type answered in
+    both with the same `(tier, rationale)` is served once. A type answered in
+    both with DIFFERENT answers is skipped and counted, never guessed. A type
+    equal to its current effective tier is still returned: whether it is worth
+    proposing is `volatility_suggestion_proposal`'s rule."""
+    task_model = config.resolve_task_model(cfg, "volatility_typing")
+    lookup = cached_answers(layout, task_model, cfg.type_tiers)
+    by_type: dict[str, list[TierSuggestion]] = {}
+    for include_confidential in (False, True):
+        for planned in volatility_typing.plan_types(
+            layout.bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=False,
+            rationale_language=cfg.rationale_language,
+            served=lookup,
+            type_tiers=cfg.type_tiers,
+        ):
+            answer = lookup(planned.type_name, planned.prompt_digest)
+            if answer is not None:
+                by_type.setdefault(planned.type_name, []).append(answer)
+    answers: list[TierSuggestion] = []
+    ambiguous = 0
+    for type_name in sorted(by_type):
+        held = by_type[type_name]
+        distinct = {(a.suggested_tier, a.rationale) for a in held}
+        if len(distinct) > 1:
+            ambiguous += 1
+            continue
+        answers.append(held[0])
+    return StoredVolatilityAnswers(tuple(answers), ambiguous)
+
+
 def record_answers(
     layout: config.WorkspaceLayout,
     model: str,

@@ -428,6 +428,44 @@ def enqueue_relations(
     )
 
 
+def enqueue_stored_relations(
+    conn: Any,
+    suggestions: Iterable[Any],
+    *,
+    current_digest: CurrentDigest,
+    bundle_dir: Path,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] | None = None,
+) -> ProducerResult:
+    """Publish suggestions served from the store (#1391), never retiring.
+
+    Retiring needs "every candidate edge was answered", and a store-only pass
+    cannot know the candidate set (it needs a client's locality) or see a daemon
+    row whose persist failed open. So this inserts and amends only
+    (`complete=False`); the daemon's `enqueue_relations` keeps retirement. A
+    verdict carried over unchanged inputs amends the open row in place."""
+    proposals = [
+        proposal
+        for suggestion in suggestions
+        if (
+            proposal := relation_suggestion_proposal(
+                suggestion, current_digest=current_digest
+            )
+        )
+        is not None
+    ]
+    return publish(
+        conn,
+        "relation_type",
+        proposals,
+        complete=False,
+        commit_section=commit_section,
+        bundle_dir=bundle_dir,
+        clock=clock,
+        amend_same_inputs=True,
+    )
+
+
 # -- volatility -----------------------------------------------------------------
 
 
@@ -487,6 +525,37 @@ def enqueue_volatility(
         commit_section=commit_section,
         bundle_dir=bundle_dir,
         clock=clock,
+    )
+
+
+def enqueue_stored_volatility(
+    conn: Any,
+    answers: Iterable[Any],
+    *,
+    bundle_dir: Path,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] | None = None,
+) -> ProducerResult:
+    """Publish cached volatility answers (#1391), never retiring.
+
+    The regime a cached prompt was asked under is unknown without a client, and
+    a fail-open `record_answers` can leave a published row with no cached
+    answer, so absence proves nothing: `complete=False`. A volatility proposal
+    has no input digests, so any payload change amends the open row in place."""
+    proposals = [
+        proposal
+        for answer in answers
+        if (proposal := volatility_suggestion_proposal(answer)) is not None
+    ]
+    return publish(
+        conn,
+        "volatility",
+        proposals,
+        complete=False,
+        commit_section=commit_section,
+        bundle_dir=bundle_dir,
+        clock=clock,
+        amend_same_inputs=True,
     )
 
 

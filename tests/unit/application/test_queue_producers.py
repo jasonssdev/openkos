@@ -1079,3 +1079,209 @@ def test_a_supersession_over_an_unreadable_source_is_not_queued(
 
     assert result.inserted == 0
     assert pq.open_items(conn) == []
+
+
+# -- The store-only producers (#1391) -----------------------------------------
+
+
+def _stored_relations(
+    conn: sqlite3.Connection,
+    section: _Section,
+    bundle_dir: Path,
+    suggestions: Sequence[EdgeSuggestion],
+    *,
+    version: int = 1,
+    minutes: int = 0,
+) -> qp.ProducerResult:
+    return qp.enqueue_stored_relations(
+        conn,
+        suggestions,
+        current_digest=_digest(version),
+        commit_section=section,
+        bundle_dir=bundle_dir,
+        clock=lambda: T0 + timedelta(minutes=minutes),
+    )
+
+
+def _stored_volatility(
+    conn: sqlite3.Connection,
+    section: _Section,
+    bundle_dir: Path,
+    answers: Sequence[TierSuggestion],
+    *,
+    minutes: int = 0,
+) -> qp.ProducerResult:
+    return qp.enqueue_stored_volatility(
+        conn,
+        answers,
+        commit_section=section,
+        bundle_dir=bundle_dir,
+        clock=lambda: T0 + timedelta(minutes=minutes),
+    )
+
+
+def _typed(a: str, b: str, rationale: str = "they work together") -> EdgeSuggestion:
+    return EdgeSuggestion(Edge(a, b), "works_at", rationale)
+
+
+def test_stored_relations_insert_what_they_are_given_and_never_retire(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    first = _stored_relations(
+        conn, section, bundle_dir, [_typed(*_PAIRS[0]), _typed(*_PAIRS[1])]
+    )
+    # A later pass sees only one of the two: a store-only pass cannot tell
+    # "absent" from "not stored", so it must not retire the other.
+    second = _stored_relations(
+        conn, section, bundle_dir, [_typed(*_PAIRS[0])], minutes=1
+    )
+
+    assert (first.inserted, first.complete) == (2, False)
+    assert (second.unchanged, second.retired, second.complete) == (1, 0, False)
+    assert sorted(item.targets for item in pq.open_items(conn)) == [
+        ("concepts/a", "concepts/b"),
+        ("concepts/c", "concepts/d"),
+    ]
+
+
+def test_stored_relations_amend_a_changed_payload_over_equal_inputs(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _stored_relations(conn, section, bundle_dir, [_typed(*_PAIRS[0], "before")])
+    (before,) = pq.open_items(conn)
+
+    again = _stored_relations(
+        conn, section, bundle_dir, [_typed(*_PAIRS[0], "after")], minutes=1
+    )
+
+    (after,) = pq.open_items(conn)
+    assert (again.amended, again.inserted, again.retired) == (1, 0, 0)
+    assert after.id == before.id
+    assert json.loads(after.payload)["rationale"] == "after"
+
+
+def test_stored_relations_retire_a_row_whose_inputs_really_changed(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _stored_relations(conn, section, bundle_dir, [_typed(*_PAIRS[0])])
+
+    changed = _stored_relations(
+        conn, section, bundle_dir, [_typed(*_PAIRS[0])], version=2, minutes=1
+    )
+
+    assert (changed.replaced, changed.amended) == (1, 0)
+    assert [item.status for item in pq.open_items(conn)] == ["pending"]
+
+
+def test_stored_relations_publish_the_daemons_payload(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    suggestion = _typed(*_PAIRS[0])
+    _stored_relations(conn, section, bundle_dir, [suggestion])
+
+    (expected,) = qp.relation_proposals(
+        SuggestRelationsOutcome(status="completed", results=(suggestion,), total=1),
+        current_digest=_digest(1),
+    )
+
+    (item,) = pq.open_items(conn)
+    assert item.payload == expected.payload
+    assert item.producer == qp.PRODUCER_RELATIONS
+
+
+def test_stored_volatility_inserts_and_never_retires(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _stored_volatility(
+        conn,
+        section,
+        bundle_dir,
+        [
+            TierSuggestion("Person", "timeless", "snapshot", "why"),
+            TierSuggestion("Place", "timeless", "pointer", "why"),
+        ],
+    )
+
+    later = _stored_volatility(
+        conn,
+        section,
+        bundle_dir,
+        [TierSuggestion("Person", "timeless", "snapshot", "why")],
+        minutes=1,
+    )
+
+    assert (later.unchanged, later.retired, later.complete) == (1, 0, False)
+    assert sorted(
+        json.loads(item.payload)["type_name"] for item in pq.open_items(conn)
+    ) == ["Person", "Place"]
+
+
+def test_stored_volatility_amends_a_changed_payload_in_place(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _stored_volatility(
+        conn,
+        section,
+        bundle_dir,
+        [TierSuggestion("Person", "timeless", "snapshot", "a")],
+    )
+    (before,) = pq.open_items(conn)
+
+    again = _stored_volatility(
+        conn,
+        section,
+        bundle_dir,
+        [TierSuggestion("Person", "timeless", "pointer", "b")],
+        minutes=1,
+    )
+
+    (after,) = pq.open_items(conn)
+    assert (again.amended, again.inserted, again.retired) == (1, 0, 0)
+    assert after.id == before.id
+    assert json.loads(after.payload)["suggested_tier"] == "pointer"
+
+
+def test_stored_volatility_skips_a_type_already_on_the_suggested_tier(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    result = _stored_volatility(
+        conn,
+        section,
+        bundle_dir,
+        [
+            TierSuggestion("Person", "timeless", "timeless", "no change"),
+            TierSuggestion("Place", "timeless", "pointer", "changes"),
+        ],
+    )
+
+    assert result.inserted == 1
+    assert [json.loads(i.payload)["type_name"] for i in pq.open_items(conn)] == [
+        "Place"
+    ]
+
+
+def test_the_daemons_producers_still_retire_on_a_complete_run(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    """The store-only entry points are additions: the daemon's keep retiring."""
+    _feed_volatility(
+        conn,
+        items=2,
+        version=1,
+        complete=True,
+        commit_section=section,
+        bundle_dir=bundle_dir,
+        minutes=0,
+    )
+
+    after = _feed_volatility(
+        conn,
+        items=1,
+        version=1,
+        complete=True,
+        commit_section=section,
+        bundle_dir=bundle_dir,
+        minutes=1,
+    )
+
+    assert (after.retired, after.complete) == (1, True)
