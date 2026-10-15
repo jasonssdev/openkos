@@ -93,3 +93,7 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0052](0052-event-date-accepts-a-local-time.md) | A Source's event_date may carry a naive local time, and direction compares at the finest precision both sides carry | Accepted | 2026-10-13 |
 | [0053](0053-curation-decisions-are-a-two-phase-application-surface.md) | Curation decisions are an application surface applied through a two-phase preview and commit | Accepted | 2026-10-14 |
 | [0054](0054-python-314-is-the-only-supported-interpreter.md) | Python 3.14 is the only supported interpreter | Proposed | 2026-10-14 |
+| [0055](0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar.md) | The desktop shell is Tauri 2, with the engine as a supervised sidecar | Proposed | 2026-10-14 |
+| [0056](0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md) | The engine ships frozen with PyInstaller one-directory under Contents/Resources, deep ad-hoc signed | Proposed | 2026-10-14 |
+| [0057](0057-the-first-model-runtime-is-a-user-installed-ollama-behind-a-guided-setup.md) | The first model runtime is a user-installed Ollama behind a guided setup | Proposed | 2026-10-14 |
+| [0058](0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md) | The local API is loopback HTTP with a per-launch bearer token and Host/Origin checks | Proposed | 2026-10-14 |
