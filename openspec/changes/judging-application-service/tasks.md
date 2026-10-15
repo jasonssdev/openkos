@@ -335,23 +335,23 @@ Independent mutation: in `amend_open_proposal`, change the open-row guard so a
 Goal: an LLM-free, kind-tagged identity quote and its token; `QuoteStale` type and
 the binding comparison. No run yet.
 
-- [ ] S2b.1 RED: widen the guards first so they fail for the missing module.
+- [x] S2b.1 RED: widen the guards first so they fail for the missing module.
   `tests/unit/cli/test_chat_timeout_wiring.py`: `_EXPECTED_SERVICE_TASKS` values become
   sets, `judging.py` is expected to name `adjudication`. `tests/unit/application/
   test_curate_decisions_boundary.py`: `_TARGET` becomes the tuple
   `("curate_decisions", "judging", "identity_adjudication")` and every spelling check
   runs for each. Observe RED. Widen, never bypass. Satisfies: J19, J1.
-- [ ] S2b.2 RED then GREEN: types in `src/openkos/application/judging.py`:
+- [x] S2b.2 RED then GREEN: types in `src/openkos/application/judging.py`:
   `JudgingKind`, `QuoteBinding`, `WorkItem`, `QuoteToken` (with `digest()` covering
   every field, sorted and NUL-separated), `QuoteStale`, `QuoteNotice`,
   `JudgingQuote`, `JudgingPorts`, `JudgingObserver`. Tests in
   `tests/unit/application/test_judging.py`: digest is stable for equal tokens and
   differs per field; no field holds a time. Satisfies: J3.
-- [ ] S2b.3 RED then GREEN: `QuoteBinding` comparison returning the changed fields
+- [x] S2b.3 RED then GREEN: `QuoteBinding` comparison returning the changed fields
   (`model`, `backend`, `locality`, `confidential`, `rubric`); test one case per field
   and that a changed work set alone is not a binding change. The run returns the
   `QuoteStale` in S2c; here only the comparator and type exist. Satisfies: J8.
-- [ ] S2b.4 RED then GREEN: `quote_judging(root, "identity", ...)`: builds the client
+- [x] S2b.4 RED then GREEN: `quote_judging(root, "identity", ...)`: builds the client
   only to read locality and the model tag, uses `find_candidates_report`, drops
   kept-distinct, partitions with `partition_adjudication_serves` under the effective
   confidential bit, reports `total`, `served`, `to_judge`, `calls`. Tests with a client
@@ -359,15 +359,15 @@ the binding comparison. No run yet.
   two servable gives `total` 5, `served` 2, `to_judge` 3, `calls <= 3`; an edited
   member counts in `to_judge`; a rubric change leaves no group `served`; no
   stdout/stderr output; no ETA field. Satisfies: J2, J1.
-- [ ] S2b.5 Resolve the zero-call group (see Conflicts below, item 1) and cover it:
+- [x] S2b.5 Resolve the zero-call group (see Conflicts below, item 1) and cover it:
   an identity group with no readable member adds nothing to `calls`. Test, then
   GREEN. Satisfies: J2.
-- [ ] S2b.6 RED then GREEN: `include_uncertain`. Default: decided and uncertain are
+- [x] S2b.6 RED then GREEN: `include_uncertain`. Default: decided and uncertain are
   split, uncertain reported as `uncertain` count and in neither `to_judge` nor
   `calls`; with `include_uncertain=True` they move into both, before consent; the
   flag is bound into the token; an edited member returns the group to `to_judge`
   with or without the flag. Satisfies: J4, J3.
-- [ ] S2b.7 RED then GREEN: notices as data: exactly one `model` notice naming the
+- [x] S2b.7 RED then GREEN: notices as data: exactly one `model` notice naming the
   resolved model and backend, `truncated`, `quarantined`, `rubric_rejudge`, and
   `unattended_active` from `.openkos/jobs.db` read-only via
   `jobs.open_jobs_read_only` (open job, or newest job started within
@@ -375,9 +375,9 @@ the binding comparison. No run yet.
   `state="unknown"`; absent file yields no notice and the file is not created). The
   notice changes neither price nor token. Tests with a seeded `jobs.db`. Satisfies:
   J5, J15.
-- [ ] S2b.8 Token stability and age test: two quotes with no change in between bind
+- [x] S2b.8 Token stability and age test: two quotes with no change in between bind
   the same context and work set; the token carries no clock. Satisfies: J3.
-- [ ] S2b.9 Patched-line mutation, guard sanity (add and remove a temporary offending
+- [x] S2b.9 Patched-line mutation, guard sanity (add and remove a temporary offending
   `isatty` line to see the AST guard redden), and the five gates. Satisfies: J1, J18.
 
 Gates: the five gates above.
