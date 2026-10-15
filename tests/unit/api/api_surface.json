@@ -78,6 +78,23 @@
       "kind": "exception",
       "members": {}
     },
+    "BackendHostLocality": {
+      "fields": [
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "is_local"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "display_host"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "BackendModelNotFound": {
       "bases": [
         "BackendError"
@@ -93,6 +110,27 @@
       "fields": {},
       "kind": "exception",
       "members": {}
+    },
+    "ChangedField": {
+      "kind": "alias",
+      "value": "Literal['model', 'backend', 'locality', 'confidential', 'rubric']"
+    },
+    "ChatClient": {
+      "bases": [
+        "LLMBackend",
+        "Protocol"
+      ],
+      "kind": "protocol",
+      "members": {
+        "locality": {
+          "kind": "property",
+          "returns": "BackendHostLocality"
+        }
+      }
+    },
+    "ChatClientFactory": {
+      "kind": "alias",
+      "value": "Callable[[str], ChatClient]"
     },
     "Decision": {
       "fields": [
@@ -353,6 +391,198 @@
       "kind": "dataclass",
       "members": {}
     },
+    "JudgingKind": {
+      "kind": "alias",
+      "value": "Literal['identity', 'relation_type', 'volatility']"
+    },
+    "JudgingObserver": {
+      "bases": [
+        "object"
+      ],
+      "kind": "class",
+      "members": {
+        "chunk_persisted": {
+          "kind": "method",
+          "parameters": [
+            {
+              "annotation": "int",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "persisted"
+            }
+          ],
+          "returns": "None"
+        },
+        "progress": {
+          "kind": "method",
+          "parameters": [
+            {
+              "annotation": "JudgingProgress",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "event"
+            }
+          ],
+          "returns": "None"
+        }
+      }
+    },
+    "JudgingOutcome": {
+      "fields": [
+        {
+          "annotation": "Literal['identity', 'relation_type', 'volatility']",
+          "default": false,
+          "name": "kind"
+        },
+        {
+          "annotation": "Literal['completed', 'stopped', 'failed', 'unpersisted']",
+          "default": false,
+          "name": "status"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "judged"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "persisted"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "unpersisted"
+        },
+        {
+          "annotation": "Literal['workspace_busy', 'store_error'] | None",
+          "default": false,
+          "name": "unpersisted_cause"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "dropped"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "deferred"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "not_in_quote"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "settled_since_quote"
+        },
+        {
+          "annotation": "BackendError | None",
+          "default": true,
+          "name": "failure"
+        },
+        {
+          "annotation": "int | None",
+          "default": true,
+          "name": "failed_at"
+        },
+        {
+          "annotation": "bool",
+          "default": true,
+          "name": "observer_failed"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "JudgingProgress": {
+      "fields": [
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "index"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "total"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "work_key"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "verdict"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "JudgingQuote": {
+      "fields": [
+        {
+          "annotation": "Literal['identity', 'relation_type', 'volatility']",
+          "default": false,
+          "name": "kind"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "total"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "served"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "uncertain"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "to_judge"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls"
+        },
+        {
+          "annotation": "QuoteBinding",
+          "default": false,
+          "name": "binding"
+        },
+        {
+          "annotation": "tuple[QuoteNotice, ...]",
+          "default": false,
+          "name": "notices"
+        },
+        {
+          "annotation": "QuoteToken",
+          "default": false,
+          "name": "token"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "JudgingRefused": {
       "bases": [
         "OpenKosError"
@@ -415,6 +645,78 @@
       "kind": "dataclass",
       "members": {}
     },
+    "KindRefresh": {
+      "fields": [
+        {
+          "annotation": "Literal['identity', 'relation_type', 'volatility']",
+          "default": false,
+          "name": "kind"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "inserted"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "amended"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "unchanged"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "replaced"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "suppressed"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "retired"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "complete"
+        },
+        {
+          "annotation": "int",
+          "default": true,
+          "name": "ambiguous"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "LLMBackend": {
+      "bases": [
+        "Protocol"
+      ],
+      "kind": "protocol",
+      "members": {
+        "chat": {
+          "kind": "method",
+          "parameters": [
+            {
+              "annotation": "Sequence[Message]",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "messages"
+            }
+          ],
+          "returns": "str"
+        }
+      }
+    },
     "MergePlan": {
       "fields": [
         {
@@ -450,6 +752,13 @@
       ],
       "frozen": true,
       "kind": "dataclass",
+      "members": {}
+    },
+    "Message": {
+      "bases": [
+        "dict"
+      ],
+      "kind": "class",
       "members": {}
     },
     "NotApplied": {
@@ -546,6 +855,33 @@
       "kind": "dataclass",
       "members": {}
     },
+    "QueueRefresh": {
+      "fields": [
+        {
+          "annotation": "KindRefresh",
+          "default": false,
+          "name": "identity"
+        },
+        {
+          "annotation": "KindRefresh",
+          "default": false,
+          "name": "relation_type"
+        },
+        {
+          "annotation": "KindRefresh",
+          "default": false,
+          "name": "volatility"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "identity_truncation_notice"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "QueueRefreshRefused": {
       "bases": [
         "OpenKosError"
@@ -561,6 +897,146 @@
       "fields": {},
       "kind": "exception",
       "members": {}
+    },
+    "QuoteBinding": {
+      "fields": [
+        {
+          "annotation": "Literal['identity', 'relation_type', 'volatility']",
+          "default": false,
+          "name": "kind"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "model"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "backend"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "is_local"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "effective_confidential"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "rubric_digest"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {
+        "digest": {
+          "kind": "method",
+          "parameters": [],
+          "returns": "str"
+        }
+      }
+    },
+    "QuoteNotice": {
+      "fields": [
+        {
+          "annotation": "Literal['model', 'truncated', 'quarantined', 'rubric_rejudge', 'unattended_active']",
+          "default": false,
+          "name": "code"
+        },
+        {
+          "annotation": "int | None",
+          "default": true,
+          "name": "count"
+        },
+        {
+          "annotation": "int | None",
+          "default": true,
+          "name": "produced"
+        },
+        {
+          "annotation": "Literal['active', 'unknown'] | None",
+          "default": true,
+          "name": "state"
+        },
+        {
+          "annotation": "str | None",
+          "default": true,
+          "name": "model"
+        },
+        {
+          "annotation": "str | None",
+          "default": true,
+          "name": "backend"
+        },
+        {
+          "annotation": "str | None",
+          "default": true,
+          "name": "text"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "QuoteStale": {
+      "fields": [
+        {
+          "annotation": "Literal['identity', 'relation_type', 'volatility']",
+          "default": false,
+          "name": "kind"
+        },
+        {
+          "annotation": "tuple[Literal['model', 'backend', 'locality', 'confidential', 'rubric'], ...]",
+          "default": false,
+          "name": "changed"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "QuoteToken": {
+      "fields": [
+        {
+          "annotation": "QuoteBinding",
+          "default": false,
+          "name": "binding"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "include_confidential"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "include_uncertain"
+        },
+        {
+          "annotation": "tuple[WorkItem, ...]",
+          "default": false,
+          "name": "work"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {
+        "digest": {
+          "kind": "method",
+          "parameters": [],
+          "returns": "str"
+        }
+      }
     },
     "Refused": {
       "bases": [
@@ -629,6 +1105,22 @@
       "kind": "dataclass",
       "members": {}
     },
+    "RunRefused": {
+      "fields": [
+        {
+          "annotation": "Literal['no_quote_token']",
+          "default": false,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "RunResult": {
+      "kind": "alias",
+      "value": "JudgingOutcome | QuoteStale | RunRefused"
+    },
     "Stale": {
       "fields": [
         {
@@ -645,6 +1137,60 @@
       "frozen": true,
       "kind": "dataclass",
       "members": {}
+    },
+    "StopToken": {
+      "bases": [
+        "object"
+      ],
+      "kind": "class",
+      "members": {
+        "is_set": {
+          "kind": "method",
+          "parameters": [],
+          "returns": "bool"
+        },
+        "set": {
+          "kind": "method",
+          "parameters": [],
+          "returns": "None"
+        },
+        "wait": {
+          "kind": "method",
+          "parameters": [
+            {
+              "annotation": "float",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "timeout"
+            },
+            {
+              "annotation": "Callable[[], float] | None",
+              "default": "None",
+              "kind": "KEYWORD_ONLY",
+              "name": "clock"
+            },
+            {
+              "annotation": "Callable[[float], None] | None",
+              "default": "None",
+              "kind": "KEYWORD_ONLY",
+              "name": "sleep"
+            },
+            {
+              "annotation": "float",
+              "default": "0.1",
+              "kind": "KEYWORD_ONLY",
+              "name": "poll"
+            },
+            {
+              "annotation": "Callable[[], bool] | None",
+              "default": "None",
+              "kind": "KEYWORD_ONLY",
+              "name": "wake"
+            }
+          ],
+          "returns": "bool"
+        }
+      }
     },
     "TierDetail": {
       "fields": [
@@ -701,6 +1247,23 @@
           "annotation": "Literal['pending_evaluation', 'judged_different', 'judged_uncertain', 'cross_type', 'more_than_two_members', 'no_valid_suggestion']",
           "default": false,
           "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "WorkItem": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "work_key"
+        },
+        {
+          "annotation": "tuple[tuple[str, str], ...]",
+          "default": false,
+          "name": "member_digests"
         }
       ],
       "frozen": true,
@@ -953,6 +1516,102 @@
         }
       ],
       "returns": "DecisionPreview | NotApplied | Stale"
+    },
+    "quote_judging": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "Literal['identity', 'relation_type', 'volatility']",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "kind"
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "kind": "KEYWORD_ONLY",
+          "name": "include_confidential"
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "kind": "KEYWORD_ONLY",
+          "name": "include_uncertain"
+        },
+        {
+          "annotation": "Callable[[str], ChatClient] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "chat_client"
+        }
+      ],
+      "returns": "JudgingQuote"
+    },
+    "refresh_decision_queue": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        }
+      ],
+      "returns": "QueueRefresh"
+    },
+    "run_judging": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "QuoteToken | None",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "token"
+        },
+        {
+          "annotation": "StopToken | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "stop"
+        },
+        {
+          "annotation": "JudgingObserver | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "observer"
+        },
+        {
+          "annotation": "Callable[[str], ChatClient] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "chat_client"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        }
+      ],
+      "returns": "JudgingOutcome | QuoteStale | RunRefused"
     },
     "status": {
       "kind": "function",

@@ -542,11 +542,11 @@ the API's own default chat client. Satisfies: A12, A13, A14, A15. Depends on: S5
 and S6a (serialized: branch from `main` after S6a merges, then regenerate the
 snapshot rather than merging the JSON).
 
-- [ ] S6b.1 RED: add `"openkos.api._wiring"` to `_BACKEND_BINDING_MODULES` in
+- [x] S6b.1 RED: add `"openkos.api._wiring"` to `_BACKEND_BINDING_MODULES` in
   `tests/unit/conftest.py` first; a conftest binding test asserts
   `openkos.api._wiring` is patched. Observe RED (the module does not yet bind the
   concrete classes). Satisfies: A13.
-- [ ] S6b.2 RED: `tests/unit/api/test_judging_api.py`: a quote with a chat client whose
+- [x] S6b.2 RED: `tests/unit/api/test_judging_api.py`: a quote with a chat client whose
   `chat` fails the test returns a token; the quote builds a client and makes no
   call; an override factory is used and no default client is built (factories
   patched to fail); a moved model returns `QuoteStale` with no chat call (value,
@@ -555,19 +555,19 @@ snapshot rather than merging the JSON).
   unreachable backend raises an instance of `BackendUnavailable`, `BackendError`
   and `OpenKosError` and is not a `QuoteStale`; a persistently busy workspace ends
   `status="unpersisted"` rather than raising. Satisfies: A12, A13.
-- [ ] S6b.3 RED: `tests/unit/api/test_wiring_parity.py`: for each `(backend, task)`,
+- [x] S6b.3 RED: `tests/unit/api/test_wiring_parity.py`: for each `(backend, task)`,
   the default chat client has the same constructor kwargs as the CLI's
   `_chat_client` (recording factories patched into both `openkos.cli.main` and
   `openkos.api._wiring`). Also assert `BackendFactories(...)` holds class
   references so `test_backend_construction_guard.py` stays unconditional.
   Satisfies: A13.
-- [ ] S6b.4 RED: `tests/unit/api/test_refresh_api.py`: `refresh_decision_queue`
+- [x] S6b.4 RED: `tests/unit/api/test_refresh_api.py`: `refresh_decision_queue`
   through the API resolves no client (factories patched to fail), returns three
   `KindRefresh` entries, relation_type and volatility report `complete` false and
   zero retired, identity reports the truncation notice, `QueueRefreshRefused` for
   an unreadable workspace, `WorkspaceBusyError` for a held lock with
   `wait_seconds=0`. Satisfies: A14.
-- [ ] S6b.5 GREEN: create `src/openkos/api/_judging.py` (`ChatClient`,
+- [x] S6b.5 GREEN: create `src/openkos/api/_judging.py` (`ChatClient`,
   `ChatClientFactory`, `RunResult`, `quote_judging`, `run_judging` mapping the
   override onto `JudgingPorts.chat_client` as `lambda cfg, task: override(task)`)
   and `src/openkos/api/_refresh.py` (`KindRefresh`, `QueueRefresh`,
@@ -575,13 +575,13 @@ snapshot rather than merging the JSON).
   `_backend_factories()` (own globals, call-time) and the default chat-client
   lambda over `application.backends.chat_client`. Update `__init__.py` exports.
   Satisfies: A12, A13, A14.
-- [ ] S6b.6 Regenerate `tests/unit/api/api_surface.json`; the classified diff must be
+- [x] S6b.6 Regenerate `tests/unit/api/api_surface.json`; the classified diff must be
   additive only; `API_VERSION == 1`. Confirm the fresh-interpreter test still
   shows `openkos.cli` absent after these imports. Satisfies: A3, A4, A15.
-- [ ] S6b.7 Mutation: change the default chat-client lambda to ignore the freshly
+- [x] S6b.7 Mutation: change the default chat-client lambda to ignore the freshly
   read `cfg` (use a cached one); the "default follows the configuration" and
   `QuoteStale` tests must redden. Revert, purge, GREEN. Satisfies: A12, A13.
-- [ ] S6b.8 Run the five gates; commit. Satisfies: A12..A15.
+- [x] S6b.8 Run the five gates; commit. Satisfies: A12..A15.
 
 Branch/PR: `feat/python-api-judging-refresh`. Independent mutation: build a client
 inside `refresh_decision_queue`; the no-client test must fail.

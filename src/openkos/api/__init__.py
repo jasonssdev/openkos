@@ -45,6 +45,13 @@ from openkos.api._decisions import (
     list_decisions,
     preview_decision,
 )
+from openkos.api._judging import (
+    ChatClient,
+    ChatClientFactory,
+    RunResult,
+    quote_judging,
+    run_judging,
+)
 from openkos.api._reads import (
     ActivityEntry,
     HealthCounts,
@@ -56,6 +63,7 @@ from openkos.api._reads import (
     pending_report,
     status,
 )
+from openkos.api._refresh import KindRefresh, QueueRefresh, refresh_decision_queue
 from openkos.api._workspace import Workspace, WorkspaceNotFound, WorkspaceUnreadable
 from openkos.application.curate_decisions import (
     Action,
@@ -65,9 +73,24 @@ from openkos.application.curate_decisions import (
     Stale,
     WithheldAction,
 )
-from openkos.application.judging import JudgingRefused
+from openkos.application.judging import (
+    ChangedField,
+    JudgingKind,
+    JudgingObserver,
+    JudgingOutcome,
+    JudgingProgress,
+    JudgingQuote,
+    JudgingRefused,
+    QuoteBinding,
+    QuoteNotice,
+    QuoteStale,
+    QuoteToken,
+    RunRefused,
+    WorkItem,
+)
 from openkos.application.pending_queue_report import QueueUnavailableError
 from openkos.application.queue_refresh import QueueRefreshRefused
+from openkos.application.runtime import StopToken
 from openkos.application.write_gate import (
     DriftDetected,
     Refused,
@@ -78,8 +101,11 @@ from openkos.errors import OpenKosError
 from openkos.llm.base import (
     BackendError,
     BackendGenerationCapped,
+    BackendHostLocality,
     BackendModelNotFound,
     BackendUnavailable,
+    LLMBackend,
+    Message,
 )
 from openkos.lock import WorkspaceBusyError, WorkspaceLockUnavailableError
 
@@ -94,8 +120,12 @@ __all__ = [
     "ApplyOutcome",
     "BackendError",
     "BackendGenerationCapped",
+    "BackendHostLocality",
     "BackendModelNotFound",
     "BackendUnavailable",
+    "ChangedField",
+    "ChatClient",
+    "ChatClientFactory",
     "Decision",
     "DecisionKind",
     "DecisionPreview",
@@ -105,23 +135,40 @@ __all__ = [
     "HealthCounts",
     "IdentityDetail",
     "JobSummary",
+    "JudgingKind",
+    "JudgingObserver",
+    "JudgingOutcome",
+    "JudgingProgress",
+    "JudgingQuote",
     "JudgingRefused",
     "KeepDistinctPlan",
     "KindCounts",
+    "KindRefresh",
+    "LLMBackend",
     "MergePlan",
+    "Message",
     "NotApplied",
     "OpenKosError",
     "PendingReport",
     "PendingRow",
+    "QueueRefresh",
     "QueueRefreshRefused",
     "QueueUnavailableError",
+    "QuoteBinding",
+    "QuoteNotice",
+    "QuoteStale",
+    "QuoteToken",
     "Refused",
     "RelatePlan",
     "RelationDetail",
+    "RunRefused",
+    "RunResult",
     "Stale",
+    "StopToken",
     "TierDetail",
     "TierPlan",
     "WithheldAction",
+    "WorkItem",
     "Workspace",
     "WorkspaceBusyError",
     "WorkspaceLockUnavailableError",
@@ -134,5 +181,8 @@ __all__ = [
     "list_decisions",
     "pending_report",
     "preview_decision",
+    "quote_judging",
+    "refresh_decision_queue",
+    "run_judging",
     "status",
 ]

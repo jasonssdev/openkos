@@ -485,9 +485,9 @@ def test_live_backend_marker_also_lifts_the_offline_ollama_seam() -> None:
 
 def test_conftest_single_helper_patches_both_bindings() -> None:
     """The autouse `_offline_ollama_by_default` fixture patches
-    `OllamaClient`/`OpenAICompatibleClient` in BOTH `openkos.cli.main` and
-    `openkos.mcp.server` through the one shared `_patch_backend_seams`
-    helper, and clears `OPENKOS_OPENAI_API_KEY` so no developer's exported
+    `OllamaClient`/`OpenAICompatibleClient` in `openkos.cli.main`,
+    `openkos.mcp.server` and the Python API's `openkos.api._wiring` through
+    the one shared `_patch_backend_seams` helper, and clears `OPENKOS_OPENAI_API_KEY` so no developer's exported
     key leaks into a test (issue #1057 task 9.25).
 
     The binding-coverage half is proven BEHAVIORALLY: read each seam
@@ -501,10 +501,11 @@ def test_conftest_single_helper_patches_both_bindings() -> None:
     mirroring `test_declared_surfaces_match_the_ones_tested_literally`'s
     rationale for the socket guard (a check driven by the thing it checks
     would disappear together with it)."""
+    from openkos.api import _wiring
     from openkos.cli import main
     from openkos.mcp import server
 
-    for module in (main, server):
+    for module in (main, server, _wiring):
         assert getattr(module, "OllamaClient") is OfflineOllama  # noqa: B009
         assert (
             getattr(module, "OpenAICompatibleClient")  # noqa: B009
