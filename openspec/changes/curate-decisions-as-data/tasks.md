@@ -421,21 +421,34 @@ and `--auto-merge` stay OUTSIDE the table.
 
 ### Phase 1: The table and the pure functions (RED first)
 
-- [ ] S4b.1 RED: `BULK_ELIGIBILITY` pinned test: `identity` is `NEVER`; `relation_type` is `SYMMETRIC_ONLY`; `volatility` is `ALWAYS`; `contradiction`, `revision`, `watch_refusal` are `NEVER`; the mapping is read-only (`MappingProxyType`). Must fail.
-- [ ] S4b.2 RED: `spend_consent(*, auto, interactive)`, `write_walk_consent(*, writes, interactive, accepted, unattended_identity)`, `item_consent(kind, *, accepted, asymmetric, interactive)`: a table test over every combination whose expected values are the OUTCOMES RECORDED BY THE S0b MATRIX (the pure-function twin). `interactive` is a thunk and a test asserts it is NOT called on branches that do not read the TTY today (for example `gate` under `--auto`). `item_consent("identity", ...)` returns `"ask"` for every input; an asymmetric relation never returns `"bulk"`. Must fail.
-- [ ] S4b.3 GREEN: add `BulkEligibility`, `BULK_ELIGIBILITY`, `spend_consent`, `write_walk_consent` and `item_consent` to `src/openkos/application/curate_decisions.py`. Pure: the thunk is the only I/O. S4b.1-S4b.2 pass.
+- [x] S4b.1 RED: `BULK_ELIGIBILITY` pinned test: `identity` is `NEVER`; `relation_type` is `SYMMETRIC_ONLY`; `volatility` is `ALWAYS`; `contradiction`, `revision`, `watch_refusal` are `NEVER`; the mapping is read-only (`MappingProxyType`). Must fail.
+- [x] S4b.2 RED: `spend_consent(*, auto, interactive)`, `write_walk_consent(*, writes, interactive, accepted, unattended_identity)`, `item_consent(kind, *, accepted, asymmetric, interactive)`: a table test over every combination whose expected values are the OUTCOMES RECORDED BY THE S0b MATRIX (the pure-function twin). `interactive` is a thunk and a test asserts it is NOT called on branches that do not read the TTY today (for example `gate` under `--auto`). `item_consent("identity", ...)` returns `"ask"` for every input; an asymmetric relation never returns `"bulk"`. Must fail.
+- [x] S4b.3 GREEN: add `BulkEligibility`, `BULK_ELIGIBILITY`, `spend_consent`, `write_walk_consent` and `item_consent` to `src/openkos/application/curate_decisions.py`. Pure: the thunk is the only I/O. S4b.1-S4b.2 pass.
 
 ### Phase 2: Wire the CLI
 
-- [ ] S4b.4 Edit `src/openkos/cli/curate.py`: `gate()` prints its disclosures unchanged, then branches on `spend_consent`; `run_curate`'s write refusal branches on `write_walk_consent`; `_confirm_item` branches on `item_consent`. The adapter supplies `interactive=lambda: sys.stdin.isatty()`.
-- [ ] S4b.5 RED then GREEN: a pinned test that `Stage.auto_acceptable` equals `BULK_ELIGIBILITY[...] is not NEVER` for every stage; `Stage.auto_acceptable` stays a field (tests construct `Stage`); `_STAGES` derives it from the table for the three write stages. Prove RED first by flipping one table entry and observing the test fail.
-- [ ] S4b.6 Run the S0b consent matrix and the S0 goldens unchanged; zero edits to the recorded matrix expectations.
+- [x] S4b.4 Edit `src/openkos/cli/curate.py`: `gate()` prints its disclosures unchanged, then branches on `spend_consent`; `run_curate`'s write refusal branches on `write_walk_consent`; `_confirm_item` branches on `item_consent`. The adapter supplies `interactive=lambda: sys.stdin.isatty()`.
+- [x] S4b.5 RED then GREEN: a pinned test that `Stage.auto_acceptable` equals `BULK_ELIGIBILITY[...] is not NEVER` for every stage; `Stage.auto_acceptable` stays a field (tests construct `Stage`); `_STAGES` derives it from the table for the three write stages. Prove RED first by flipping one table entry and observing the test fail.
+- [x] S4b.6 Run the S0b consent matrix and the S0 goldens unchanged; zero edits to the recorded matrix expectations.
 
 ### Phase 3: Prove and gate
 
-- [ ] S4b.7 Mutation proofs (revert, purge, re-run): (a) set `BULK_ELIGIBILITY["identity"]` to `ALWAYS`; S4b.1, the matrix and the pure-function twin all fail. (b) Make `item_consent("identity", ...)` return `"bulk"` when `accepted`; the S4b.2 test AND the matrix identity row fail (the second, data-level barrier). (c) Read `interactive()` unconditionally in `spend_consent`; the thunk-not-called assertion fails.
-- [ ] S4b.8 Confirm accept-recommended and `--auto-merge` do not reach the table: `rg -n "BULK_ELIGIBILITY|item_consent" src/openkos/cli/curate.py` shows no use inside `_offer_accept_recommended` or the auto-merge call path.
-- [ ] S4b.9 Gate: the five commands, unpiped. `git add` new files. Commit: `refactor(cli): evaluate curate's consent policy from data`.
+- [x] S4b.7 Mutation proofs (revert, purge, re-run): (a) set `BULK_ELIGIBILITY["identity"]` to `ALWAYS`; S4b.1, the matrix and the pure-function twin all fail. (b) Make `item_consent("identity", ...)` return `"bulk"` when `accepted`; the S4b.2 test AND the matrix identity row fail (the second, data-level barrier). (c) Read `interactive()` unconditionally in `spend_consent`; the thunk-not-called assertion fails.
+- [x] S4b.8 Confirm accept-recommended and `--auto-merge` do not reach the table: `rg -n "BULK_ELIGIBILITY|item_consent" src/openkos/cli/curate.py` shows no use inside `_offer_accept_recommended` or the auto-merge call path.
+- [x] S4b.9 Gate: the five commands, unpiped. `git add` new files. Commit: `refactor(cli): evaluate curate's consent policy from data`.
+
+S4b deviation notes: (1) `item_consent`'s `asymmetric` flag exempts an item under
+every non-`NEVER` row, not only `SYMMETRIC_ONLY`: the S0b matrix drives a Metadata
+item with `acceptable_in_bulk=False` (#508) and requires it to ask, so the table
+decides which KINDS may be accepted in bulk and the flag which ITEMS still ask.
+(2) Mutation (a) (`identity` -> `ALWAYS`) fails the table pin, the matrix identity
+rows and the `Stage` equality, but not the pure-function twin, by design:
+`item_consent` refuses `identity` by name and so does not read the table for it
+(that is the second barrier, caught by mutation (b)). (3) `_STAGES` derives
+`auto_acceptable` from the table for Identity too (all three write stages). (4) A
+new adapter-level test forces `accepted_stages={"Identity"}` and asserts the prompt
+is still reached. (5) `sys.stdin.isatty()` reads in `cli/curate.py`: 6 before, 4
+after (the three consent sites collapse into the single `_interactive` thunk).
 
 ---
 

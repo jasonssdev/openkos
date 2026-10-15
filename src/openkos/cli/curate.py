@@ -47,11 +47,12 @@ relocation block states why the aliases were removed).
 
 import contextlib
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from types import MappingProxyType
+from typing import Final, Literal, cast
 
 import typer
 
@@ -718,6 +719,23 @@ def _all_present(layout: config.WorkspaceLayout, concept_ids: Sequence[str]) -> 
     )
 
 
+# The decision kind each write stage settles, which is the key into the
+# consent table (`curate_decisions.BULK_ELIGIBILITY`).
+_STAGE_KIND: Final[Mapping[str, curate_decisions.DecisionKind]] = MappingProxyType(
+    {
+        "Identity": "identity",
+        "Structure": "relation_type",
+        "Metadata": "volatility",
+    }
+)
+
+
+def _interactive() -> bool:
+    """The terminal thunk the pure consent functions take: read at call time
+    so a function that does not need the terminal never reads it."""
+    return sys.stdin.isatty()
+
+
 def _confirm_item(
     ctx: CurateContext,
     stage_name: str,
@@ -747,11 +765,16 @@ def _confirm_item(
     directly, which keeps the merge walk structurally incapable of being
     accepted in bulk, so a future edit to the acceptance rules cannot reach
     it by accident."""
-    if _accepts(ctx, stage_name):
-        if acceptable_in_bulk:
-            return "yes"
-        if not sys.stdin.isatty():
-            return "no"
+    consent = curate_decisions.item_consent(
+        _STAGE_KIND[stage_name],
+        accepted=_accepts(ctx, stage_name),
+        asymmetric=not acceptable_in_bulk,
+        interactive=_interactive,
+    )
+    if consent == "bulk":
+        return "yes"
+    if consent == "withheld":
+        return "no"
     answer = _confirm_choice(
         f"{prompt_text} [y/N/s/a]" if acceptable_in_bulk else f"{prompt_text} [y/N/s]",
         offer_all=acceptable_in_bulk,
@@ -843,9 +866,10 @@ def gate(stage: Stage, probe: StageProbe, ctx: CurateContext) -> bool:
     accept = accept_notice(stage, probe, ctx)
     if accept is not None:
         typer.echo(accept, err=True)
-    if ctx.auto:
+    consent = curate_decisions.spend_consent(auto=ctx.auto, interactive=_interactive)
+    if consent == "granted":
         return True
-    if sys.stdin.isatty():
+    if consent == "ask":
         return typer.confirm("Proceed?")
     typer.echo(
         f"openkos curate: {stage.name}: refusing without confirmation -- "
@@ -2943,6 +2967,14 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     return StageOutcome(status=status, applied=len(displayed), notice=notice)
 
 
+def _bulk_eligible(kind: curate_decisions.DecisionKind) -> bool:
+    """Whether the consent table lets `--accept` settle `kind` in bulk."""
+    return (
+        curate_decisions.BULK_ELIGIBILITY[kind]
+        is not curate_decisions.BulkEligibility.NEVER
+    )
+
+
 _STAGES: tuple[Stage, ...] = (
     Stage(
         name="Preconditions",
@@ -2963,6 +2995,7 @@ _STAGES: tuple[Stage, ...] = (
         writes=True,
         unattended_hint=_IDENTITY_UNATTENDED_HINT,
         live=True,
+        auto_acceptable=_bulk_eligible("identity"),
         task="adjudication",
     ),
     Stage(
@@ -2974,7 +3007,7 @@ _STAGES: tuple[Stage, ...] = (
         writes=True,
         unattended_hint="openkos relate <source> <type> <target>",
         live=True,
-        auto_acceptable=True,
+        auto_acceptable=_bulk_eligible("relation_type"),
         accept_caveat=(
             "asymmetric types are still asked per item, since their "
             "direction is model-suggested and unverified"
@@ -2991,7 +3024,7 @@ _STAGES: tuple[Stage, ...] = (
         writes=True,
         unattended_hint="openkos set-volatility <concept> <tier>",
         live=True,
-        auto_acceptable=True,
+        auto_acceptable=_bulk_eligible("volatility"),
         task="volatility_typing",
     ),
     Stage(
@@ -3109,10 +3142,13 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             continue
 
         if (
-            stage.writes
-            and not sys.stdin.isatty()
-            and not _accepts(ctx, stage.name)
-            and not _unattended_identity(ctx, stage)
+            curate_decisions.write_walk_consent(
+                writes=stage.writes,
+                interactive=_interactive,
+                accepted=_accepts(ctx, stage.name),
+                unattended_identity=_unattended_identity(ctx, stage),
+            )
+            == "refused"
         ):
             # D3 rule 2: `--auto` consents to model spend, never to a
             # per-item write -- reached only when `gate` accepted via

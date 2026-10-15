@@ -1390,3 +1390,88 @@ def apply_decision(
     return commit_keep_distinct_decision(
         root, layout, built, ports=ports, observer=observer, expected=version
     )
+
+
+# -- consent as data ------------------------------------------------------- #
+
+
+class BulkEligibility(StrEnum):
+    """Whether `--accept` (or `review: false`) may settle a kind's decisions
+    without asking per item."""
+
+    NEVER = "never"
+    SYMMETRIC_ONLY = "symmetric_only"
+    ALWAYS = "always"
+
+
+BULK_ELIGIBILITY: Mapping[DecisionKind, BulkEligibility] = MappingProxyType(
+    {
+        # An identity merge is destructive and judged by a model: it is asked
+        # one group at a time, never accepted in bulk. This row is the
+        # data-level barrier; `item_consent` also refuses it by name.
+        "identity": BulkEligibility.NEVER,
+        # Asymmetric types ask per item (#624); `related_to` is bulk (#1222).
+        "relation_type": BulkEligibility.SYMMETRIC_ONLY,
+        "volatility": BulkEligibility.ALWAYS,
+        "contradiction": BulkEligibility.NEVER,
+        "revision": BulkEligibility.NEVER,
+        "watch_refusal": BulkEligibility.NEVER,
+    }
+)
+
+
+def spend_consent(
+    *, auto: bool, interactive: Callable[[], bool]
+) -> Literal["granted", "ask", "refused"]:
+    """The model-spend decision of one LLM-costing stage. `--auto` consents
+    outright, without consulting the terminal; otherwise a terminal can be
+    asked and a pipe has no channel to ask on. `interactive` is a thunk so the
+    terminal is read only on the branch that needs it."""
+    if auto:
+        return "granted"
+    return "ask" if interactive() else "refused"
+
+
+def write_walk_consent(
+    *,
+    writes: bool,
+    interactive: Callable[[], bool],
+    accepted: bool,
+    unattended_identity: bool,
+) -> Literal["walk", "refused"]:
+    """Whether a stage may begin its per-item write walk once its spend was
+    granted. `--auto` consents to spend, never to a per-item write, so a
+    writing stage on a pipe is refused unless naming it in `--accept` (or the
+    unattended identity pass) supplied the missing consent. Only a writing
+    stage reads the terminal."""
+    if not writes:
+        return "walk"
+    if interactive() or accepted or unattended_identity:
+        return "walk"
+    return "refused"
+
+
+def item_consent(
+    kind: DecisionKind,
+    *,
+    accepted: bool,
+    asymmetric: bool,
+    interactive: Callable[[], bool],
+) -> Literal["bulk", "ask", "withheld"]:
+    """How one item's write consent is obtained: `bulk` (taken from an
+    accepted stage), `ask` (a per-item prompt) or `withheld` (an accepted
+    stage's exempt item on a pipe, where there is no channel to ask on).
+
+    `asymmetric` marks an item exempt from bulk acceptance: an asymmetric
+    relation whose direction is unverified (#624), or any suggestion that
+    asserts nothing specific (#508). It exempts under every non-`NEVER` row, so
+    the table decides which KINDS may be accepted in bulk and the flag which
+    ITEMS of an accepted kind still ask.
+
+    Identity is `ask` for every input, whatever the table or the flags say. The
+    terminal is read only for an accepted-but-exempt item."""
+    if kind == "identity" or not accepted:
+        return "ask"
+    if BULK_ELIGIBILITY[kind] is not BulkEligibility.NEVER and not asymmetric:
+        return "bulk"
+    return "ask" if interactive() else "withheld"
