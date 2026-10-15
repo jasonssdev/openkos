@@ -398,19 +398,19 @@ rename (the planned adapter becomes "the local HTTP API", built on `openkos.api`
 Record the window in the S5 PR body; do not edit `docs/architecture.md` in S5
 (shape docs change once, in S7).
 
-- [ ] S5.1 ADR-0060: copy `docs/adr/template.md` to
+- [x] S5.1 ADR-0060: copy `docs/adr/template.md` to
   `docs/adr/0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md`;
   transcribe Context, Decision, Consequences and Alternatives from the "ADR-0060
   (content to transcribe)" section of `design.md` (read-only), status **Proposed**,
   with `description`, date and timestamp; add the row to `docs/adr/README.md`.
   Written now, while the forces are fresh. Satisfies: ADR gate, A1..A15.
-- [ ] S5.2 RED: `tests/unit/test_error_root.py`: for each class in design Decision 8
+- [x] S5.2 RED: `tests/unit/test_error_root.py`: for each class in design Decision 8
   (`BackendError`, `WriteRefused`, `JudgingRefused`, `SuggestionRefused`,
   `QueueUnavailableError`, `WorkspaceBusyError`, `WorkspaceLockUnavailableError`,
   `ListUsageError`, `ConceptNotFound`, `QueueRefreshRefused`), the previous MRO is
   a subsequence of the new MRO and `issubclass(cls, OpenKosError)`. Observe RED.
   Satisfies: A8.
-- [ ] S5.3 GREEN: add the `OpenKosError` base (existing bases kept, same relative
+- [x] S5.3 GREEN: add the `OpenKosError` base (existing bases kept, same relative
   order) in `src/openkos/llm/base.py`, `src/openkos/lock.py`,
   `src/openkos/application/write_gate.py`, `src/openkos/application/judging.py`,
   `src/openkos/application/suggest_relations_service.py`,
@@ -419,37 +419,37 @@ Record the window in the S5 PR body; do not edit `docs/architecture.md` in S5
   `src/openkos/application/concept_read.py`. `lock.py` and `llm/base.py` import only
   the leaf `openkos.errors`; confirm the llm guard (bans only `config` imports)
   and the lock leaf rule still pass. Satisfies: A8.
-- [ ] S5.4 RED then GREEN: `curate_decisions` public readers. Tests in
+- [x] S5.4 RED then GREEN: `curate_decisions` public readers. Tests in
   `tests/unit/application/test_curate_decisions.py` for `relation_fields`
   (promoted from `_relation_fields`), `identity_detail_fields` and
   `tier_detail_fields` (valid payload yields the tuple; unparsable yields `None`).
   Then implement in `src/openkos/application/curate_decisions.py`; keep
   `_relation_fields` callers working. Satisfies: A11.
-- [ ] S5.5 RED: `tests/unit/api/test_workspace.py`: `Workspace.open` on a root; on a
+- [x] S5.5 RED: `tests/unit/api/test_workspace.py`: `Workspace.open` on a root; on a
   non-workspace (`WorkspaceNotFound` naming the path, nothing created); on a nested
   directory (`WorkspaceNotFound`, no upward search); on an unreadable or invalid
   `openkos.yaml` (`WorkspaceUnreadable`); a symlinked workspace path is refused
   (path taken as given, `absolute()` not `resolve()`); `Workspace(root=p)` equals
   `Workspace.open(p)`; attribute assignment raises; a model change in
   `openkos.yaml` is observed through a held handle. Satisfies: A6, A7.
-- [ ] S5.6 GREEN: create `src/openkos/api/_workspace.py` (`Workspace`,
+- [x] S5.6 GREEN: create `src/openkos/api/_workspace.py` (`Workspace`,
   `WorkspaceNotFound`, `WorkspaceUnreadable`, `_layout` set in `__post_init__` via
   `object.__setattr__`, config validated once and not cached for services) and
   `src/openkos/api/__init__.py` (docstring per the design's ordered statements,
   `API_VERSION: Final = 1`, sorted `__all__`, re-exports). Satisfies: A1, A2, A6,
   A7, A9.
-- [ ] S5.7 RED then GREEN: `tests/unit/api/test_reads.py` and
+- [x] S5.7 RED then GREEN: `tests/unit/api/test_reads.py` and
   `src/openkos/api/_reads.py`: `status` and `pending_report` under a held lock
   return, build no client (factories patched to fail), write nothing; an absent
   queue reports `queue_computed=False`; an unreadable queue raises
   `QueueUnavailableError`; result types hold counts, strings and API values only
   (no lint findings, surveys, queue rows or job records). Satisfies: A10.
-- [ ] S5.8 RED then GREEN: `tests/unit/api/test_list_decisions.py` and
+- [x] S5.8 RED then GREEN: `tests/unit/api/test_list_decisions.py` and
   `src/openkos/api/_decisions.py` (list only): `list_decisions` returns typed
   `IdentityDetail`/`RelationDetail`/`TierDetail`, `detail=None` for a malformed
   payload (still listed), no confidence, no payload mapping, no lock, no client.
   Satisfies: A11.
-- [ ] S5.9 RED then GREEN: snapshot tooling. `tests/unit/api/surface.py` (generator
+- [x] S5.9 RED then GREEN: snapshot tooling. `tests/unit/api/surface.py` (generator
   with `--write`, evaluated annotations via `annotationlib.get_annotations`,
   canonical rendering, classified diff print), `tests/unit/api/test_api_surface.py`
   (completeness of `__all__`; leak check for any rendered `openkos.*`/`sqlite3.*`
@@ -459,7 +459,7 @@ Record the window in the S5 PR body; do not edit `docs/architecture.md` in S5
   skipping that half with a message when git is unavailable). Generate
   `tests/unit/api/api_surface.json` (first snapshot; JSON excluded from line
   estimate) and `git add` it. Satisfies: A3, A4.
-- [ ] S5.10 RED then GREEN: `tests/unit/api/test_api_guards.py`: import allowlist
+- [x] S5.10 RED then GREEN: `tests/unit/api/test_api_guards.py`: import allowlist
   (stdlib, `openkos.api.*`, `openkos.errors`, `openkos.config`, `openkos.lock`,
   `openkos.application.*`, `openkos.llm.base`; `_wiring.py` additionally the two
   backend client modules and `openkos.vcs.autocommit`), with named assertions for
@@ -467,19 +467,19 @@ Record the window in the S5 PR body; do not edit `docs/architecture.md` in S5
   `openkos.state`, `sqlite3`; nothing outside `api/` imports `openkos.api`; a fresh
   `subprocess.run([sys.executable, "-I", "-c", ...])` shows `openkos.cli` and `typer`
   absent from `sys.modules`. Satisfies: A5, A15.
-- [ ] S5.11 Generalize the owner-local boundary in
+- [x] S5.11 Generalize the owner-local boundary in
   `tests/unit/application/test_curate_decisions_boundary.py`: `_ADAPTERS = ("mcp",
   "api")` becomes a scan of every top-level package under `src/openkos/` except
   `application`, `cli` and `api`; keep the spelling matrix and tolerated-missing
   tests, retargeted at a temporary package named `localapi`. Confirm `mcp` is
   still barred. This is the change that makes the `docs/architecture.md:229`
   window real (see the note above). Satisfies: A5.
-- [ ] S5.12 Mutation proofs (each reverted byte-exactly, `__pycache__` purged):
+- [x] S5.12 Mutation proofs (each reverted byte-exactly, `__pycache__` purged):
   add a public name without `__all__` (completeness reddens); remove a dataclass
   field and regenerate without a bump (classifier reddens); annotate a public
   return with a `state.*` type (leak check reddens); add `import typer` to an API
   module (allowlist reddens). Satisfies: A1, A3, A4, A5.
-- [ ] S5.13 Run the five gates; commit (several work-unit commits: `docs(docs):`
+- [x] S5.13 Run the five gates; commit (several work-unit commits: `docs(docs):`
   for the ADR, `feat(api):` for the facade). Satisfies: A1..A11.
 
 Branch/PR: `feat/python-api-skeleton`. PR body states the S5 size exception, the
