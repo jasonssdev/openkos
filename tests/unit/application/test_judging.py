@@ -1447,3 +1447,75 @@ def test_a_busy_workspace_wins_over_a_backend_failure_in_the_same_chunk(
     assert outcome.status == "unpersisted"
     assert outcome.failure is capped
     assert (outcome.failed_at, outcome.unpersisted, outcome.deferred) == (2, 1, 3)
+
+
+# -- the run: locks, the daemon and silence ----------------------------------- #
+
+
+def test_the_workspace_lock_is_free_during_every_model_call(fx: _Fixture) -> None:
+    """Another process asking for the lock in the middle of a call is not
+    refused: the run holds it only for a chunk's persist."""
+    from openkos.application import lock_wait
+
+    free_during_call: list[bool] = []
+
+    def _probe(n: int) -> None:
+        try:
+            with lock.workspace_lock(fx.root):
+                free_during_call.append(True)
+        except lock.WorkspaceBusyError:
+            free_during_call.append(False)
+
+    outcome = _outcome(
+        _run(
+            fx,
+            fx.quote().token,
+            judge=_Judge(on_chat=_probe),
+            commit_section=lock_wait.locked_commit_section(fx.root, wait_seconds=0),
+        )
+    )
+
+    assert free_during_call == [True] * 5
+    assert outcome.persisted == 5
+
+
+def test_no_section_is_ever_open_while_a_chat_call_runs(fx: _Fixture) -> None:
+    log: list[str] = []
+    sections = _Sections(log)
+    open_during_call: list[bool] = []
+
+    def _record(n: int) -> None:
+        open_during_call.append(log.count("enter") != log.count("exit"))
+
+    _run(
+        fx,
+        fx.quote().token,
+        judge=_Judge(log=log, on_chat=_record),
+        commit_section=sections,
+        chunk_size=2,
+    )
+
+    assert open_during_call == [False] * 5
+
+
+def test_an_active_engine_does_not_block_a_run_and_its_records_are_untouched(
+    fx: _Fixture,
+) -> None:
+    _seed_job(fx, started=_NOW - timedelta(days=30))
+    before = fx.layout.jobs_db_path.read_bytes()
+    token = fx.quote().token
+
+    outcome = _outcome(_run(fx, token, judge=_Judge()))
+
+    assert (outcome.status, outcome.persisted) == ("completed", 5)
+    assert [n.code for n in fx.quote().notices].count("unattended_active") == 1
+    assert fx.layout.jobs_db_path.read_bytes() == before
+
+
+def test_a_run_writes_nothing_to_a_stream(
+    fx: _Fixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(fx, fx.quote().token, judge=_Judge(), observer=_Recorder())
+
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
