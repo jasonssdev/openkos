@@ -1,23 +1,46 @@
-"""Judging as an application service: the quote half (the
-`judging-application-service` change, S2b; ADR-0059).
+"""Judging as an application service (the `judging-application-service` change,
+S2b and S2c; ADR-0059).
 
 Judging is the model-backed step that turns an unjudged item into one a human
 can decide. The surface is a quote, consent, run protocol: a caller asks for an
 LLM-free `JudgingQuote`, the human consents to it by handing back its
-`QuoteToken`, and a run (S2c) judges at most what was quoted. This module holds
-the first half: the binding, the token, the identity quote and its notices. It
-has no run yet.
+`QuoteToken`, and `run_judging` judges at most what was quoted. Identity is the
+kind covered so far.
 
 The surface is plain data. It never prompts, prints, reads a terminal or raises
-`typer.Exit`; everything a client renders reaches it as returned data. It is
-OWNER-LOCAL (a quote carries work keys and the serve helpers read stored
-rationales), so no disclosing adapter may import it.
+`typer.Exit`; everything a client renders reaches it as returned data or as
+observer events. It is OWNER-LOCAL (a quote carries work keys and the serve
+helpers read stored rationales), so no disclosing adapter may import it. It
+ends at persisted verdicts and amended queue rows: it never merges.
 
 A quote makes no model call and costs nothing. The one question that looks like
 it needs the model -- which groups would make NO call, because no member is
 readable or every member is confidential -- is answered by the leaf judge
 itself, run over a recording stand-in that is handed no model: the rule lives
 in `resolution/adjudication.py` alone and cannot drift from this module.
+
+A run re-derives the binding and returns `QuoteStale` when a field of it moved;
+a moved work set is never a refusal, it is the ceiling's job (a quoted item no
+longer needed is `settled_since_quote`, new work is `not_in_quote`, and neither
+is judged). It judges one group per chunk and persists each chunk, in its own
+commit section and with no lock held across a model call, before the next one
+starts. The ceiling client refuses the call that would pass the quote's `calls`.
+
+Stopping. A `StopToken` is observed between chunks and nothing preempts a
+model call (ADR-0021), so a stop takes effect no later than the end of the chunk
+in flight: the worst-case latency is that chunk's model calls times the
+configured per-call `chat_timeout` (600 s by default) -- one call for an
+identity chunk of one group -- plus one persist, whose wait is bounded by the
+commit section the caller supplies. A stopped run reports what it did not reach
+as `deferred`; what was persisted stays.
+
+A busy workspace is retried (`PERSIST_ATTEMPTS`, `PERSIST_BACKOFF_SECONDS`;
+both UNMEASURED placeholders, see the constants) and then reported as
+`unpersisted`, after which nothing further is spent. `BackendUnavailable` and
+`BackendModelNotFound` propagate unchanged once the completed chunks are
+persisted; the counts of those chunks reach a caller that catches them through
+the observer's `chunk_persisted` events. Any other backend error ends the run
+as a returned `failure`.
 """
 
 import contextlib
