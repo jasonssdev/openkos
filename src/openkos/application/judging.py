@@ -1,41 +1,71 @@
-"""Judging as an application service: the quote half (the
-`judging-application-service` change, S2b; ADR-0059).
+"""Judging as an application service (the `judging-application-service` change,
+S2b and S2c; ADR-0059).
 
 Judging is the model-backed step that turns an unjudged item into one a human
 can decide. The surface is a quote, consent, run protocol: a caller asks for an
 LLM-free `JudgingQuote`, the human consents to it by handing back its
-`QuoteToken`, and a run (S2c) judges at most what was quoted. This module holds
-the first half: the binding, the token, the identity quote and its notices. It
-has no run yet.
+`QuoteToken`, and `run_judging` judges at most what was quoted. Identity is the
+kind covered so far.
 
 The surface is plain data. It never prompts, prints, reads a terminal or raises
-`typer.Exit`; everything a client renders reaches it as returned data. It is
-OWNER-LOCAL (a quote carries work keys and the serve helpers read stored
-rationales), so no disclosing adapter may import it.
+`typer.Exit`; everything a client renders reaches it as returned data or as
+observer events. It is OWNER-LOCAL (a quote carries work keys and the serve
+helpers read stored rationales), so no disclosing adapter may import it. It
+ends at persisted verdicts and amended queue rows: it never merges.
 
 A quote makes no model call and costs nothing. The one question that looks like
 it needs the model -- which groups would make NO call, because no member is
 readable or every member is confidential -- is answered by the leaf judge
 itself, run over a recording stand-in that is handed no model: the rule lives
 in `resolution/adjudication.py` alone and cannot drift from this module.
+
+A run re-derives the binding and returns `QuoteStale` when a field of it moved;
+a moved work set is never a refusal, it is the ceiling's job (a quoted item no
+longer needed is `settled_since_quote`, new work is `not_in_quote`, and neither
+is judged). It judges one group per chunk and persists each chunk, in its own
+commit section and with no lock held across a model call, before the next one
+starts. The ceiling client refuses the call that would pass the quote's `calls`.
+
+Stopping. A `StopToken` is observed between chunks and nothing preempts a
+model call (ADR-0021), so a stop takes effect no later than the end of the chunk
+in flight: the worst-case latency is that chunk's model calls times the
+configured per-call `chat_timeout` (600 s by default) -- one call for an
+identity chunk of one group -- plus one persist, whose wait is bounded by the
+commit section the caller supplies. A stopped run reports what it did not reach
+as `deferred`; what was persisted stays.
+
+A busy workspace is retried (`PERSIST_ATTEMPTS`, `PERSIST_BACKOFF_SECONDS`;
+both UNMEASURED placeholders, see the constants) and then reported as
+`unpersisted`, after which nothing further is spent. `BackendUnavailable` and
+`BackendModelNotFound` propagate unchanged once the completed chunks are
+persisted; the counts of those chunks reach a caller that catches them through
+the observer's `chunk_persisted` events. Any other backend error ends the run
+as a returned `failure`.
 """
 
 import contextlib
 import hashlib
 import sqlite3
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal, cast
+from typing import Final, Literal, cast
 
 from openkos import config
 from openkos.application import backends as application_backends
 from openkos.application import identity_adjudication
 from openkos.application import pending as application_pending
 from openkos.application.lock_wait import CommitSection
-from openkos.llm.base import LLMBackend, Message
+from openkos.application.runtime import StopToken
+from openkos.llm.base import (
+    BackendError,
+    BackendModelNotFound,
+    BackendUnavailable,
+    LLMBackend,
+    Message,
+)
 from openkos.resolution import adjudication as leaf
 from openkos.resolution.candidates import (
     CandidateGroup,
@@ -352,6 +382,117 @@ def _work_item(
     )
 
 
+@dataclass(frozen=True)
+class _Context:
+    """What a quote or a run resolves from the configuration before it looks at
+    any work: the client (built, never called), its binding and the two
+    confidential bits."""
+
+    client: LLMBackend
+    binding: QuoteBinding
+    local_exemption: bool
+
+
+def _open_workspace(
+    root: Path, verb: str
+) -> tuple[config.WorkspaceLayout, config.Config]:
+    reason = config.require_workspace(root)
+    if reason is not None:
+        raise JudgingRefused(f"openkos judging: refusing to {verb} -- {reason}.")
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        raise JudgingRefused(
+            f"openkos judging: failed while reading the workspace -- {exc}."
+        ) from exc
+    return config.WorkspaceLayout(root), cfg
+
+
+def _context(
+    cfg: config.Config,
+    kind: JudgingKind,
+    *,
+    include_confidential: bool,
+    ports: JudgingPorts,
+) -> _Context:
+    """Build the client once (construction only, no call) and bind what consent
+    covers. Both the quote and the run derive the binding here, so what a token
+    was given for and what a run compares it with can never be computed two
+    ways."""
+    # The literal task name, at the call: `test_chat_timeout_wiring` reads it
+    # off the AST so a refactor cannot silently drop the `models:` override.
+    client = ports.chat_client(cfg, "adjudication")
+    local_exemption = ports.resolve_local_exemption(
+        cast(application_backends.HasLocality, client), cfg
+    )
+    binding = QuoteBinding(
+        kind=kind,
+        model=config.resolve_task_model(cfg, "adjudication"),
+        backend=cfg.backend,
+        is_local=cast(application_backends.HasLocality, client).locality.is_local,
+        effective_confidential=include_confidential or local_exemption,
+        rubric_digest=leaf.rubric_digest(),
+    )
+    return _Context(client, binding, local_exemption)
+
+
+@dataclass(frozen=True)
+class _Partition:
+    groups: list[CandidateGroup]
+    """The candidate groups, kept-distinct ones already dropped."""
+
+    serves: identity_adjudication.AdjudicationServes
+    decided: set[str]
+    uncertain: set[str]
+    fresh: set[str]
+
+    def needed(self, *, include_uncertain: bool) -> list[CandidateGroup]:
+        """The groups a run would judge, in candidate order."""
+        wanted = self.fresh | self.uncertain if include_uncertain else self.fresh
+        return [
+            group
+            for group in self.groups
+            if adjudications_store.group_key_for(group.member_ids) in wanted
+        ]
+
+
+def _partition_identity(
+    layout: config.WorkspaceLayout,
+    candidates: Sequence[CandidateGroup],
+    *,
+    effective: bool,
+) -> _Partition:
+    """The LLM-free split a quote and a run both make: drop what a human ruled
+    distinct, then separate verdicts served as decided, served as uncertain and
+    still to judge."""
+    groups = [
+        group
+        for group in candidates
+        if not application_pending.is_group_kept_distinct(layout, group.member_ids)
+    ]
+    serves = identity_adjudication.partition_adjudication_serves(
+        layout,
+        groups,
+        include_confidential=effective,
+        on_warning=None,
+        surface="judging",
+    )
+    decided = {
+        key
+        for key, verdict in serves.served.items()
+        if verdict.verdict != leaf.Verdict.UNCERTAIN
+    }
+    return _Partition(
+        groups=groups,
+        serves=serves,
+        decided=decided,
+        uncertain=set(serves.served) - decided,
+        fresh={
+            adjudications_store.group_key_for(g.member_ids) for g in serves.to_judge
+        },
+    )
+
+
 def quote_judging(
     root: Path,
     kind: JudgingKind,
@@ -371,60 +512,21 @@ def quote_judging(
     stage does not quote yet."""
     if kind != "identity":
         raise ValueError(f"judging kind {kind!r} cannot be quoted yet")
-    reason = config.require_workspace(root)
-    if reason is not None:
-        raise JudgingRefused(f"openkos judging: refusing to quote -- {reason}.")
-    layout = config.WorkspaceLayout(root)
-    try:
-        cfg = config.read_config(root)
-    except (OSError, ValueError) as exc:
-        raise JudgingRefused(
-            f"openkos judging: failed while reading the workspace -- {exc}."
-        ) from exc
-
-    # The literal task name, at the call: `test_chat_timeout_wiring` reads it
-    # off the AST so a refactor cannot silently drop the `models:` override.
-    client = cast(
-        application_backends.HasLocality, ports.chat_client(cfg, "adjudication")
+    layout, cfg = _open_workspace(root, "quote")
+    context = _context(
+        cfg, kind, include_confidential=include_confidential, ports=ports
     )
-    model = config.resolve_task_model(cfg, "adjudication")
-    local_exemption = ports.resolve_local_exemption(client, cfg)
-    effective = include_confidential or local_exemption
-    binding = QuoteBinding(
-        kind=kind,
-        model=model,
-        backend=cfg.backend,
-        is_local=client.locality.is_local,
-        effective_confidential=effective,
-        rubric_digest=leaf.rubric_digest(),
-    )
+    binding = context.binding
+    local_exemption = context.local_exemption
 
     report = ports.find_candidates_report(layout.bundle_dir)
-    groups = [
-        group
-        for group in report.groups
-        if not application_pending.is_group_kept_distinct(layout, group.member_ids)
-    ]
-    serves = identity_adjudication.partition_adjudication_serves(
-        layout,
-        groups,
-        include_confidential=effective,
-        on_warning=None,
-        surface="judging",
+    partition = _partition_identity(
+        layout, report.groups, effective=binding.effective_confidential
     )
-    decided = {
-        key
-        for key, verdict in serves.served.items()
-        if verdict.verdict != leaf.Verdict.UNCERTAIN
-    }
-    uncertain = set(serves.served) - decided
-    fresh = {adjudications_store.group_key_for(g.member_ids) for g in serves.to_judge}
-    wanted = fresh | uncertain if include_uncertain else fresh
-    needed = [
-        group
-        for group in groups
-        if adjudications_store.group_key_for(group.member_ids) in wanted
-    ]
+    groups = partition.groups
+    serves = partition.serves
+    uncertain = partition.uncertain
+    needed = partition.needed(include_uncertain=include_uncertain)
 
     calling = _calling_groups(
         needed,
@@ -438,7 +540,7 @@ def quote_judging(
     calls = len(calling)
 
     notices: list[QuoteNotice] = [
-        QuoteNotice("model", model=model, backend=cfg.backend)
+        QuoteNotice("model", model=binding.model, backend=cfg.backend)
     ]
     if report.produced > report.retained:
         notices.append(
@@ -460,11 +562,283 @@ def quote_judging(
     return JudgingQuote(
         kind=kind,
         total=len(groups),
-        served=len(decided),
+        served=len(partition.decided),
         uncertain=len(uncertain),
         to_judge=len(needed),
         calls=calls,
         binding=binding,
         notices=tuple(notices),
         token=token,
+    )
+
+
+IDENTITY_CHUNK_SIZE: Final = 1
+"""Groups judged per chunk: one chat call, then one persist. A stop is observed
+between chunks, so a larger chunk would multiply the worst-case stop latency
+without saving anything a call costs."""
+
+
+PERSIST_BACKOFF_SECONDS: Final = (1.0, 2.0)
+PERSIST_ATTEMPTS: Final = len(PERSIST_BACKOFF_SECONDS) + 1
+"""How long the run sleeps between attempts to persist a chunk into a busy
+workspace (through `ports.sleep`, with no lock held), and so how many attempts
+it makes: one more than there are waits. UNMEASURED: both are placeholders, not
+tuned values.
+
+What was measured (S2c.1, macOS, 60 persists of one chunk through the real lock
+and `locked_commit_section`): the persist holds the lock for about 1 ms (median
+1.0, p95 1.2, max 4.3), a contender waiting on a held lock acquires it within
+0.05-0.09 s of the release, and `wait_seconds=0` refuses in under a millisecond.
+That bounds this surface's own contribution to contention, not a competitor's:
+the hold time of the daemon's or an ingest's commit section (a git autocommit
+inside it) was not measured, so whether 1 s then 2 s outlasts a real contender
+is unknown. The sections the app passes may also wait on their own
+(`locked_commit_section(wait_seconds=...)`); these attempts bound the service,
+that wait bounds each attempt."""
+
+
+@dataclass(frozen=True)
+class RunRefused:
+    """No model call was made and nothing was written."""
+
+    reason: Literal["no_quote_token"]
+
+
+@dataclass(frozen=True)
+class JudgingOutcome:
+    kind: JudgingKind
+    status: Literal["completed", "stopped", "failed", "unpersisted"]
+    judged: int
+    """Results produced, zero-call degrades included."""
+
+    calls: int
+    """Chat calls made; never more than the token's."""
+
+    persisted: int
+    unpersisted: int
+    """Verdicts that were paid for and could not be stored."""
+
+    unpersisted_cause: Literal["workspace_busy", "store_error"] | None
+    dropped: int
+    """Verdicts not stored on purpose: a member was edited, raised or forgotten
+    during the call, or could not be read. `judged == persisted + dropped +
+    unpersisted`."""
+
+    deferred: int
+    """Quoted items the run did not reach."""
+
+    not_in_quote: tuple[str, ...]
+    """Work keys needed now that the quote did not cover; never judged."""
+
+    settled_since_quote: int
+    failure: BackendError | None = None
+    failed_at: int | None = None
+    """The 1-based run position of the item a backend error ended the run at."""
+
+    observer_failed: bool = False
+
+
+class _CeilingClient:
+    """Counts the chat calls a run makes and refuses the one that would pass
+    the quote's ceiling, so an excess is a defect found before the spend, not
+    after it."""
+
+    def __init__(self, inner: LLMBackend, limit: int) -> None:
+        self._inner = inner
+        self._limit = limit
+        self.calls = 0
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        if self.calls >= self._limit:
+            raise AssertionError(
+                f"a model call past the quote's ceiling of {self._limit} was refused"
+            )
+        self.calls += 1
+        return self._inner.chat(messages)
+
+
+class _ObserverGuard:
+    """Every observer call goes through here. The observer is the client's
+    callback: its failure must not cost paid work, so the first exception is
+    swallowed, recorded, and the observer is not called again."""
+
+    def __init__(self, observer: JudgingObserver) -> None:
+        self._observer = observer
+        self.failed = False
+
+    def progress(self, event: JudgingProgress) -> None:
+        if self.failed:
+            return
+        try:
+            self._observer.progress(event)
+        except Exception:  # noqa: BLE001 -- an observer is the client's callback; its failure must not cost paid work
+            self.failed = True
+
+    def chunk_persisted(self, persisted: int) -> None:
+        if self.failed:
+            return
+        try:
+            self._observer.chunk_persisted(persisted)
+        except Exception:  # noqa: BLE001 -- an observer is the client's callback; its failure must not cost paid work
+            self.failed = True
+
+
+def _persist_chunk(
+    layout: config.WorkspaceLayout,
+    results: Sequence[leaf.AdjudicatedCandidate],
+    *,
+    effective: bool,
+    pinned: Mapping[str, str | None],
+    ports: JudgingPorts,
+) -> identity_adjudication.PersistResult:
+    """Persist one chunk, retrying a busy workspace up to `PERSIST_ATTEMPTS`
+    times with the backoff between attempts. The lock is held only inside an
+    attempt, never while sleeping."""
+
+    def attempt() -> identity_adjudication.PersistResult:
+        return identity_adjudication.persist_adjudications(
+            layout,
+            results,
+            include_confidential=effective,
+            judged_digests=pinned,
+            commit_section=ports.commit_section,
+            write_through=True,
+        )
+
+    result = attempt()
+    for backoff in PERSIST_BACKOFF_SECONDS:
+        if result.busy is None:
+            return result
+        ports.sleep(backoff)
+        result = attempt()
+    return result
+
+
+def run_judging(
+    root: Path,
+    token: QuoteToken | None,
+    *,
+    stop: StopToken,
+    ports: JudgingPorts,
+    observer: JudgingObserver | None = None,
+    chunk_size: int | None = None,
+) -> JudgingOutcome | QuoteStale | RunRefused:
+    """Judge at most what `token` was quoted for, persisting each chunk.
+
+    `token=None` is refused before the configuration is read. A moved binding
+    field returns `QuoteStale` before any call. Otherwise the work is
+    re-partitioned LLM-free and only the quoted items still needed are judged,
+    in quote order; each chunk is judged with no lock held and persisted in its
+    own commit section before the next begins. `stop` is observed between
+    chunks. Raises `JudgingRefused` when `root` is not a readable workspace and
+    `ValueError` for a `chunk_size` below one."""
+    if token is None:
+        return RunRefused("no_quote_token")
+    size = IDENTITY_CHUNK_SIZE if chunk_size is None else chunk_size
+    if size < 1:
+        raise ValueError(f"chunk_size must be at least 1, got {size}")
+    if token.binding.kind != "identity":
+        raise ValueError(f"judging kind {token.binding.kind!r} cannot be run yet")
+    layout, cfg = _open_workspace(root, "run")
+    context = _context(
+        cfg,
+        token.binding.kind,
+        include_confidential=token.include_confidential,
+        ports=ports,
+    )
+    moved = changed_fields(token.binding, context.binding)
+    if moved:
+        return QuoteStale(token.binding.kind, moved)
+
+    effective = context.binding.effective_confidential
+    report = ports.find_candidates_report(layout.bundle_dir)
+    partition = _partition_identity(layout, report.groups, effective=effective)
+    needed = partition.needed(include_uncertain=token.include_uncertain)
+    digest_of = application_pending.current_finding_digest(layout.bundle_dir)
+    now_items = {_work_item(group, digest_of): group for group in needed}
+    quoted = set(token.work)
+    judge = [now_items[item] for item in token.work if item in now_items]
+    not_in_quote = tuple(item.work_key for item in now_items if item not in quoted)
+    settled = sum(1 for item in token.work if item not in now_items)
+
+    counted = _CeilingClient(context.client, token.calls)
+    guard = _ObserverGuard(observer if observer is not None else JudgingObserver())
+    judged = persisted = dropped = unpersisted = 0
+    failure: BackendError | None = None
+    failed_at: int | None = None
+    cause: Literal["workspace_busy", "store_error"] | None = None
+    status: Literal["completed", "stopped", "failed", "unpersisted"] = "completed"
+    for start in range(0, len(judge), size):
+        if stop.is_set():
+            status = "stopped"
+            break
+        chunk = judge[start : start + size]
+        current = application_pending.current_finding_digest(layout.bundle_dir)
+        pinned = {
+            member: current(member) for group in chunk for member in group.member_ids
+        }
+
+        def on_progress(
+            index: int,
+            total: int,
+            result: leaf.AdjudicatedCandidate,
+            *,
+            before: int = judged,
+        ) -> None:
+            guard.progress(
+                JudgingProgress(
+                    index=before + index,
+                    total=len(judge),
+                    work_key=adjudications_store.group_key_for(
+                        result.candidate.member_ids
+                    ),
+                    verdict=result.verdict.value,
+                )
+            )
+
+        batch = ports.adjudicate_candidates(
+            chunk,
+            bundle_dir=layout.bundle_dir,
+            llm=cast(LLMBackend, counted),
+            include_confidential=token.include_confidential,
+            local_exemption=context.local_exemption,
+            on_progress=on_progress,
+        )
+        before = judged
+        judged += len(batch.results)
+        failure = batch.failure
+        if failure is not None:
+            failed_at = before + (batch.failed_index or 1)
+        result = _persist_chunk(
+            layout, batch.results, effective=effective, pinned=pinned, ports=ports
+        )
+        dropped += result.dropped
+        if result.busy is not None or result.store_error is not None:
+            cause = "workspace_busy" if result.busy is not None else "store_error"
+            unpersisted = len(batch.results) - result.dropped
+            status = "unpersisted"
+            break
+        persisted += result.persisted
+        if batch.results:
+            guard.chunk_persisted(persisted)
+        if failure is not None:
+            if isinstance(failure, BackendUnavailable | BackendModelNotFound):
+                raise failure
+            status = "failed"
+            break
+    return JudgingOutcome(
+        kind=token.binding.kind,
+        status=status,
+        judged=judged,
+        calls=counted.calls,
+        persisted=persisted,
+        unpersisted=unpersisted,
+        unpersisted_cause=cause,
+        dropped=dropped,
+        deferred=len(judge) - (judged if failed_at is None else failed_at),
+        not_in_quote=not_in_quote,
+        settled_since_quote=settled,
+        failure=failure,
+        failed_at=failed_at,
+        observer_failed=guard.failed,
     )

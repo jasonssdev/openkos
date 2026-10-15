@@ -19,13 +19,14 @@ group". The serve partition and (from S2a) the daemon's identity stage both ask
 it, so the two can never disagree about what a servable verdict is.
 """
 
+import contextlib
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from typing import Literal, NamedTuple
 
 from openkos import config, lock
+from openkos.application import curate_queue, queue_resolution
 from openkos.application import pending as application_pending
-from openkos.application import queue_resolution
 from openkos.application.lock_wait import CommitSection
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
@@ -346,10 +347,11 @@ def persist_adjudications(
     answers the pair's open identity row (#1226), under the same lock as the
     persist so no forget can interleave; best-effort, the queue is a cache.
 
-    `write_through` is declared for the judging run (S2c) and refused until it
-    exists, so no caller can pass it and silently get today's behavior."""
-    if write_through:
-        raise NotImplementedError("write-through persistence arrives with the run")
+    `write_through` (the judging run) also writes each persisted SAME or UNCERTAIN
+    verdict through to the group's OPEN identity row, in the same section and
+    amend-only (`curate_queue.set_identity_verdicts`): a group with no open row
+    gets its row, verdict included, from the next producer pass. `curate` keeps
+    `False` and its missing-only enqueue."""
     if not results:
         return PersistResult(0, 0, None, None)
     try:
@@ -362,6 +364,7 @@ def persist_adjudications(
             # Computed once -- it is constant within a build.
             current_rubric = rubric_digest()
             batch: list[adjudications_store.Adjudication] = []
+            kept: list[AdjudicatedCandidate] = []
             for result in results:
                 digests: list[adjudications_store.InputDigest] = []
                 for member_id in result.candidate.member_ids:
@@ -377,6 +380,7 @@ def persist_adjudications(
                         )
                     )
                 else:
+                    kept.append(result)
                     batch.append(
                         adjudications_store.Adjudication(
                             member_ids=tuple(result.candidate.member_ids),
@@ -404,6 +408,15 @@ def persist_adjudications(
                         queue_resolution.resolve_judged_different(
                             layout.root, member_ids=stored.member_ids
                         )
+                if write_through:
+                    # Already inside the one section: the lock is not
+                    # re-entrant, so the amendment enters a no-op of its own.
+                    curate_queue.set_identity_verdicts(
+                        layout,
+                        kept,
+                        pinned=judged_digests or {},
+                        commit_section=contextlib.nullcontext,
+                    )
             except (OSError, sqlite3.Error) as exc:
                 return PersistResult(0, dropped, str(exc), None)
             return PersistResult(len(batch), dropped, None, None)

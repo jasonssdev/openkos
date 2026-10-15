@@ -666,18 +666,146 @@ def test_persist_enters_the_commit_section_exactly_once(
     assert entered == ["in", "out"]
 
 
-def test_persist_write_through_is_not_available_until_the_run_exists(
+# --- write-through (the judging run) -------------------------------------------
+
+
+def _write_through(
+    layout: config.WorkspaceLayout,
+    results: list[AdjudicatedCandidate],
+    *,
+    judged_digests: dict[str, str | None] | None = None,
+    commit_section: Callable[[], contextlib.AbstractContextManager[None]] = (
+        contextlib.nullcontext
+    ),
+) -> ia.PersistResult:
+    return ia.persist_adjudications(
+        layout,
+        results,
+        include_confidential=False,
+        judged_digests=judged_digests,
+        commit_section=commit_section,
+        write_through=True,
+    )
+
+
+def _seed_unjudged_row(layout: config.WorkspaceLayout) -> None:
+    """The open `pending_evaluation` row a daemon pass leaves: no verdict, the
+    current input digests."""
+    from openkos.application import queue_producers
+
+    proposal = queue_producers.identity_group_proposal(
+        _group(),
+        current_digest=application_pending.current_finding_digest(layout.bundle_dir),
+        result=None,
+    )
+    assert proposal is not None
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        pq.upsert_proposal(
+            conn,
+            proposal,
+            commit_section=contextlib.nullcontext,
+            bundle_dir=layout.bundle_dir,
+        )
+    finally:
+        conn.close()
+
+
+def _open_row_verdicts(layout: config.WorkspaceLayout) -> list[object]:
+    import json
+
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        return [
+            (json.loads(item.payload)["adjudication"] or {}).get("verdict")
+            for item in pq.all_items(conn)
+            if item.status in ("pending", "claimed")
+        ]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("verdict", [Verdict.SAME, Verdict.UNCERTAIN])
+def test_write_through_amends_the_open_row_with_the_verdict(
+    layout: config.WorkspaceLayout, verdict: Verdict
+) -> None:
+    _seed_unjudged_row(layout)
+    assert _open_row_verdicts(layout) == [None]
+
+    result = _write_through(layout, [_result(verdict)])
+
+    assert result.persisted == 1
+    assert _open_row_verdicts(layout) == [verdict.value]
+    assert len(_statuses(layout)) == 1
+
+
+def test_write_through_never_creates_a_row_for_a_group_with_none(
     layout: config.WorkspaceLayout,
 ) -> None:
-    with pytest.raises(NotImplementedError):
-        ia.persist_adjudications(
-            layout,
-            [_result()],
-            include_confidential=False,
-            judged_digests=None,
-            commit_section=contextlib.nullcontext,
-            write_through=True,
-        )
+    _seed_unjudged_row(layout)
+    elsewhere = ("concepts/c", "concepts/d")
+    for member in elsewhere:
+        _concept(layout.root, member)
+
+    _write_through(layout, [_result(Verdict.SAME, members=elsewhere)])
+
+    assert _open_row_verdicts(layout) == [None]
+    assert len(_statuses(layout)) == 1
+    assert [row.member_ids for row in _rows(layout)] == [elsewhere]
+
+
+def test_write_through_leaves_the_queue_absent_when_there_is_none(
+    layout: config.WorkspaceLayout,
+) -> None:
+    result = _write_through(layout, [_result(Verdict.SAME)])
+
+    assert result.persisted == 1
+    assert _statuses(layout) == []
+
+
+def test_write_through_declines_a_different_verdict_and_amends_nothing(
+    layout: config.WorkspaceLayout,
+) -> None:
+    _seed_unjudged_row(layout)
+
+    _write_through(layout, [_result(Verdict.DIFFERENT)])
+
+    assert _statuses(layout) == [("declined", "declined")]
+
+
+def test_write_through_skips_a_verdict_about_content_edited_during_the_call(
+    layout: config.WorkspaceLayout,
+) -> None:
+    _seed_unjudged_row(layout)
+    current = application_pending.current_finding_digest(layout.bundle_dir)
+    judged = {member: current(member) for member in _MEMBERS}
+    _concept(layout.root, "concepts/b", body="Edited during the call.")
+
+    result = _write_through(layout, [_result(Verdict.SAME)], judged_digests=judged)
+
+    assert result == ia.PersistResult(0, 1, None, None)
+    assert _rows(layout) == []
+    assert _open_row_verdicts(layout) == [None]
+
+
+def test_write_through_runs_inside_the_one_commit_section(
+    layout: config.WorkspaceLayout,
+) -> None:
+    _seed_unjudged_row(layout)
+    entered: list[str] = []
+
+    @contextlib.contextmanager
+    def _section() -> Iterator[None]:
+        # The workspace lock is not re-entrant: a second entry would be busy.
+        assert "in" not in entered[-1:], "the section was entered twice"
+        entered.append("in")
+        yield
+        entered.append("out")
+
+    _write_through(layout, [_result(Verdict.SAME)], commit_section=_section)
+
+    assert entered == ["in", "out"]
+    assert _open_row_verdicts(layout) == ["same"]
 
 
 # --- the module speaks only data ---------------------------------------------
