@@ -2857,6 +2857,25 @@ def test_an_identity_without_a_judgment_is_pending_evaluation(tmp_path: Path) ->
     assert item.evaluation == "pending_evaluation"
 
 
+@pytest.mark.parametrize("confidence", [0.5, 0.0], ids=["judged", "degraded"])
+def test_an_identity_judged_uncertain_is_listed_as_pending_evaluation(
+    tmp_path: Path, confidence: float
+) -> None:
+    """Characterization of today's behavior (the `judging-application-service`
+    change flips it to `judged_uncertain`): an UNCERTAIN verdict, including the
+    fail-closed degrade of a malformed reply, is indistinguishable from no
+    verdict and so is listed as pending evaluation."""
+    _root, layout = _merge_workspace(tmp_path)
+
+    item = _listed(
+        layout, _identity_row(layout, verdict="uncertain", confidence=confidence)
+    )
+
+    assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.withheld == (WithheldAction(Action.MERGE, "pending_evaluation"),)
+    assert item.evaluation == "pending_evaluation"
+
+
 def test_an_identity_judged_different_withholds_the_merge(tmp_path: Path) -> None:
     _root, layout = _merge_workspace(tmp_path)
 

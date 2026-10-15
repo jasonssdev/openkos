@@ -164,11 +164,11 @@ Goal: land the one intended RED (the daemon erases a judged verdict) without
 turning `main` red, and pin today's UNCERTAIN listing so S2a's flip is a visible
 diff. Tests only.
 
-- [ ] S0b.1 Pin today's behavior in `tests/unit/application/test_curate_decisions.py`:
+- [x] S0b.1 Pin today's behavior in `tests/unit/application/test_curate_decisions.py`:
   an identity row whose persisted verdict is `uncertain` (including a
   malformed-reply degrade) is listed with evaluation `pending_evaluation`. Green by
   design. Satisfies: D2 (the "before" half; flipped in S2a.10).
-- [ ] S0b.2 RED: in `tests/unit/cli/test_daemon.py` add the daemon-clobber test. Seed
+- [x] S0b.2 RED: in `tests/unit/cli/test_daemon.py` add the daemon-clobber test. Seed
   `findings.db` via `pq.upsert_proposal` (open row carrying `adjudication:
   {"verdict": "same", ...}`) and `record_adjudications` (a servable store row).
   Assert the preconditions OUTSIDE the xfailed part: store row servable, open row
@@ -178,11 +178,11 @@ diff. Tests only.
   `@pytest.mark.xfail(strict=True, raises=AssertionError, reason=...)`. Observe
   XFAIL on this tree. Satisfies: P1 (scenario "A judged-SAME row survives a daemon
   pass").
-- [ ] S0b.3 Prove setup errors are not absorbed: temporarily break a precondition
+- [x] S0b.3 Prove setup errors are not absorbed: temporarily break a precondition
   (seed a stale rubric digest, or have the stub raise), observe an ordinary FAIL
   rather than XFAIL (the `raises=AssertionError` filter plus the outside-the-marker
   preconditions). Revert, purge `__pycache__`, re-run to XFAIL. Satisfies: P1.
-- [ ] S0b.4 Run the S0a goldens unchanged (they must stay GREEN; no source changed)
+- [x] S0b.4 Run the S0a goldens unchanged (they must stay GREEN; no source changed)
   and the five gates. Satisfies: J18.
 
 Gates: the five gates above.

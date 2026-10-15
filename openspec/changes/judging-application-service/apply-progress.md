@@ -74,3 +74,44 @@ Afterwards `git status` showed no `src/` change and the file re-ran 15 passed.
 ### Deviations from design
 
 None. No source file changed.
+
+## S0b: Daemon-clobber strict xfail and UNCERTAIN pin (complete, 4/4)
+
+Branch `feat/judging-s0b`, stacked-to-main, tests only (no `src/` change, no golden or
+fixture edited).
+
+Files: `tests/unit/cli/test_daemon.py` (fixture `judged_same_after_a_pass`, helper
+`_require`, strict-xfail test `test_a_judged_same_row_survives_a_daemon_identity_pass`)
+and `tests/unit/application/test_curate_decisions.py`
+(`test_an_identity_judged_uncertain_is_listed_as_pending_evaluation`, parametrized
+`judged` / `degraded`).
+
+### Tasks
+
+- [x] S0b.1 UNCERTAIN pin (confidence 0.5 and the 0.0 degrade shape): actions
+  `(KEEP_DISTINCT, SKIP)`, merge withheld `pending_evaluation`, evaluation
+  `pending_evaluation`.
+- [x] S0b.2 Daemon-clobber RED as `xfail(strict=True, raises=AssertionError)`: XFAIL.
+- [x] S0b.3 Setup errors are not absorbed (below).
+- [x] S0b.4 S0a goldens unchanged and green; gates recorded in the slice report.
+
+### TDD Cycle Evidence
+
+| Task | RED | GREEN | REFACTOR |
+|------|-----|-------|----------|
+| S0b.2 | Marker removed: `AssertionError: assert None == {'verdict': 'same', 'confidence': 0.9, 'rationale': 'r'}` on the open row's `payload["adjudication"]` | Marker restored: XFAIL (strict). Real GREEN arrives in S2a | n/a |
+| S0b.1 | Characterization; failure proven by perturbing `curate_decisions.py` else-branch to `judged_different` (2 failed), then reverted | 3 passed | n/a |
+
+### Deviation from the design text (and why)
+
+pytest applies an xfail marker to the SETUP phase as well, so an `AssertionError` raised
+in a fixture is absorbed as XFAIL. A plain `assert` precondition therefore does NOT stay
+outside the xfailed part (observed: a broken precondition reported XFAIL). Preconditions
+go through `_require`, which calls `pytest.fail` (raises `Failed`, not `AssertionError`),
+so `raises=AssertionError` cannot absorb it. Observed: stored verdict broken -> ERROR
+`precondition failed: stored verdict is not SAME`; seeded verdict `None` -> ERROR
+`precondition failed: open row does not carry the seeded SAME verdict`.
+
+Note: the "chat stub raises" perturbation still reports XFAIL because `_identity_stage`
+never calls the chat client; the never-called precondition is a recorder
+(`chat_calls == []`), which would fail if the stage ever called it.
