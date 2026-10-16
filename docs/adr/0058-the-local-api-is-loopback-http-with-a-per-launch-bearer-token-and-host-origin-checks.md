@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0058: The local API is loopback HTTP with a per-launch bearer token and Host/Origin checks"
 description: The engine's local API binds 127.0.0.1 on a random port, requires a bearer token handed over stdin at each launch, and rejects any non-loopback Host and any unknown Origin.
-status: Proposed
+status: Accepted
 date: 2026-10-14
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0058: The local API is loopback HTTP with a per-launch bearer token and Host/Origin checks
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-14
 
 ## Context
@@ -45,7 +45,7 @@ The local API is HTTP on loopback with three independent checks:
 2. **A per-launch bearer token.** The shell generates it and hands it to the engine over stdin; it is never placed in a URL, argv or a file. Requests without it get 401; requests with a wrong one get 403. A token carried in the URL alone is not accepted.
 3. **Host and Origin checks.** Reject any `Host` that is not loopback with the engine's port, and any `Origin` that is not on a short allowlist (the shell's own origin). This is what stops DNS rebinding even if a page learns the port.
 
-The API reuses the MCP adapter's model: synchronous services, one worker per operation. The sensitivity disclosure gate applies to every response that crosses the boundary. The decision-surface payloads are owner-local ([ADR-0053](0053-curation-decisions-are-a-two-phase-application-surface.md)), as in the CLI, and carry no extra disclosure beyond what the owner already sees.
+The API reuses the MCP adapter's model: synchronous services, one worker per operation. Its caller is the workspace owner, as the CLI's is, so responses are owner-local: the read and decision-surface payloads ([ADR-0053](0053-curation-decisions-are-a-two-phase-application-surface.md)) carry no extra disclosure beyond what the owner already sees. The sensitivity disclosure gate is not applied to these payloads; it arrives with the first ask or query endpoint, which must apply it before any answer crosses the boundary.
 
 ## Consequences
 
