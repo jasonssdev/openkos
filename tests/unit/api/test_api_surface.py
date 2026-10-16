@@ -6,6 +6,7 @@ commit as a surface change.
 """
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -199,6 +200,174 @@ def test_a_breaking_change_since_the_committed_snapshot_needs_a_higher_version()
             "breaking changes without an API_VERSION bump: "
             + "; ".join(str(c) for c in broken)
         )
+
+
+# -- the bump, against the base branch ------------------------------------------ #
+
+# CI sets this so a missing base ref is a failure, not a skip: a check that
+# skips where it is meant to enforce guards nothing.
+_REQUIRE_BASE = "OPENKOS_REQUIRE_API_BASE_REF"
+_BASE_REF = "origin/main"
+
+
+def test_a_breaking_change_since_the_base_branch_needs_a_higher_version() -> None:
+    """The half CI can enforce. A pull request checkout already contains its own
+    regenerated snapshot, so `HEAD` cannot tell a breaking diff from no diff;
+    the merge base with the base branch can."""
+    current = json.loads(_GOLDEN.read_text(encoding="utf-8"))
+    try:
+        previous = surface.base_snapshot(_REPO, _BASE_REF)
+    except surface.BaseUnavailable as exc:
+        if os.environ.get(_REQUIRE_BASE) == "1":
+            pytest.fail(f"{_REQUIRE_BASE}=1 but the base is unreachable: {exc}")
+        pytest.skip(f"no base to compare against: {exc}")
+    if previous is None:
+        return  # the base has no snapshot yet: nothing to break
+
+    unbumped = surface.unbumped_breaking(previous, current)
+
+    assert not unbumped, (
+        f"breaking changes since {_BASE_REF} without an API_VERSION bump: "
+        + "; ".join(str(c) for c in unbumped)
+    )
+
+
+def _git_repo(tmp_path: Path) -> tuple[Path, Any]:
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("git is unavailable")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def run(*args: str) -> str:
+        done = subprocess.run(  # noqa: S603 -- a fixed git argv, no shell
+            [
+                git,
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                *args,
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return done.stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    return repo, run
+
+
+def _commit_snapshot(repo: Path, run: Any, snapshot: dict[str, Any] | None) -> None:
+    target = repo / surface.SNAPSHOT_RELPATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if snapshot is None:
+        target.with_name("other.txt").write_text("x", encoding="utf-8")
+        run("add", "-A")
+    else:
+        target.write_text(surface.dumps(snapshot), encoding="utf-8")
+        run("add", "-A")
+    run("commit", "-q", "-m", "c")
+
+
+def _pr_repo(
+    tmp_path: Path, base: dict[str, Any], head: dict[str, Any]
+) -> tuple[Path, dict[str, Any]]:
+    """A repo whose `origin/main` records `base` and whose branch records `head`."""
+    repo, run = _git_repo(tmp_path)
+    _commit_snapshot(repo, run, base)
+    run("update-ref", "refs/remotes/origin/main", "HEAD")
+    run("switch", "-q", "-c", "feature")
+    _commit_snapshot(repo, run, head)
+    return repo, head
+
+
+def _verdict(tmp_path: Path, base: dict[str, Any], head: dict[str, Any]) -> list[str]:
+    repo, current = _pr_repo(tmp_path, base, head)
+    previous = surface.base_snapshot(repo, _BASE_REF)
+    assert previous == base
+    return [str(c) for c in surface.unbumped_breaking(previous, current)]
+
+
+def test_a_removed_name_with_a_regenerated_snapshot_and_no_bump_is_caught(
+    tmp_path: Path,
+) -> None:
+    base = snap(1, f=fn(param("a")), g=fn())
+    head = snap(1, f=fn(param("a")))
+
+    assert _verdict(tmp_path, base, head) == ["breaking  g: name removed"]
+
+
+def test_the_same_removal_with_a_bump_passes(tmp_path: Path) -> None:
+    base = snap(1, f=fn(param("a")), g=fn())
+    head = snap(2, f=fn(param("a")))
+
+    assert _verdict(tmp_path, base, head) == []
+
+
+def test_an_additive_change_with_no_bump_passes(tmp_path: Path) -> None:
+    base = snap(1, f=fn(param("a")))
+    head = snap(1, f=fn(param("a")), g=fn())
+
+    assert _verdict(tmp_path, base, head) == []
+
+
+def test_a_bump_that_goes_down_does_not_count(tmp_path: Path) -> None:
+    base = snap(3, f=fn(), g=fn())
+    head = snap(2, f=fn())
+
+    assert _verdict(tmp_path, base, head) == ["breaking  g: name removed"]
+
+
+def test_the_base_is_the_merge_base_not_the_moved_tip(tmp_path: Path) -> None:
+    repo, run = _git_repo(tmp_path)
+    forked = snap(1, f=fn(), g=fn())
+    _commit_snapshot(repo, run, forked)
+    run("update-ref", "refs/remotes/origin/main", "HEAD")
+    run("switch", "-q", "-c", "feature")
+    _commit_snapshot(repo, run, snap(1, f=fn()))
+    # main moves on afterwards, with an unrelated additive change
+    run("update-ref", "refs/remotes/origin/main", "main")
+    run("switch", "-q", "main")
+    _commit_snapshot(repo, run, snap(1, f=fn(), g=fn(), h=fn()))
+    run("update-ref", "refs/remotes/origin/main", "HEAD")
+    run("switch", "-q", "feature")
+
+    assert surface.base_snapshot(repo, _BASE_REF) == forked
+
+
+def test_an_absent_base_ref_is_unavailable_not_empty(tmp_path: Path) -> None:
+    repo, run = _git_repo(tmp_path)
+    _commit_snapshot(repo, run, snap(1, f=fn()))
+
+    with pytest.raises(surface.BaseUnavailable):
+        surface.base_snapshot(repo, _BASE_REF)
+
+
+def test_a_base_without_a_snapshot_has_nothing_to_break(tmp_path: Path) -> None:
+    repo, run = _git_repo(tmp_path)
+    _commit_snapshot(repo, run, None)
+    run("update-ref", "refs/remotes/origin/main", "HEAD")
+    run("switch", "-q", "-c", "feature")
+    _commit_snapshot(repo, run, snap(1, f=fn()))
+
+    assert surface.base_snapshot(repo, _BASE_REF) is None
+
+
+def test_an_unrelated_history_has_no_merge_base(tmp_path: Path) -> None:
+    repo, run = _git_repo(tmp_path)
+    _commit_snapshot(repo, run, snap(1, f=fn()))
+    run("update-ref", "refs/remotes/origin/main", "HEAD")
+    run("switch", "-q", "--orphan", "other")
+    # a different tree, so the root commit is not the same object as main's
+    _commit_snapshot(repo, run, snap(2, f=fn()))
+
+    with pytest.raises(surface.BaseUnavailable):
+        surface.base_snapshot(repo, _BASE_REF)
 
 
 # -- classifier ------------------------------------------------------------------ #
