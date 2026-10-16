@@ -90,7 +90,13 @@ jobs:
       matrix:
         python-version: ["3.14"]
     steps:
+      # Full history, so the API_VERSION bump check can find the merge base with
+      # origin/main (tests/unit/api/test_api_surface.py). A pull request checkout
+      # already contains its own regenerated snapshot, so only the base branch's
+      # snapshot can tell a breaking diff from no diff.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           python-version: ${{ matrix.python-version }}
@@ -111,6 +117,9 @@ jobs:
       - name: Run tests with coverage
         env:
           OPENKOS_SMOKE_EXPECT_WHEEL: "0"
+          # Locally the bump check skips when no base ref is reachable; in CI a
+          # missing base must fail, or the check would skip where it must enforce.
+          OPENKOS_REQUIRE_API_BASE_REF: "1"
         run: uv run pytest --cov
 
   # The eval harnesses carry their own `--self-test` entry points, and until

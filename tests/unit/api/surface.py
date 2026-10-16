@@ -19,6 +19,8 @@ import enum
 import inspect
 import json
 import re
+import shutil
+import subprocess
 import sys
 import types
 import typing
@@ -29,6 +31,7 @@ from typing import Any
 import openkos.api
 
 SNAPSHOT_PATH = Path(__file__).with_name("api_surface.json")
+SNAPSHOT_RELPATH = "tests/unit/api/api_surface.json"
 
 _LEAK = re.compile(r"\b(?:openkos|sqlite3)\.[\w.]+")
 _SHORT_MODULES = {"builtins", "collections.abc", "typing"}
@@ -542,6 +545,52 @@ def classify(before: dict[str, Any], after: dict[str, Any]) -> list[Change]:
 
 def breaking(changes: list[Change]) -> list[Change]:
     return [c for c in changes if c.severity == "breaking"]
+
+
+# -- the base branch ------------------------------------------------------------- #
+
+
+class BaseUnavailable(Exception):
+    """The snapshot on the base branch cannot be read: git is missing, the base
+    ref is not reachable, or it shares no history with `HEAD`."""
+
+
+def base_snapshot(repo: Path, base_ref: str) -> dict[str, Any] | None:
+    """The snapshot recorded at the merge base of `HEAD` and `base_ref`.
+
+    `None` when that commit has no snapshot yet. Comparing against the merge
+    base rather than the tip means a base that moved on after the branch forked
+    is not blamed on the branch.
+    """
+    git = shutil.which("git")
+    if git is None:
+        raise BaseUnavailable("git is unavailable")
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603 -- a fixed git argv, no shell
+            [git, *args], cwd=repo, capture_output=True, text=True, check=False
+        )
+
+    base = run("merge-base", "HEAD", base_ref)
+    if base.returncode != 0 or not base.stdout.strip():
+        raise BaseUnavailable(
+            f"no merge base between HEAD and {base_ref}: {base.stderr.strip()}"
+        )
+    shown = run("show", f"{base.stdout.strip()}:{SNAPSHOT_RELPATH}")
+    if shown.returncode != 0:
+        return None
+    result: dict[str, Any] = json.loads(shown.stdout)
+    return result
+
+
+def unbumped_breaking(
+    previous: dict[str, Any], current: dict[str, Any]
+) -> list[Change]:
+    """The breaking changes from `previous` to `current` that `API_VERSION` does
+    not answer; empty when the version rose or nothing broke."""
+    if current["api_version"] > previous["api_version"]:
+        return []
+    return breaking(classify(previous, current))
 
 
 # -- regeneration ---------------------------------------------------------------- #
