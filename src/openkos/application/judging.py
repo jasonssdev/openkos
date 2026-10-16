@@ -221,7 +221,12 @@ class QuoteToken:
 @dataclass(frozen=True)
 class QuoteNotice:
     code: Literal[
-        "model", "truncated", "quarantined", "rubric_rejudge", "unattended_active"
+        "model",
+        "truncated",
+        "quarantined",
+        "rubric_rejudge",
+        "unattended_active",
+        "insecure_key",
     ]
     count: int | None = None
     """truncated: groups shown; rubric_rejudge: groups."""
@@ -242,7 +247,9 @@ class QuoteNotice:
     """relation_type `truncated` and `quarantined`: the relations service's own
     notice, already restricted to what the caller may see. It carries no count
     because the service derives the visible counts through the sensitivity walk
-    and renders them; this surface does not repeat that derivation."""
+    and renders them; this surface does not repeat that derivation.
+    `insecure_key`: the advisory `backends.insecure_key_warning` builds, which
+    names the host and never the key."""
 
 
 @dataclass(frozen=True)
@@ -379,6 +386,14 @@ def _calling_groups(
         on_progress=on_progress,
     )
     return calling
+
+
+def _insecure_key_notice(cfg: config.Config) -> QuoteNotice | None:
+    """The advisory the CLI prints before it builds a client: an
+    `openai-compatible` API key about to travel over plain HTTP to a non-local
+    host. The same predicate, so a caller shows it before the user consents."""
+    warning = application_backends.insecure_key_warning(cfg)
+    return None if warning is None else QuoteNotice("insecure_key", text=warning)
 
 
 def _unattended_notice(
@@ -731,6 +746,9 @@ def _quote_relations(
     unattended = _unattended_notice(layout, cfg, ports.now())
     if unattended is not None:
         notices.append(unattended)
+    insecure = _insecure_key_notice(cfg)
+    if insecure is not None:
+        notices.append(insecure)
 
     # Every edge costs exactly one chat call and none short-circuits, so the
     # bound is the work itself.
@@ -814,6 +832,9 @@ def _quote_volatility(
     unattended = _unattended_notice(layout, cfg, ports.now())
     if unattended is not None:
         notices.append(unattended)
+    insecure = _insecure_key_notice(cfg)
+    if insecure is not None:
+        notices.append(insecure)
     token = QuoteToken(
         binding=binding,
         include_confidential=include_confidential,
@@ -906,6 +927,9 @@ def quote_judging(
     unattended = _unattended_notice(layout, cfg, ports.now())
     if unattended is not None:
         notices.append(unattended)
+    insecure = _insecure_key_notice(cfg)
+    if insecure is not None:
+        notices.append(insecure)
 
     token = QuoteToken(
         binding=binding,

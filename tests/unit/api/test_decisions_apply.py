@@ -398,6 +398,53 @@ def test_applying_the_tier_a_config_already_holds_commits_nothing_and_stays_quie
     assert warnings == []
 
 
+def _mark_confidential(root: Path, concept_id: str) -> None:
+    path = root / "bundle" / f"{concept_id}.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "type: Concept\n", "type: Concept\nsensitivity: confidential\n", 1
+        ),
+        encoding="utf-8",
+    )
+    vcs_git.commit_paths(root, [f"bundle/{concept_id}.md"], "mark confidential")
+
+
+def test_a_commit_holding_a_confidential_concept_says_so(root: Path) -> None:
+    _mark_confidential(root, "concepts/a")
+    _enqueue_merge(root)
+    version = _preview(root, IDENTITY_KEY, Action.MERGE).version
+
+    outcome = apply_decision(Workspace.open(root), version, Action.MERGE)
+
+    assert isinstance(outcome, Applied)
+    assert outcome.commit_sha is not None
+    assert outcome.committed_confidential is True
+
+
+def test_a_commit_holding_nothing_confidential_does_not_say_so(root: Path) -> None:
+    _enqueue_merge(root)
+    version = _preview(root, IDENTITY_KEY, Action.MERGE).version
+
+    outcome = apply_decision(Workspace.open(root), version, Action.MERGE)
+
+    assert isinstance(outcome, Applied)
+    assert outcome.commit_sha is not None
+    assert outcome.committed_confidential is False
+
+
+def test_an_uncommitted_apply_never_claims_a_confidential_commit(root: Path) -> None:
+    _mark_confidential(root, "concepts/a")
+    _enqueue_merge(root)
+    shutil.rmtree(root / ".git")
+    version = _preview(root, IDENTITY_KEY, Action.MERGE).version
+
+    outcome = apply_decision(Workspace.open(root), version, Action.MERGE)
+
+    assert isinstance(outcome, Applied)
+    assert outcome.commit_sha is None
+    assert outcome.committed_confidential is False
+
+
 def test_a_non_repository_still_applies_and_warns_exactly_once(root: Path) -> None:
     _enqueue_merge(root)
     shutil.rmtree(root / ".git")

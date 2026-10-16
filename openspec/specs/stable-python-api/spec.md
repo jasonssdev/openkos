@@ -418,7 +418,9 @@ repository, identity unset, failure) the apply MUST still succeed with no commit
 identity and MUST report the skipped commit through the caller's optional
 warning callback. A commit MUST contain only the paths the decision wrote
 (a pre-staged unrelated file or an unrelated dirty edit of `openkos.yaml` is
-never swept in). Applying takes the workspace lock only inside its commit
+never swept in). `Applied` MUST say, as returned data, whether the commit it
+records holds a concept explicitly marked confidential, so a caller can show the
+notice the CLI prints; it is false when no commit landed. Applying takes the workspace lock only inside its commit
 section, waiting at most the caller's `wait_seconds` (default zero) and raising
 the existing workspace-busy error beyond it.
 
@@ -492,6 +494,13 @@ API-owned per-action plans holding only identifiers, types and flags.
 - WHEN each is previewed or applied
 - THEN the first is `Stale` with reason `unknown_key` and the second is `Stale`
   with reason `row_resolved`, and nothing is written
+
+#### Scenario: A commit holding a confidential concept says so
+
+- GIVEN a decision whose commit holds a concept marked `sensitivity: confidential`
+- WHEN the decision is applied
+- THEN `Applied` reports a confidential commit, and a commit holding no such
+  concept, or no commit at all, reports none
 
 ### Requirement: Judging Is Quoted, Then Run Against That Quote
 

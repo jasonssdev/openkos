@@ -9,7 +9,7 @@ listed (ADR-0053: list, never hide).
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from openkos.api import _wiring
@@ -246,6 +246,9 @@ def apply_decision(
     committed to the workspace's git repository, only the paths it wrote. A
     commit that cannot be made still leaves the apply successful with
     `commit_sha=None`, reported once through `on_warning`.
+    `committed_confidential` is true when the commit holds a concept explicitly
+    marked confidential, so an app can show the notice the CLI prints; the API
+    itself prints nothing.
 
     The workspace lock is held only inside the commit section, waiting at most
     `wait_seconds` (0 to 3600); beyond it `WorkspaceBusyError` is raised and
@@ -253,15 +256,19 @@ def apply_decision(
     after the preview. Merged bodies are not reconciled with a model, and the
     derived indexes are not refreshed."""
     wait = _wiring.validated_wait(wait_seconds)
-    return curate_decisions.apply_decision(
+    notes = _wiring.CommitNotes()
+    result = curate_decisions.apply_decision(
         workspace.root,
         workspace._layout,
         version,
         action,
         policy=_POLICY,
         ports=_wiring.decision_ports(
-            workspace, wait_seconds=wait, on_warning=on_warning
+            workspace, wait_seconds=wait, on_warning=on_warning, notes=notes
         ),
         observer=curate_decisions.DecisionObserver(),
         surface=_SURFACE,
     )
+    if isinstance(result, Applied) and notes.confidential:
+        return replace(result, committed_confidential=True)
+    return result
