@@ -971,6 +971,24 @@ openkos mcp --workspace /path/to/workspace
 
 Every tool result is a success — never a JSON-RPC error for a disclosure decision — carrying `withheld` (a count, never content; for `query` it also counts the confidential concepts retrieval dropped before ranking, which appear in no citation), `warnings` (an in-flight write or a stale derived store), and `not_run` (a check that could not complete, reported rather than raised): incompleteness is data, not failure (ADR-0022). `get`, `navigate`, and `pending` never report a stale derived store; only `query` reads one recent enough to go stale.
 
+### `openkos serve`
+
+Serves one workspace over a local HTTP API on `127.0.0.1`, for a client the owner runs on the same machine (the desktop app is the first). It is an adapter over the same Python API the CLI uses, shipped in an optional extra: install it with `pip install 'openkos[api]'`. Without the extra the verb prints that remedy on stderr, writes nothing to stdout and exits `2`; every other verb is unaffected, because the extra is imported only inside this verb. `serve` takes the workspace lock per unit of work inside the API, never for its lifetime (the same class as `daemon`).
+
+| Flag | Meaning |
+| --- | --- |
+| `--workspace <dir>` | Workspace directory to serve. Defaults to the current directory. A path that is not a readable workspace exits `1` with the refusal on stderr. |
+
+There is deliberately no flag, environment variable or file for the bearer token: the launching process writes it as the first line of stdin, so it never appears in a process listing. Once the server is listening, `serve` writes exactly one JSON line to stdout and nothing else, ever:
+
+```json
+{"event": "ready", "host": "127.0.0.1", "port": 49152, "api_version": 1, "base_path": "/v1"}
+```
+
+The port is chosen by the operating system, so the line is how a client learns it. Every request must carry the token as a bearer credential. Two lifelines end the server gracefully (exit `0`): closing stdin, so a server never outlives the process that launched it, and `SIGTERM` or `SIGINT`. Exit `1` is a runtime failure (a refused workspace, or the socket could not be bound) and exit `2` a usage failure (no token, a malformed token, or the missing extra).
+
+The API is owner-local: the bearer token is its only gate, and the sensitivity disclosure gate that `mcp` and `export` apply at their boundaries is deferred rather than reimplemented here. Its endpoints and schemas are defined by the OpenAPI document generated from the app and committed with the tests; the server itself serves no documentation page. That document and `--help` are the authority, not this page.
+
 ## `openkos.yaml` (workspace config)
 
 Structured settings for the workspace, read by the engine. It lives at the workspace root, beside `raw/` and `bundle/` — not inside the bundle, which holds concept documents and nothing else.
@@ -1281,4 +1299,4 @@ A withheld document is **not** an error and does not change the exit code. `rein
 
 ## Not yet built
 
-For orientation, these are **not** part of the CLI: a local API (planned with the desktop app, MVP 6). `openkos mcp` (above) already ships the ask surface — an MCP client, not the CLI, is its interface. Everything else described above — hybrid semantic/graph query, volatility-aware freshness windows, entity resolution and merge, the typed graph, reference-aware/cascade `forget`, and the `purge` verb — ships today.
+For orientation, these are **not** part of the CLI: the desktop app (MVP 6) that `openkos serve` (above) is the local API for. `openkos mcp` (above) already ships the ask surface — an MCP client, not the CLI, is its interface. Everything else described above — hybrid semantic/graph query, volatility-aware freshness windows, entity resolution and merge, the typed graph, reference-aware/cascade `forget`, and the `purge` verb — ships today.

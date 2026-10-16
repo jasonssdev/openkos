@@ -678,24 +678,24 @@ loopback-only test must fail.
 Goal: the verb, the lazy import with its remedy, the real-process proof and the wheel
 proof without the extra. Satisfies: L1, L2, L3. Depends on: S5a.
 
-- [ ] S5b.1 RED: `tests/unit/cli/test_serve_cmd.py` in-process: `openkos serve --help`
+- [x] S5b.1 RED: `tests/unit/cli/test_serve_cmd.py` in-process: `openkos serve --help`
   exposes `--workspace` and no option that could carry a token (assert the option
   set); with `sys.modules["fastapi"] = None` the verb exits 2, stderr names
   `openkos[api]`, stdout is empty; another `ImportError` propagates; `serve` is in
   `_SELF_LOCKING_COMMANDS` and the CLI lock guard does not wrap it; the verb sits in
   the "Explore" panel; the verb forwards `Path(workspace).absolute()` and exits with
   `launch.serve`'s return code (stub). Observe RED (no verb). Satisfies: L1, L3.
-- [ ] S5b.2 RED: fresh-interpreter test (the `test_mcp_cmd.py` pattern): `python -I -c
+- [x] S5b.2 RED: fresh-interpreter test (the `test_mcp_cmd.py` pattern): `python -I -c
   "import openkos.cli.main; ..."` and `openkos --help` leave `fastapi`, `uvicorn`,
   `starlette`, `pydantic` and `openkos.localapi` out of `sys.modules`; running another
   verb (`--version`) does too. Satisfies: L3.
-- [ ] S5b.3 GREEN: edit `src/openkos/cli/main.py`: add the `serve` verb (panel
+- [x] S5b.3 GREEN: edit `src/openkos/cli/main.py`: add the `serve` verb (panel
   "Explore", next to `mcp`), the lazy `from openkos.localapi import launch` inside the
   body, the `ModuleNotFoundError` check on the top-level `name` in `{fastapi, uvicorn,
   pydantic}` printing the install remedy to stderr and exiting 2, and add `serve` to
   `_SELF_LOCKING_COMMANDS`. Locate by content (`_SELF_LOCKING_COMMANDS`, the `mcp`
   verb), not by line. Satisfies: L1, L3.
-- [ ] S5b.4 RED: `tests/unit/localapi/test_launch_process.py`, POSIX only (skip on
+- [x] S5b.4 RED: `tests/unit/localapi/test_launch_process.py`, POSIX only (skip on
   Windows), `subprocess.Popen` of the CLI with bounded reads: token on stdin gives
   one ready line; the HTTP probe runs in a **second child Python process** (the unit
   network guard blocks the test process) and gets 200 with the token and 401 without;
@@ -703,7 +703,7 @@ proof without the extra. Satisfies: L1, L2, L3. Depends on: S5a.
   exits 2 with no ready line and empty stdout; a bad workspace exits 1; a token in
   argv or the environment with an empty stdin exits 2 and is never accepted. None is
   marked `cross_platform_smoke`. Satisfies: L1, L2.
-- [ ] S5b.5 CI step (RED is the local command, then the workflow): edit
+- [x] S5b.5 CI step (RED is the local command, then the workflow): edit
   `.github/workflows/ci.yml` build job (the isolated wheel install, located by
   content) with a step after the wheel smoke test that runs `openkos serve
   --workspace "$workdir" </dev/null`, asserts exit status 2 and that stderr contains
@@ -711,15 +711,15 @@ proof without the extra. Satisfies: L1, L2, L3. Depends on: S5a.
   built wheel in a scratch virtual environment without the extra (`uv build`, install
   the wheel only) and record the result in the PR body; confirm `openkos --help`
   already runs in the existing step. Satisfies: L3.
-- [ ] S5b.6 Docs: `docs/cli.md` gains a `serve` section (stdin token, the ready line
+- [x] S5b.6 Docs: `docs/cli.md` gains a `serve` section (stdin token, the ready line
   as documented fields, lifelines, exit codes 0/1/2, the `openkos[api]` extra, owner-
   local scope and the deferral of the gate) and the "not part of the CLI: a local API
   (planned ...)" sentence is rewritten (located by content). No counts. Satisfies:
   L1, L14.
-- [ ] S5b.7 Mutation: remove `serve` from `_SELF_LOCKING_COMMANDS` and observe S5b.1
+- [x] S5b.7 Mutation: remove `serve` from `_SELF_LOCKING_COMMANDS` and observe S5b.1
   fail; import `fastapi` at module top of `cli/main.py` and observe S5b.2 fail;
   revert, purge, GREEN. Satisfies: L3.
-- [ ] S5b.8 Run the five gates, then `uv build` and the new CI commands locally;
+- [x] S5b.8 Run the five gates, then `uv build` and the new CI commands locally;
   commits `feat(cli):`, `ci(ci):`, `docs(docs):`. Satisfies: L1..L3.
 
 Branch/PR: `feat/local-api-serve-verb`. Independent mutation: have the verb read the
