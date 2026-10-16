@@ -102,14 +102,6 @@ class RunStatus(BaseModel):
     error: ErrorBody | None
 
 
-class PreviewRequest(BaseModel):
-    """Which action to preview for the decision named in the path."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    action: api.Action
-
-
 class _EchoRequest(BaseModel):
     """A request that carries an echoed API dataclass.
 
@@ -127,6 +119,18 @@ class _EchoRequest(BaseModel):
         if isinstance(data, dict) and not data.keys() <= cls.model_fields.keys():
             raise ValueError("unknown field")
         return data
+
+
+class PreviewRequest(_EchoRequest):
+    """Which action to preview for the decision named in the path, and, for
+    `merge_group` only, the members the person marked and the survivor.
+
+    A request model that carries a nested API dataclass, so it rejects unknown
+    top-level keys itself (see `_EchoRequest`) rather than through `extra="forbid"`,
+    which would split `GroupSelection` into `-Input` and `-Output` components."""
+
+    action: api.Action
+    selection: api.GroupSelection | None = None
 
 
 class QuoteRequest(BaseModel):

@@ -127,7 +127,9 @@ def make_router() -> APIRouter:
         workspace: api.Workspace = Depends(_workspace),  # noqa: B008
     ) -> DecisionPreview:
         result = invoke(
-            lambda: api.preview_decision(workspace, decision_key, body.action)
+            lambda: api.preview_decision(
+                workspace, decision_key, body.action, selection=body.selection
+            )
         )
         if isinstance(result, api.DecisionPreview):
             return DecisionPreview(
