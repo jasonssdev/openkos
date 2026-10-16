@@ -124,13 +124,16 @@ The desktop app's shell lives beside the engine, not inside it: `desktop/` is a 
 
 ```
 desktop/
+├── engine/                       # the PyInstaller recipe that freezes the engine, and its entry point
+├── scripts/                      # build the freeze and the app; smoke-check a frozen engine
 ├── src-tauri/                    # the shell's Rust crate (Tauri's conventional layout)
 │   ├── Cargo.toml · Cargo.lock · build.rs · tauri.conf.json · icons/
+│   ├── tauri.bundle.conf.json    # the bundle build: the frozen engine as a resource, ad-hoc signing
 │   ├── src/
 │   │   ├── main.rs  lib.rs       # the Tauri app: start the supervisor, expose its state, stop it on exit
 │   │   ├── engine.rs             # one engine process: token over stdin, the ready line, stop
 │   │   ├── supervisor.rs         # start, watch, bounded restarts, stop; the state the UI reads
-│   │   └── locator.rs            # which engine to run: the one place the frozen engine will swap in
+│   │   └── locator.rs            # which engine to run: the bundle's frozen engine, or a checkout's
 │   └── tests/live_engine.rs      # the shell against the real engine of the checkout
 └── ui/                           # the web view's page: static HTML, CSS and JavaScript, no build step
 ```
@@ -138,7 +141,8 @@ desktop/
 - **The engine contract is the engine's.** The shell conforms to `openkos serve` as `localapi/launch.py` defines it: a per-launch token as the first line of stdin, one JSON ready line on stdout naming the loopback port, and EOF on stdin as the engine's lifeline.
 - **No orphaned engine.** The shell keeps the engine's stdin open for the engine's whole life, so when the shell dies by any route, a force-quit included, the pipe closes and the engine exits. On a normal stop the shell closes stdin first, waits, and only then kills the engine's process group.
 - **The web view talks to the engine directly.** It asks the shell for the engine's state (its base URL and per-launch token) and calls the local API itself; its origin is one of the engine's allowed origins ([ADR-0058](adr/0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md)), and its content security policy allows connections to loopback only.
-- **The engine locator is the seam for packaging.** It runs the development engine of a source checkout today; the frozen engine of [ADR-0056](adr/0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md) replaces it there and nowhere else.
+- **The engine locator is the seam for packaging.** Inside an app bundle it runs the frozen engine the bundle ships under `Contents/Resources/engine` ([ADR-0056](adr/0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md)); outside one, the development engine of a source checkout. Nothing else in the shell knows which.
+- **The freeze is a build output, not source.** `desktop/engine/` holds the recipe; the frozen tree, the `.app` and the `.dmg` are built under ignored directories by `desktop/scripts/`, and the PyInstaller one-directory freeze runs as one process, so the stdin lifeline reaches the engine itself.
 
 ## Repository conventions
 

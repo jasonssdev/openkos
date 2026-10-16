@@ -444,18 +444,24 @@ jobs:
           OPENKOS_SMOKE_EXPECT_WHEEL: "1"
         run: uv run --no-sync pytest -m cross_platform_smoke -v
 
-  # The desktop app ships the engine frozen with PyInstaller (ADR-0056), and a
-  # freeze breaks only at run time: a hidden import it missed, a native
-  # extension left behind, an interpreter that is not 3.14. So this job builds
-  # the freeze exactly as a contributor does (`desktop/scripts/build-engine.sh`,
-  # from uv.lock on a uv-managed 3.14, which fails on a wrong interpreter) and
-  # runs the smoke check against it: the engine starts and answers
-  # `/v1/status`, is one process, exits on stdin EOF and when its parent is
-  # killed, and loads sqlite-vec. No model is involved.
+  # The desktop app ships the engine frozen with PyInstaller inside its bundle
+  # (ADR-0056), and a freeze breaks only at run time: a hidden import it
+  # missed, a native extension left behind, an interpreter that is not 3.14.
+  # So this job builds the app exactly as a contributor does
+  # (`desktop/scripts/build-app.sh`): it freezes the engine from uv.lock on a
+  # uv-managed 3.14, bundles the shell with the freeze under
+  # Contents/Resources/engine, deep ad-hoc re-signs and verifies the .app,
+  # checks the interpreter inside it, and runs the smoke check against the
+  # engine inside the .app -- it starts and answers `/v1/status`, is one
+  # process, exits on stdin EOF and when its parent is killed, and loads
+  # sqlite-vec -- before writing the .dmg. Any of those failing fails the job.
+  # No model is involved.
   #
   # Apple Silicon only, the one platform the freeze targets; PyInstaller is not
   # a cross-compiler, so this cannot run on the Linux runners. No path filter,
-  # for the reason the top of this file gives. The freeze takes seconds.
+  # for the reason the top of this file gives. The Tauri CLI is pinned and,
+  # like the release build of the shell, kept by the Rust cache, which also
+  # caches `~/.cargo/bin`.
   desktop-bundle:
     name: desktop bundle (macOS)
     runs-on: macos-latest
@@ -467,10 +473,18 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
-      - name: Freeze the engine
-        run: desktop/scripts/build-engine.sh
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
-      - name: Smoke-check the frozen engine
-        run: >-
-          build/freeze/venv/bin/python desktop/scripts/smoke_engine.py
-          build/freeze/dist/openkos-engine/openkos-engine
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: desktop/src-tauri
+          key: bundle
+
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version 2.12.3 --locked
+
+      - name: Build the app and smoke-check its engine
+        run: desktop/scripts/build-app.sh
