@@ -185,9 +185,12 @@ any module imports `openkos.cli`, `openkos.mcp` (including `openkos.mcp.gate`),
 fail if any public signature or public dataclass field annotation mentions
 `sqlite3`, a type defined under `openkos.state`, or any `openkos` type that
 `openkos.api` does not export. A third check MUST fail if any module under
-`src/openkos/` outside `openkos.api` imports `openkos.api`. The existing
-layering tests MUST continue to bar `openkos.mcp`, and every top-level package
-other than `application`, `cli` and `api`, from importing the owner-local
+`src/openkos/` outside `openkos.api` and outside `openkos.localapi` imports
+`openkos.api`; `openkos.localapi`, the local HTTP adapter, is the one package
+permitted to import it, and it MUST import no other `openkos` module (see the
+`local-http-api` capability). The existing layering tests MUST continue to bar
+`openkos.mcp`, and every top-level package other than `application`, `cli` and
+`api` (so including `openkos.localapi`), from importing the owner-local
 `application/` services, and MUST NOT be weakened for any importer.
 
 #### Scenario: An API module importing the CLI is rejected
@@ -214,11 +217,25 @@ other than `application`, `cli` and `api`, from importing the owner-local
 - WHEN the import guard runs
 - THEN it fails and names the module and the import
 
-#### Scenario: Nothing outside the API imports it
+#### Scenario: Nothing outside the API and its local adapter imports it
 
-- GIVEN a module outside `openkos.api` imports `openkos.api`
+- GIVEN a module outside `openkos.api` and outside `openkos.localapi` imports
+  `openkos.api`
 - WHEN the guard runs
 - THEN it fails and names the module
+
+#### Scenario: The local HTTP adapter may import the API
+
+- GIVEN a module under `openkos.localapi` imports `openkos.api`
+- WHEN the guard runs
+- THEN it passes
+
+#### Scenario: The local HTTP adapter cannot reach owner-local services
+
+- GIVEN a module under `openkos.localapi` imports an owner-local
+  `openkos.application` service
+- WHEN the existing layering test runs
+- THEN it fails
 
 #### Scenario: The MCP adapter still cannot reach owner-local services
 
