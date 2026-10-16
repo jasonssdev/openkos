@@ -244,6 +244,37 @@ jobs:
           test -f openkos.yaml
           test -f AGENTS.md
 
+      # The wheel is installed WITHOUT the `[api]` extra, so `openkos serve`
+      # must fail closed: exit 2, the install remedy on stderr, nothing on
+      # stdout. `openkos --help` already ran above against this same install,
+      # which is what proves the extra's packages are never imported at
+      # start-up.
+      - name: Serve without the api extra (missing-extra remedy)
+        run: |
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          uv run --isolated --no-project --with "${GITHUB_WORKSPACE}"/dist/openkos-*.whl openkos init
+          set +e
+          uv run --isolated --no-project --with "${GITHUB_WORKSPACE}"/dist/openkos-*.whl \
+            openkos serve --workspace "$workdir" </dev/null >stdout.txt 2>stderr.txt
+          status=$?
+          set -e
+          test "$status" -eq 2 || {
+            echo "::error::openkos serve exited $status without the extra, expected 2" >&2
+            cat stderr.txt >&2
+            exit 1
+          }
+          grep -q 'openkos\[api\]' stderr.txt || {
+            echo "::error::stderr does not name openkos[api]" >&2
+            cat stderr.txt >&2
+            exit 1
+          }
+          test ! -s stdout.txt || {
+            echo "::error::stdout is not empty" >&2
+            cat stdout.txt >&2
+            exit 1
+          }
+
   # Every job above runs on `ubuntu-latest` only. macOS and Windows behavior
   # is otherwise UNVERIFIED until a user hits it, and this repo has already
   # paid for that twice: platform-gated tests that first ran on Linux cost
