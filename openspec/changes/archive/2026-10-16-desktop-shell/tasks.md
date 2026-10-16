@@ -82,9 +82,9 @@ previous one is squash-merged).
 
 ## S3 Archive
 
-- [ ] S3.1 CHANGELOG entry; the roadmap's MVP 6 status line.
-- [ ] S3.2 Merge the delta into `openspec/specs/desktop-shell/spec.md`; name-match
+- [x] S3.1 CHANGELOG entry; the roadmap's MVP 6 status line.
+- [x] S3.2 Merge the delta into `openspec/specs/desktop-shell/spec.md`; name-match
   every heading; check every requirement against the shipped code.
-- [ ] S3.3 ADR-0055 Accepted in its frontmatter, body and README row.
-- [ ] S3.4 Move the change to `openspec/changes/archive/<date>-desktop-shell/` with
+- [x] S3.3 ADR-0055 Accepted in its frontmatter, body and README row.
+- [x] S3.4 Move the change to `openspec/changes/archive/<date>-desktop-shell/` with
   `archive-report.md`; verify on `main` that the original folder is gone.
