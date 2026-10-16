@@ -30,6 +30,9 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SRC_ROOT = _REPO_ROOT / "src" / "openkos"
 _MCP_DIR = _SRC_ROOT / "mcp"
+# The local API's one async edge: its lifespan hands the blocking run-registry
+# shutdown to a worker thread (ADR-0061). No other localapi module may use asyncio.
+_LOCALAPI_ASYNC_EDGE = _SRC_ROOT / "localapi" / "_app.py"
 _APPLICATION_DIR = _SRC_ROOT / "application"
 _CLI_MAIN = _SRC_ROOT / "cli" / "main.py"
 
@@ -83,13 +86,14 @@ def test_layering_invariants() -> None:
         path
         for path in _src_modules()
         if _MCP_DIR not in path.parents
+        and path != _LOCALAPI_ASYNC_EDGE
         and any(
             name == "asyncio" or name.startswith("asyncio.")
             for name in _imported_module_names(_tree(path))
         )
     ]
     assert asyncio_offenders == [], (
-        f"asyncio must be imported only under mcp/; found: {asyncio_offenders}"
+        f"asyncio must be imported only under mcp/ and localapi/_app.py; found: {asyncio_offenders}"
     )
 
     # -- mcp/ never imports openkos.cli, and only stdlib or openkos.* -------

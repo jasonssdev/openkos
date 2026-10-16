@@ -23,6 +23,8 @@ from openkos.localapi._errors import (
     ApiProblem,
     ErrorBody,
     error_body,
+    outcome_problem,
+    run_active,
 )
 from openkos.localapi._models import JudgingOutcomeBody, RunStatus
 
@@ -32,10 +34,6 @@ ADMISSION_TIMEOUT_SECONDS: Final = 10.0
 SHUTDOWN_GRACE_SECONDS: Final = 5.0
 # Finished and failed runs kept for polling; older ones are evicted.
 FINISHED_RUNS_KEPT: Final = 16
-
-RUN_ACTIVE: Final = "run_active"
-QUOTE_STALE: Final = "quote_stale"
-RUN_REFUSED: Final = "run_refused"
 
 _THREAD_NAME: Final = "openkos-judging-run"
 
@@ -111,25 +109,6 @@ def _outcome_body(outcome: api.JudgingOutcome) -> JudgingOutcomeBody:
     )
 
 
-def _stale_problem(stale: api.QuoteStale) -> ApiProblem:
-    changed = ", ".join(stale.changed)
-    body = ErrorBody(
-        code=QUOTE_STALE,
-        retryable=False,
-        message=f"the quote is stale (changed: {changed}); quote again",
-    )
-    return ApiProblem(409, body)
-
-
-def _refused_problem() -> ApiProblem:
-    body = ErrorBody(
-        code=RUN_REFUSED,
-        retryable=False,
-        message="a run needs the token of a quote",
-    )
-    return ApiProblem(422, body)
-
-
 class RunRegistry:
     """At most one active run, and the newest finished ones for polling."""
 
@@ -155,14 +134,7 @@ class RunRegistry:
         )
         with self._lock:
             if any(r.state in ("running", "stopping") for r in self._runs.values()):
-                raise ApiProblem(
-                    409,
-                    ErrorBody(
-                        code=RUN_ACTIVE,
-                        retryable=True,
-                        message="a judging run is already active",
-                    ),
-                )
+                raise run_active()
             self._runs[run.run_id] = run
             thread = threading.Thread(
                 target=self._execute,
@@ -250,10 +222,8 @@ class RunRegistry:
                 observer=_Observer(self, run),
                 wait_seconds=WRITE_WAIT_SECONDS,
             )
-            if isinstance(result, api.QuoteStale):
-                problem = _stale_problem(result)
-            elif isinstance(result, api.RunRefused):
-                problem = _refused_problem()
+            if isinstance(result, api.QuoteStale | api.RunRefused):
+                problem = outcome_problem(result)
             else:
                 outcome = _outcome_body(result)
         except Exception as exc:  # noqa: BLE001 -- mapped to a fixed-message body

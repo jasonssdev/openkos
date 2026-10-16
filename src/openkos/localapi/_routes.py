@@ -4,7 +4,7 @@ attribute, so a test that patches `openkos.api.<fn>` intercepts the call."""
 import dataclasses
 from importlib import metadata
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.security import HTTPBearer
 
 from openkos import api
@@ -16,8 +16,12 @@ from openkos.localapi._models import (
     DecisionList,
     HealthBody,
     PreviewRequest,
+    QuoteRequest,
     RefreshRequest,
+    RunRequest,
+    RunStatus,
 )
+from openkos.localapi._runs import RunRegistry
 
 # Documents the scheme in the OpenAPI schema only: the guard enforces the token
 # before any route runs, so this never rejects (`auto_error=False`).
@@ -40,6 +44,12 @@ def _workspace(request: Request) -> api.Workspace:
     """The launch's workspace, kept on the app by `create_app`."""
     workspace: api.Workspace = request.app.state.workspace
     return workspace
+
+
+def _registry(request: Request) -> RunRegistry:
+    """The run registry `_build` keeps on the app."""
+    registry: RunRegistry = request.app.state.registry
+    return registry
 
 
 def _plain_mappings(s: api.WorkspaceStatus) -> api.WorkspaceStatus:
@@ -131,5 +141,46 @@ def make_router() -> APIRouter:
     ) -> api.QueueRefresh:
         wait = _wait(body.wait_seconds if body else _errors.WRITE_WAIT_SECONDS)
         return invoke(lambda: api.refresh_decision_queue(workspace, wait_seconds=wait))
+
+    @router.post("/judging/quote")
+    def quote(
+        body: QuoteRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.JudgingQuote:
+        return invoke(
+            lambda: api.quote_judging(
+                workspace,
+                body.kind,
+                include_confidential=body.include_confidential,
+                include_uncertain=body.include_uncertain,
+            )
+        )
+
+    @router.post("/judging/runs", status_code=202)
+    def start_run(
+        body: RunRequest,
+        response: Response,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+        registry: RunRegistry = Depends(_registry),  # noqa: B008
+    ) -> RunStatus:
+        if body.token is None:
+            raise _errors.outcome_problem(api.RunRefused("no_quote_token"))
+        status = registry.start(workspace, body.token)
+        response.headers["Location"] = f"{prefix()}/judging/runs/{status.run_id}"
+        return status
+
+    @router.get("/judging/runs/{run_id}")
+    def run_status(
+        run_id: str,
+        registry: RunRegistry = Depends(_registry),  # noqa: B008
+    ) -> RunStatus:
+        return registry.status(run_id)
+
+    @router.post("/judging/runs/{run_id}/stop")
+    def stop_run(
+        run_id: str,
+        registry: RunRegistry = Depends(_registry),  # noqa: B008
+    ) -> RunStatus:
+        return registry.stop(run_id)
 
     return router

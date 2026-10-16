@@ -90,6 +90,24 @@ class _EchoRequest(BaseModel):
         return data
 
 
+class QuoteRequest(BaseModel):
+    """Which judging to price, and whether the quote may include what the run
+    needs consent for."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: api.JudgingKind
+    include_confidential: bool = False
+    include_uncertain: bool = False
+
+
+class RunRequest(_EchoRequest):
+    """The quote's token, echoed unchanged. A missing or null token is a
+    refusal the route answers (422 `run_refused`), not a validation error."""
+
+    token: api.QuoteToken | None = None
+
+
 class ApplyRequest(_EchoRequest):
     """The action, the version the preview issued (echoed unchanged) and how
     long to wait for the workspace lock; a client can shorten the wait only."""

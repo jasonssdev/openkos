@@ -23,6 +23,10 @@ EXPECTED_ROUTES = {
     ("POST", "/v1/decisions/{decision_key}/preview"),
     ("POST", "/v1/decisions/{decision_key}/apply"),
     ("POST", "/v1/queue/refresh"),
+    ("POST", "/v1/judging/quote"),
+    ("POST", "/v1/judging/runs"),
+    ("GET", "/v1/judging/runs/{run_id}"),
+    ("POST", "/v1/judging/runs/{run_id}/stop"),
 }
 
 

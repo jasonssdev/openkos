@@ -5,6 +5,7 @@ is the only middleware: no route can opt out of it. `openapi_document` builds
 the same routes with no settings, so the contract needs no workspace or socket.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -15,7 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from openkos import api
-from openkos.localapi import _errors, _routes
+from openkos.localapi import _errors, _routes, _runs
 from openkos.localapi._guard import ALLOWED_ORIGINS, LocalApiGuard, _GuardConfig
 
 DEFAULT_ORIGINS: Final = tuple(sorted(ALLOWED_ORIGINS))
@@ -66,8 +67,12 @@ async def _on_unexpected(_request: Request, exc: Exception) -> JSONResponse:
 
 
 @asynccontextmanager
-async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
+    # Set every stop token and wait at most the grace; the join blocks, so it
+    # leaves the event loop. A call in flight is abandoned with its daemon thread.
+    registry: _runs.RunRegistry = app.state.registry
+    await asyncio.to_thread(registry.shutdown, _runs.SHUTDOWN_GRACE_SECONDS)
 
 
 def _build() -> FastAPI:
@@ -79,6 +84,7 @@ def _build() -> FastAPI:
         openapi_url=None,
         lifespan=_lifespan,
     )
+    app.state.registry = _runs.RunRegistry()
     app.include_router(_routes.make_router())
     handlers: dict[Any, Any] = {
         _errors.ApiProblem: _on_api_problem,
