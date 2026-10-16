@@ -136,7 +136,7 @@ change the answer, the citations, or any count in the retrieval summary.
 
 ### Requirement: `--limit` Option
 
-`query` MUST accept an optional `--limit <n>` argument defaulting to 5 and
+`query` MUST accept an optional `--limit <n>` argument defaulting to 8 (`DEFAULT_QUERY_LIMIT`, ADR-0062) and
 MUST forward it unchanged as `answer(..., limit=n)`.
 
 #### Scenario: Caller overrides the default limit
@@ -149,7 +149,7 @@ MUST forward it unchanged as `answer(..., limit=n)`.
 
 - GIVEN `openkos query "<question>"` is run without `--limit`
 - WHEN `query` invokes `answer()`
-- THEN `answer()` is called with `limit=5`
+- THEN `answer()` is called with `limit=8`
 
 ### Requirement: LLM And Index Errors Map To Exit 1
 

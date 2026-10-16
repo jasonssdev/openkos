@@ -26,6 +26,7 @@ from openkos.application import consistency as application_consistency
 from openkos.application import query as query_service
 from openkos.llm.base import Embedder, LLMBackend
 from openkos.mcp import gate
+from openkos.retrieval.answer import DEFAULT_QUERY_LIMIT
 
 ProgressSink = Callable[[str, int, int], None]
 """`(phase, completed, total)`, called from the worker thread running a
@@ -241,10 +242,10 @@ def _query_run(
     actually releases the block once `local_exemption` is `True`; this
     function never bypasses that by passing `include_confidential=True`
     instead). `progress` is threaded straight through to `answer()`,
-    unmodified. `limit` defaults to `5` -- the CLI's own default -- when
+    unmodified. `limit` defaults to `DEFAULT_QUERY_LIMIT` -- the CLI's own default -- when
     omitted."""
     question = cast(str, arguments["question"])  # inputSchema already enforced this
-    limit = cast(int, arguments.get("limit", 5))
+    limit = cast(int, arguments.get("limit", DEFAULT_QUERY_LIMIT))
     cfg = config.read_config(ctx.layout.root)
     llm = ctx.make_llm(cfg)
     embedder = ctx.make_embedder(cfg)

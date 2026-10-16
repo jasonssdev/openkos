@@ -225,7 +225,7 @@ What `query` *does* do is **say so**. Before contacting the model it compares ea
 
 | Flag | Meaning |
 | --- | --- |
-| `--limit <n>` | Max concepts to retrieve as context. Defaults to `5`. Each retriever is queried with a pool of `max(limit, 10)` before fusion truncates to `limit`. |
+| `--limit <n>` | Max concepts to retrieve as context. Defaults to `8`, measured against 5 in [`evals/query_limit/`](https://github.com/jasonssdev/openkos/tree/main/evals/query_limit) ([ADR-0062](adr/0062-query-limit-defaults-to-8-measured-against-5.md)). Each retriever is queried with a pool of `max(limit, 10)` before fusion truncates to `limit`. |
 | `--include-deprecated` | Include deprecated and superseded concepts in retrieval. Excluded by default from both channels (lexical, dense) — the `retrieval:` stderr summary already reports the POST-filter counts. |
 | `--include-confidential` | Include confidential concepts in retrieval. Excluded by default from both channels (lexical, dense) when the LLM backend is **not** verifiably on this machine. Against a local backend the exemption already applies and this flag is unnecessary — see [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 | `--save` | File the cited answer back into the bundle as a new `Insight` — the filed-synthesis type (the two-output rule). Opt-in; off by default, keeping `query` read-only. Refuses when the answer cited no concepts (nothing to record provenance from). |

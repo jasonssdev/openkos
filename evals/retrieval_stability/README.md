@@ -84,4 +84,4 @@ re-running this probe now measures the shipped state: the `raw` and
 - The dense channel still embeds the full question. Language clustering in
   the embedding space remains a milder, unresolved pull; a re-ranking or
   query-translation treatment would need its own measurement.
-- `k=5` (the display limit) is untouched.
+- `k=5` is held fixed here on purpose: the harness varies the pool floor, not the display limit, and its stored results were measured at 5. The shipped default moved to 8 on a separate measurement (`evals/query_limit/`, ADR-0062).

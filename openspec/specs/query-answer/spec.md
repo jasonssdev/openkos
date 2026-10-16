@@ -108,7 +108,7 @@ whose `answer` is the LLM's returned text.
 
 ### Requirement: Default Retrieval Limit
 
-`limit` MUST default to 5. Each retriever MUST be called with
+`limit` MUST default to 8 (`DEFAULT_QUERY_LIMIT`, ADR-0062). Each retriever MUST be called with
 `pool_limit = max(limit, 10)`; `fuse`'s output MUST be truncated to `limit`
 before context assembly.
 
@@ -117,7 +117,7 @@ before context assembly.
 - GIVEN a caller invokes `answer` without a `limit` argument
 - WHEN retrieval executes
 - THEN both `FtsIndex.search` and `vector_store.query` are called with
-  `pool_limit=10`, and the fused, truncated context contains at most 5
+  `pool_limit=10`, and the fused, truncated context contains at most 8
   concepts
 
 ### Requirement: Zero Hits Return A Canned No-Match Result

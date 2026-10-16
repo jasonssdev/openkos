@@ -5042,7 +5042,7 @@ def test_sources_do_not_crowd_compiled_concepts_out_of_the_context(
     llm = _FakeLLM(reply="Gustavo attended.")
 
     result = answer_mod.answer(
-        "who attended", bundle_dir=bundle_dir, llm=llm, fts_index=index
+        "who attended", bundle_dir=bundle_dir, llm=llm, fts_index=index, limit=5
     )
 
     assert [c.concept_id for c in result.citations] == [
@@ -5133,3 +5133,15 @@ def test_include_deprecated_restores_a_provenance_orphan(tmp_path: Path) -> None
     )
 
     assert {c.concept_id for c in result.citations} == {"concepts/v1-only"}
+
+
+def test_default_query_limit_is_the_measured_constant() -> None:
+    """`answer()`'s default is the named, measured constant (#1377), so the
+    CLI and MCP defaults cannot drift from it."""
+    import inspect
+
+    assert answer_mod.DEFAULT_QUERY_LIMIT == 8
+    assert (
+        inspect.signature(answer_mod.answer).parameters["limit"].default
+        == answer_mod.DEFAULT_QUERY_LIMIT
+    )

@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
+from openkos.retrieval.answer import DEFAULT_QUERY_LIMIT
 from openkos.state import fts, vectorstore
 from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
@@ -122,7 +123,7 @@ def test_answered_query_emits_one_json_object_with_the_v1_schema(
     ]
     assert payload["schema_version"] == 1
     assert payload["question"] == "dichotomyzz"
-    assert payload["limit"] == 5
+    assert payload["limit"] == DEFAULT_QUERY_LIMIT
     assert payload["outcome"] == "answered"
     assert payload["answer"] == "The answer."
     assert payload["sufficiency"] == {

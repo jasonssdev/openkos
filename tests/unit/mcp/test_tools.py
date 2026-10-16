@@ -370,3 +370,26 @@ def test_query_llm_egress_conjunction(tmp_path: Path) -> None:
     )
     assert remote_on_llm.calls
     assert _MARKER not in remote_on_llm.calls[0]
+
+
+def test_query_tool_omitted_limit_uses_the_shared_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The MCP `query` tool and the CLI share one default (#1377)."""
+    from openkos.retrieval.answer import DEFAULT_QUERY_LIMIT
+
+    layout = _build_query_fixture(tmp_path)
+    seen: list[int] = []
+
+    def _record(question: str, **kwargs: object) -> object:
+        seen.append(int(kwargs["limit"]))  # type: ignore[call-overload]
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr("openkos.application.query.run_query", _record)
+    with pytest.raises(RuntimeError):
+        tools.REGISTRY["query"].run(
+            {"question": "marker value"},
+            _query_ctx(layout, _RecordingLLM(is_local=True), expose_confidential=False),
+            None,
+        )
+    assert seen == [DEFAULT_QUERY_LIMIT] == [8]
