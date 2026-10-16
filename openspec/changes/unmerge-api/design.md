@@ -42,15 +42,17 @@ one prompt; the API has a preview, which lists every step before consent.
 The digest is sha-256 over sorted lines:
 
 - `target\t<survivor>\t<absorbed>` and `discard\t<true|false>`;
-- `ledger\t<sha256 of the survivor's committed ledger sidecar>` (it holds every
-  entry being reversed);
-- per step: `step\t<n>\t<absorbed>\t<merged_at>`, `absent\t<absorbed>.md\t<-|sha>`
-  (the recreated file must be free), and `file\t<rel>\t<sha|->` for every file the
-  entry rewrites (links, relations, provenance);
-- for the first step, the drift baselines of Phase A: the survivor's bytes,
-  `index.md`/`log.md` when the entry restores snapshots (a delta entry is
-  re-composed, as merge's catalog is, so it is not guarded), and the read
-  dependencies.
+- `ledger\t<sha256 of the survivor's committed ledger sidecar>`: it holds every
+  entry being reversed, so the sequence follows from it and the target;
+- the first step's Phase A baselines: the survivor's bytes, each file it
+  rewrites, `index.md`/`log.md` when the entry restores snapshots (a delta entry
+  is re-composed, as merge's catalog is, so it is not guarded), and every other
+  bundle document, which Phase A captures for its supersession walk. Those cover
+  every file a later step rewrites and every path a later step recreates.
+
+Per-step lines, per-file lines for later steps and document-name lines were
+written first and dropped when a mutation check showed each redundant with the
+lines above; every line kept has a test that fails without it.
 
 The time the preview ran is not part of it, so the same bundle always yields the
 same digest. A flipped `discard_survivor_edits` changes a line, so an echoed
