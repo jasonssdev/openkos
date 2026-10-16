@@ -102,4 +102,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0061](0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra.md) | The local API is a FastAPI adapter over the Python API, shipped as an optional extra | Accepted | 2026-10-15 |
 | [0062](0062-query-limit-defaults-to-8-measured-against-5.md) | The query limit defaults to 8, measured against 5 | Accepted | 2026-10-16 |
 | [0063](0063-an-identity-group-is-one-decision-that-merges-marked-members-pairwise-into-a-chosen-survivor.md) | An identity group is one decision that merges the marked members pairwise into a chosen survivor | Accepted | 2026-10-16 |
-| [0064](0064-unmerge-is-a-two-phase-api-operation-bound-to-a-version-over-the-ledger.md) | Unmerge is a two-phase API operation bound to a version over the ledger, not a queue decision | Proposed | 2026-10-16 |
+| [0064](0064-unmerge-is-a-two-phase-api-operation-bound-to-a-version-over-the-ledger.md) | Unmerge is a two-phase API operation bound to a version over the ledger, not a queue decision | Accepted | 2026-10-16 |

@@ -120,7 +120,7 @@ golden snapshot is regenerated and `API_VERSION` is not raised: new names
 `merge_history`, `preview_unmerge`, `apply_unmerge`) and the value `"unmerge"`
 added to `WriteFailed.operation`. No existing union, alias or signature changes.
 
-#### Scenario: The surface diff is additive
+#### Scenario: The unmerge surface diff is additive
 
 - GIVEN the snapshot recorded at the merge base with `origin/main`
 - WHEN the snapshot is regenerated after the change

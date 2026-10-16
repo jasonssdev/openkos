@@ -82,12 +82,12 @@ JSON is never hand-merged).
 
 ## S4 Close
 
-- [ ] S4.1 `docs/decision-wording.md`: drop the #1432 gap and its open question.
-- [ ] S4.2 CHANGELOG entry.
-- [ ] S4.3 Merge the deltas into `openspec/specs/` (name-match every heading;
+- [x] S4.1 `docs/decision-wording.md`: drop the #1432 gap and its open question.
+- [x] S4.2 CHANGELOG entry.
+- [x] S4.3 Merge the deltas into `openspec/specs/` (name-match every heading;
   check each requirement against shipped code).
-- [ ] S4.4 ADR-0064 to Accepted (frontmatter, body, README row).
-- [ ] S4.5 Move the change folder to `openspec/changes/archive/<date>-unmerge-api/`
+- [x] S4.4 ADR-0064 to Accepted (frontmatter, body, README row).
+- [x] S4.5 Move the change folder to `openspec/changes/archive/<date>-unmerge-api/`
   with `archive-report.md`.
 
 ## Applicable checks (every slice)
@@ -100,3 +100,8 @@ once on the cumulative content, `uv run python evals/run_self_tests.py`.
 
 | Slice | PR | Squash SHA | Notes |
 |-------|----|------------|-------|
+| S1 | #1440 | `2fa4d702` | plan, ADR-0064 Proposed |
+| S2a | #1441 | `7d6ee738` | digest trimmed after mutation checks |
+| S2b | #1443 | `ad91829d` | self-merge ledger entry refused |
+| S3 | #1444 | `8fa50102` | |
+| S4 | this PR | | archive |
