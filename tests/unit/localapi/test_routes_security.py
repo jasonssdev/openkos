@@ -15,7 +15,12 @@ from openkos import api
 from openkos.localapi._app import ServerSettings, _build, create_app, openapi_document
 from tests.unit.localapi.conftest import AUTH, PORT, TAURI, TOKEN
 
-EXPECTED_ROUTES = {("GET", "/v1/health")}
+EXPECTED_ROUTES = {
+    ("GET", "/v1/health"),
+    ("GET", "/v1/status"),
+    ("GET", "/v1/pending"),
+    ("GET", "/v1/decisions"),
+}
 
 
 @pytest.fixture

@@ -95,6 +95,7 @@ def _build() -> FastAPI:
 def create_app(settings: ServerSettings) -> FastAPI:
     """The guarded application for one launch."""
     app = _build()
+    app.state.workspace = settings.workspace
     app.add_middleware(
         LocalApiGuard,
         config=_GuardConfig(port=settings.port, token_digest=settings.token_digest),

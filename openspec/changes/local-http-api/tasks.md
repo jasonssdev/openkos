@@ -376,7 +376,7 @@ Satisfies: L8, L9, L11 (read rows), L12 (reads ignore the lock), L14. Depends on
 Includes correction 1 (the `MappingProxyType` flattening failure) as the RED that
 proves the failure and the fix.
 
-- [ ] S2c.1 RED: `tests/unit/localapi/test_reads.py` populated models, patching
+- [x] S2c.1 RED: `tests/unit/localapi/test_reads.py` populated models, patching
   `openkos.api.status`, `api.pending_report` and `api.list_decisions` with stubs that
   return the instance and record the call: `WorkspaceStatus` with `MappingProxyType`
   mappings for `concepts_by_type` and `open_decisions_by_kind`, `edges=(3, 1)`,
@@ -386,38 +386,38 @@ proves the failure and the fix.
   `WithheldAction`. Assert the exact JSON, then `TypeAdapter(T).validate_python(json)
   == instance`. The status test fails first with `TypeError: cannot pickle
   'mappingproxy'` from FastAPI's `asdict`; record that RED. Satisfies: L9.
-- [ ] S2c.2 GREEN: add `DecisionList` to `_models.py`; add `GET /status`,
+- [x] S2c.2 GREEN: add `DecisionList` to `_models.py`; add `GET /status`,
   `GET /pending`, `GET /decisions` as plain `def` endpoints in `_routes.py`, each
   calling `_errors.invoke(lambda: api.<fn>(settings.workspace))`; the status endpoint
   passes `dataclasses.replace(s, concepts_by_type=dict(...),
   open_decisions_by_kind=dict(...))`; response types are the API dataclasses (no DTO,
   D2). Satisfies: L8, L9.
-- [ ] S2c.3 RED then GREEN, read-path error rows in `test_errors.py`:
+- [x] S2c.3 RED then GREEN, read-path error rows in `test_errors.py`:
   `QueueUnavailableError` is 503 `queue_unavailable` (retryable false);
   `WorkspaceNotFound` 500 `workspace_not_found`; `WorkspaceUnreadable` 500
   `workspace_unreadable`; each raised with a sentinel message that must not appear in
   the body; `OSError` and `ValueError` are 500 `internal_error`. Add the rows to
   `_errors.py` subclass-first. Satisfies: L11.
-- [ ] S2c.4 RED then GREEN, real workspace: use the existing workspace fixture.
+- [x] S2c.4 RED then GREEN, real workspace: use the existing workspace fixture.
   Status, pending and decisions on an initialized workspace return 200 and the
   workspace is byte-identical afterwards; an absent queue reports the not-computed
   pending report; two open decisions are both listed; with the workspace lock held
   by another process (`lock.workspace_lock`), all three still succeed and none takes
   the lock or calls a model (client factories patched to fail). Satisfies: L8, L12.
-- [ ] S2c.5 RED then GREEN, owner-local: a decision whose rationale derives from a
+- [x] S2c.5 RED then GREEN, owner-local: a decision whose rationale derives from a
   confidential source is returned unredacted with a valid token, and the same request
   without a token or with a wrong one returns 401/403 with no content; assert
   `openkos.mcp.gate` is not in `sys.modules` after importing `openkos.localapi`
   in a fresh interpreter. Satisfies: L14.
-- [ ] S2c.6 Extend the route-enumeration expected set in
+- [x] S2c.6 Extend the route-enumeration expected set in
   `test_routes_security.py` with the three routes and confirm the whole matrix runs
   over them; regenerate `tests/unit/localapi/openapi.json` and confirm
   `DecisionList` and the API types appear with short component names. Satisfies: L7,
   L16.
-- [ ] S2c.7 Mutation: drop the `dict(...)` conversion in the status endpoint and
+- [x] S2c.7 Mutation: drop the `dict(...)` conversion in the status endpoint and
   observe S2c.1 redden with the pickling error; return the lock-taking path from a
   read and observe S2c.4 fail; revert, purge, GREEN. Satisfies: L9, L12.
-- [ ] S2c.8 Run the five gates; commit `feat(api):`. Satisfies: L8, L9, L11, L12, L14.
+- [x] S2c.8 Run the five gates; commit `feat(api):`. Satisfies: L8, L9, L11, L12, L14.
 
 Branch/PR: `feat/local-api-reads`. Independent mutation: serve `list_decisions` as a
 bare top-level array; the exact-JSON test must fail.
