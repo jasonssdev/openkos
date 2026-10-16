@@ -900,7 +900,7 @@
         "type": "object"
       },
       "MergePlan": {
-        "description": "Merging two concepts: the survivor absorbs the other.",
+        "description": "Merging concepts into a survivor: one pairwise merge, or, for\n`merge_group`, one per marked member.",
         "properties": {
           "absorbed_id": {
             "title": "Absorbed Id",
@@ -925,11 +925,27 @@
             "title": "Files Rewritten",
             "type": "integer"
           },
+          "kept_distinct_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Kept Distinct Ids",
+            "type": "array"
+          },
           "kind": {
             "const": "merge",
             "default": "merge",
             "title": "Kind",
             "type": "string"
+          },
+          "steps": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/MergeStep"
+            },
+            "title": "Steps",
+            "type": "array"
           },
           "survivor_criterion": {
             "title": "Survivor Criterion",
@@ -938,6 +954,17 @@
           "survivor_id": {
             "title": "Survivor Id",
             "type": "string"
+          },
+          "survivor_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Survivor Type"
           }
         },
         "required": [
@@ -947,9 +974,59 @@
           "files_rewritten",
           "cross_source_same_pair",
           "cross_type_concern",
-          "kind"
+          "kind",
+          "steps",
+          "kept_distinct_ids",
+          "survivor_type"
         ],
         "title": "MergePlan",
+        "type": "object"
+      },
+      "MergeStep": {
+        "description": "One pairwise merge of a plan: `survivor_id` absorbs `absorbed_id`.",
+        "properties": {
+          "absorbed_id": {
+            "title": "Absorbed Id",
+            "type": "string"
+          },
+          "absorbed_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Absorbed Type"
+          },
+          "files_rewritten": {
+            "title": "Files Rewritten",
+            "type": "integer"
+          },
+          "survivor_id": {
+            "title": "Survivor Id",
+            "type": "string"
+          },
+          "type_outcome": {
+            "enum": [
+              "same_type",
+              "recorded",
+              "discarded",
+              "unknown"
+            ],
+            "title": "Type Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "survivor_id",
+          "absorbed_id",
+          "absorbed_type",
+          "type_outcome",
+          "files_rewritten"
+        ],
+        "title": "MergeStep",
         "type": "object"
       },
       "PendingReport": {

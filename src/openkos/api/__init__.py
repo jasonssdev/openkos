@@ -37,6 +37,7 @@ from openkos.api._decisions import (
     IdentityDetail,
     KeepDistinctPlan,
     MergePlan,
+    MergeStep,
     RelatePlan,
     RelationDetail,
     TierDetail,
@@ -94,6 +95,7 @@ from openkos.application.queue_refresh import QueueRefreshRefused
 from openkos.application.runtime import StopToken
 from openkos.application.write_gate import (
     DriftDetected,
+    MergeGroupInterrupted,
     Refused,
     WriteFailed,
     WriteRefused,
@@ -147,7 +149,9 @@ __all__ = [
     "KindCounts",
     "KindRefresh",
     "LLMBackend",
+    "MergeGroupInterrupted",
     "MergePlan",
+    "MergeStep",
     "Message",
     "NotApplied",
     "OpenKosError",
