@@ -19,6 +19,7 @@ from openkos.application.curate_decisions import (
     Action,
     Applied,
     DecisionVersion,
+    GroupSelection,
     NotApplied,
     Stale,
     WithheldAction,
@@ -141,16 +142,40 @@ on both, so the plan a caller reviewed is the plan that is committed."""
 
 
 @dataclass(frozen=True)
-class MergePlan:
-    """Merging two concepts: the survivor absorbs the other."""
+class MergeStep:
+    """One pairwise merge of a plan: `survivor_id` absorbs `absorbed_id`."""
 
     survivor_id: str
     absorbed_id: str
+    absorbed_type: str | None
+    type_outcome: Literal["same_type", "recorded", "discarded", "unknown"]
+    """What the step does with the absorbed type: nothing to do (same as the
+    survivor's), recorded as the survivor's `type_alternative`, discarded
+    because the survivor already records one, or unknown because a type cannot
+    be read."""
+    files_rewritten: int
+
+
+@dataclass(frozen=True)
+class MergePlan:
+    """Merging concepts into a survivor: one pairwise merge, or, for
+    `merge_group`, one per marked member."""
+
+    survivor_id: str
+    absorbed_id: str
+    """The first absorbed member; `steps` lists them all."""
     survivor_criterion: str
+    """Why this survivor, or `"chosen"` when the person named it."""
     files_rewritten: int
     cross_source_same_pair: bool
     cross_type_concern: str | None
     kind: Literal["merge"] = "merge"
+    steps: tuple[MergeStep, ...] = ()
+    """The pairwise merges, in the order they are written."""
+    kept_distinct_ids: tuple[str, ...] = ()
+    """The members of a group that were not marked: left as they are and
+    recorded as different from the survivor."""
+    survivor_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -196,6 +221,32 @@ ApplyOutcome = Applied | NotApplied | Stale
 def _plan_of(
     body: curate_decisions.DecisionPreviewBody,
 ) -> MergePlan | RelatePlan | TierPlan | KeepDistinctPlan:
+    if isinstance(body, curate_decisions.MergeGroupDecisionPreview):
+        marked = {f"{member}.md" for member in body.selection.member_ids}
+        rewritten = {
+            rel for step in body.steps for rel in step.prepared.touched_files
+        } - marked
+        steps = tuple(
+            MergeStep(
+                survivor_id=step.prepared.survivor_canonical,
+                absorbed_id=step.prepared.absorbed_canonical,
+                absorbed_type=step.absorbed_type,
+                type_outcome=step.type_outcome,
+                files_rewritten=len(step.prepared.touched_files),
+            )
+            for step in body.steps
+        )
+        return MergePlan(
+            survivor_id=body.survivor_id,
+            absorbed_id=steps[0].absorbed_id,
+            survivor_criterion="chosen",
+            files_rewritten=len(rewritten),
+            cross_source_same_pair=body.cross_source_same_pair,
+            cross_type_concern=body.cross_type_concern,
+            steps=steps,
+            kept_distinct_ids=body.kept_distinct_ids,
+            survivor_type=body.survivor_type,
+        )
     if isinstance(body, curate_decisions.MergeDecisionPreview):
         return MergePlan(
             survivor_id=body.prepared.survivor_canonical,
@@ -204,6 +255,16 @@ def _plan_of(
             files_rewritten=len(body.prepared.touched_files),
             cross_source_same_pair=body.cross_source_same_pair,
             cross_type_concern=body.cross_type_concern,
+            steps=(
+                MergeStep(
+                    survivor_id=body.prepared.survivor_canonical,
+                    absorbed_id=body.prepared.absorbed_canonical,
+                    absorbed_type=body.absorbed_type,
+                    type_outcome=body.type_outcome,
+                    files_rewritten=len(body.prepared.touched_files),
+                ),
+            ),
+            survivor_type=body.survivor_type,
         )
     if isinstance(body, curate_decisions.RelateDecisionPreview):
         return RelatePlan(body.source_id, body.target_id, body.relation_type)
@@ -213,16 +274,30 @@ def _plan_of(
 
 
 def preview_decision(
-    workspace: Workspace, decision_key: str, action: Action
+    workspace: Workspace,
+    decision_key: str,
+    action: Action,
+    *,
+    selection: GroupSelection | None = None,
 ) -> DecisionPreview | NotApplied | Stale:
     """What `action` would do to the open decision `decision_key`, with the
     version to apply it against.
 
     Writes nothing, takes no lock, builds no client and makes no model call. A
     decision that is no longer open is the returned `Stale`; an action it does
-    not offer, and skip (which has no plan), are the returned `NotApplied`."""
+    not offer, and skip (which has no plan), are the returned `NotApplied`.
+
+    `selection` names the members the person marked the same and the one that
+    stays; it is required by `Action.MERGE_GROUP` and by no other action. A
+    missing or invalid one is the returned `NotApplied("invalid_selection")`.
+    The returned version carries it, so `apply_decision` takes no selection."""
     result = curate_decisions.preview_decision(
-        workspace.root, workspace._layout, decision_key, action, policy=_POLICY
+        workspace.root,
+        workspace._layout,
+        decision_key,
+        action,
+        policy=_POLICY,
+        selection=selection,
     )
     if isinstance(result, NotApplied | Stale):
         return result

@@ -24,6 +24,7 @@ from openkos.api import (
     DecisionVersion,
     KeepDistinctPlan,
     MergePlan,
+    MergeStep,
     NotApplied,
     Refused,
     RelatePlan,
@@ -140,6 +141,16 @@ def _enqueue_merge(root: Path) -> None:
                 files_rewritten=1,
                 cross_source_same_pair=False,
                 cross_type_concern=None,
+                steps=(
+                    MergeStep(
+                        survivor_id="concepts/a",
+                        absorbed_id="concepts/b",
+                        absorbed_type="Concept",
+                        type_outcome="same_type",
+                        files_rewritten=1,
+                    ),
+                ),
+                survivor_type="Concept",
             ),
         ),
         (
@@ -204,6 +215,9 @@ def test_a_preview_carries_no_prepared_merge_anywhere(root: Path) -> None:
         "files_rewritten",
         "cross_source_same_pair",
         "cross_type_concern",
+        "steps",
+        "kept_distinct_ids",
+        "survivor_type",
     }
     assert not hasattr(result.plan, "prepared")
     assert [f.name for f in dataclasses.fields(result)] == [

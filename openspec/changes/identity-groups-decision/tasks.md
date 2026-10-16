@@ -235,45 +235,45 @@ Covers C6 and C8's interruption. D6, D8.
 
 Covers C1, C2, C7 (bulk), P1, and the dispatch half of C3. D1, D2, D9, D10.
 
-- [ ] 4.1 RED `tests/unit/application/test_curate_decisions.py` (list and
+- [x] 4.1 RED `tests/unit/application/test_curate_decisions.py` (list and
   dispatch):
-  - [ ] 4.1.1 Judged SAME group of three: actions `(MERGE_GROUP, KEEP_DISTINCT, SKIP)`,
+  - [x] 4.1.1 Judged SAME group of three: actions `(MERGE_GROUP, KEEP_DISTINCT, SKIP)`,
     withheld `MERGE` with `more_than_two_members`. Judged SAME cross-type pair:
     the same with `cross_type`. Judged SAME same-type pair: unchanged, no
     `MERGE_GROUP` anywhere (C1, C2).
-  - [ ] 4.1.2 Pending, DIFFERENT and UNCERTAIN groups of three, and a pending
+  - [x] 4.1.2 Pending, DIFFERENT and UNCERTAIN groups of three, and a pending
     cross-type pair: `MERGE` and `MERGE_GROUP` both withheld with the evaluation
     reason; a pending same-type pair withholds only `MERGE` (C2).
-  - [ ] 4.1.3 `preview_decision` and `apply_decision` with `MERGE_GROUP`:
+  - [x] 4.1.3 `preview_decision` and `apply_decision` with `MERGE_GROUP`:
     withheld item is `NotApplied("not_mergeable")`; same-type pair
     `NotApplied("not_offered")`; missing selection `invalid_selection`; a
     selection with `MERGE` is `invalid_selection`; a valid one previews and
     applies end to end and the row is `applied` (C2, C3, C4).
-  - [ ] 4.1.4 `BULK_ELIGIBILITY["identity"]` is still `NEVER` and
+  - [x] 4.1.4 `BULK_ELIGIBILITY["identity"]` is still `NEVER` and
     `item_consent("identity", accepted=True, ...)` is `ask` (C7).
-  - [ ] 4.1.5 End to end with judging: a pending group of three judged SAME
+  - [x] 4.1.5 End to end with judging: a pending group of three judged SAME
     through `api.run_judging` with a recording chat factory becomes
     `MERGE_GROUP`-offered with the same `decision_key` (D10, Finding 7).
-- [ ] 4.2 RED `tests/unit/api/test_decisions_apply.py` and
+- [x] 4.2 RED `tests/unit/api/test_decisions_apply.py` and
   `tests/unit/api/test_list_decisions.py`: a merge-group preview's plan is a
   `MergePlan` with `kind == "merge"`, `survivor_criterion == "chosen"`, two
   `MergeStep`s, `kept_distinct_ids`, `survivor_type`; a pairwise merge plan
   lists its one step equal to `survivor_id`/`absorbed_id`; `except WriteFailed`
   catches an interrupted group through `api.apply_decision` (P1).
-- [ ] 4.3 RED `tests/unit/api/test_api_surface.py`: classification against the
+- [x] 4.3 RED `tests/unit/api/test_api_surface.py`: classification against the
   merge base is additive only (`Action` member, `MergeStep`,
   `MergeGroupInterrupted`, `MergePlan` fields, `preview_decision` keyword) and
   `API_VERSION == 1`; `DecisionPreview.plan` and `ApplyOutcome` are unchanged.
-- [ ] 4.4 GREEN `application/curate_decisions.py`: `_identity_actions` offers or
+- [x] 4.4 GREEN `application/curate_decisions.py`: `_identity_actions` offers or
   withholds `MERGE_GROUP` (shape: more than two members or a cross-type
   concern); `_refusal` maps a withheld `MERGE_GROUP` to `not_mergeable`;
   `preview_decision`/`apply_decision` take and validate the selection and
   dispatch to `preview_merge_group`/`commit_merge_group_decision`.
-- [ ] 4.5 GREEN `api/_decisions.py`: `MergeStep`; `MergePlan` fields after
+- [x] 4.5 GREEN `api/_decisions.py`: `MergeStep`; `MergePlan` fields after
   `kind`; `_plan_of` fills `steps` for both previews; `preview_decision(...,
   selection=None)`. `api/__init__.py`: export `MergeStep`, `MergeGroupInterrupted`.
-- [ ] 4.6 Regenerate both snapshots; confirm additive.
-- [ ] 4.7 Gates. Commit: `feat(api): offer merge_group on identity groups through openkos.api`
+- [x] 4.6 Regenerate both snapshots; confirm additive.
+- [x] 4.7 Gates. Commit: `feat(api): offer merge_group on identity groups through openkos.api`
 
 ## S4: Local HTTP API: selection body, error row, OpenAPI
 

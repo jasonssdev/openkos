@@ -760,6 +760,14 @@
         }
       }
     },
+    "MergeGroupInterrupted": {
+      "bases": [
+        "WriteFailed"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
     "MergePlan": {
       "fields": [
         {
@@ -796,6 +804,53 @@
           "annotation": "Literal['merge']",
           "default": true,
           "name": "kind"
+        },
+        {
+          "annotation": "tuple[MergeStep, ...]",
+          "default": true,
+          "name": "steps"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": true,
+          "name": "kept_distinct_ids"
+        },
+        {
+          "annotation": "str | None",
+          "default": true,
+          "name": "survivor_type"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "MergeStep": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "absorbed_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "absorbed_type"
+        },
+        {
+          "annotation": "Literal['same_type', 'recorded', 'discarded', 'unknown']",
+          "default": false,
+          "name": "type_outcome"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "files_rewritten"
         }
       ],
       "frozen": true,
@@ -1571,6 +1626,12 @@
           "default": null,
           "kind": "POSITIONAL_OR_KEYWORD",
           "name": "action"
+        },
+        {
+          "annotation": "GroupSelection | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "selection"
         }
       ],
       "returns": "DecisionPreview | NotApplied | Stale"

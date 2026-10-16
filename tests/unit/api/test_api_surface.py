@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import typing
 from pathlib import Path
 from typing import Any
 
@@ -200,6 +201,37 @@ def test_a_breaking_change_since_the_committed_snapshot_needs_a_higher_version()
             "breaking changes without an API_VERSION bump: "
             + "; ".join(str(c) for c in broken)
         )
+
+
+# -- group decisions stay inside v1 --------------------------------------------- #
+
+
+def test_group_decisions_leave_the_plan_union_and_the_outcome_union_unchanged() -> None:
+    """A widened non-`Literal` union is breaking under the classifier, so a group
+    decision reuses `MergePlan` and the three outcomes it already has."""
+    plan = typing.get_type_hints(openkos.api.DecisionPreview)["plan"]
+
+    assert typing.get_args(plan) == (
+        openkos.api.MergePlan,
+        openkos.api.RelatePlan,
+        openkos.api.TierPlan,
+        openkos.api.KeepDistinctPlan,
+    )
+    assert typing.get_args(openkos.api.ApplyOutcome) == (
+        openkos.api.Applied,
+        openkos.api.NotApplied,
+        openkos.api.Stale,
+    )
+    assert openkos.api.API_VERSION == 1
+
+
+def test_the_group_names_are_public_and_the_interruption_is_a_write_failure() -> None:
+    for name in ("GroupSelection", "MergeStep", "MergeGroupInterrupted"):
+        assert name in openkos.api.__all__
+    golden = json.loads(_GOLDEN.read_text("utf-8"))
+
+    assert golden["names"]["MergeGroupInterrupted"]["bases"] == ["WriteFailed"]
+    assert golden["api_version"] == 1
 
 
 # -- the bump, against the base branch ------------------------------------------ #

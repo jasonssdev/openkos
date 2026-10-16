@@ -428,6 +428,11 @@ class MergeDecisionPreview:
     group: CandidateGroup
     no_reconcile: bool
     reconcile: bool
+    survivor_type: str | None = None
+    absorbed_type: str | None = None
+    type_outcome: TypeOutcome = "unknown"
+    """What the merge does with the absorbed member's OKF type, read from the
+    two documents as they are now."""
 
 
 def preview_merge(
@@ -469,6 +474,9 @@ def preview_merge(
         survivor_criterion = application_lifecycle.ordered_merge_pair(
             layout.bundle_dir, group.member_ids
         )[2]
+    survivor_type, [(absorbed_type, type_outcome)] = _type_outcomes(
+        layout, prepared.survivor_canonical, (prepared.absorbed_canonical,)
+    )
     return MergeDecisionPreview(
         prepared=prepared,
         member_ids=tuple(group.member_ids),
@@ -487,6 +495,9 @@ def preview_merge(
         group=group,
         no_reconcile=no_reconcile,
         reconcile=reconcile,
+        survivor_type=survivor_type,
+        absorbed_type=absorbed_type,
+        type_outcome=type_outcome,
     )
 
 
@@ -1607,25 +1618,26 @@ def _identity_actions(
     adjudication = row.payload.get("adjudication")
     verdict = adjudication.get("verdict") if isinstance(adjudication, dict) else None
     members = _identity_members(row)
-    reason: (
-        Literal[
-            "pending_evaluation",
-            "judged_different",
-            "judged_uncertain",
-            "cross_type",
-            "more_than_two_members",
-        ]
-        | None
-    )
+    shape: Literal["more_than_two_members", "cross_type"] | None
+    if len(members) != 2:
+        shape = "more_than_two_members"
+    elif application_lifecycle.cross_type_concern(layout.bundle_dir, members):
+        shape = "cross_type"
+    else:
+        shape = None
     if verdict == Verdict.SAME.value:
-        evaluation = "judged_same"
-        if len(members) != 2:
-            reason = "more_than_two_members"
-        elif application_lifecycle.cross_type_concern(layout.bundle_dir, members):
-            reason = "cross_type"
-        else:
-            reason = None
-    elif verdict == Verdict.DIFFERENT.value:
+        if shape is None:
+            return "judged_same", (Action.MERGE, Action.KEEP_DISTINCT, Action.SKIP), ()
+        # The group needs a person's choice of members and survivor, so the
+        # pairwise merge stays withheld, with the reason it always had, and
+        # `merge_group` is the way through.
+        return (
+            "judged_same",
+            (Action.MERGE_GROUP, Action.KEEP_DISTINCT, Action.SKIP),
+            (WithheldAction(Action.MERGE, shape),),
+        )
+    reason: Literal["pending_evaluation", "judged_different", "judged_uncertain"]
+    if verdict == Verdict.DIFFERENT.value:
         evaluation, reason = "judged_different", "judged_different"
     elif verdict == Verdict.UNCERTAIN.value:
         # A judgment the model declined to make (a malformed reply degrades to
@@ -1633,13 +1645,11 @@ def _identity_actions(
         evaluation, reason = "judged_uncertain", "judged_uncertain"
     else:
         evaluation, reason = "pending_evaluation", "pending_evaluation"
-    if reason is None:
-        return evaluation, (Action.MERGE, Action.KEEP_DISTINCT, Action.SKIP), ()
-    return (
-        evaluation,
-        (Action.KEEP_DISTINCT, Action.SKIP),
-        (WithheldAction(Action.MERGE, reason),),
+    # A group that could be combined once judged says so with the same reason.
+    withheld = (WithheldAction(Action.MERGE, reason),) + (
+        (WithheldAction(Action.MERGE_GROUP, reason),) if shape is not None else ()
     )
+    return evaluation, (Action.KEEP_DISTINCT, Action.SKIP), withheld
 
 
 def _actions_of(
@@ -1743,6 +1753,7 @@ class DecisionPolicy:
 
 DecisionPreviewBody = (
     MergeDecisionPreview
+    | MergeGroupDecisionPreview
     | RelateDecisionPreview
     | TierDecisionPreview
     | KeepDistinctDecisionPreview
@@ -1761,7 +1772,10 @@ def _refusal(item: DecisionItem, action: Action) -> NotApplied | None:
     """Why `action` is not one this item takes, or `None` when it is."""
     if action in item.actions:
         return None
-    if any(w.action is action and action is Action.MERGE for w in item.withheld):
+    if any(
+        w.action is action and action in (Action.MERGE, Action.MERGE_GROUP)
+        for w in item.withheld
+    ):
         return NotApplied(action, "not_mergeable")
     return NotApplied(action, "not_offered")
 
@@ -1795,9 +1809,15 @@ def _build_preview(
     row: curate_queue.OpenRow,
     action: Action,
     policy: DecisionPolicy,
+    selection: GroupSelection | None,
 ) -> DecisionPreviewBody | NotApplied:
     """The preview for `action` over the open `row`: member ids, relation
-    endpoints and type, and proposed tier all come from the row's payload."""
+    endpoints and type, and proposed tier all come from the row's payload. The
+    one input that does not is a group's `selection`, supplied by the caller."""
+    if action is Action.MERGE_GROUP:
+        return preview_merge_group(
+            root, layout, _group_of(row), verdict=Verdict.SAME, selection=selection
+        )
     if action is Action.MERGE:
         group = _group_of(row)
         survivor, absorbed, criterion = application_lifecycle.ordered_merge_pair(
@@ -1855,14 +1875,17 @@ def preview_decision(
     action: Action,
     *,
     policy: DecisionPolicy = DecisionPolicy(),  # noqa: B008 -- frozen, shared
+    selection: GroupSelection | None = None,
 ) -> DecisionPreview | NotApplied | Stale:
     """What `action` would do to the open decision `decision_key`, with the
     version to commit it against. Writes nothing, takes no lock, calls no
     model. A key whose row was settled is `Stale("row_resolved")` and a key no
     row ever carried is `Stale("unknown_key")`; an action the item
-    does not take is `NotApplied` (`not_mergeable` for a withheld merge,
-    `not_offered` otherwise); skip has no plan, so it is
-    `NotApplied("skipped")`."""
+    does not take is `NotApplied` (`not_mergeable` for a withheld merge or
+    merge-group, `not_offered` otherwise); skip has no plan, so it is
+    `NotApplied("skipped")`. `selection` belongs to `merge_group` alone: it is
+    required there and `NotApplied("invalid_selection")` with any other
+    action."""
     row = curate_queue.open_row_by_key(layout, decision_key)
     if row is None:
         return _no_open_row(layout, decision_key)
@@ -1871,7 +1894,9 @@ def preview_decision(
         return refusal
     if action is Action.SKIP:
         return skip_decision(decision_key)
-    built = _build_preview(root, layout, row, action, policy)
+    if selection is not None and action is not Action.MERGE_GROUP:
+        return NotApplied(action, "invalid_selection")
+    built = _build_preview(root, layout, row, action, policy, selection)
     if isinstance(built, NotApplied):
         return built
     return DecisionPreview(
@@ -1894,9 +1919,11 @@ def apply_decision(
     """Apply `action` to the decision `version` was issued for, against that
     version, holding no state but the token.
 
-    The item is re-listed by `version.decision_key`. A merge the item withholds
-    is `NotApplied("not_mergeable")` and any other action outside its set is
-    `NotApplied("not_offered")`; skip writes nothing and returns
+    The item is re-listed by `version.decision_key`. A merge or merge-group the
+    item withholds is `NotApplied("not_mergeable")` and any other action outside
+    its set is `NotApplied("not_offered")`. The group selection a merge-group
+    commits is the one `version` carries, and a version for any other action
+    that carries one is `NotApplied("invalid_selection")`. Skip writes nothing and returns
     `NotApplied("skipped")`, leaving the row `pending`. Otherwise the action is
     re-previewed from current bytes and committed on the token path of its
     kind, which returns `Stale` (and writes nothing) when the version no longer
@@ -1909,9 +1936,21 @@ def apply_decision(
         return refusal
     if action is Action.SKIP:
         return skip_decision(version.decision_key)
-    built = _build_preview(root, layout, row, action, policy)
+    if version.selection is not None and action is not Action.MERGE_GROUP:
+        return NotApplied(action, "invalid_selection")
+    built = _build_preview(root, layout, row, action, policy, version.selection)
     if isinstance(built, NotApplied):
         return built
+    if isinstance(built, MergeGroupDecisionPreview):
+        return commit_merge_group_decision(
+            root,
+            layout,
+            built,
+            ports=ports,
+            observer=observer,
+            surface=surface,
+            expected=version,
+        )
     if isinstance(built, MergeDecisionPreview):
         return commit_merge_decision(
             root,

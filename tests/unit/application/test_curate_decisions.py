@@ -2922,7 +2922,7 @@ def test_a_cross_type_identity_withholds_the_merge_and_names_the_command(
 
     item = _listed(layout, _identity_row(layout, ("concepts/a", "concepts/e")))
 
-    assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.actions == (Action.MERGE_GROUP, Action.KEEP_DISTINCT, Action.SKIP)
     assert item.withheld == (WithheldAction(Action.MERGE, "cross_type"),)
     assert "merge --include-cross-type" in item.resolves_via
 
@@ -2936,7 +2936,7 @@ def test_an_identity_of_more_than_two_members_withholds_the_merge(
         layout, _identity_row(layout, ("concepts/a", "concepts/b", "concepts/c"))
     )
 
-    assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.actions == (Action.MERGE_GROUP, Action.KEEP_DISTINCT, Action.SKIP)
     assert item.withheld == (WithheldAction(Action.MERGE, "more_than_two_members"),)
 
 

@@ -114,7 +114,7 @@ def enqueue(
 
 def enqueue_identity(
     root: Path,
-    members: tuple[str, str],
+    members: tuple[str, ...],
     *,
     verdict: str | None = None,
     rationale: str = "Same entity.",
@@ -132,7 +132,7 @@ def enqueue_identity(
         key_body=pq.identity_key(members),
         payload={
             "member_ids": list(members),
-            "member_types": ["Concept", "Concept"],
+            "member_types": ["Concept"] * len(members),
             "okf_type": "Concept",
             "tier": tier,
             "trigger": "alpha",
