@@ -185,6 +185,21 @@ def merge_commit_message(prepared: PreparedMerge) -> str:
     )
 
 
+def merge_group_commit_message(
+    survivor_id: str,
+    absorbed_ids: Sequence[str],
+    kept_distinct: Sequence[Sequence[str]] = (),
+) -> str:
+    """The one auto-commit message of a group decision: the survivor and the
+    members merged into it in write order, then, when keep-distinct rulings were
+    recorded, the member sets they cover."""
+    message = f"openkos: merge group into {survivor_id} ({', '.join(absorbed_ids)})"
+    if kept_distinct:
+        sets = ", ".join("/".join(members) for members in kept_distinct)
+        message += f"; keep distinct {sets}"
+    return message
+
+
 def commit_merge(
     root: Path,
     layout: config.WorkspaceLayout,

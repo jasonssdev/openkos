@@ -92,7 +92,12 @@ def _identity_row(members: tuple[str, ...]) -> pq.Proposal:
     )
 
 
-def _merge(root: Path, survivor_id: str, absorbed_id: str) -> None:
+def _merge(
+    root: Path,
+    survivor_id: str,
+    absorbed_id: str,
+    group_row: queue_resolution.GroupRow | None = None,
+) -> None:
     bundle_dir = root / "bundle"
     survivor_path, survivor = application_lifecycle.resolve_concept_path(
         bundle_dir, survivor_id
@@ -111,9 +116,18 @@ def _merge(root: Path, survivor_id: str, absorbed_id: str) -> None:
         root,
         now=datetime(2026, 1, 1, tzinfo=UTC),
     )
-    application_lifecycle.merge_core(
-        bundle_dir, bundle_dir / "index.md", bundle_dir / "log.md", prepared
-    )
+    if group_row is None:
+        application_lifecycle.merge_core(
+            bundle_dir, bundle_dir / "index.md", bundle_dir / "log.md", prepared
+        )
+    else:
+        application_lifecycle.merge_core(
+            bundle_dir,
+            bundle_dir / "index.md",
+            bundle_dir / "log.md",
+            prepared,
+            group_row=group_row,
+        )
 
 
 # -- merge (identity rows) --------------------------------------------------
@@ -162,6 +176,64 @@ def test_merge_retires_an_identity_row_over_a_larger_group_naming_the_absorbed_i
 
     row = _only(root)
     assert (row.status, row.resolution) == ("stale", "stale")
+
+
+def _group_key(*members: str) -> str:
+    return pq.stored_decision_key("identity", pq.identity_key(members))
+
+
+@pytest.mark.parametrize(
+    ("as_proposed", "resolution"), [(True, "as_proposed"), (False, "modified")]
+)
+def test_a_group_step_resolves_the_group_row_applied_not_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    as_proposed: bool,
+    resolution: str,
+) -> None:
+    """The first step of a group names the group's own row; it would retire it
+    `stale` as the absorbed id's row unless it resolves it first."""
+    root = _init(tmp_path, monkeypatch)
+    members = tuple(f"concepts/{name}" for name in "abc")
+    for member in members:
+        _concept(root, member)
+    _seed(root, _identity_row(members))
+
+    _merge(
+        root,
+        "concepts/b",
+        "concepts/a",
+        group_row=queue_resolution.GroupRow(_group_key(*members), as_proposed),
+    )
+
+    row = _only(root)
+    assert (row.status, row.resolution) == ("applied", resolution)
+
+
+def test_a_group_step_still_retires_other_rows_naming_the_absorbed_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _init(tmp_path, monkeypatch)
+    members = tuple(f"concepts/{name}" for name in "abc")
+    for name in "abcd":
+        _concept(root, f"concepts/{name}")
+    _seed(root, _identity_row(members))
+    _seed(root, _relation_row("concepts/a", "concepts/d", "supports"))
+    _seed(root, _relation_row("concepts/c", "concepts/d", "supports"))
+
+    _merge(
+        root,
+        "concepts/b",
+        "concepts/a",
+        group_row=queue_resolution.GroupRow(_group_key(*members), True),
+    )
+
+    by_targets = {item.targets: item.status for item in _items(root)}
+    assert by_targets == {
+        members: "applied",
+        ("concepts/a", "concepts/d"): "stale",
+        ("concepts/c", "concepts/d"): "pending",
+    }
 
 
 def test_merge_retires_every_open_row_naming_the_absorbed_id_and_only_those(

@@ -43,6 +43,7 @@ import contextlib
 import json
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -138,13 +139,24 @@ def _resolve_by_key(
     resolution: Callable[[pq.PendingItem], pq.Resolution],
     resolved_by: str,
 ) -> None:
+    _resolve_stored_key(
+        root, pq.stored_decision_key(kind, key_body), resolution, resolved_by
+    )
+
+
+def _resolve_stored_key(
+    root: Path,
+    decision_key: str,
+    resolution: Callable[[pq.PendingItem], pq.Resolution],
+    resolved_by: str,
+) -> None:
     with _queue(root) as conn:
         if conn is None:
             return
         with contextlib.suppress(sqlite3.Error, OSError):
             pq.resolve_open_by_key(
                 conn,
-                pq.stored_decision_key(kind, key_body),
+                decision_key,
                 resolution=resolution,
                 resolved_by=resolved_by,
                 commit_section=_NO_SECTION,
@@ -155,15 +167,41 @@ def _as_proposed(matches: bool) -> pq.Resolution:
     return "as_proposed" if matches else "modified"
 
 
+@dataclass(frozen=True)
+class GroupRow:
+    """The identity row a group decision settles: its STORED `decision_key` and
+    whether the person marked every member (`as_proposed`) or only some
+    (`modified`). Only the first step of a group carries it."""
+
+    decision_key: str
+    as_proposed: bool
+
+
 def resolve_merged(
-    root: Path, *, survivor_id: str, absorbed_id: str, proposed_survivor: str
+    root: Path,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    proposed_survivor: str,
+    group_row: GroupRow | None = None,
 ) -> None:
     """`merge`: the identity row over exactly the merged pair. `proposed_survivor`
     is the member the engine would keep (`lifecycle.ordered_merge_pair`), read
     BEFORE the absorbed file is removed. A larger group's row is not `applied`
-    (a pairwise merge does not perform what a many-member proposal asks), but
-    like every other open row naming the absorbed id it is retired `stale`: the
-    concept it offers a resolving command over no longer exists."""
+    by a pairwise merge (it does not perform what a many-member proposal asks),
+    but like every other open row naming the absorbed id it is retired `stale`:
+    the concept it offers a resolving command over no longer exists.
+
+    A group decision performs that proposal, so its first step names the row in
+    `group_row` and it is resolved `applied` BEFORE the retirement runs, which
+    then finds it settled and leaves it."""
+    if group_row is not None:
+        _resolve_stored_key(
+            root,
+            group_row.decision_key,
+            lambda _item: _as_proposed(group_row.as_proposed),
+            "merge",
+        )
     _resolve_by_key(
         root,
         "identity",

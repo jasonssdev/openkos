@@ -630,6 +630,8 @@ def merge_core(
     index_path: Path,
     log_path: Path,
     prepared: PreparedMerge,
+    *,
+    group_row: queue_resolution.GroupRow | None = None,
 ) -> MergeResult:
     """Phase B (after confirm): ordered writes -- `index.md` then `log.md`,
     every touched file's rewrite, then the ledger sidecar's two-phase write
@@ -644,7 +646,9 @@ def merge_core(
 
     The identity row over exactly this pair (if the pending-work queue holds
     one) is resolved last, in the caller's commit phase, as `as_proposed` only
-    when the engine's own survivor choice is the one merged (#1141)."""
+    when the engine's own survivor choice is the one merged (#1141). The first
+    step of a group decision also passes `group_row`, the group's own row, which
+    is resolved `applied` before the retirement of rows naming the absorbed id."""
     # Read BEFORE the writes: the absorbed file is gone afterwards.
     proposed_survivor = ordered_merge_pair(
         bundle_dir,
@@ -733,6 +737,7 @@ def merge_core(
         survivor_id=survivor_canonical,
         absorbed_id=absorbed_canonical,
         proposed_survivor=proposed_survivor,
+        group_row=group_row,
     )
 
     sidecar_rel = (

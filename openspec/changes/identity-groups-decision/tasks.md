@@ -150,51 +150,51 @@ Covers C3 (selection in the token), C4, the preview half of C5 and C7. D1, D2
 
 Covers C5 (commit half), C8 (except interruption), W1. D3, D4, D5, D7.
 
-- [ ] 2.1 RED `tests/unit/application/test_curate_decisions_group_commit.py`:
-  - [ ] 2.1.1 Commit a group of three, all marked, survivor B: A and C are gone,
+- [x] 2.1 RED `tests/unit/application/test_curate_decisions_group_commit.py`:
+  - [x] 2.1.1 Commit a group of three, all marked, survivor B: A and C are gone,
     B holds two ledger entries in ascending absorbed order, `Applied.merged` is
     `(("B","A"), ("B","C"))`, `Applied.kept_distinct` is empty.
-  - [ ] 2.1.2 Byte parity: `unmerge` the second step then the first (through the
+  - [x] 2.1.2 Byte parity: `unmerge` the second step then the first (through the
     unmerge service) restores every bundle file to its pre-group bytes (C5).
-  - [ ] 2.1.3 Exactly one `autocommit` port call, holding both steps' paths and
+  - [x] 2.1.3 Exactly one `autocommit` port call, holding both steps' paths and
     the ledger sidecar; message
     `openkos: merge group into B (A, C)` (D5). `committed_confidential` is true
     when a marked member is confidential.
-  - [ ] 2.1.4 Staleness, each writing nothing: an edit to an unmarked member
+  - [x] 2.1.4 Staleness, each writing nothing: an edit to an unmarked member
     before the section is `Stale("content_changed")`; an altered selection is
     `Stale("content_changed")`; a resolved row is `Stale("row_resolved")`; a
     superseded row `row_superseded`; changed inputs `row_inputs_changed`; a
     replayed token after a commit `row_resolved` (C3, C5, C8).
-  - [ ] 2.1.5 Inside the section: an unmarked member deleted is
+  - [x] 2.1.5 Inside the section: an unmarked member deleted is
     `NotApplied("member_missing")` and nothing is written; a first-step target
     edited after the token check raises `DriftDetected` and nothing is written
     (C8).
-  - [ ] 2.1.6 The lock is entered once: a counting `commit_section` port sees
+  - [x] 2.1.6 The lock is entered once: a counting `commit_section` port sees
     one entry for a group of four; with the real `lock_wait.locked_commit_section`
     held by another process and `wait_seconds=0`, `WorkspaceBusyError` is raised
     and no file changed (C8).
-  - [ ] 2.1.7 Later steps are prepared against the earlier steps' bytes: the
+  - [x] 2.1.7 Later steps are prepared against the earlier steps' bytes: the
     second step's plan sees the survivor as written by the first (assert the
     written `type_alternative` equals the previewed outcome from 1.1.4).
-- [ ] 2.2 RED `tests/unit/application/test_queue_resolution.py`: with a
+- [x] 2.2 RED `tests/unit/application/test_queue_resolution.py`: with a
   populated queue, a group of three all marked resolves the group row `applied`
   as proposed; marking three of four resolves it `applied` as modified; neither is
   `stale`; a relation row naming an absorbed member is `stale` (W1). A pairwise
   `merge_core` with no `group_row` behaves as before (existing tests unchanged).
-- [ ] 2.3 GREEN `application/queue_resolution.py`: `GroupRow`;
+- [x] 2.3 GREEN `application/queue_resolution.py`: `GroupRow`;
   `resolve_merged(..., group_row=None)` resolves the group key before
   `_retire_naming`.
-- [ ] 2.4 GREEN `application/lifecycle.py`: `merge_core(..., group_row=None)`
+- [x] 2.4 GREEN `application/lifecycle.py`: `merge_core(..., group_row=None)`
   forwards it; the registry test still passes unchanged.
-- [ ] 2.5 GREEN `application/merge_service.py`: `merge_group_commit_message`.
-- [ ] 2.6 GREEN `application/curate_decisions.py`: `Applied.merged` and
+- [x] 2.5 GREEN `application/merge_service.py`: `merge_group_commit_message`.
+- [x] 2.6 GREEN `application/curate_decisions.py`: `Applied.merged` and
   `Applied.kept_distinct` (defaulted); `commit_merge_group_decision` in D4's
   order with a mandatory `expected`.
-- [ ] 2.7 Measure the lock hold for a group of four on a 300-concept generated
+- [x] 2.7 Measure the lock hold for a group of four on a 300-concept generated
   fixture (median of 5); record the number in the PR description and in
   `verify` notes. No assertion on time in the suite.
-- [ ] 2.8 Regenerate both snapshots (`Applied` fields); confirm additive.
-- [ ] 2.9 Gates. Commit: `feat(api): commit an identity group as pairwise merges under one lock`
+- [x] 2.8 Regenerate both snapshots (`Applied` fields); confirm additive.
+- [x] 2.9 Gates. Commit: `feat(api): commit an identity group as pairwise merges under one lock`
 
 ## S2b: Unmarked rulings and the interrupted group
 

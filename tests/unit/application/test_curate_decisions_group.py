@@ -7,7 +7,6 @@ the function under test.
 """
 
 import dataclasses
-from datetime import date
 from pathlib import Path
 
 import pytest
@@ -21,58 +20,24 @@ from openkos.application.curate_decisions import (
     MergeGroupDecisionPreview,
     NotApplied,
 )
-from openkos.bundle import bundle
-from openkos.model import okf
 from openkos.resolution.adjudication import Verdict
-from openkos.resolution.candidates import CandidateGroup, Tier
+from tests.unit.application.group_support import (
+    A,
+    B,
+    C,
+    D,
+    group_of,
+    make_workspace,
+    selection_of,
+    snapshot,
+    write_concept,
+)
 
-_A, _B, _C, _D = (f"concepts/{name}" for name in "abcd")
-
-
-def _write(
-    layout: config.WorkspaceLayout,
-    concept_id: str,
-    okf_type: str,
-    *,
-    extra: dict[str, object] | None = None,
-    body: str = "",
-) -> None:
-    path = layout.bundle_dir / f"{concept_id}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    metadata: dict[str, object] = {
-        "type": okf_type,
-        "title": concept_id,
-        **(extra or {}),
-    }
-    path.write_text(
-        okf.dump_frontmatter(metadata, f"# {concept_id}\n\n{body or concept_id}\n"),
-        encoding="utf-8",
-    )
-
-
-def _workspace(
-    tmp_path: Path, types: dict[str, str] | None = None
-) -> tuple[Path, config.WorkspaceLayout]:
-    root = tmp_path / "ws"
-    root.mkdir()
-    config.write_config(root)
-    layout = config.WorkspaceLayout(root)
-    bundle.create(layout.bundle_dir, date(2026, 1, 1))
-    for concept_id, okf_type in (
-        types or {_A: "Concept", _B: "Concept", _C: "Concept"}
-    ).items():
-        _write(layout, concept_id, okf_type)
-    return root, layout
-
-
-def _group(*ids: str) -> CandidateGroup:
-    return CandidateGroup(
-        okf_type="Concept", member_ids=tuple(sorted(ids)), tier=Tier.HIGH, trigger="t"
-    )
-
-
-def _selection(survivor: str, *marked: str) -> GroupSelection:
-    return GroupSelection(survivor_id=survivor, member_ids=marked)
+_A, _B, _C, _D = A, B, C, D
+_write = write_concept
+_workspace = make_workspace
+_group = group_of
+_selection = selection_of
 
 
 def _preview(
@@ -99,8 +64,7 @@ def _must(
     return preview
 
 
-def _snapshot(root: Path) -> dict[Path, bytes]:
-    return {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+_snapshot = snapshot
 
 
 # -- 1.1.1 the selection ---------------------------------------------------- #

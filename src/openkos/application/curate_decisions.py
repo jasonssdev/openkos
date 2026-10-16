@@ -36,6 +36,7 @@ from openkos.application import (
     duplicates_service,
     merge_service,
     pending_queue_report,
+    queue_resolution,
 )
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
@@ -125,6 +126,12 @@ class Applied:
     action: Action
     commit_sha: str | None
     committed_confidential: bool = False
+    merged: tuple[tuple[str, str], ...] = ()
+    """The `(survivor, absorbed)` pairs a group decision merged, in write
+    order; empty for every other action."""
+    kept_distinct: tuple[tuple[str, ...], ...] = ()
+    """The member sets a group decision recorded a keep-distinct ruling over;
+    a ruling that could not be recorded is absent."""
 
 
 @dataclass(frozen=True)
@@ -915,6 +922,175 @@ def _group_content_lines(
             digest = "-"
         lines.append(f"keep\t{member_id}\t{digest}")
     return sorted(lines)
+
+
+def _group_stale(
+    layout: config.WorkspaceLayout, expected: DecisionVersion
+) -> Stale | None:
+    """`row_resolved` when the group's row is no longer open, else `None`. A
+    token replayed after its group committed re-previews over members that no
+    longer exist; the row says why, which is the more useful answer."""
+    row = curate_queue.open_row_by_key(layout, expected.decision_key)
+    return Stale(expected.decision_key, "row_resolved") if row is None else None
+
+
+def _repreview_group(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    preview: MergeGroupDecisionPreview,
+    expected: DecisionVersion,
+) -> MergeGroupDecisionPreview | NotApplied | Stale:
+    """The same group, re-planned from the bytes on disk now, against the
+    selection the TOKEN carries (never the one the caller's preview object
+    holds, so an altered selection cannot be committed), and checked against
+    the token's content digest."""
+    refreshed = preview_merge_group(
+        root,
+        layout,
+        preview.group,
+        verdict=Verdict.SAME,
+        selection=expected.selection,
+    )
+    if isinstance(refreshed, NotApplied):
+        if refreshed.reason == "member_missing":
+            return _group_stale(layout, expected) or refreshed
+        return refreshed
+    if (
+        version_of(refreshed, layout=layout, payload_digest=None).content_digest
+        != expected.content_digest
+    ):
+        return Stale(expected.decision_key, "content_changed")
+    return refreshed
+
+
+def _write_group_step(
+    layout: config.WorkspaceLayout,
+    prepared: application_lifecycle.PreparedMerge,
+    *,
+    group_row: queue_resolution.GroupRow | None,
+) -> application_lifecycle.MergeResult:
+    return application_lifecycle.merge_core(
+        layout.bundle_dir,
+        layout.bundle_dir / "index.md",
+        layout.bundle_dir / "log.md",
+        prepared,
+        **({} if group_row is None else {"group_row": group_row}),
+    )
+
+
+def commit_merge_group_decision(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    preview: MergeGroupDecisionPreview,
+    *,
+    ports: DecisionPorts,
+    observer: DecisionObserver,
+    surface: str,
+    expected: DecisionVersion,
+) -> ApplyOutcome:
+    """Commit one previewed identity group against its version token.
+
+    The token is mandatory: there is no baseline-only path, because no
+    in-process caller walks a group. The group is re-previewed from current
+    bytes with the selection the token carries; a changed `content_digest`
+    returns `Stale("content_changed")` before the section opens.
+
+    Inside ONE commit section, in order: the open row re-read
+    (`row_resolved`, `row_superseded`), every member of the group present (a
+    vanished one is announced through the observer and RETURNED as
+    `NotApplied("member_missing")`), the first step's target drift, catalog
+    recompose and read drift (each RAISED as `DriftDetected`), the row's
+    inputs, and then the writes. Every failed check writes nothing.
+
+    The first step is the previewed plan, resolves the group's row `applied`
+    and is the only step written from it. Each later step is prepared HERE,
+    inside the section, against the bytes the earlier steps wrote, so no other
+    writer can interleave and no step overwrites another's. One auto-commit
+    holds every path the steps wrote."""
+    refreshed = _repreview_group(root, layout, preview, expected)
+    if not isinstance(refreshed, MergeGroupDecisionPreview):
+        return refreshed
+    preview = refreshed
+    first = preview.steps[0].prepared
+    absorbed_ids = tuple(step.prepared.absorbed_canonical for step in preview.steps)
+    group_row = queue_resolution.GroupRow(preview.decision_key, preview.as_proposed)
+    absorbed_path = layout.bundle_dir / f"{first.absorbed_canonical}.md"
+    with ports.commit_section():
+        if stale := _stale_row(layout, expected):
+            return stale
+        for member_id in sorted(preview.group.member_ids):
+            if not _all_present(layout, (member_id,)):
+                observer.merge_member_missing(preview.survivor_id, member_id)
+                return NotApplied(Action.MERGE_GROUP, "member_missing")
+        # `index.md`/`log.md` are re-composed over their current bytes, not
+        # guarded: every verb appends to them.
+        drift = application_drift.describe_drift(
+            layout,
+            application_lifecycle.merge_drift_targets(
+                layout, first, include_catalog=False
+            ),
+            surface,
+            deletes=frozenset({absorbed_path}),
+        )
+        if drift is not None:
+            raise DriftDetected(drift)
+        try:
+            first = application_lifecycle.recompose_merge_catalog(
+                layout, first, verb=surface
+            )
+        except catalog_delta.CatalogRecomposeError as exc:
+            raise DriftDetected(str(exc)) from exc
+        read_drift = commit_phase.describe_read_drift(
+            layout, first.read_dependencies, surface
+        )
+        if read_drift is not None:
+            raise DriftDetected(read_drift)
+        if stale := _stale_inputs(layout, expected):
+            return stale
+        paths: list[str] = []
+        written: list[tuple[str, str]] = []
+        for index, absorbed_id in enumerate(absorbed_ids):
+            try:
+                if index == 0:
+                    prepared = first
+                else:
+                    later = application_lifecycle.prepare_one_merge(
+                        root,
+                        layout,
+                        layout.bundle_dir / "index.md",
+                        layout.bundle_dir / "log.md",
+                        preview.group,
+                        ordered_pair=(preview.survivor_id, absorbed_id),
+                    )
+                    if later is None:
+                        raise ValueError(f"{absorbed_id} no longer resolves")
+                    prepared = application_lifecycle.recompose_merge_catalog(
+                        layout, later, verb=surface
+                    )
+                result = _write_group_step(
+                    layout, prepared, group_row=group_row if index == 0 else None
+                )
+            except (OSError, ValueError) as exc:
+                raise WriteFailed(
+                    "merge", (preview.survivor_id, absorbed_id), str(exc)
+                ) from exc
+            paths.extend(
+                path
+                for path in merge_service.merge_commit_paths(prepared, result)
+                if path not in paths
+            )
+            written.append((preview.survivor_id, absorbed_id))
+        commit_sha = ports.autocommit(
+            root,
+            paths,
+            merge_service.merge_group_commit_message(preview.survivor_id, absorbed_ids),
+        )
+    return Applied(
+        preview.decision_key,
+        Action.MERGE_GROUP,
+        commit_sha,
+        merged=tuple(written),
+    )
 
 
 # -- relate ---------------------------------------------------------------- #
