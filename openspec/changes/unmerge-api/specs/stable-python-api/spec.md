@@ -47,7 +47,7 @@ The preview MUST return `NotUnmergeable` (never raise) with reason
 `survivor_missing` when the survivor's document does not exist (with
 `absorbed_into` naming the concept that absorbed it, when a ledger records one),
 `not_merged` when the survivor's ledger records no merge of `absorbed_id`, and
-`survivor_edited` when restoring any step would discard an edit made to the
+`survivor_edited` when restoring the first step would discard an edit made to the
 survivor after that step's merge and `discard_survivor_edits` is false. With
 `discard_survivor_edits` true, the plan proceeds and `survivor_edits_discarded`
 reports whether an edit is discarded. Any other refusal of the plan MUST raise

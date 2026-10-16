@@ -103,7 +103,7 @@ the decisions.
 
 | Risk | Mitigation |
 |---|---|
-| A chain stops part way. | Completed steps are committed and reported in `UnmergeInterrupted`; the bundle is consistent after every step (the CLI's invariant). Steps whose survivor-edit check is decidable from the ledger are refused at preview instead. |
+| A chain stops part way. | Completed steps are committed and reported in `UnmergeInterrupted`; the bundle is consistent after every step (the CLI's invariant). The first step's survivor-edit check is decided at preview, so a single-step split never stops part way. |
 | The lock is held for the whole chain. | No model call runs in it; each step is the CLI step's reads and writes. The wait to acquire stays bounded (5 s on HTTP). |
 | A widened public union breaks v1. | No existing union, alias or signature changes; everything is a new name, a new keyword-free function or a new `Literal` value of an input parameter (`WriteFailed.operation`). The surface classifier proves it. |
 | The client flips `discard_survivor_edits` in the echoed version. | The flag is a line of the content digest: a flipped flag is `UnmergeStale`. |

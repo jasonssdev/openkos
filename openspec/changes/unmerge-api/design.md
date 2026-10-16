@@ -74,10 +74,12 @@ Before planning, the preview checks, in order: the survivor's file exists
 ledger records `absorbed_id` (`not_merged`). It then prepares the first step with
 `discard_survivor_edits=True` and reads `survivor_edits_discarded`: when set and
 the caller did not opt in, the result is `survivor_edited`. No error text is
-parsed. For later steps the same check is decidable from the ledger alone: the
-survivor that step will see is the previous step's `survivor_before`, so its
-`survivor_sha256` is compared with the step's `survivor_after_sha256`.
-Everything else Phase A refuses (an invalid id, a torn ledger, a file already at
+parsed. Only the first step is decided at preview: the survivor a later step
+sees is what the earlier step restores, including any deprecated-status export
+folded into it over the post-unmerge state, so predicting it from the ledger alone
+could refuse a chain the run would complete. A later step's survivor check runs in
+that step's own Phase A at apply, as on the CLI, and a failure there is
+`UnmergeInterrupted` (D5). Everything else Phase A refuses (an invalid id, a torn ledger, a file already at
 the absorbed path, a drifted rewrite file, a redacted entry) stays the service's
 `Refused`, whose message the local API passes through as `write_refused`.
 

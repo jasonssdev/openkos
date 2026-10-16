@@ -45,8 +45,7 @@ JSON is never hand-merged).
   `merge_history` (newest first, title from the snapshot, invalid id and no ledger
   list nothing) and `preview_unwind` (one step for the newest merge, a chain for a
   deeper one, `survivor_missing` with `absorbed_into`, `not_merged`,
-  `survivor_edited` for the first step and for a later step decided from the
-  ledger, `discard_survivor_edits` reported, digest stable across calls and moved
+  `survivor_edited` for the first step, `discard_survivor_edits` reported, digest stable across calls and moved
   by a changed rewrite file, the absorbed path, the flag). Writes nothing.
 - [ ] S2a.2 GREEN: `application/unmerge_service.py` gains `MergeHistoryEntry`,
   `merge_history`, `UnwindPreview`, `UnwindRefusal`, `preview_unwind` and the
