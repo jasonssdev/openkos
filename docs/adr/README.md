@@ -101,4 +101,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0060](0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md) | The stable Python API is a versioned facade package with one error root | Accepted | 2026-10-15 |
 | [0061](0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra.md) | The local API is a FastAPI adapter over the Python API, shipped as an optional extra | Accepted | 2026-10-15 |
 | [0062](0062-query-limit-defaults-to-8-measured-against-5.md) | The query limit defaults to 8, measured against 5 | Accepted | 2026-10-16 |
-| [0063](0063-an-identity-group-is-one-decision-that-merges-marked-members-pairwise-into-a-chosen-survivor.md) | An identity group is one decision that merges the marked members pairwise into a chosen survivor | Proposed | 2026-10-16 |
+| [0063](0063-an-identity-group-is-one-decision-that-merges-marked-members-pairwise-into-a-chosen-survivor.md) | An identity group is one decision that merges the marked members pairwise into a chosen survivor | Accepted | 2026-10-16 |

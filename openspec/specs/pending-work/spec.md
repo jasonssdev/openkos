@@ -306,13 +306,18 @@ one open row MUST exist per key. A producer MUST NOT move a row to
 
 A row MUST move to `applied` only when a human-facing write path --
 `curate`, `adjudicate`, `merge`, `relate`, `set-volatility`, `reconcile`,
-`suggest-relations --apply`, or an ingest that lands a `watch_refusal`'s
-bytes -- performs the write the row proposes, and to `declined` only when a
-human declines it through a surface that records the decline. A run of the
-job runner MUST NOT resolve a row. The MCP surface MUST NOT change a row's
+`suggest-relations --apply`, an ingest that lands a `watch_refusal`'s
+bytes, or a decision applied through the curation decision surface (including a
+merge-group) -- performs the write the row proposes, and to `declined` only when a
+human declines it through a surface that records the decline. A merge-group
+performs the write its group's row proposes once its first pairwise merge is
+written, and resolves that row `applied` then, as proposed when every member was
+marked and modified otherwise, before rows naming the absorbed member are retired.
+A run of the job runner MUST NOT resolve a row. The MCP surface MUST NOT change a row's
 status. A human-facing path MAY mark a row `claimed` while it presents it,
 and a claim MUST lapse back to `pending` when its claimant exits without
 resolving it.
+(Previously: the paths were named by verb only, and a pairwise merge's retirement of rows naming the absorbed concept left a larger group's row `stale` even when a person had decided that group.)
 
 #### Scenario: A merge resolves its identity row
 
@@ -329,6 +334,14 @@ resolving it.
   command over a concept that no longer exists
 - AND an open row that does not name B is untouched
 - AND a row already `applied`, `declined` or `stale` keeps its state
+
+#### Scenario: A merge-group applies its own row, not stale
+
+- GIVEN an open identity row over A, B and C, and a relation-type row over B/C
+- WHEN a merge-group marking A, B and C with survivor A is applied through the
+  decision surface
+- THEN the identity row over A, B and C is `applied` as proposed
+- AND the relation-type row over B/C is `stale`
 
 #### Scenario: A different verdict closes the identity row
 

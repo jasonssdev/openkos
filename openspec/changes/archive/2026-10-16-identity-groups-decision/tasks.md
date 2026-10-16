@@ -307,11 +307,11 @@ Covers H1, H2, H3. D12.
 
 ## S5: Decision wording, CHANGELOG, spec merge, ADR-0063 Accepted, archive
 
-- [ ] 6.1 `docs/decision-wording.md`, Identity section:
-  - [ ] 6.1.1 Remove the "Not combinable in the app" paragraph and its "These
+- [x] 6.1 `docs/decision-wording.md`, Identity section:
+  - [x] 6.1.1 Remove the "Not combinable in the app" paragraph and its "These
     can't be combined here yet." line; the actions line names `merge_group`
     beside `merge`.
-  - [ ] 6.1.2 Add **"Which of these are the same?"** (more than two pages,
+  - [x] 6.1.2 Add **"Which of these are the same?"** (more than two pages,
     `merge_group`) **(H)**: the pages side by side, each with a mark; "Which one
     should the combined page keep its name from?" over the marked pages. Options:
     **Combine the ones I marked** ("We'll make one page from the {n} pages you
@@ -319,7 +319,7 @@ Covers H1, H2, H3. D12.
     as they are, and we won't suggest combining them with '{survivor title}'
     again."), **Keep all separate**, **Decide later**. The combine button stays
     disabled with the line "Mark at least two pages" until two are marked **(H)**.
-  - [ ] 6.1.3 Add **"What is {title}?"** (different kinds, `merge_group`) **(H)**:
+  - [x] 6.1.3 Add **"What is {title}?"** (different kinds, `merge_group`) **(H)**:
     one option per kind among the pages, worded with the type nouns ("It's a
     person", "It's an organization"), plus **They're different things** (keep
     separate) and **Decide later**. What it does: "We'll keep one page, as a
@@ -329,33 +329,33 @@ Covers H1, H2, H3. D12.
     pages share the chosen kind, ask which one keeps its name **(H)**. The
     "different files" line and the cross-type warning line are shown as for a
     pair.
-  - [ ] 6.1.4 Undo: a group is undone step by step with **Split again**, newest
+  - [x] 6.1.4 Undo: a group is undone step by step with **Split again**, newest
     first, using the existing "the later combines on this page are split first"
     wording; note that the app needs an API unmerge for it.
-  - [ ] 6.1.5 Busy/refusal table gains `invalid_selection` ("Something about your
+  - [x] 6.1.5 Busy/refusal table gains `invalid_selection` ("Something about your
     choice didn't match these pages. Please choose again." → reload) and
     `merge_group_interrupted` ("Only some of these were combined. Nothing else
     changed, and each combine can be split again." → reload) **(H)**.
-  - [ ] 6.1.6 "Open questions": remove the "Groups the app cannot combine"
+  - [x] 6.1.6 "Open questions": remove the "Groups the app cannot combine"
     bullet.
-- [ ] 6.2 `CHANGELOG.md` `[Unreleased] / Added`: one entry naming `merge_group`,
+- [x] 6.2 `CHANGELOG.md` `[Unreleased] / Added`: one entry naming `merge_group`,
   the selection in the version, the additive surface (`API_VERSION` unchanged)
   and the two HTTP codes, with `(#1430)`.
-- [ ] 6.3 Spec merge: apply each delta to `openspec/specs/{curate-decisions,stable-python-api,local-http-api,pending-work}/spec.md`.
+- [x] 6.3 Spec merge: apply each delta to `openspec/specs/{curate-decisions,stable-python-api,local-http-api,pending-work}/spec.md`.
   Name-match every MODIFIED heading against the living spec before replacing
   (`grep -n "^### Requirement: <heading>$"` must hit exactly once); append every
   ADDED requirement; keep the "(Previously: ...)" lines as written, as the living
   specs already do.
   Diff the merged specs against the shipped code, not against the task list.
-- [ ] 6.4 ADR-0063: flip `status` and the body **Status:** line to Accepted, and
+- [x] 6.4 ADR-0063: flip `status` and the body **Status:** line to Accepted, and
   its index row; nothing else in the ADR changes. Run
   `uv run pytest tests/unit/test_adr_index.py`.
-- [ ] 6.5 Archive: move `openspec/changes/identity-groups-decision/` to
+- [x] 6.5 Archive: move `openspec/changes/identity-groups-decision/` to
   `openspec/changes/archive/2026-MM-DD-identity-groups-decision/` (date of the
   merge) with `git mv`, add `archive-report.md` (slices, PRs, measured lock hold,
   deviations), and confirm the original folder is gone and every artifact moved
   (diff against a sibling archive's file list).
-- [ ] 6.6 Gates. Commits: `docs(docs): word group and kind choices in the decision brief`
+- [x] 6.6 Gates. Commits: `docs(docs): word group and kind choices in the decision brief`
   and `docs(sdd): archive identity-groups-decision` (one PR, `Closes #1430`).
 
 ## Follow-ups (not in this change)
