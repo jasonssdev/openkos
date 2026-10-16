@@ -624,18 +624,18 @@ branches in-process. Satisfies: L1, L2 (in-process parts). Depends on: S4b.
 Threat-matrix cases carried here: Bind (`127.0.0.1` only); Token delivery; Token
 handling (never echoed); Lifecycle.
 
-- [ ] S5a.1 RED: `tests/unit/localapi/test_launch.py` token reader: `read_token`
+- [x] S5a.1 RED: `tests/unit/localapi/test_launch.py` token reader: `read_token`
   accepts a valid `\n`-terminated line (and strips an optional `\r`); a line without
   a newline is EOF (`TokenError`, exit-2 class); empty line, over 1,026 bytes and a
   character outside `^[A-Za-z0-9\-._~+/]{32,1024}=*$` each raise `TokenError`;
   no error message contains any part of the input. Observe RED (module missing).
   Satisfies: L1.
-- [ ] S5a.2 RED: ready line and bind: `ready_line(port)` is exactly one JSON object
+- [x] S5a.2 RED: ready line and bind: `ready_line(port)` is exactly one JSON object
   with `event`, `host` `127.0.0.1`, integer `port`, `api_version`, `base_path`
   `/v1` and no other field; the bound socket's `getsockname()` host is `127.0.0.1`
   and never `0.0.0.0` or IPv6; the port in the line equals the socket's. Satisfies:
   L1.
-- [ ] S5a.3 RED: `serve` ordering and exits, injecting `stdin`, `stdout` and
+- [x] S5a.3 RED: `serve` ordering and exits, injecting `stdin`, `stdout` and
   `install_signals=False`, with uvicorn's `Server.run` replaced by a recording stub
   where a real listener is not needed: an invalid workspace exits 1, the reason is
   on stderr and nothing was bound or written; a missing, empty or malformed token
@@ -643,7 +643,7 @@ handling (never echoed); Lifecycle.
   records no `bind`), stdout empty, stderr without the token; a terminal stdin
   prints the one stderr hint; the workspace is opened with `absolute()`, never
   `resolve()` (a symlinked path is refused). Satisfies: L1.
-- [ ] S5a.4 RED: running server, in-process on a background thread: with a real
+- [x] S5a.4 RED: running server, in-process on a background thread: with a real
   uvicorn server on the bound socket, the ready line is written only after
   `server.started`, then a `TestClient`-free probe is avoided (the unit network guard
   refuses loopback): assert instead that `serve` wrote exactly one line to the fake
@@ -651,22 +651,22 @@ handling (never echoed); Lifecycle.
   `ws="none"`, `access_log=False`, `log_config=None`, `lifespan="on"`,
   `server_header=False`, `timeout_graceful_shutdown=5`. A server that stops before
   starting writes no ready line and returns 1. Satisfies: L1.
-- [ ] S5a.5 RED: lifelines: after the token line, EOF on the injected stdin sets
+- [x] S5a.5 RED: lifelines: after the token line, EOF on the injected stdin sets
   `server.should_exit` and `serve` returns 0; data after the token line is discarded
   without effect; the SIGTERM handler (installed with `install_signals=True` in a
   test that restores the previous handler) sets `should_exit`; a blocked run does not
   hold shutdown past the grace (stubbed registry); stdout contains only the ready
   line after requests were served through the app object. Satisfies: L1, L2.
-- [ ] S5a.6 GREEN: create `src/openkos/localapi/launch.py` per D9 (`serve`,
+- [x] S5a.6 GREEN: create `src/openkos/localapi/launch.py` per D9 (`serve`,
   `read_token`, `ready_line`, `TokenError`, the ready thread polling `server.started`
   every 20 ms, the stdin-EOF daemon thread, the signal handler). Imports only
   stdlib, `uvicorn`, `openkos.api` and `openkos.localapi.*`; it prints nothing but the
   ready line to stdout. Satisfies: L1, L2.
-- [ ] S5a.7 Guards and mutation: `test_localapi_guards.py` still passes. Mutations:
+- [x] S5a.7 Guards and mutation: `test_localapi_guards.py` still passes. Mutations:
   bind `0.0.0.0` and observe the bind test fail; write the ready line from the
   lifespan and observe the ordering test fail; put the token in a stderr message and
   observe the no-echo test fail; revert, purge, GREEN. Satisfies: L1.
-- [ ] S5a.8 Run the five gates; commit `feat(api):`. Satisfies: L1, L2.
+- [x] S5a.8 Run the five gates; commit `feat(api):`. Satisfies: L1, L2.
 
 Branch/PR: `feat/local-api-launch`. Independent mutation: bind `("0.0.0.0", 0)`; the
 loopback-only test must fail.
