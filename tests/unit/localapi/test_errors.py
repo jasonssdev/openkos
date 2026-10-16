@@ -159,6 +159,7 @@ def test_the_parametrized_reasons_are_the_ones_the_api_declares() -> None:
         "record_failed",
         "not_mergeable",
         "not_offered",
+        "invalid_selection",
     }
 
 
@@ -198,6 +199,7 @@ def test_each_stale_reason_has_its_own_message(
         ("not_mergeable", 409, "not_mergeable", False),
         ("member_missing", 409, "member_missing", False),
         ("record_failed", 409, "record_failed", True),
+        ("invalid_selection", 422, "invalid_selection", False),
     ],
 )
 def test_not_applied_reasons_map_to_their_rows_and_never_echo_the_detail(
@@ -348,6 +350,7 @@ SPEC_CODES = {
     "not_mergeable",
     "member_missing",
     "record_failed",
+    "invalid_selection",
     "run_refused",
     "run_active",
     "write_drift",

@@ -17,6 +17,7 @@ from openkos.localapi._models import (
     DecisionList,
     DecisionPreview,
     HealthBody,
+    PreviewPlan,
     PreviewRequest,
     QuoteRequest,
     RefreshRequest,
@@ -132,7 +133,7 @@ def make_router() -> APIRouter:
             return DecisionPreview(
                 decision_key=result.decision_key,
                 action=result.action,
-                plan=result.plan,
+                plan=PreviewPlan(result.plan),
                 version=result.version,
             )
         raise _errors.outcome_problem(result)

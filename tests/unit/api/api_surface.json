@@ -13,6 +13,7 @@
       "members": {
         "KEEP_DISTINCT": "keep_distinct",
         "MERGE": "merge",
+        "MERGE_GROUP": "merge_group",
         "RELATE": "relate",
         "RELATE_REVERSED": "relate_reversed",
         "SET_TIER": "set_tier",
@@ -236,6 +237,11 @@
           "annotation": "str",
           "default": false,
           "name": "content_digest"
+        },
+        {
+          "annotation": "GroupSelection | None",
+          "default": true,
+          "name": "selection"
         }
       ],
       "frozen": true,
@@ -259,6 +265,23 @@
     "Evaluation": {
       "kind": "alias",
       "value": "Literal['judged_same', 'judged_different', 'judged_uncertain', 'pending_evaluation', 'not_applicable']"
+    },
+    "GroupSelection": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "member_ids"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
     },
     "HealthCounts": {
       "fields": [
@@ -784,7 +807,7 @@
           "name": "action"
         },
         {
-          "annotation": "Literal['skipped', 'member_missing', 'record_failed', 'not_mergeable', 'not_offered']",
+          "annotation": "Literal['skipped', 'member_missing', 'record_failed', 'not_mergeable', 'not_offered', 'invalid_selection']",
           "default": false,
           "name": "reason"
         },

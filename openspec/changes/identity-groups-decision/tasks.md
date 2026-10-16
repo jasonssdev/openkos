@@ -102,33 +102,33 @@ is never hand-merged.
 Covers C3 (selection in the token), C4, the preview half of C5 and C7. D1, D2
 (application side), D3.
 
-- [ ] 1.1 RED `tests/unit/application/test_curate_decisions_group.py`:
-  - [ ] 1.1.1 `validate_selection` returns `NotApplied(MERGE_GROUP, "invalid_selection")`
+- [x] 1.1 RED `tests/unit/application/test_curate_decisions_group.py`:
+  - [x] 1.1.1 `validate_selection` returns `NotApplied(MERGE_GROUP, "invalid_selection")`
     for: no selection; survivor not marked; a member outside the group; one
     marked member; and returns the canonical selection (deduplicated, ascending)
     for a valid one (C4 scenarios).
-  - [ ] 1.1.2 `preview_merge_group` over a SAME group of three, all marked,
+  - [x] 1.1.2 `preview_merge_group` over a SAME group of three, all marked,
     survivor B: two steps in ascending absorbed order; no step names an unmarked
     member; nothing on disk changes (snapshot of every file's bytes).
-  - [ ] 1.1.3 A verdict other than SAME is `NotApplied("not_mergeable")`; a
+  - [x] 1.1.3 A verdict other than SAME is `NotApplied("not_mergeable")`; a
     member that does not resolve is `NotApplied("member_missing")`.
-  - [ ] 1.1.4 Type outcomes over A (Person), B (Organization), C (Place), all
+  - [x] 1.1.4 Type outcomes over A (Person), B (Organization), C (Place), all
     marked, survivor A with no `type_alternative`: B `recorded`, C `discarded`;
     survivor that already records one: both `discarded`; same types:
     `same_type`; an unreadable type: `unknown` (C5, C7).
-  - [ ] 1.1.5 The preview's cross-type concern is computed over the marked
+  - [x] 1.1.5 The preview's cross-type concern is computed over the marked
     members only (an unmarked member of another type does not raise it).
-  - [ ] 1.1.6 `version_of` for a group preview: `selection` is set; reordering or
+  - [x] 1.1.6 `version_of` for a group preview: `selection` is set; reordering or
     duplicating marked members gives the same `content_digest` and `token()`;
     editing an unmarked member changes `content_digest`; a different selection
     changes it (C3, C8 content half).
-  - [ ] 1.1.7 `DecisionVersion.token()` for a version with `selection=None` equals
+  - [x] 1.1.7 `DecisionVersion.token()` for a version with `selection=None` equals
     the value computed by the current formula (pin a literal hex digest of a fixed
     version before the change).
-- [ ] 1.2 RED `tests/unit/localapi/test_errors.py`: the pinned `NotApplied`
+- [x] 1.2 RED `tests/unit/localapi/test_errors.py`: the pinned `NotApplied`
   reason set gains `invalid_selection`; it maps to 422 `invalid_selection`, not
   retryable, fixed message; the spec-code set gains `invalid_selection`.
-- [ ] 1.3 GREEN `application/curate_decisions.py`: `Action.MERGE_GROUP`;
+- [x] 1.3 GREEN `application/curate_decisions.py`: `Action.MERGE_GROUP`;
   `NotApplied` reason `invalid_selection`; `GroupSelection`;
   `DecisionVersion.selection` (defaulted, last field) and the `token()` branch;
   `validate_selection`; `MergeGroupDecisionPreview` (survivor, absorbed ids,
@@ -138,13 +138,13 @@ Covers C3 (selection in the token), C4, the preview half of C5 and C7. D1, D2
   `lifecycle.prepare_one_merge(..., ordered_pair=(survivor, absorbed))`; the type
   simulation reads frontmatter through `okf`, never `yaml`); `version_of` branch
   (selection lines, every step's `_merge_content_lines`, `keep` lines).
-- [ ] 1.4 GREEN `api/__init__.py`: export `GroupSelection` (the leak guard rejects
+- [x] 1.4 GREEN `api/__init__.py`: export `GroupSelection` (the leak guard rejects
   `DecisionVersion` naming an unexported type).
-- [ ] 1.5 GREEN `localapi/_errors.py`: the `invalid_selection` row and constant.
-- [ ] 1.6 Regenerate both snapshots; confirm the surface diff is additive
+- [x] 1.5 GREEN `localapi/_errors.py`: the `invalid_selection` row and constant.
+- [x] 1.6 Regenerate both snapshots; confirm the surface diff is additive
   (`Action` member, `NotApplied.reason` Literal widened, `DecisionVersion` field
   with default, `GroupSelection` name added).
-- [ ] 1.7 Gates. Commit: `feat(api): preview an identity group merge against a chosen survivor`
+- [x] 1.7 Gates. Commit: `feat(api): preview an identity group merge against a chosen survivor`
 
 ## S2a: Group commit: steps, one lock, one commit, row resolution
 

@@ -2,7 +2,7 @@
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 from openkos import api
 from openkos.localapi._errors import WRITE_WAIT_SECONDS, ErrorBody
@@ -26,26 +26,42 @@ class DecisionList(BaseModel):
     decisions: list[api.Decision]
 
 
-class DecisionPreview(BaseModel):
-    """`api.DecisionPreview` with its plan declared as a discriminated union.
+class PreviewPlan(
+    RootModel[
+        Annotated[
+            api.MergePlan | api.RelatePlan | api.TierPlan | api.KeepDistinctPlan,
+            Field(discriminator="kind"),
+        ]
+    ]
+):
+    """The plan of a preview, declared as a discriminated union.
 
     The plan types carry a literal `kind`, so the OpenAPI document names it as the
     discriminator and a generated client narrows `plan` with `switch (plan.kind)`.
-    The field names and the plan types are `openkos.api`'s own. A response model
-    only: no `extra="forbid"`, which would reach the nested dataclasses and split
-    their components into `-Input` and `-Output` variants. A defaulted `kind` is
-    still always sent, so the response schema marks it required."""
+    The plan types are `openkos.api`'s own, and the wrapper serialises as the bare
+    plan. A defaulted `kind` is always sent, so the response schema marks it (and
+    every other defaulted plan field) required. That flag lives HERE and not on
+    `DecisionPreview`, because it reaches every nested dataclass: on the preview it
+    would also mark `DecisionVersion.selection` required in the response only, and
+    `DecisionVersion`, which a client echoes back in a request, would split into
+    `-Input` and `-Output` components."""
 
     model_config = ConfigDict(
         frozen=True, json_schema_serialization_defaults_required=True
     )
 
+
+class DecisionPreview(BaseModel):
+    """`api.DecisionPreview` with its plan declared as a discriminated union. The
+    field names are `openkos.api`'s own. A response model only: no
+    `extra="forbid"`, which would reach the nested dataclasses and split their
+    components into `-Input` and `-Output` variants."""
+
+    model_config = ConfigDict(frozen=True)
+
     decision_key: str
     action: api.Action
-    plan: Annotated[
-        api.MergePlan | api.RelatePlan | api.TierPlan | api.KeepDistinctPlan,
-        Field(discriminator="kind"),
-    ]
+    plan: PreviewPlan
     version: api.DecisionVersion
 
 

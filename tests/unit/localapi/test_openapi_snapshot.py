@@ -174,7 +174,10 @@ def test_a_busy_503_declares_its_retry_after_header() -> None:
 
 def test_the_preview_plan_is_a_discriminated_union_on_kind() -> None:
     schemas = openapi_document()["components"]["schemas"]  # type: ignore[index]
-    plan = schemas["DecisionPreview"]["properties"]["plan"]
+    assert schemas["DecisionPreview"]["properties"]["plan"] == {
+        "$ref": "#/components/schemas/PreviewPlan"
+    }
+    plan = schemas["PreviewPlan"]
 
     assert plan["discriminator"]["propertyName"] == "kind"
     assert plan["discriminator"]["mapping"] == {
