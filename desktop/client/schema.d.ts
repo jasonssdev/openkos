@@ -155,6 +155,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page */
+        get: operations["page_v1_pages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/pending": {
         parameters: {
             query?: never;
@@ -698,6 +715,39 @@ export interface components {
              * @enum {string}
              */
             type_outcome: "same_type" | "recorded" | "discarded" | "unknown";
+        };
+        /**
+         * Page
+         * @description One page as the desktop app shows it.
+         */
+        Page: {
+            /** Concept Id */
+            concept_id: string;
+            /** Excerpt */
+            excerpt: string;
+            /** Okf Type */
+            okf_type: string | null;
+            /**
+             * Sensitivity
+             * @enum {string}
+             */
+            sensitivity: "public" | "private" | "confidential";
+            /** Sources */
+            sources: components["schemas"]["PageSource"][];
+            /** Title */
+            title: string;
+        };
+        /**
+         * PageSource
+         * @description A file the person added that a page came from.
+         */
+        PageSource: {
+            /** Added At */
+            added_at: string | null;
+            /** File Name */
+            file_name: string;
+            /** Source Id */
+            source_id: string;
         };
         /**
          * PendingReport
@@ -1776,6 +1826,73 @@ export interface operations {
             };
             /** @description Forbidden */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    page_v1_pages_get: {
+        parameters: {
+            query: {
+                concept_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -48,18 +48,26 @@ Delivery strategy: stacked-to-main.
 
 ## S2 The Page Read
 
-- [ ] S2.1 `openkos.api.read_page`, `Page`, `PageSource` (P1, D1): tests for
+- [x] S2.1 `openkos.api.read_page`, `Page`, `PageSource` (P1, D1): tests for
   the fields, every excerpt rule, the sensitivity fail-closed rank, sources
   from Source documents only, `None` for invalid, missing and unreadable ids,
-  and no write.
-- [ ] S2.2 Surface snapshot regenerated; the classifier reports every
+  and no write. RED: `test_read_page.py` failed to collect (`cannot import
+  name 'Page' from 'openkos.api'`). The Source file is read by
+  `application.concept_read.read_source_file`; an unquoted `generated.at`
+  (parsed as a datetime) is returned as ISO text.
+- [x] S2.2 Surface snapshot regenerated; the classifier reports every
   difference additive (P2).
-- [ ] S2.3 `GET /v1/pages?concept_id=` with 404 `not_found` for `None` and 422
-  without the parameter (H1, H2); OpenAPI snapshot regenerated.
-- [ ] S2.4 `pnpm --dir desktop generate`; `client.readPage(conceptId)`; the
-  type-equality test covers it; `check:schema` passes.
-- [ ] S2.5 Mutations on the excerpt cut, the heading drop, the Source-type
-  filter and the fail-closed sensitivity.
+- [x] S2.3 `GET /v1/pages?concept_id=` with 404 `not_found` for `None` and 422
+  without the parameter (H1, H2); OpenAPI snapshot regenerated. RED: the read
+  answered 404 "no such route" and the unknown page carried that message.
+- [x] S2.4 `pnpm --dir desktop generate`; `client.readPage(conceptId)`; the
+  type-equality test covers it; `check:schema` passes. RED: `tsc` TS2339 and
+  TS2344 on `readPage`, and the request test failed.
+- [x] S2.5 Mutations on the excerpt cut, the heading drop, the Source-type
+  filter and the fail-closed sensitivity. 8 run, each restored from a byte
+  copy with `__pycache__` purged: 6 killed at once; the cut-on-a-space guard
+  and the `Source` type filter survived and each got a test, then were
+  killed.
 
 ## S3 Wording
 

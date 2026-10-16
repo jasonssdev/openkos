@@ -1084,6 +1084,91 @@
         "title": "MergeStep",
         "type": "object"
       },
+      "Page": {
+        "description": "One page as the desktop app shows it.",
+        "properties": {
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "excerpt": {
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "okf_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Okf Type"
+          },
+          "sensitivity": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Sensitivity",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/PageSource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concept_id",
+          "title",
+          "okf_type",
+          "excerpt",
+          "sensitivity",
+          "sources"
+        ],
+        "title": "Page",
+        "type": "object"
+      },
+      "PageSource": {
+        "description": "A file the person added that a page came from.",
+        "properties": {
+          "added_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added At"
+          },
+          "file_name": {
+            "title": "File Name",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "file_name",
+          "added_at"
+        ],
+        "title": "PageSource",
+        "type": "object"
+      },
       "PendingReport": {
         "description": "What `openkos pending` reads.",
         "properties": {
@@ -2934,6 +3019,90 @@
           }
         ],
         "summary": "Merges"
+      }
+    },
+    "/v1/pages": {
+      "get": {
+        "operationId": "page_v1_pages_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "concept_id",
+            "required": true,
+            "schema": {
+              "title": "Concept Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Page"
       }
     },
     "/v1/pending": {

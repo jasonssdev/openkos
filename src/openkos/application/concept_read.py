@@ -15,6 +15,7 @@ may disclose.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Literal
 
 from openkos import config, lifecycle, read_outcome
@@ -203,4 +204,46 @@ def concept_neighbors(layout: config.WorkspaceLayout, concept_id: str) -> Neighb
         concept_id=canonical_id,
         neighbors=tuple(neighbors),
         skipped_count=skipped_count,
+    )
+
+
+@dataclass(frozen=True)
+class SourceFile:
+    """The file a person added, as its Source document records it: the base
+    name of its `raw/` resource and when it was added (`generated.at`,
+    verbatim)."""
+
+    file_name: str
+    added_at: str | None
+
+
+_RAW_PREFIX = "raw/"
+
+
+def read_source_file(
+    layout: config.WorkspaceLayout, concept_id: str
+) -> SourceFile | None:
+    """The added file behind `concept_id`, or `None` when the id is invalid or
+    missing, the document cannot be read or parsed, is not a `Source`, or its
+    `resource` is not a file under `raw/`. Reads one file and writes nothing."""
+    try:
+        path, _ = application_lifecycle.resolve_concept_path(
+            layout.bundle_dir, concept_id
+        )
+        metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    except ValueError, OSError, UnicodeDecodeError:
+        # `okf.FrontmatterError` is a `ValueError`, like the resolver's refusal.
+        return None
+    resource = metadata.get("resource")
+    if metadata.get("type") != "Source" or not isinstance(resource, str):
+        return None
+    if not resource.startswith(_RAW_PREFIX) or resource == _RAW_PREFIX:
+        return None
+    generated = metadata.get("generated")
+    added_at = generated.get("at") if isinstance(generated, dict) else None
+    if isinstance(added_at, date):  # an unquoted timestamp parses as a date
+        added_at = added_at.isoformat()
+    return SourceFile(
+        file_name=resource.rsplit("/", 1)[-1],
+        added_at=added_at if isinstance(added_at, str) else None,
     )

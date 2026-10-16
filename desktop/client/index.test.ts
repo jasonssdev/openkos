@@ -125,6 +125,13 @@ describe("the requests", () => {
       null,
     ],
     [
+      "readPage",
+      (c) => c.readPage("people/m osei"),
+      "GET",
+      "/v1/pages?concept_id=people%2Fm+osei",
+      null,
+    ],
+    [
       "previewUnmerge",
       (c) => c.previewUnmerge({ survivor_id: "s", absorbed_id: "a" }),
       "POST",
