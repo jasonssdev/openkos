@@ -228,14 +228,14 @@ preflight (foreign Origin, disallowed method or header, foreign Host); Origin
 string only); Proxy headers (a forwarded Host does not bypass the Host check);
 Token handling (digest only, never in `repr`).
 
-- [ ] S2a.1 RED: create `tests/unit/localapi/__init__.py` and
+- [x] S2a.1 RED: create `tests/unit/localapi/__init__.py` and
   `tests/unit/localapi/conftest.py` (a recording inner ASGI app, a scope builder, a
   fixed port and token digest). Create `tests/unit/localapi/test_guard.py` Host
   cases: exact `127.0.0.1:P` and `localhost:P` pass (case-insensitive); `evil.com`,
   `127.0.0.1:Q`, absent, duplicated and `[::1]:P` give 403 `host_not_allowed` and the
   inner app is not reached; a forwarded `X-Forwarded-Host` does not change the
   verdict. Observe RED (`ModuleNotFoundError`). Satisfies: L4.
-- [ ] S2a.2 RED: preflight cases in the same file: an allowlisted Origin with
+- [x] S2a.2 RED: preflight cases in the same file: an allowlisted Origin with
   `Access-Control-Request-Method: POST` and headers `authorization, content-type` and
   no `Authorization` gets 204 with the exact `Allow-Origin`, `Allow-Methods: GET,
   POST`, `Allow-Headers: Authorization, Content-Type`, `Max-Age: 600`, `Vary:
@@ -243,27 +243,27 @@ Token handling (digest only, never in `repr`).
   each get 403 (`preflight_rejected`, or `host_not_allowed` for a foreign Host) with
   no `Access-Control-Allow-*` header; the Host check runs before the preflight
   answer; a preflight never reaches the inner app. Satisfies: L4, L6.
-- [ ] S2a.3 RED: Origin cases: absent Origin passes; each allowlisted origin
+- [x] S2a.3 RED: Origin cases: absent Origin passes; each allowlisted origin
   (`tauri://localhost`, `http://tauri.localhost`, `https://tauri.localhost`) passes;
   `https://evil.example` and `null` give 403 `origin_not_allowed`; a disallowed
   Origin with no token is 403, not 401. Satisfies: L5.
-- [ ] S2a.4 RED: token cases: no header, `Basic x`, an empty bearer value and two
+- [x] S2a.4 RED: token cases: no header, `Basic x`, an empty bearer value and two
   `Authorization` headers give 401 `unauthorized` with `WWW-Authenticate: Bearer`; a
   wrong bearer value gives 403 `forbidden`; the right token passes; the token only in
   the query string gives 401; the comparison uses `hmac.compare_digest` over
   `sha256` (assert via a monkeypatch that records the call, plus equal-length digest
   inputs). Satisfies: L7.
-- [ ] S2a.5 RED: response-header and scope cases: an allowed-Origin response carries
+- [x] S2a.5 RED: response-header and scope cases: an allowed-Origin response carries
   `Access-Control-Allow-Origin`, `Vary: Origin` and `Access-Control-Expose-Headers:
   Location, Retry-After`, on success and on a guard rejection; never
   `Access-Control-Allow-Credentials`; a `lifespan` scope passes through; a
   `websocket` scope is closed with code 1008; guard bodies are exactly
   `{code, retryable, message}` with `retryable` false. Satisfies: L6, L11 (guard rows).
-- [ ] S2a.6 RED: token-handling case: `ServerSettings`-style holder `repr` contains
+- [x] S2a.6 RED: token-handling case: `ServerSettings`-style holder `repr` contains
   neither the token nor its digest bytes (the settings class itself lands in S2b;
   here assert on the guard's own config object, `_GuardConfig`, with
   `field(repr=False)` on the digest). Satisfies: D4.
-- [ ] S2a.7 GREEN: create `src/openkos/localapi/__init__.py` (docstring only,
+- [x] S2a.7 GREEN: create `src/openkos/localapi/__init__.py` (docstring only,
   imports nothing: states that responses are owner-local, loopback, token-gated, and
   that the disclosure gate is deferred to the first ask/query endpoint; L14),
   `src/openkos/localapi/_errors.py` (only `ErrorBody` as a frozen
@@ -271,12 +271,12 @@ Token handling (digest only, never in `repr`).
   `RETRY_AFTER_SECONDS`), and `src/openkos/localapi/_guard.py` implementing D4 in
   the stated code order with hand-encoded JSON responses and stdlib-only typing. No
   `starlette` or `anyio` import. Satisfies: L4, L5, L6, L7, L14.
-- [ ] S2a.8 REFACTOR and survival: the guard file reads top to bottom as the four
+- [x] S2a.8 REFACTOR and survival: the guard file reads top to bottom as the four
   checks. Independent mutations (one at a time, reverted byte-exactly, bytecode
   purged): swap the Host and Origin checks; answer the preflight before the Host
   check; replace `compare_digest` with `==`; add `Allow-Credentials`. Each must
   redden a named test. Satisfies: L4..L7.
-- [ ] S2a.9 Run the five gates; commits `test(api): ...` is folded into
+- [x] S2a.9 Run the five gates; commits `test(api): ...` is folded into
   `feat(api): add the ASGI guard ...` with its tests. Satisfies: L4..L7.
 
 Branch/PR: `feat/local-api-guard`. Independent mutation: answer a foreign-Host
