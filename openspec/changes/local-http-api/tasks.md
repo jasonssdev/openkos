@@ -178,34 +178,34 @@ so each PR opens against a settled `main`.
 Goal: record the decision and make the optional dependency installable, with no
 runtime code. Satisfies: L15 (the extra is optional), D12, D13. Depends on: none.
 
-- [ ] S1.1 RED: create `tests/unit/test_api_extra.py`: read `pyproject.toml` with
+- [x] S1.1 RED: create `tests/unit/test_api_extra.py`: read `pyproject.toml` with
   `tomllib`; assert `fastapi`, `uvicorn` and `pydantic` appear under
   `[project.optional-dependencies].api` and in none of `[project].dependencies`;
   assert the dev group lists `fastapi`, `httpx`, `pydantic` and `uvicorn`; assert
   `watch` is untouched. Observe RED (extra missing). Satisfies: L15.
-- [ ] S1.2 GREEN: edit `pyproject.toml` per D12 (`api = ["fastapi>=0.143.2",
+- [x] S1.2 GREEN: edit `pyproject.toml` per D12 (`api = ["fastapi>=0.143.2",
   "pydantic>=2.14.1", "uvicorn>=0.54.0"]` with the explanatory comment; dev group
   gains `fastapi>=0.143.2`, `httpx>=0.28.1`, `pydantic>=2.14.1`,
   `uvicorn>=0.54.0`); regenerate `uv.lock` with `uv lock` and confirm `uv lock
   --check` passes. `uv.lock` is excluded from the estimate. Satisfies: L15.
-- [ ] S1.3 RED then GREEN, ADR gate: copy `docs/adr/template.md` to
+- [x] S1.3 RED then GREEN, ADR gate: copy `docs/adr/template.md` to
   `docs/adr/0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra.md`;
   transcribe Context, Decision (seven points), Consequences and Alternatives from D13
   (read-only source: `design.md`); status **Proposed**, with `description`, date and
   timestamp; add the row to `docs/adr/README.md`. Run the existing ADR-status test
   (`tests/unit/docs`) first and observe it RED if the README row is missing, then
   GREEN. ADR-0058 is not edited. Satisfies: D13.
-- [ ] S1.4 Docs text, shape only: `AGENTS.md` ("LLM calls" bullet: `pydantic` is not
+- [x] S1.4 Docs text, shape only: `AGENTS.md` ("LLM calls" bullet: `pydantic` is not
   a core dependency, it arrives only with the `[api]` extra confined to
   `openkos.localapi`, ADR-0061; "The core is synchronous" bullet: async only at the
   adapter edges `mcp/` and `localapi/`); `openspec/config.yaml` `context` line (same
   statement); `docs/tech_stack.md` (the Pydantic rows and the "no web framework is a
   dependency yet" sentence, located by content). Do not touch any other ADR.
   Satisfies: D13.
-- [ ] S1.5 Survival: `uv run python -c "import fastapi, uvicorn, pydantic, httpx"`
+- [x] S1.5 Survival: `uv run python -c "import fastapi, uvicorn, pydantic, httpx"`
   succeeds; `openkos --help` still works. Mutation: move `fastapi` into the core
   dependency list and observe S1.1 fail; revert, purge, GREEN. Satisfies: L15.
-- [ ] S1.6 Run the five gates. Commits: `docs(docs):` for the ADR and text;
+- [x] S1.6 Run the five gates. Commits: `docs(docs):` for the ADR and text;
   `feat(api): declare the api optional extra` for the `pyproject.toml` and lock
   change with its test (`build` and `chore` are not project scopes). Satisfies: L15,
   D12, D13.
