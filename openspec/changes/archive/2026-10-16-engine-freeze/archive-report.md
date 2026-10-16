@@ -14,7 +14,7 @@
 | S1 plan | #1453 | `274d8de6` | about 565 (docs) | passed | (not yet present) |
 | S2 the freeze, smoke check, `freeze` group, CI job | #1454 | `a90008fb` | about 565 | 14m24s | 56s (freeze and smoke only) |
 | S3 locator, bundle overlay, build-app script, CI bundle, docs | #1455 | `6cd5e1db` | about 430 | 9m52s | 12m27s (every cache cold) |
-| S4 CHANGELOG, roadmap, spec merge, ADRs, archive | this PR | | docs only | | |
+| S4 CHANGELOG, roadmap, spec merge, ADRs, archive | this PR | | docs only | | 2m10s (Tauri CLI and Rust build restored from the cache) |
 
 - **Shipped surface**: `desktop/engine/` (the PyInstaller recipe `openkos-engine.spec` and its entry point `openkos_engine.py`), `desktop/scripts/` (`build-engine.sh`, `build-app.sh`, `smoke_engine.py`), `desktop/src-tauri/tauri.bundle.conf.json`, the bundled branch of the engine locator (`EngineSource`, `engine_source`, `bundled_engine`, `LocateError::BundledEngineMissing`), the `freeze` dependency group, the `desktop bundle (macOS)` CI job, `exclude_gitignore` for MyPy, and the `.gitignore` negation for the recipe.
 - **Engine**: unchanged. No file under `src/` was touched. The parent-PID poll was not added (see below).
