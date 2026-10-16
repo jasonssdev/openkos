@@ -89,6 +89,24 @@ We use pre-commit hooks to run these automatically:
 uv run pre-commit install
 ```
 
+### The desktop shell
+
+The desktop app's shell under `desktop/` is Rust ([Tauri 2](https://v2.tauri.app/)); working on it needs a stable Rust toolchain, and on Linux the [WebKitGTK packages Tauri lists](https://v2.tauri.app/start/prerequisites/). It runs the engine of your checkout with `uv run openkos serve`, so `uv sync` first. To start it against a workspace:
+
+```bash
+cd desktop/src-tauri
+OPENKOS_WORKSPACE=/path/to/workspace cargo run
+```
+
+`OPENKOS_ENGINE` names a different `openkos` executable to run instead. Its gates:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test                               # the supervisor, against fake engines
+cargo test --test live_engine -- --ignored   # the shell against the real engine
+```
+
 ---
 
 ## Pull request process

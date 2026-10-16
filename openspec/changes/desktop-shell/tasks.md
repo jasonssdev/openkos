@@ -64,20 +64,20 @@ previous one is squash-merged).
 
 ## S2b The Tauri App And The Status Page
 
-- [ ] S2b.1 RED: a supervisor shared between threads can be shut down from any of
+- [x] S2b.1 RED: a supervisor shared between threads can be shut down from any of
   them (`shutdown(&self)`), needed by the Tauri state.
-- [ ] S2b.2 The Tauri app: `tauri.conf.json` (static `frontendDist`, global Tauri
+- [x] S2b.2 The Tauri app: `tauri.conf.json` (static `frontendDist`, global Tauri
   API, the CSP of D6, bundling off), `build.rs`, `main.rs`, `run()` with the
   `engine_state` command and the stop on `RunEvent::Exit` (R4, R5).
-- [ ] S2b.3 The page: engine state in English, the status read with the token,
+- [x] S2b.3 The page: engine state in English, the status read with the token,
   values written as text (R5).
-- [ ] S2b.4 The live test against the real engine (R5), mutation-checked with a
+- [x] S2b.4 The live test against the real engine (R5), mutation-checked with a
   foreign origin.
-- [ ] S2b.5 CI: WebKitGTK packages, the build cache, the engine install and the
+- [x] S2b.5 CI: WebKitGTK packages, the build cache, the engine install and the
   live test.
-- [ ] S2b.6 Docs: `docs/architecture.md` (the app and `ui/`, the delivery line),
+- [x] S2b.6 Docs: `docs/architecture.md` (the app and `ui/`, the delivery line),
   `CONTRIBUTING.md` (building and checking the shell).
-- [ ] S2b.7 Manual check against the real engine: a SIGKILLed and a SIGTERMed
+- [x] S2b.7 Manual check against the real engine: a SIGKILLed and a SIGTERMed
   shell leave no engine process.
 
 ## S3 Archive

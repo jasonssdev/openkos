@@ -163,7 +163,7 @@ impl Shared {
 /// The running supervision thread and the state it publishes.
 pub struct Supervisor {
     shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
+    thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Supervisor {
@@ -180,7 +180,7 @@ impl Supervisor {
             .expect("spawn the supervision thread");
         Self {
             shared,
-            thread: Some(thread),
+            thread: Mutex::new(Some(thread)),
         }
     }
 
@@ -214,11 +214,14 @@ impl Supervisor {
         }
     }
 
-    /// Stop the engine and the supervision thread. Idempotent.
-    pub fn shutdown(&mut self) {
+    /// Stop the engine and the supervision thread. Idempotent, and callable
+    /// from any thread: a second caller waits until the first one's stop is
+    /// complete, because the join happens under the thread lock.
+    pub fn shutdown(&self) {
         self.shared.state.lock().expect("state lock").1 = true;
         self.shared.changed.notify_all();
-        if let Some(thread) = self.thread.take() {
+        let mut thread = self.thread.lock().expect("thread lock");
+        if let Some(thread) = thread.take() {
             let _ = thread.join();
         }
     }
@@ -432,7 +435,7 @@ mod tests {
     #[test]
     fn it_starts_the_engine_and_publishes_ready() {
         let dir = fake::scratch("sup-ready");
-        let mut sup = Supervisor::start(fixed(counting(&dir)), fast(3));
+        let sup = Supervisor::start(fixed(counting(&dir)), fast(3));
         let state = sup.wait_for(WAIT, is_ready).expect("ready");
         let EngineState::Ready {
             base_url,
@@ -453,7 +456,7 @@ mod tests {
     #[test]
     fn a_crashed_engine_is_restarted_with_a_fresh_token() {
         let dir = fake::scratch("sup-restart");
-        let mut sup = Supervisor::start(fixed(counting(&dir)), fast(3));
+        let sup = Supervisor::start(fixed(counting(&dir)), fast(3));
         let EngineState::Ready { pid, token, .. } = sup.wait_for(WAIT, is_ready).expect("ready")
         else {
             unreachable!()
@@ -480,7 +483,7 @@ mod tests {
     fn restarts_are_bounded_then_the_state_is_failed() {
         let dir = fake::scratch("sup-bounded");
         let script = "echo x >> \"$1/starts\"; IFS= read -r t; echo 'boom' >&2; exit 3";
-        let mut sup = Supervisor::start(fixed(fake::engine(script, &dir)), fast(2));
+        let sup = Supervisor::start(fixed(fake::engine(script, &dir)), fast(2));
         let state = sup
             .wait_for(WAIT, |s| matches!(s, EngineState::Failed { .. }))
             .expect("failed");
@@ -497,7 +500,7 @@ mod tests {
 
     #[test]
     fn a_locator_failure_is_final_and_spawns_nothing() {
-        let mut sup = Supervisor::start(
+        let sup = Supervisor::start(
             Box::new(|| Err("the workspace is missing".to_owned())),
             fast(3),
         );
@@ -521,7 +524,7 @@ mod tests {
         let mut config = fast(3);
         config.policy.initial_backoff = Duration::from_secs(30);
         config.policy.max_backoff = Duration::from_secs(30);
-        let mut sup = Supervisor::start(fixed(fake::engine(script, &dir)), config);
+        let sup = Supervisor::start(fixed(fake::engine(script, &dir)), config);
         sup.wait_for(WAIT, |s| matches!(s, EngineState::Restarting { .. }))
             .expect("restarting");
         let began = Instant::now();
@@ -539,6 +542,22 @@ mod tests {
         };
         drop(sup);
         assert!(fake::gone_within(pid, WAIT));
+    }
+
+    #[test]
+    fn a_shared_supervisor_is_read_and_shut_down_from_other_threads() {
+        let dir = fake::scratch("sup-shared");
+        let sup = Arc::new(Supervisor::start(fixed(counting(&dir)), fast(3)));
+        let EngineState::Ready { pid, .. } = sup.wait_for(WAIT, is_ready).expect("ready") else {
+            unreachable!()
+        };
+        let reader = Arc::clone(&sup);
+        std::thread::spawn(move || reader.shutdown())
+            .join()
+            .expect("shutdown thread");
+        assert_eq!(sup.state(), EngineState::Stopped);
+        assert!(!fake::alive(pid));
+        sup.shutdown();
     }
 
     /// Not a test on its own: the body of the force-quit probe below, run in a

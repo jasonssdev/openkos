@@ -11,10 +11,14 @@ publish = false
 [lib]
 name = "openkos_desktop"
 
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
 [dependencies]
 getrandom = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tauri = { version = "2", features = [] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
