@@ -51,6 +51,16 @@ WRITE_REFUSED: Final = "write_refused"
 WRITE_FAILED: Final = "write_failed"
 QUEUE_REFRESH_REFUSED: Final = "queue_refresh_refused"
 
+# Judging rows.
+QUOTE_STALE: Final = "quote_stale"
+RUN_REFUSED: Final = "run_refused"
+RUN_ACTIVE: Final = "run_active"
+JUDGING_REFUSED: Final = "judging_refused"
+BACKEND_UNAVAILABLE: Final = "backend_unavailable"
+BACKEND_MODEL_NOT_FOUND: Final = "backend_model_not_found"
+GENERATION_CAPPED: Final = "generation_capped"
+BACKEND_ERROR: Final = "backend_error"
+
 _REFUSAL_FALLBACK: Final = "the write was refused"
 
 
@@ -67,7 +77,8 @@ class _Row(NamedTuple):
 _BUSY_HEADERS: Final = {"Retry-After": str(RETRY_AFTER_SECONDS)}
 
 # Subclass-first: the first isinstance match wins. `WriteFailed` and
-# `DriftDetected` come before `WriteRefused`, which they extend.
+# `DriftDetected` come before `WriteRefused`, which they extend, and the three
+# specific backend errors come before the `BackendError` they extend.
 _ROWS: Final[tuple[_Row, ...]] = (
     _Row(
         api.QueueUnavailableError,
@@ -121,6 +132,35 @@ _ROWS: Final[tuple[_Row, ...]] = (
         False,
         "the decision queue cannot be refreshed",
     ),
+    _Row(
+        api.JudgingRefused,
+        503,
+        JUDGING_REFUSED,
+        False,
+        "judging cannot be run on this workspace",
+    ),
+    _Row(
+        api.BackendUnavailable,
+        503,
+        BACKEND_UNAVAILABLE,
+        True,
+        "the configured model backend is unreachable",
+    ),
+    _Row(
+        api.BackendModelNotFound,
+        424,
+        BACKEND_MODEL_NOT_FOUND,
+        False,
+        "the configured model is not installed",
+    ),
+    _Row(
+        api.BackendGenerationCapped,
+        502,
+        GENERATION_CAPPED,
+        False,
+        "the model's reply was cut off before it finished",
+    ),
+    _Row(api.BackendError, 502, BACKEND_ERROR, False, "the model backend failed"),
 )
 
 # Outcomes returned (not raised) by the write operations. (status, code,
@@ -257,8 +297,38 @@ def key_mismatch() -> ApiProblem:
     )
 
 
-def outcome_problem(outcome: api.NotApplied | api.Stale) -> ApiProblem:
-    """The failure a returned (not raised) write outcome is answered with."""
+def run_active() -> ApiProblem:
+    """A run was requested while another is active; trying again later can work."""
+    return ApiProblem(
+        409,
+        ErrorBody(
+            code=RUN_ACTIVE,
+            retryable=True,
+            message="a judging run is already active",
+        ),
+    )
+
+
+def outcome_problem(
+    outcome: api.NotApplied | api.Stale | api.QuoteStale | api.RunRefused,
+) -> ApiProblem:
+    """The failure a returned (not raised) outcome is answered with."""
+    if isinstance(outcome, api.QuoteStale):
+        # Only the `ChangedField` literals, never anything a client supplied.
+        changed = ", ".join(outcome.changed)
+        message = f"the quote is stale (changed: {changed}); quote again"
+        return ApiProblem(
+            409, ErrorBody(code=QUOTE_STALE, retryable=False, message=message)
+        )
+    if isinstance(outcome, api.RunRefused):
+        return ApiProblem(
+            422,
+            ErrorBody(
+                code=RUN_REFUSED,
+                retryable=False,
+                message="a run needs the token of a quote",
+            ),
+        )
     if isinstance(outcome, api.Stale):
         message = _STALE_MESSAGES.get(outcome.reason, _STALE_FALLBACK)
         return ApiProblem(409, ErrorBody(code=STALE, retryable=False, message=message))

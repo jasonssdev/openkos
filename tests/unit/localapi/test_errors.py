@@ -323,3 +323,85 @@ def test_drift_is_not_reported_as_a_plain_refusal() -> None:
 
     assert drift[1].code == "write_drift"
     assert refused[1].code == "write_refused"
+
+
+# -- the table is complete ---------------------------------------------------------- #
+
+# The `code` column of the spec's error table, as literals so a row cannot be
+# dropped or invented without this test noticing.
+SPEC_CODES = {
+    "unauthorized",
+    "forbidden",
+    "host_not_allowed",
+    "origin_not_allowed",
+    "preflight_rejected",
+    "not_found",
+    "method_not_allowed",
+    "invalid_request",
+    "key_mismatch",
+    "stale",
+    "quote_stale",
+    "action_not_offered",
+    "skip_not_applicable",
+    "not_mergeable",
+    "member_missing",
+    "record_failed",
+    "run_refused",
+    "run_active",
+    "write_drift",
+    "write_refused",
+    "write_failed",
+    "workspace_busy",
+    "workspace_lock_unavailable",
+    "queue_unavailable",
+    "queue_refresh_refused",
+    "judging_refused",
+    "workspace_not_found",
+    "workspace_unreadable",
+    "backend_unavailable",
+    "backend_model_not_found",
+    "generation_capped",
+    "backend_error",
+    "internal_error",
+}
+
+
+def _produced_by_the_guard_and_the_framework(client: TestClient) -> list[str]:
+    foreign = {"Origin": "https://evil.example"}
+    responses = [
+        client.get("/v1/health"),
+        client.get("/v1/health", headers={"Authorization": "Bearer wrong"}),
+        client.get("/v1/health", headers={**AUTH, "Host": "evil.com"}),
+        client.get("/v1/health", headers={**AUTH, **foreign}),
+        client.options(
+            "/v1/health", headers={**foreign, "Access-Control-Request-Method": "GET"}
+        ),
+        client.get("/v1/nothing", headers=AUTH),
+        client.delete("/v1/health", headers=AUTH),
+        client.post("/v1/_probe_body", json={"count": "x"}, headers=AUTH),
+    ]
+    return [r.json()["code"] for r in responses]
+
+
+def test_every_code_in_the_spec_table_is_produced_exactly_once_and_no_other(
+    client: TestClient,
+) -> None:
+    rows = [row.code for row in _errors._ROWS]
+    not_applied = [row[1] for row in _errors._NOT_APPLIED.values()]
+    helpers = [
+        _errors.key_mismatch().body.code,
+        _errors.outcome_problem(api.Stale(_KEY, "content_changed")).body.code,
+        _errors.outcome_problem(api.QuoteStale("identity", ("model",))).body.code,
+        _errors.outcome_problem(api.RunRefused("no_quote_token")).body.code,
+        _errors.run_active().body.code,
+        _errors.error_body(RuntimeError("x"))[1].code,
+    ]
+    produced = [
+        *rows,
+        *not_applied,
+        *helpers,
+        *_produced_by_the_guard_and_the_framework(client),
+    ]
+
+    assert len(produced) == len(set(produced))  # exactly one producer per code
+    assert set(produced) == SPEC_CODES

@@ -554,14 +554,14 @@ Satisfies: L8, L9, L10, L11, L13. Depends on: S3, S4a.
 Threat-matrix case carried here: Lifecycle (stuck model call; SIGTERM sets the run
 stop, wired in the lifespan).
 
-- [ ] S4b.1 RED: `tests/unit/localapi/test_judging_routes.py` quote: `POST
+- [x] S4b.1 RED: `tests/unit/localapi/test_judging_routes.py` quote: `POST
   /judging/quote` with a chat client whose `chat` fails the test returns 200 with a
   `JudgingQuote` whose `token` is the full `QuoteToken` JSON (binding, `work` with
   `member_digests` as two-string arrays, `calls`), `QuoteRequest` validates `kind`
   and defaults the two booleans to false, an unknown `kind` is 422
   `invalid_request`. Populated round-trip with `TypeAdapter(JudgingQuote)`.
   Satisfies: L8, L9, L13 (quote costs no model call).
-- [ ] S4b.2 RED: start/poll/stop over HTTP with a stubbed `api.run_judging`: start
+- [x] S4b.2 RED: start/poll/stop over HTTP with a stubbed `api.run_judging`: start
   returns 202 with `Location: /v1/judging/runs/{id}` and a `RunStatus` before a
   blocked "model call" completes; the echoed `QuoteToken` reaches the stub `==` the
   issued value; poll is 200 for running, stopping, finished and failed runs;
@@ -570,12 +570,12 @@ stop, wired in the lifespan).
   active is 409 `run_active`; unknown id on poll and stop is 404 `not_found`; the 17th
   finished run evicts the first; status and decisions are served promptly while a
   run is blocked. Satisfies: L10, L13.
-- [ ] S4b.3 RED: token shapes: a body that omits the token or sets it null is 422
+- [x] S4b.3 RED: token shapes: a body that omits the token or sets it null is 422
   `run_refused` and the stub was not called; a token that is a string is 422
   `invalid_request`; `QuoteStale` from the stub is 409 `quote_stale` with a message
   built only from the `ChangedField` literals; no job exists after either. Satisfies:
   L10, L11.
-- [ ] S4b.4 RED: backend rows, parametrized: `BackendUnavailable` 503
+- [x] S4b.4 RED: backend rows, parametrized: `BackendUnavailable` 503
   `backend_unavailable` retryable; `BackendModelNotFound` 424
   `backend_model_not_found`; `BackendGenerationCapped` 502 `generation_capped`; any
   other `BackendError` 502 `backend_error`; `JudgingRefused` 503 `judging_refused`;
@@ -584,31 +584,31 @@ stop, wired in the lifespan).
   `ErrorBody` with a code from the table and the fixed message, never exception
   text; a run that raises after admission is `failed` with `error`. Satisfies: L11,
   L13.
-- [ ] S4b.5 RED: table completeness: a test builds the set of `code` values in the
+- [x] S4b.5 RED: table completeness: a test builds the set of `code` values in the
   spec's error table (listed in the test as literals) and asserts each is produced by
   exactly one row of `_errors.py` or the guard, and that no extra code exists, so a
   row cannot be forgotten. Satisfies: L11.
-- [ ] S4b.6 RED: `tests/unit/localapi/test_admission_pin.py` against the real
+- [x] S4b.6 RED: `tests/unit/localapi/test_admission_pin.py` against the real
   `api.run_judging` with the existing judging fixtures, a recording chat-client
   factory (`chat_client=`) and a recording `StopToken` subclass, for each of the three
   kinds: `stop.is_set()` is called before the first chat call and after the binding
   check, so a moved binding returns `QuoteStale` with no chat call. Satisfies: L13.
-- [ ] S4b.7 GREEN: add `QuoteRequest`, `RunRequest` to `_models.py`; add the backend
+- [x] S4b.7 GREEN: add `QuoteRequest`, `RunRequest` to `_models.py`; add the backend
   and judging rows to `_errors.py`; add the five routes to `_routes.py` (plain `def`
   for quote, poll and stop; the start route calls `registry.start` and sets
   `Location`); build the `RunRegistry` in `_app.py` and add the lifespan exit
   `await asyncio.to_thread(registry.shutdown, SHUTDOWN_GRACE_SECONDS)`. `asyncio` is
   used in `_app.py` only. Satisfies: L8, L11, L13, L2.
-- [ ] S4b.8 RED then GREEN, shutdown in the app: closing the `TestClient` context
+- [x] S4b.8 RED then GREEN, shutdown in the app: closing the `TestClient` context
   with a blocked run returns within the grace and the stub's stop token is set.
   Satisfies: L2.
-- [ ] S4b.9 Extend the enumeration set to the full route set and assert it exactly;
+- [x] S4b.9 Extend the enumeration set to the full route set and assert it exactly;
   regenerate `openapi.json`; confirm `RunStatus`, `JudgingOutcomeBody`, `QuoteToken`
   and `prefixItems` for `member_digests`, and no `-Input`/`-Output` or
   module-qualified names. Mutation: map `RunRefused` to 409 and observe S4b.3 fail;
   start the thread before registering the run and observe the `run_active` race test
   fail; revert, purge, GREEN. Satisfies: L7, L16.
-- [ ] S4b.10 Run the five gates; commits `feat(api):`. Satisfies: L8..L13.
+- [x] S4b.10 Run the five gates; commits `feat(api):`. Satisfies: L8..L13.
 
 Branch/PR: `feat/local-api-judging`. Independent mutation: report `QuoteStale` as 202
 (drop the admission wait); the S4b.3 stale test must fail. At the advisory ~400 lines

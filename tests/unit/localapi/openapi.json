@@ -547,6 +547,183 @@
         "title": "JobSummary",
         "type": "object"
       },
+      "JudgingOutcomeBody": {
+        "additionalProperties": false,
+        "description": "What a judging run returned, field for field, with a failure as a body.",
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "deferred": {
+            "title": "Deferred",
+            "type": "integer"
+          },
+          "dropped": {
+            "title": "Dropped",
+            "type": "integer"
+          },
+          "failed_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed At"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "judged": {
+            "title": "Judged",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "identity",
+              "relation_type",
+              "volatility"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "not_in_quote": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Not In Quote",
+            "type": "array"
+          },
+          "observer_failed": {
+            "title": "Observer Failed",
+            "type": "boolean"
+          },
+          "persisted": {
+            "title": "Persisted",
+            "type": "integer"
+          },
+          "settled_since_quote": {
+            "title": "Settled Since Quote",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "stopped",
+              "failed",
+              "unpersisted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "unpersisted": {
+            "title": "Unpersisted",
+            "type": "integer"
+          },
+          "unpersisted_cause": {
+            "anyOf": [
+              {
+                "enum": [
+                  "workspace_busy",
+                  "store_error"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unpersisted Cause"
+          }
+        },
+        "required": [
+          "kind",
+          "status",
+          "judged",
+          "calls",
+          "persisted",
+          "unpersisted",
+          "unpersisted_cause",
+          "dropped",
+          "deferred",
+          "not_in_quote",
+          "settled_since_quote",
+          "failure",
+          "failed_at",
+          "observer_failed"
+        ],
+        "title": "JudgingOutcomeBody",
+        "type": "object"
+      },
+      "JudgingQuote": {
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/QuoteBinding"
+          },
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "identity",
+              "relation_type",
+              "volatility"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "notices": {
+            "items": {
+              "$ref": "#/components/schemas/QuoteNotice"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "served": {
+            "title": "Served",
+            "type": "integer"
+          },
+          "to_judge": {
+            "title": "To Judge",
+            "type": "integer"
+          },
+          "token": {
+            "$ref": "#/components/schemas/QuoteToken"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "uncertain": {
+            "title": "Uncertain",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "total",
+          "served",
+          "uncertain",
+          "to_judge",
+          "calls",
+          "binding",
+          "notices",
+          "token"
+        ],
+        "title": "JudgingQuote",
+        "type": "object"
+      },
       "KeepDistinctPlan": {
         "description": "Recording that these concepts are different things.",
         "properties": {
@@ -840,6 +1017,214 @@
         "title": "QueueRefresh",
         "type": "object"
       },
+      "QuoteBinding": {
+        "description": "What consent was given to. A change of any field is `QuoteStale`.",
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "effective_confidential": {
+            "title": "Effective Confidential",
+            "type": "boolean"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "identity",
+              "relation_type",
+              "volatility"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "rubric_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rubric Digest"
+          }
+        },
+        "required": [
+          "kind",
+          "model",
+          "backend",
+          "is_local",
+          "effective_confidential",
+          "rubric_digest"
+        ],
+        "title": "QuoteBinding",
+        "type": "object"
+      },
+      "QuoteNotice": {
+        "properties": {
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend"
+          },
+          "code": {
+            "enum": [
+              "model",
+              "truncated",
+              "quarantined",
+              "rubric_rejudge",
+              "unattended_active",
+              "insecure_key"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "produced": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Produced"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "active",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "QuoteNotice",
+        "type": "object"
+      },
+      "QuoteRequest": {
+        "additionalProperties": false,
+        "description": "Which judging to price, and whether the quote may include what the run\nneeds consent for.",
+        "properties": {
+          "include_confidential": {
+            "default": false,
+            "title": "Include Confidential",
+            "type": "boolean"
+          },
+          "include_uncertain": {
+            "default": false,
+            "title": "Include Uncertain",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "identity",
+              "relation_type",
+              "volatility"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "QuoteRequest",
+        "type": "object"
+      },
+      "QuoteToken": {
+        "description": "The context consent was given for. It holds no time: a token is stale\nonly when a binding field moved, decided by resolved values and digests.",
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/QuoteBinding"
+          },
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "include_confidential": {
+            "title": "Include Confidential",
+            "type": "boolean"
+          },
+          "include_uncertain": {
+            "title": "Include Uncertain",
+            "type": "boolean"
+          },
+          "work": {
+            "items": {
+              "$ref": "#/components/schemas/WorkItem"
+            },
+            "title": "Work",
+            "type": "array"
+          }
+        },
+        "required": [
+          "binding",
+          "include_confidential",
+          "include_uncertain",
+          "work",
+          "calls"
+        ],
+        "title": "QuoteToken",
+        "type": "object"
+      },
       "RefreshRequest": {
         "additionalProperties": false,
         "description": "How long a queue refresh waits for the workspace lock.",
@@ -919,6 +1304,110 @@
         "title": "RelationDetail",
         "type": "object"
       },
+      "RunRequest": {
+        "description": "The quote's token, echoed unchanged. A missing or null token is a\nrefusal the route answers (422 `run_refused`), not a validation error.",
+        "properties": {
+          "token": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuoteToken"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RunRequest",
+        "type": "object"
+      },
+      "RunStatus": {
+        "additionalProperties": false,
+        "description": "A judging run as a poll sees it. The run's own result is a field here,\nnever the poll's HTTP status.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index"
+          },
+          "kind": {
+            "enum": [
+              "identity",
+              "relation_type",
+              "volatility"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JudgingOutcomeBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "persisted": {
+            "title": "Persisted",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "stopping",
+              "finished",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          }
+        },
+        "required": [
+          "run_id",
+          "kind",
+          "state",
+          "index",
+          "total",
+          "persisted",
+          "outcome",
+          "error"
+        ],
+        "title": "RunStatus",
+        "type": "object"
+      },
       "TierDetail": {
         "additionalProperties": false,
         "description": "A volatility decision: a suggested tier for one concept type.",
@@ -993,6 +1482,37 @@
           "reason"
         ],
         "title": "WithheldAction",
+        "type": "object"
+      },
+      "WorkItem": {
+        "properties": {
+          "member_digests": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Member Digests",
+            "type": "array"
+          },
+          "work_key": {
+            "title": "Work Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_key",
+          "member_digests"
+        ],
+        "title": "WorkItem",
         "type": "object"
       },
       "WorkspaceStatus": {
@@ -1398,6 +1918,260 @@
           }
         ],
         "summary": "Health"
+      }
+    },
+    "/v1/judging/quote": {
+      "post": {
+        "operationId": "quote_v1_judging_quote_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgingQuote"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Quote"
+      }
+    },
+    "/v1/judging/runs": {
+      "post": {
+        "operationId": "start_run_v1_judging_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Start Run"
+      }
+    },
+    "/v1/judging/runs/{run_id}": {
+      "get": {
+        "operationId": "run_status_v1_judging_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Run Status"
+      }
+    },
+    "/v1/judging/runs/{run_id}/stop": {
+      "post": {
+        "operationId": "stop_run_v1_judging_runs__run_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Stop Run"
       }
     },
     "/v1/pending": {

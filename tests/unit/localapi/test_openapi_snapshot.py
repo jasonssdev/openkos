@@ -82,3 +82,38 @@ def test_the_uniform_error_body_is_described() -> None:
         "retryable",
         "message",
     }
+
+
+def _schemas() -> dict[str, dict[str, object]]:
+    components = openapi_document()["components"]
+    assert isinstance(components, dict)
+    schemas: dict[str, dict[str, object]] = components["schemas"]
+    return schemas
+
+
+def test_the_judging_contract_names_its_components() -> None:
+    schemas = _schemas()
+
+    for name in ("RunStatus", "JudgingOutcomeBody", "QuoteToken", "JudgingQuote"):
+        assert name in schemas
+
+
+def test_the_quote_token_describes_member_digests_as_two_string_arrays() -> None:
+    digests = _schemas()["WorkItem"]["properties"]["member_digests"]  # type: ignore[index]
+
+    item = digests["items"]
+    assert item["type"] == "array"
+    assert item["prefixItems"] == [{"type": "string"}, {"type": "string"}]
+    assert (item["minItems"], item["maxItems"]) == (2, 2)
+
+
+def test_the_run_start_route_is_202_with_a_job_and_a_run_refusal_row() -> None:
+    paths = openapi_document()["paths"]
+    assert isinstance(paths, dict)
+
+    start = paths["/v1/judging/runs"]["post"]
+
+    assert "202" in start["responses"]
+    assert start["responses"]["202"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/RunStatus"
+    }
