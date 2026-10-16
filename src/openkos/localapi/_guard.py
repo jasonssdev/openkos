@@ -7,10 +7,15 @@ refused at the first one that fails and no later check is reached:
 2. CORS preflight: answered here, never reaching the token check or a route.
 3. Origin: absent passes; present must be on the allowlist.
 4. Token: exactly one `Authorization: Bearer <token>`, compared as digests.
+5. Body size: a declared `Content-Length` above the cap is refused at once; a
+   body without one (or lying about it) is counted as it streams and aborted
+   when it crosses the cap. It runs after the token so an unauthenticated
+   caller learns nothing about the cap.
 
 Stdlib only: the responses are hand-encoded so they cannot depend on routing.
 """
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -32,6 +37,20 @@ ALLOWED_ORIGINS: Final = frozenset(
 _ALLOWED_METHODS: Final = frozenset({"GET", "POST"})
 _ALLOWED_REQUEST_HEADERS: Final = frozenset({"authorization", "content-type"})
 _WS_POLICY_VIOLATION: Final = 1008
+
+# The largest request body accepted. The biggest legitimate body is a judging
+# run echoing its `QuoteToken`, which lists every quoted group: measured at
+# about 416 bytes per three-member group, and a quote covers at most a few
+# hundred groups (the candidate scan keeps 50, a re-judge stays under the call
+# ceiling), so roughly 170 KiB at the extreme. The decision payloads are under
+# 1 KiB. 1 MiB is a round number with several times that headroom, and far
+# below anything that could strain a local process.
+MAX_REQUEST_BODY_BYTES: Final = 1024 * 1024
+_TOO_LARGE_MESSAGE: Final = "the request body is too large"
+
+
+class _BodyTooLarge(Exception):
+    """Raised inside the app's `receive` once the cap is crossed."""
 
 
 @dataclass(frozen=True)
@@ -133,17 +152,50 @@ class LocalApiGuard:
             await _respond(send, status, code, message, extra + challenge)
             return
 
-        if not extra:
-            await self._app(scope, receive, send)
+        # 5. Body size, last: only an authenticated caller learns the cap.
+        declared = _one(scope, b"content-length")
+        if (
+            declared is not None
+            and declared.isascii()
+            and declared.isdigit()
+            and int(declared) > MAX_REQUEST_BODY_BYTES
+        ):
+            await self._too_large(send, extra)
             return
 
-        async def send_with_cors(message: Message) -> None:
+        rejected = False
+        started = False
+        seen = 0
+
+        async def counted_receive() -> Message:
+            nonlocal rejected, seen
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > MAX_REQUEST_BODY_BYTES:
+                    if not started and not rejected:
+                        rejected = True
+                        await self._too_large(send, extra)
+                    raise _BodyTooLarge
+            return message
+
+        async def guarded_send(message: Message) -> None:
+            nonlocal started
+            if rejected:
+                return  # the 413 is on the wire; the aborted app says nothing more
             if message["type"] == "http.response.start":
-                message = dict(message)
-                message["headers"] = [*message.get("headers", ()), *extra]
+                started = True
+                if extra:
+                    message = dict(message)
+                    message["headers"] = [*message.get("headers", ()), *extra]
             await send(message)
 
-        await self._app(scope, receive, send_with_cors)
+        # The app let the abort escape; the 413 was already sent.
+        with contextlib.suppress(_BodyTooLarge):
+            await self._app(scope, counted_receive, guarded_send)
+
+    async def _too_large(self, send: Send, extra: list[tuple[bytes, bytes]]) -> None:
+        await _respond(send, 413, _errors.REQUEST_TOO_LARGE, _TOO_LARGE_MESSAGE, extra)
 
     async def _preflight(self, scope: Scope, origin: str, send: Send) -> None:
         method = _one(scope, b"access-control-request-method")

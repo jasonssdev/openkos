@@ -13,6 +13,7 @@ from starlette.routing import BaseRoute
 
 from openkos import api
 from openkos.localapi._app import ServerSettings, _build, create_app, openapi_document
+from openkos.localapi._guard import MAX_REQUEST_BODY_BYTES
 from tests.unit.localapi.conftest import AUTH, PORT, TAURI, TOKEN
 
 EXPECTED_ROUTES = {
@@ -195,3 +196,41 @@ def test_health_is_authenticated_and_reports_the_versions(
     assert body["api_version"] == api.API_VERSION
     assert isinstance(body["engine_version"], str)
     assert body["engine_version"]
+
+
+# -- the request body cap, end to end through the framework --------------------- #
+
+_BODY_ROUTES = [
+    "/v1/decisions/identity:abc/preview",
+    "/v1/decisions/identity:abc/apply",
+    "/v1/queue/refresh",
+    "/v1/judging/quote",
+    "/v1/judging/runs",
+]
+
+
+@pytest.mark.parametrize("path", _BODY_ROUTES)
+def test_an_oversized_declared_body_is_413_on_every_body_route(
+    client: TestClient, path: str
+) -> None:
+    response = client.post(
+        path, content=b"x" * (MAX_REQUEST_BODY_BYTES + 1), headers=AUTH
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        "code": "request_too_large",
+        "retryable": False,
+        "message": "the request body is too large",
+    }
+
+
+def test_an_oversized_chunked_body_is_413(client: TestClient) -> None:
+    def chunks() -> Iterator[bytes]:
+        for _ in range(3):
+            yield b"x" * (MAX_REQUEST_BODY_BYTES // 2)
+
+    response = client.post("/v1/queue/refresh", content=chunks(), headers=AUTH)
+
+    assert response.status_code == 413
+    assert response.json()["code"] == "request_too_large"

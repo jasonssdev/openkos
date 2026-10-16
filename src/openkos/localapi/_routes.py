@@ -119,7 +119,7 @@ def make_router() -> APIRouter:
             decisions=list(invoke(lambda: api.list_decisions(workspace)))
         )
 
-    @router.post("/decisions/{decision_key}/preview", responses=_errors_of(409))
+    @router.post("/decisions/{decision_key}/preview", responses=_errors_of(409, 413))
     def preview(
         decision_key: str,
         body: PreviewRequest,
@@ -139,7 +139,7 @@ def make_router() -> APIRouter:
 
     @router.post(
         "/decisions/{decision_key}/apply",
-        responses=_errors_of(409, 503, retry_after=True),
+        responses=_errors_of(409, 413, 503, retry_after=True),
     )
     def apply(
         decision_key: str,
@@ -162,7 +162,7 @@ def make_router() -> APIRouter:
             return ApplyResponse(applied=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
-    @router.post("/queue/refresh", responses=_errors_of(503, retry_after=True))
+    @router.post("/queue/refresh", responses=_errors_of(413, 503, retry_after=True))
     def refresh(
         body: RefreshRequest | None = None,
         workspace: api.Workspace = Depends(_workspace),  # noqa: B008
@@ -170,7 +170,7 @@ def make_router() -> APIRouter:
         wait = _wait(body.wait_seconds if body else _errors.WRITE_WAIT_SECONDS)
         return invoke(lambda: api.refresh_decision_queue(workspace, wait_seconds=wait))
 
-    @router.post("/judging/quote", responses=_errors_of(424, 502, 503))
+    @router.post("/judging/quote", responses=_errors_of(413, 424, 502, 503))
     def quote(
         body: QuoteRequest,
         workspace: api.Workspace = Depends(_workspace),  # noqa: B008
@@ -184,7 +184,7 @@ def make_router() -> APIRouter:
             )
         )
 
-    @router.post("/judging/runs", status_code=202, responses=_errors_of(409))
+    @router.post("/judging/runs", status_code=202, responses=_errors_of(409, 413))
     def start_run(
         body: RunRequest,
         response: Response,
