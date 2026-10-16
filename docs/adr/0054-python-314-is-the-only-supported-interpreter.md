@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0054: Python 3.14 is the only supported interpreter"
 description: The Python floor rises from 3.12 to 3.14 and 3.14 becomes the only tested interpreter, so development, CI, release and the frozen desktop app all run one interpreter; users on 3.12 or 3.13 stay on 0.5.5.
-status: Proposed
+status: Accepted
 date: 2026-10-14
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0054: Python 3.14 is the only supported interpreter
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-14
 
 ## Context
