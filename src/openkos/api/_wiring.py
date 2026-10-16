@@ -20,6 +20,7 @@ below therefore intercepts every client the API builds.
 
 import math
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -66,6 +67,15 @@ def skipped_warning(outcome: CommitOutcome) -> str | None:
     return None
 
 
+@dataclass
+class CommitNotes:
+    """What the commit ports learned that `Applied` has no slot for in flight:
+    set by the ports while an apply runs, read by the caller afterwards."""
+
+    confidential: bool = False
+    """A commit landed and holds a concept explicitly marked confidential."""
+
+
 def _ignore(message: str) -> None:
     """The default warning sink: drop it."""
 
@@ -75,6 +85,7 @@ def decision_ports(
     *,
     wait_seconds: float,
     on_warning: Callable[[str], None] | None,
+    notes: CommitNotes | None = None,
 ) -> curate_decisions.DecisionPorts:
     """The effects `apply_decision` needs, bound to `workspace`.
 
@@ -85,6 +96,8 @@ def decision_ports(
     warn = on_warning if on_warning is not None else _ignore
 
     def report(outcome: CommitOutcome) -> str | None:
+        if notes is not None and outcome.includes_confidential:
+            notes.confidential = True
         warning = skipped_warning(outcome)
         if warning is not None:
             warn(warning)

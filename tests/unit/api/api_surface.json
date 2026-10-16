@@ -52,6 +52,11 @@
           "annotation": "str | None",
           "default": false,
           "name": "commit_sha"
+        },
+        {
+          "annotation": "bool",
+          "default": true,
+          "name": "committed_confidential"
         }
       ],
       "frozen": true,
@@ -944,7 +949,7 @@
     "QuoteNotice": {
       "fields": [
         {
-          "annotation": "Literal['model', 'truncated', 'quarantined', 'rubric_rejudge', 'unattended_active']",
+          "annotation": "Literal['model', 'truncated', 'quarantined', 'rubric_rejudge', 'unattended_active', 'insecure_key']",
           "default": false,
           "name": "code"
         },

@@ -91,11 +91,16 @@ class DecisionVersion:
 @dataclass(frozen=True)
 class Applied:
     """The action took effect. `commit_sha` is `None` when the auto-commit
-    degraded (the write itself still landed)."""
+    degraded (the write itself still landed). `committed_confidential` is true
+    only when a commit landed and holds a concept explicitly marked
+    `sensitivity: confidential`; an adapter that has no notice of its own to
+    print leaves it false, and one that reports it sets it from the commit's
+    outcome."""
 
     decision_key: str | None
     action: Action
     commit_sha: str | None
+    committed_confidential: bool = False
 
 
 @dataclass(frozen=True)
