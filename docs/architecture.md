@@ -120,12 +120,15 @@ The principles that shape it:
 
 ## Repository structure (the desktop shell)
 
-The desktop app's shell lives beside the engine, not inside it: `desktop/` is a Rust crate for the Tauri 2 shell ([ADR-0055](adr/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar.md)), outside `src/` so the Python package, its wheel and its gates never see it. The shell holds no product behaviour; it starts the engine as a sidecar running `openkos serve` and keeps it running.
+The desktop app's shell lives beside the engine, not inside it: `desktop/` holds a Rust crate for the Tauri 2 shell ([ADR-0055](adr/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar.md)) and the TypeScript package of the page it shows ([ADR-0065](adr/0065-the-desktop-web-view-is-typescript-built-with-vite-over-a-client-generated-from-the-openapi-snapshot.md)), outside `src/` so the Python package, its wheel and its gates never see it. The shell holds no product behaviour; it starts the engine as a sidecar running `openkos serve` and keeps it running.
 
 ```
 desktop/
+├── package.json · pnpm-lock.yaml · tsconfig.json · vite.config.ts   # the page's package (pnpm, Vite)
+├── client/                       # the TypeScript client for the local API; schema.d.ts is generated
+├── ui/                           # the page's source: HTML, CSS and TypeScript over the client
 ├── engine/                       # the PyInstaller recipe that freezes the engine, and its entry point
-├── scripts/                      # build the freeze and the app; smoke-check a frozen engine
+├── scripts/                      # generate the client's types; build the freeze and the app; smoke-check a frozen engine
 ├── src-tauri/                    # the shell's Rust crate (Tauri's conventional layout)
 │   ├── Cargo.toml · Cargo.lock · build.rs · tauri.conf.json · icons/
 │   ├── tauri.bundle.conf.json    # the bundle build: the frozen engine as a resource, ad-hoc signing
@@ -135,12 +138,13 @@ desktop/
 │   │   ├── supervisor.rs         # start, watch, bounded restarts, stop; the state the UI reads
 │   │   └── locator.rs            # which engine to run: the bundle's frozen engine, or a checkout's
 │   └── tests/live_engine.rs      # the shell against the real engine of the checkout
-└── ui/                           # the web view's page: static HTML, CSS and JavaScript, no build step
+└── dist/                         # the built page, Tauri's frontendDist (ignored)
 ```
 
 - **The engine contract is the engine's.** The shell conforms to `openkos serve` as `localapi/launch.py` defines it: a per-launch token as the first line of stdin, one JSON ready line on stdout naming the loopback port, and EOF on stdin as the engine's lifeline.
 - **No orphaned engine.** The shell keeps the engine's stdin open for the engine's whole life, so when the shell dies by any route, a force-quit included, the pipe closes and the engine exits. On a normal stop the shell closes stdin first, waits, and only then kills the engine's process group.
 - **The web view talks to the engine directly.** It asks the shell for the engine's state (its base URL and per-launch token) and calls the local API itself; its origin is one of the engine's allowed origins ([ADR-0058](adr/0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md)), and its content security policy allows connections to loopback only.
+- **The snapshot is the client's source of truth.** The client's types are generated from the committed OpenAPI snapshot the Python suite holds equal to the served document, and CI fails when the committed client differs from what the snapshot generates; the page calls the API only through the client. The page is built with Vite before the shell compiles, because Tauri embeds the built page in the shell's binary.
 - **The engine locator is the seam for packaging.** Inside an app bundle it runs the frozen engine the bundle ships under `Contents/Resources/engine` ([ADR-0056](adr/0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md)); outside one, the development engine of a source checkout. Nothing else in the shell knows which.
 - **The freeze is a build output, not source.** `desktop/engine/` holds the recipe; the frozen tree, the `.app` and the `.dmg` are built under ignored directories by `desktop/scripts/`, and the PyInstaller one-directory freeze runs as one process, so the stdin lifeline reaches the engine itself.
 

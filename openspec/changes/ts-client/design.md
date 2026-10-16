@@ -39,8 +39,8 @@ screen imports it the same way the status page does.
 Measured: `tauri-codegen` 2.7 panics when `frontendDist` is missing ("this path
 doesn't exist"), so every `cargo` build of the shell needs `pnpm build` first.
 `devUrl` and `beforeDevCommand` are not set: `cargo run` keeps loading the
-embedded page, and the dev loop is `pnpm --dir desktop build` then `cargo run`
-(or `pnpm --dir desktop build --watch` beside it).
+embedded page, and the dev loop is `pnpm --dir desktop build` then `cargo run`.
+The page is embedded at compile time, so a changed page needs both again.
 
 ## D2 The generator: openapi-typescript for types, a hand-written typed call
 

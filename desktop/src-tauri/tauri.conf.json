@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "io.github.jasonssdev.openkos",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../dist"
   },
   "app": {
     "withGlobalTauri": true,

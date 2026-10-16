@@ -91,14 +91,26 @@ uv run pre-commit install
 
 ### The desktop shell
 
-The desktop app's shell under `desktop/` is Rust ([Tauri 2](https://v2.tauri.app/)); working on it needs a stable Rust toolchain, and on Linux the [WebKitGTK packages Tauri lists](https://v2.tauri.app/start/prerequisites/). It runs the engine of your checkout with `uv run openkos serve`, so `uv sync` first. To start it against a workspace:
+The desktop app's shell under `desktop/` is Rust ([Tauri 2](https://v2.tauri.app/)); working on it needs a stable Rust toolchain, and on Linux the [WebKitGTK packages Tauri lists](https://v2.tauri.app/start/prerequisites/). It runs the engine of your checkout with `uv run openkos serve`, so `uv sync` first.
+
+The page the shell shows is TypeScript, built with [Vite](https://vite.dev/) into `desktop/dist/` ([ADR-0065](docs/adr/0065-the-desktop-web-view-is-typescript-built-with-vite-over-a-client-generated-from-the-openapi-snapshot.md)), and it needs Node 24 and pnpm (`desktop/package.json` pins the pnpm version; `corepack enable` provides it). Tauri embeds that directory when the shell compiles and refuses to compile without it, so build the page before any `cargo` command, and again after changing it. To start the shell against a workspace:
 
 ```bash
+pnpm --dir desktop install
+pnpm --dir desktop build
 cd desktop/src-tauri
 OPENKOS_WORKSPACE=/path/to/workspace cargo run
 ```
 
-`OPENKOS_ENGINE` names a different `openkos` executable to run instead. Its gates:
+The page reaches the local API only through the client in `desktop/client/`, whose types are generated from the committed OpenAPI snapshot. When an API change regenerates `tests/unit/localapi/openapi.json`, regenerate the client in the same change with `pnpm --dir desktop generate`; CI fails while they differ. The client's and the page's gates:
+
+```bash
+pnpm --dir desktop typecheck
+pnpm --dir desktop test
+pnpm --dir desktop check:schema        # the client against the snapshot
+```
+
+`OPENKOS_ENGINE` names a different `openkos` executable to run instead. The shell's gates:
 
 ```bash
 cargo fmt --check
@@ -109,14 +121,14 @@ cargo test --test live_engine -- --ignored   # the shell against the real engine
 
 #### Building the app
 
-The app ships the engine frozen with [PyInstaller](https://pyinstaller.org/) inside its bundle ([ADR-0056](docs/adr/0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md)). Building it needs macOS on Apple Silicon, `uv`, the Rust toolchain and the Tauri CLI (`cargo install tauri-cli --version 2.12.3 --locked`). From the repository root:
+The app ships the engine frozen with [PyInstaller](https://pyinstaller.org/) inside its bundle ([ADR-0056](docs/adr/0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md)). Building it needs macOS on Apple Silicon, `uv`, Node and pnpm, the Rust toolchain and the Tauri CLI (`cargo install tauri-cli --version 2.12.3 --locked`). From the repository root:
 
 ```bash
 desktop/scripts/build-engine.sh   # the frozen engine only: build/freeze/dist/openkos-engine/
 desktop/scripts/build-app.sh      # the engine, then OpenKOS.app and build/desktop/OpenKOS.dmg
 ```
 
-`build-engine.sh` syncs its own environment under `build/freeze/` from `uv.lock` (the `[api]` extra and the `freeze` dependency group, on a uv-managed Python 3.14) and fails unless the freeze carries that interpreter. `build-app.sh` then bundles the shell with the freeze under `Contents/Resources/engine`, re-signs the whole `.app` ad hoc and verifies it, and runs `desktop/scripts/smoke_engine.py` against the engine inside it before it writes the `.dmg`. The `.app` lands in `desktop/src-tauri/target/release/bundle/macos/`; nothing it writes is tracked. A bundled app runs its own frozen engine; `OPENKOS_ENGINE` still overrides it, and `cargo run` keeps running the engine of your checkout.
+`build-engine.sh` syncs its own environment under `build/freeze/` from `uv.lock` (the `[api]` extra and the `freeze` dependency group, on a uv-managed Python 3.14) and fails unless the freeze carries that interpreter. `build-app.sh` builds the page from the pnpm lockfile, then bundles the shell with the freeze under `Contents/Resources/engine`, re-signs the whole `.app` ad hoc and verifies it, and runs `desktop/scripts/smoke_engine.py` against the engine inside it before it writes the `.dmg`. The `.app` lands in `desktop/src-tauri/target/release/bundle/macos/`; nothing it writes is tracked. A bundled app runs its own frozen engine; `OPENKOS_ENGINE` still overrides it, and `cargo run` keeps running the engine of your checkout.
 
 ---
 
