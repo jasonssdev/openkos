@@ -30,10 +30,12 @@ leaves steps 1..N-1 completed and a consistent, git-recoverable bundle.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from openkos import config
 from openkos.application import catalog_delta, commit_phase
@@ -571,3 +573,267 @@ def _unmerge_step(
         if policy.keep_distinct:
             ports.record_distinct(root, survivor_canonical, absorbed_canonical)
         ports.after_commit()
+
+
+# -- the stateless path (`unmerge-api`, ADR-0064) ------------------------------ #
+#
+# A caller with no terminal and no memory between calls (`openkos.api`) undoes a
+# merge in two phases: `preview_unwind` plans the unwind and digests every byte
+# the plan rests on, and the apply re-plans under the lock and refuses a moved
+# digest. Nothing here prompts; the version is the consent.
+
+
+@dataclass(frozen=True)
+class MergeHistoryEntry:
+    """One merge recorded on a survivor's ledger."""
+
+    survivor_id: str
+    absorbed_id: str
+    absorbed_title: str | None
+    """The absorbed document's `title` as the ledger recorded it, or `None`
+    when it cannot be read (a redacted snapshot included)."""
+    merged_at: str
+
+
+def _recorded_title(entry: okf.MergeLedgerEntry) -> str | None:
+    try:
+        metadata, _body = okf.load_frontmatter(entry.absorbed_snapshot)
+    except ValueError:
+        return None
+    title = metadata.get("title")
+    return title if isinstance(title, str) and title.strip() else None
+
+
+def merge_history(root: Path, concept_id: str) -> tuple[MergeHistoryEntry, ...]:
+    """Every merge recorded on `concept_id`'s committed ledger, newest first.
+
+    Reads only the ledger: no lock, no write. An id that is not a valid Concept
+    ID, or names no ledger, lists nothing; a ledger that cannot be read is a
+    `Refused`."""
+    layout = config.WorkspaceLayout(root)
+    try:
+        canonical = application_lifecycle.canonicalize_concept_id(concept_id)
+    except ValueError:
+        return ()
+    try:
+        entries = bundle_ledger.read_entries(canonical, layout.bundle_dir)
+    except (OSError, ValueError) as exc:
+        raise Refused(
+            f"openkos unmerge: the merge ledger of '{canonical}' cannot be read "
+            f"-- {exc}."
+        ) from exc
+    return tuple(
+        MergeHistoryEntry(
+            survivor_id=canonical,
+            absorbed_id=entry.absorbed_id,
+            absorbed_title=_recorded_title(entry),
+            merged_at=entry.merged_at,
+        )
+        for entry in reversed(entries)
+    )
+
+
+@dataclass(frozen=True)
+class UnwindStepSummary:
+    """One step of a stateless unwind, as data derived from its ledger entry."""
+
+    absorbed_id: str
+    absorbed_title: str | None
+    merged_at: str
+    files_rewritten: int
+    """The other documents this step restores or rewrites."""
+    survivor_edits_unverifiable: bool
+    """The entry predates the survivor-edit check (#1110): an edit made to the
+    survivor since this merge cannot be detected, and would be discarded."""
+    restores_catalog_snapshot: bool
+    """The entry restores whole-file `index.md`/`log.md` snapshots, discarding
+    any later change to them, instead of reversing only its own edit."""
+
+
+@dataclass(frozen=True)
+class UnwindRefusal:
+    """Why a stateless unwind cannot be planned; nothing was written."""
+
+    reason: Literal["survivor_missing", "not_merged", "survivor_edited"]
+    absorbed_into: str | None = None
+    """For `survivor_missing`: the concept whose ledger records absorbing the
+    survivor, when one does."""
+
+
+@dataclass(frozen=True)
+class UnwindPreview:
+    """A planned unwind, newest merge first, and the digest of what it rests on."""
+
+    survivor_id: str
+    absorbed_id: str
+    steps: tuple[UnwindStepSummary, ...]
+    discard_survivor_edits: bool
+    survivor_edits_discarded: bool
+    """The first step would discard an edit made to the survivor since its
+    merge; only possible when `discard_survivor_edits` is set."""
+    content_digest: str
+
+
+def _rewritten_files(entry: okf.MergeLedgerEntry) -> list[str]:
+    return sorted(
+        {rewrite.file for rewrite in entry.link_rewrites}
+        | {rewrite.file for rewrite in entry.relation_rewrites}
+        | {rewrite.file for rewrite in entry.provenance_rewrites}
+    )
+
+
+def _sha_or_dash(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "-"
+
+
+def _bundle_relative(layout: config.WorkspaceLayout, path: Path) -> str:
+    try:
+        return path.relative_to(layout.bundle_dir).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _unwind_digest(
+    layout: config.WorkspaceLayout,
+    survivor_id: str,
+    absorbed_id: str,
+    first: PreparedUnmerge,
+    *,
+    discard_survivor_edits: bool,
+) -> str:
+    """sha-256 over sorted lines naming every input of the plan (design D2):
+    the target and the caller's choice, the ledger sidecar (every step's entry
+    lives in it, so the sequence follows from it and the target), and the first
+    step's baselines: the survivor, its rewrite files, the catalog when the
+    entry restores snapshots, and every other bundle document, which its read
+    dependencies capture for the supersession walk. So a file a later step
+    rewrites, and a path a later step recreates, are covered without a line of
+    their own. The time is not an input: an unchanged bundle digests the same."""
+
+    def sha(data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()
+
+    bundle = layout.bundle_dir
+    lines = [
+        f"target\t{survivor_id}\t{absorbed_id}",
+        f"discard\t{'true' if discard_survivor_edits else 'false'}",
+        f"ledger\t{_sha_or_dash(bundle_ledger.ledger_path_for(survivor_id, bundle))}",
+        f"survivor\t{sha(first.survivor_bytes)}",
+    ]
+    if first.catalog_edit is None:
+        # A snapshot entry restores whole files, so the catalog is an input.
+        lines.append(f"catalog\tindex.md\t{sha(first.index_bytes)}")
+        lines.append(f"catalog\tlog.md\t{sha(first.log_bytes)}")
+    lines.extend(
+        f"rewrite\t{rel}\t{sha(data)}" for rel, data in first.rewrite_bytes.items()
+    )
+    dependencies = first.read_dependencies
+    lines.extend(
+        f"read\t{_bundle_relative(layout, path)}\t{sha(data)}"
+        for path, data in dependencies.present.items()
+    )
+    return sha("\n".join(sorted(lines)).encode("utf-8"))
+
+
+def _step_summary(entry: okf.MergeLedgerEntry) -> UnwindStepSummary:
+    return UnwindStepSummary(
+        absorbed_id=entry.absorbed_id,
+        absorbed_title=_recorded_title(entry),
+        merged_at=entry.merged_at,
+        files_rewritten=len(_rewritten_files(entry)),
+        survivor_edits_unverifiable=not entry.survivor_after_sha256,
+        restores_catalog_snapshot=entry.schema != okf.MERGE_LEDGER_SCHEMA_V5,
+    )
+
+
+def preview_unwind(
+    root: Path,
+    survivor_id: str,
+    absorbed_id: str,
+    *,
+    discard_survivor_edits: bool = False,
+    clock: Callable[[], datetime] = _utc_now,
+) -> UnwindPreview | UnwindRefusal:
+    """Plan undoing `survivor_id`'s merges, newest first, down to and including
+    the one that absorbed `absorbed_id`; naming the newest is one step.
+
+    Pure: no lock, no write. Returns `UnwindRefusal` for the three causes a
+    client words (design D4): the survivor's document is gone, nothing of that
+    id is recorded on it, or restoring the first step would discard an edit
+    made since its merge and the caller did not opt in. Later steps' own checks
+    run at apply. Every other refusal is raised as `Refused`, in the CLI's
+    words."""
+    layout = config.WorkspaceLayout(root)
+    try:
+        survivor_canonical = application_lifecycle.canonicalize_concept_id(survivor_id)
+        target_canonical = application_lifecycle.canonicalize_concept_id(absorbed_id)
+    except ValueError as exc:
+        raise Refused(f"openkos unmerge: refusing to unmerge -- {exc}.") from exc
+    workspace_reason = config.require_workspace(root)
+    if workspace_reason is not None:
+        raise Refused(f"openkos unmerge: refusing to unmerge -- {workspace_reason}.")
+    if not okf.concept_path_for(survivor_canonical, layout.bundle_dir).is_file():
+        return UnwindRefusal(
+            "survivor_missing",
+            absorbed_into=bundle_ledger.find_absorber(
+                survivor_canonical, layout.bundle_dir
+            ),
+        )
+    request = _open_request(
+        root, survivor_id, absorbed_id, UnmergePorts(autocommit=_no_commit, clock=clock)
+    )
+    try:
+        entries = bundle_ledger.read_entries(survivor_canonical, layout.bundle_dir)
+    except (OSError, ValueError) as exc:
+        raise Refused(
+            f"openkos unmerge: failed while preparing the unmerge -- {exc}."
+        ) from exc
+    if all(entry.absorbed_id != target_canonical for entry in entries):
+        return UnwindRefusal("not_merged")
+    sequence = bundle_merge.plan_unwind_sequence(
+        survivor_id=survivor_canonical,
+        to_absorbed_id=target_canonical,
+        entries=entries,
+    )
+    try:
+        # Prepared with the override on, so an edit is REPORTED rather than
+        # raised: the refusal below is then decided from a flag, never from
+        # error text.
+        first = application_lifecycle.prepare_unmerge(
+            root,
+            layout,
+            request.survivor_path,
+            survivor_canonical,
+            sequence[0].absorbed_id,
+            now=request.now,
+            cfg=request.cfg,
+            discard_survivor_edits=True,
+        )
+    except (OSError, ValueError) as exc:
+        raise Refused(
+            f"openkos unmerge: failed while preparing the unmerge -- {exc}."
+        ) from exc
+    if first.survivor_edits_discarded and not discard_survivor_edits:
+        return UnwindRefusal("survivor_edited")
+    return UnwindPreview(
+        survivor_id=survivor_canonical,
+        absorbed_id=target_canonical,
+        steps=tuple(_step_summary(entry) for entry in sequence),
+        discard_survivor_edits=discard_survivor_edits,
+        survivor_edits_discarded=first.survivor_edits_discarded,
+        content_digest=_unwind_digest(
+            layout,
+            survivor_canonical,
+            target_canonical,
+            first,
+            discard_survivor_edits=discard_survivor_edits,
+        ),
+    )
+
+
+def _no_commit(root: Path, paths: Sequence[str], message: str) -> str | None:
+    """The auto-commit port of a plan that never writes."""
+    return None

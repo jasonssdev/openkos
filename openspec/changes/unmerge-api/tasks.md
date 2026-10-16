@@ -41,20 +41,20 @@ JSON is never hand-merged).
 
 ## S2a History and preview (P1, P2 preview half, P3)
 
-- [ ] S2a.1 RED: `tests/unit/application/test_unmerge_api_service.py` for
+- [x] S2a.1 RED: `tests/unit/application/test_unmerge_api_service.py` for
   `merge_history` (newest first, title from the snapshot, invalid id and no ledger
   list nothing) and `preview_unwind` (one step for the newest merge, a chain for a
   deeper one, `survivor_missing` with `absorbed_into`, `not_merged`,
   `survivor_edited` for the first step, `discard_survivor_edits` reported, digest stable across calls and moved
   by a changed rewrite file, the absorbed path, the flag). Writes nothing.
-- [ ] S2a.2 GREEN: `application/unmerge_service.py` gains `MergeHistoryEntry`,
+- [x] S2a.2 GREEN: `application/unmerge_service.py` gains `MergeHistoryEntry`,
   `merge_history`, `UnwindPreview`, `UnwindRefusal`, `preview_unwind` and the
   digest (D2, D4, D6).
-- [ ] S2a.3 RED then GREEN: `tests/unit/api/test_unmerge_api.py` previews a real
+- [x] S2a.3 RED then GREEN: `tests/unit/api/test_unmerge_api.py` previews a real
   pairwise merge and a real group merge through the facade; `api/_unmerge.py`
   with `MergeRecord`, `UnmergeStep`, `UnmergeVersion`, `UnmergePreview`,
   `NotUnmergeable`, `merge_history`, `preview_unmerge`; exports in `__all__`.
-- [ ] S2a.4 Regenerate `api_surface.json`; the classifier reports only additive
+- [x] S2a.4 Regenerate `api_surface.json`; the classifier reports only additive
   changes. Mutation-check the survivor-edit decision and the digest's flag line.
 
 ## S2b Apply (P2 apply half, P3)

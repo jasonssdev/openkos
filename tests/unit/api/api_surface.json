@@ -825,6 +825,33 @@
       "kind": "dataclass",
       "members": {}
     },
+    "MergeRecord": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "absorbed_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "absorbed_title"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "merged_at"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "MergeStep": {
       "fields": [
         {
@@ -880,6 +907,33 @@
           "annotation": "str | None",
           "default": true,
           "name": "detail"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "NotUnmergeable": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "absorbed_id"
+        },
+        {
+          "annotation": "Literal['survivor_missing', 'not_merged', 'survivor_edited']",
+          "default": false,
+          "name": "reason"
+        },
+        {
+          "annotation": "str | None",
+          "default": true,
+          "name": "absorbed_into"
         }
       ],
       "frozen": true,
@@ -1349,6 +1403,107 @@
       "kind": "dataclass",
       "members": {}
     },
+    "UnmergePreview": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "absorbed_id"
+        },
+        {
+          "annotation": "tuple[UnmergeStep, ...]",
+          "default": false,
+          "name": "steps"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "survivor_edits_discarded"
+        },
+        {
+          "annotation": "UnmergeVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "UnmergeStep": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "absorbed_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "absorbed_title"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "merged_at"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "files_rewritten"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "survivor_edits_unverifiable"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "restores_catalog_snapshot"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "UnmergeVersion": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "absorbed_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
+        },
+        {
+          "annotation": "bool",
+          "default": true,
+          "name": "discard_survivor_edits"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "WithheldAction": {
       "fields": [
         {
@@ -1594,6 +1749,24 @@
       ],
       "returns": "tuple[Decision, ...]"
     },
+    "merge_history": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "concept_id"
+        }
+      ],
+      "returns": "tuple[MergeRecord, ...]"
+    },
     "pending_report": {
       "kind": "function",
       "parameters": [
@@ -1635,6 +1808,36 @@
         }
       ],
       "returns": "DecisionPreview | NotApplied | Stale"
+    },
+    "preview_unmerge": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "absorbed_id"
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "kind": "KEYWORD_ONLY",
+          "name": "discard_survivor_edits"
+        }
+      ],
+      "returns": "UnmergePreview | NotUnmergeable"
     },
     "quote_judging": {
       "kind": "function",

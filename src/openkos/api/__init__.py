@@ -65,6 +65,15 @@ from openkos.api._reads import (
     status,
 )
 from openkos.api._refresh import KindRefresh, QueueRefresh, refresh_decision_queue
+from openkos.api._unmerge import (
+    MergeRecord,
+    NotUnmergeable,
+    UnmergePreview,
+    UnmergeStep,
+    UnmergeVersion,
+    merge_history,
+    preview_unmerge,
+)
 from openkos.api._workspace import Workspace, WorkspaceNotFound, WorkspaceUnreadable
 from openkos.application.curate_decisions import (
     Action,
@@ -151,9 +160,11 @@ __all__ = [
     "LLMBackend",
     "MergeGroupInterrupted",
     "MergePlan",
+    "MergeRecord",
     "MergeStep",
     "Message",
     "NotApplied",
+    "NotUnmergeable",
     "OpenKosError",
     "PendingReport",
     "PendingRow",
@@ -173,6 +184,9 @@ __all__ = [
     "StopToken",
     "TierDetail",
     "TierPlan",
+    "UnmergePreview",
+    "UnmergeStep",
+    "UnmergeVersion",
     "WithheldAction",
     "WorkItem",
     "Workspace",
@@ -185,8 +199,10 @@ __all__ = [
     "WriteRefused",
     "apply_decision",
     "list_decisions",
+    "merge_history",
     "pending_report",
     "preview_decision",
+    "preview_unmerge",
     "quote_judging",
     "refresh_decision_queue",
     "run_judging",
