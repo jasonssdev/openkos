@@ -1,0 +1,24 @@
+{
+  "name": "openkos-desktop-web",
+  "private": true,
+  "type": "module",
+  "description": "The desktop app's web view and its client for the local API.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@11.13.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "generate": "node scripts/schema.mjs",
+    "check:schema": "node scripts/schema.mjs --check",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.4",
+    "vitest": "4.1.12"
+  }
+}

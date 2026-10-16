@@ -284,3 +284,7 @@ evals/query_identity/results/pairs-*.json
 # context blocks). Constructed-corpus runs (`runs-*`/`arms-*`/`report-*`)
 # stay committed like every other harness; field runs never leave the machine.
 /evals/query_entailment/results/field-*
+
+# The desktop web view (desktop/package.json): dependencies and the built page.
+desktop/node_modules/
+desktop/dist/

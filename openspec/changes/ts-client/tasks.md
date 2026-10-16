@@ -41,22 +41,41 @@ Delivery strategy: stacked-to-main.
 
 ## S2 The Client
 
-- [ ] S2.1 `desktop/package.json` (exact pins, `packageManager`, `engines`),
+- [x] S2.1 `desktop/package.json` (exact pins, `packageManager`, `engines`),
   `.node-version`, `tsconfig.json`, `pnpm-lock.yaml`; `.gitignore` for
   `desktop/node_modules/` and `desktop/dist/` (D1, D9).
-- [ ] S2.2 `scripts/schema.mjs` with `generate` and `--check`; generate
-  `client/schema.d.ts` (C1, D3). RED: `check:schema` fails on a missing and on an
-  edited file.
-- [ ] S2.3 `client/errors.ts`: `ERROR_CODES`, `ApiError`, `ProtocolError`,
+- [x] S2.2 `scripts/schema.mjs` with `generate` and `--check`; generate
+  `client/schema.d.ts` (C1, D3). RED: `check:schema` exited 1 on a missing
+  file, on a hand-edited file (`code: number`) and on a snapshot with a field
+  added to `ErrorBody`; 0 after `generate` and after each restore.
+- [x] S2.3 `client/errors.ts`: `ERROR_CODES`, `ApiError`, `ProtocolError`,
   `EngineUnreachable`, the predicates; the error-code test against
-  `_errors.py` (C1, C3, D3, D4). RED first.
-- [ ] S2.4 `client/engine.ts` and `client/index.ts`: `createClient(ready)`, the
-  base URL check, the token middleware, one method per operation, envelope
-  mapping, `retryWhileBusy` (C2, C3, D4, D5, D6). RED first.
-- [ ] S2.5 Type-level test: exhaustive `switch (plan.kind)` (C1).
-- [ ] S2.6 Node CI job (C4, D8).
-- [ ] S2.7 Mutations on the guards: the base URL check, the envelope shape
-  check, the busy-only retry, the deadline, the schema comparison.
+  `_errors.py` (C1, C3, D3, D4). RED: both test files failed to load
+  (`Cannot find module './errors.ts'`, `'./index.ts'`) and `tsc` reported
+  TS2307 for each missing module.
+- [x] S2.4 `client/engine.ts` and `client/index.ts`: `createClient(ready)`, the
+  base URL check, the token in the `fetch` closure, one method per operation
+  over the hand-written `call`, envelope mapping, `retryWhileBusy` (C2, C3, D2,
+  D4, D5, D6). Both protocol checks (a success that is not JSON, a failure
+  without the envelope) run where the request is sent, so the error names its
+  path. GREEN: 63 tests. The first GREEN was over openapi-fetch; S2.5's
+  type-equality test then failed on three methods (TS2344; openapi-fetch's
+  mapped types widen the schema's tuples to arrays), so the runtime
+  became the hand-written call and openapi-fetch was removed (D2).
+- [x] S2.5 Type-level tests. `plan-kind.typecheck.ts`: reading `plan.tier` in
+  the `merge` branch fails TS2339; dropping the `keep_distinct` case fails
+  TS2322 on the `never` branch. `types.typecheck.ts`: every method takes and
+  returns exactly `Schemas[...]`; RED under openapi-fetch (three TS2344).
+- [x] S2.6 Node CI job (C4, D8); the page build step joins it in S3.
+- [x] S2.7 Mutations on the exact guarded lines, each restored from a byte
+  copy: 24, all killed (the host, the scheme, the path, credentials/query/hash,
+  the envelope's `retryable` type, the non-envelope failure, the non-JSON
+  success, the busy-only retry, the deadline arithmetic, the `Retry-After`
+  pattern, the `Authorization` header, `retryAfterSeconds`, both defaults, the
+  `isBusy`, `isTryAgain`, `isStale` and `isUnmergeRefusal` code sets, one
+  missing code, the missing path value, path encoding, the query, the JSON
+  content type, a wrong path template). The content-type mutation survived the
+  first run and got its own test.
 
 ## S3 The Page
 
