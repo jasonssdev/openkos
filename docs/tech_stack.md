@@ -63,7 +63,7 @@ As shipped, the whole derived layer is five SQLite files under `.openkos/`, all 
 | --- | --- | --- |
 | Language / runtime | Python 3.14 | PSF |
 | CLI | Typer | MIT |
-| Schemas / validation | stdlib dataclasses + hand-rolled validators (Pydantic deliberately not adopted) | PSF |
+| Schemas / validation | stdlib dataclasses + hand-rolled validators (Pydantic is not a core dependency; it arrives only with the optional `api` extra, confined to `openkos.localapi`) | PSF |
 | Knowledge format | Markdown + YAML frontmatter (OKF) | — |
 | Frontmatter (round-trip) | python-frontmatter + PyYAML | MIT |
 | State + lexical search | SQLite + FTS5 | Public domain |
@@ -80,7 +80,7 @@ As shipped, the whole derived layer is five SQLite files under `.openkos/`, all 
 | In-memory graph analysis | NetworkX (on subgraphs) | NetworkX | BSD |
 | Local LLM (extraction) | Ollama (Qwen3 / Mistral Small) | larger model | check the vendor's terms |
 
-The MCP server (`openkos mcp`, stdio) ships; it is hand-rolled rather than built on an SDK ([ADR-0027](adr/0027-hand-rolled-stdio-mcp-server.md)). A local API is planned with the desktop app (MVP 6) and no web framework is a dependency yet.
+The MCP server (`openkos mcp`, stdio) ships; it is hand-rolled rather than built on an SDK ([ADR-0027](adr/0027-hand-rolled-stdio-mcp-server.md)). A local API for the desktop app (MVP 6) is a FastAPI adapter over the Python API, shipped as the optional `api` extra rather than a core dependency ([ADR-0061](adr/0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra.md)).
 
 **What each runtime dependency is for.** `pyproject.toml` is the authority for the list itself; this table exists because a manifest says *what* is required and never *why*, and a dependency whose reason nobody records is one nobody can retire:
 
@@ -104,7 +104,7 @@ SQLite, FTS5, and everything git-related add nothing: SQLite ships with Python, 
 
 - **Python 3.14**
 - **Typer** for the command-line interface (Click, MIT, is the mature fallback if we ever want fewer abstractions)
-- **Stdlib dataclasses and hand-rolled validators** for schemas and validation — Pydantic was in the original plan but has not been needed; it remains an option if validation outgrows the stdlib
+- **Stdlib dataclasses and hand-rolled validators** for schemas and validation — the core and extraction use no validation library; Pydantic appears only in the optional local API adapter
 - **Markdown + YAML frontmatter** using the OKF v0.2 field set (`type`, `title`, `description`, `resource`, `tags`, `generated`, `status`, `sources`)
 
 ## Local AI
