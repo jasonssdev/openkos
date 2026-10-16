@@ -123,7 +123,7 @@ fix(lint): stamp volatile facts missed by freshness lint
 docs(model): clarify provenance chain in knowledge-object-model
 ```
 
-Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`. The scope is the subsystem or domain touched (`okf`, `model`, `bundle`, `config`, `ingest`, `extract`, `graph`, `retrieval`, `memory`, `llm`, `lint`, `cli`, `api`, `mcp`, `sdd`, `docs`, `ci`), as listed in [`AGENTS.md`](AGENTS.md).
+Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`. The scope is the subsystem or domain touched (`okf`, `model`, `bundle`, `config`, `ingest`, `extract`, `graph`, `retrieval`, `memory`, `llm`, `lint`, `cli`, `api`, `mcp`, `desktop`, `sdd`, `docs`, `ci`), as listed in [`AGENTS.md`](AGENTS.md).
 
 ---
 

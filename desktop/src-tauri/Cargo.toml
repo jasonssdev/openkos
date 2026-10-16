@@ -1,0 +1,20 @@
+[package]
+name = "openkos-desktop"
+version = "0.1.0"
+description = "The OpenKOS desktop shell: supervises the engine as a sidecar."
+license = "Apache-2.0"
+repository = "https://github.com/jasonssdev/openkos"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[lib]
+name = "openkos_desktop"
+
+[dependencies]
+getrandom = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
