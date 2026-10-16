@@ -156,9 +156,12 @@ def test_a_pair_is_split_again_over_http(client: TestClient, pair: Path) -> None
     applied = _apply(client, {"version": body["version"]})
 
     assert applied.status_code == 200, applied.text
-    unmerged = applied.json()["unmerged"]
-    assert unmerged["restored_ids"] == [B]
-    assert len(unmerged["commit_shas"]) == 1
+    unmerged = TypeAdapter(api.Unmerged).validate_python(applied.json()["unmerged"])
+    assert unmerged.survivor_id == A
+    assert unmerged.restored_ids == (B,)
+    [sha] = unmerged.commit_shas
+    assert sha is not None
+    assert unmerged.committed_confidential is False
     assert applied.json()["warnings"] == []
     assert (pair / "bundle" / f"{B}.md").is_file()
 
