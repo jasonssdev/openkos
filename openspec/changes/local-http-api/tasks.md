@@ -433,37 +433,37 @@ policy. Satisfies: L8, L9, L10, L11, L12. Depends on: S2c.
 Threat-matrix case carried here: Lock (a client-chosen long wait is impossible; 5 s
 ceiling, 503); Error disclosure (sentinel tests for every new row).
 
-- [ ] S3.1 RED: `tests/unit/localapi/test_decisions_write.py` request validation:
+- [x] S3.1 RED: `tests/unit/localapi/test_decisions_write.py` request validation:
   `PreviewRequest`, `ApplyRequest` and `RefreshRequest` reject an unknown field
   (`extra="forbid"`), an unknown action, a malformed version, and a `wait_seconds`
   above 5 or below 0 (422 `invalid_request`, API not called); the refresh body may be
   omitted. Satisfies: L8, L12.
-- [ ] S3.2 RED: echo and mapping, with `openkos.api` stubs that capture the received
+- [x] S3.2 RED: echo and mapping, with `openkos.api` stubs that capture the received
   argument: `DecisionPreview.version` posted unchanged to apply reaches
   `api.apply_decision` `==` the issued value (dataclass equality); the path key
   differing from `version.decision_key` is 422 `key_mismatch` and the stub was not
   called; apply passes `wait_seconds == 5.0` by default and `on_warning` messages
   reach `ApplyResponse.warnings`; refresh passes `wait_seconds == 5.0`. Satisfies:
   L10, L12.
-- [ ] S3.3 RED: outcome rows, parametrized over the table: `Stale` (each reason) 409
+- [x] S3.3 RED: outcome rows, parametrized over the table: `Stale` (each reason) 409
   `stale`; `NotApplied` `not_offered` 422 `action_not_offered`, `skipped` 422
   `skip_not_applicable`, `not_mergeable` 409, `member_missing` 409, `record_failed`
   409 with `retryable` true; messages are fixed (the stored `detail` of a
   `record_failed` is not echoed). Satisfies: L11.
-- [ ] S3.4 RED: exception rows: `WorkspaceBusyError` 503 `workspace_busy` with
+- [x] S3.4 RED: exception rows: `WorkspaceBusyError` 503 `workspace_busy` with
   `Retry-After: 2`; `WorkspaceLockUnavailableError` 500; `DriftDetected` 409
   `write_drift` retryable (subclass-first: not `write_refused`); `WriteFailed` 500;
   `WriteRefused` 422 `write_refused` whose body `message` equals the exception's own
   user-facing `message` (the one passthrough); `QueueRefreshRefused` 503; and each of
   these raised with a sentinel message that must not appear in the body (except the
   `WriteRefused` one). Satisfies: L11.
-- [ ] S3.5 GREEN: add `PreviewRequest`, `ApplyRequest`, `RefreshRequest`,
+- [x] S3.5 GREEN: add `PreviewRequest`, `ApplyRequest`, `RefreshRequest`,
   `ApplyResponse` to `_models.py`; add the outcome and exception rows plus
   `outcome_problem` to `_errors.py`; add `POST /decisions/{decision_key}/preview`,
   `POST /decisions/{decision_key}/apply`, `POST /queue/refresh` to `_routes.py`, each
   one `openkos.api` call through `invoke` (no composed operations, ADR-0021
   Decision Five). Satisfies: L8..L12.
-- [ ] S3.6 RED then GREEN, real workspace: preview then apply one of two open
+- [x] S3.6 RED then GREEN, real workspace: preview then apply one of two open
   decisions on a real two-decision workspace in a temp git repo; the other stays open;
   an altered version field is 409 `stale` and the bundle is unchanged; a version for
   a decision edited after preview is 409 `stale`; a new `create_app` instance on the
@@ -472,20 +472,20 @@ ceiling, 503); Error disclosure (sentinel tests for every new row).
   an action the decision does not offer is 422 `action_not_offered`; an unknown
   action in the body is 422 `invalid_request` before any operation ran. Satisfies:
   L10, L11.
-- [ ] S3.7 RED then GREEN, lock wait: with `WRITE_WAIT_SECONDS` patched to 0.1 and
+- [x] S3.7 RED then GREEN, lock wait: with `WRITE_WAIT_SECONDS` patched to 0.1 and
   the real workspace lock held by the test, apply and refresh answer 503
   `workspace_busy` with a positive integer `Retry-After` and write nothing; a lock
   released within the wait lets the write through (released from a timer thread,
   bounded waits only); `wait_seconds: 0` answers 503 at once; `wait_seconds: 3600` is
   422 `invalid_request` and the API stub was not called; reads still succeed while
   the lock is held. Satisfies: L12.
-- [ ] S3.8 Extend the enumeration set and regenerate `openapi.json`; confirm
+- [x] S3.8 Extend the enumeration set and regenerate `openapi.json`; confirm
   `ApplyRequest`, `ApplyResponse`, `DecisionVersion`, `Action` appear, no `-Input` or
   `-Output` names, and `wait_seconds` carries `minimum 0` and `maximum 5`. Mutation:
   change `le=5.0` to `le=50.0` and observe S3.1 fail; swap the `DriftDetected` and
   `WriteRefused` row order and observe S3.4 fail; revert, purge, GREEN. Satisfies:
   L11, L12, L16.
-- [ ] S3.9 Run the five gates; commits `feat(api):`. Satisfies: L8..L12.
+- [x] S3.9 Run the five gates; commits `feat(api):`. Satisfies: L8..L12.
 
 Branch/PR: `feat/local-api-writes`. Independent mutation: skip the `key_mismatch`
 check; the S3.2 test must fail. This slice is at the advisory ~400 lines because the

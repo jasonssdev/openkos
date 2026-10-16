@@ -33,6 +33,95 @@
         "title": "ActivityEntry",
         "type": "object"
       },
+      "Applied": {
+        "additionalProperties": false,
+        "description": "The action took effect. `commit_sha` is `None` when the auto-commit\ndegraded (the write itself still landed). `committed_confidential` is true\nonly when a commit landed and holds a concept explicitly marked\n`sensitivity: confidential`; an adapter that has no notice of its own to\nprint leaves it false, and one that reports it sets it from the commit's\noutcome.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "committed_confidential": {
+            "default": false,
+            "title": "Committed Confidential",
+            "type": "boolean"
+          },
+          "decision_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Key"
+          }
+        },
+        "required": [
+          "decision_key",
+          "action",
+          "commit_sha"
+        ],
+        "title": "Applied",
+        "type": "object"
+      },
+      "ApplyRequest": {
+        "description": "The action, the version the preview issued (echoed unchanged) and how\nlong to wait for the workspace lock; a client can shorten the wait only.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "version": {
+            "$ref": "#/components/schemas/DecisionVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "action",
+          "version"
+        ],
+        "title": "ApplyRequest",
+        "type": "object"
+      },
+      "ApplyResponse": {
+        "additionalProperties": false,
+        "description": "What was applied, and the warnings the apply raised along the way (for\nexample a commit that could not be made).",
+        "properties": {
+          "applied": {
+            "$ref": "#/components/schemas/Applied"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "applied",
+          "warnings"
+        ],
+        "title": "ApplyResponse",
+        "type": "object"
+      },
       "Decision": {
         "additionalProperties": false,
         "description": "One open decision, as data a client can render.",
@@ -148,6 +237,77 @@
           "decisions"
         ],
         "title": "DecisionList",
+        "type": "object"
+      },
+      "DecisionPreview": {
+        "description": "What an action would do, and the version to apply it against.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "decision_key": {
+            "title": "Decision Key",
+            "type": "string"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MergePlan"
+              },
+              {
+                "$ref": "#/components/schemas/RelatePlan"
+              },
+              {
+                "$ref": "#/components/schemas/TierPlan"
+              },
+              {
+                "$ref": "#/components/schemas/KeepDistinctPlan"
+              }
+            ],
+            "title": "Plan"
+          },
+          "version": {
+            "$ref": "#/components/schemas/DecisionVersion"
+          }
+        },
+        "required": [
+          "decision_key",
+          "action",
+          "plan",
+          "version"
+        ],
+        "title": "DecisionPreview",
+        "type": "object"
+      },
+      "DecisionVersion": {
+        "description": "The version a stateless caller commits against.\n\n`payload_digest` proves the queue row, its proposal and its recorded\ninputs are unchanged; `content_digest` proves the bytes the human saw are\nthe bytes that would be written. `payload_digest` is `None` when no queue\nrow backs the item, which the token path rejects. `decision_key` is the\nhandle: a findings row id is never used, because the cache is derived.",
+        "properties": {
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "decision_key": {
+            "title": "Decision Key",
+            "type": "string"
+          },
+          "payload_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload Digest"
+          }
+        },
+        "required": [
+          "decision_key",
+          "payload_digest",
+          "content_digest"
+        ],
+        "title": "DecisionVersion",
         "type": "object"
       },
       "ErrorBody": {
@@ -387,6 +547,23 @@
         "title": "JobSummary",
         "type": "object"
       },
+      "KeepDistinctPlan": {
+        "description": "Recording that these concepts are different things.",
+        "properties": {
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "member_ids"
+        ],
+        "title": "KeepDistinctPlan",
+        "type": "object"
+      },
       "KindCounts": {
         "description": "Lifetime counters of one pending-work kind.",
         "properties": {
@@ -429,6 +606,111 @@
           "open"
         ],
         "title": "KindCounts",
+        "type": "object"
+      },
+      "KindRefresh": {
+        "description": "What one refresh did for one kind of decision.",
+        "properties": {
+          "ambiguous": {
+            "default": 0,
+            "title": "Ambiguous",
+            "type": "integer"
+          },
+          "amended": {
+            "title": "Amended",
+            "type": "integer"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "inserted": {
+            "title": "Inserted",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "identity",
+              "relation_type",
+              "volatility"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "replaced": {
+            "title": "Replaced",
+            "type": "integer"
+          },
+          "retired": {
+            "title": "Retired",
+            "type": "integer"
+          },
+          "suppressed": {
+            "title": "Suppressed",
+            "type": "integer"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "inserted",
+          "amended",
+          "unchanged",
+          "replaced",
+          "suppressed",
+          "retired",
+          "complete"
+        ],
+        "title": "KindRefresh",
+        "type": "object"
+      },
+      "MergePlan": {
+        "description": "Merging two concepts: the survivor absorbs the other.",
+        "properties": {
+          "absorbed_id": {
+            "title": "Absorbed Id",
+            "type": "string"
+          },
+          "cross_source_same_pair": {
+            "title": "Cross Source Same Pair",
+            "type": "boolean"
+          },
+          "cross_type_concern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Type Concern"
+          },
+          "files_rewritten": {
+            "title": "Files Rewritten",
+            "type": "integer"
+          },
+          "survivor_criterion": {
+            "title": "Survivor Criterion",
+            "type": "string"
+          },
+          "survivor_id": {
+            "title": "Survivor Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "survivor_id",
+          "absorbed_id",
+          "survivor_criterion",
+          "files_rewritten",
+          "cross_source_same_pair",
+          "cross_type_concern"
+        ],
+        "title": "MergePlan",
         "type": "object"
       },
       "PendingReport": {
@@ -511,6 +793,92 @@
         "title": "PendingRow",
         "type": "object"
       },
+      "PreviewRequest": {
+        "additionalProperties": false,
+        "description": "Which action to preview for the decision named in the path.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "PreviewRequest",
+        "type": "object"
+      },
+      "QueueRefresh": {
+        "description": "The three per-kind results of one refresh.",
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/KindRefresh"
+          },
+          "identity_truncation_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity Truncation Notice"
+          },
+          "relation_type": {
+            "$ref": "#/components/schemas/KindRefresh"
+          },
+          "volatility": {
+            "$ref": "#/components/schemas/KindRefresh"
+          }
+        },
+        "required": [
+          "identity",
+          "relation_type",
+          "volatility",
+          "identity_truncation_notice"
+        ],
+        "title": "QueueRefresh",
+        "type": "object"
+      },
+      "RefreshRequest": {
+        "additionalProperties": false,
+        "description": "How long a queue refresh waits for the workspace lock.",
+        "properties": {
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "title": "RefreshRequest",
+        "type": "object"
+      },
+      "RelatePlan": {
+        "description": "Writing one typed relation, as it would be written.",
+        "properties": {
+          "relation_type": {
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "target_id",
+          "relation_type"
+        ],
+        "title": "RelatePlan",
+        "type": "object"
+      },
       "RelationDetail": {
         "additionalProperties": false,
         "description": "A relation-type decision: a suggested type for one untyped edge.",
@@ -579,6 +947,25 @@
           "rationale"
         ],
         "title": "TierDetail",
+        "type": "object"
+      },
+      "TierPlan": {
+        "description": "Setting one concept type's volatility tier.",
+        "properties": {
+          "tier": {
+            "title": "Tier",
+            "type": "string"
+          },
+          "type_name": {
+            "title": "Type Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type_name",
+          "tier"
+        ],
+        "title": "TierPlan",
         "type": "object"
       },
       "WithheldAction": {
@@ -812,6 +1199,154 @@
         "summary": "Decisions"
       }
     },
+    "/v1/decisions/{decision_key}/apply": {
+      "post": {
+        "operationId": "apply_v1_decisions__decision_key__apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_key",
+            "required": true,
+            "schema": {
+              "title": "Decision Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Apply"
+      }
+    },
+    "/v1/decisions/{decision_key}/preview": {
+      "post": {
+        "operationId": "preview_v1_decisions__decision_key__preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_key",
+            "required": true,
+            "schema": {
+              "title": "Decision Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Preview"
+      }
+    },
     "/v1/health": {
       "get": {
         "operationId": "health_v1_health_get",
@@ -916,6 +1451,76 @@
           }
         ],
         "summary": "Pending"
+      }
+    },
+    "/v1/queue/refresh": {
+      "post": {
+        "operationId": "refresh_v1_queue_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RefreshRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueRefresh"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Refresh"
       }
     },
     "/v1/status": {

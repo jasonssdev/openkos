@@ -2,12 +2,14 @@
 
 import logging
 from collections.abc import Iterator
+from typing import get_args, get_type_hints
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
+from openkos import api
 from openkos.localapi import _errors
 from openkos.localapi._app import ServerSettings, create_app
 from tests.unit.localapi.conftest import AUTH, PORT, TOKEN
@@ -113,3 +115,211 @@ def test_error_body_maps_an_unknown_exception_to_the_generic_row() -> None:
         False,
         {},
     )
+
+
+# -- the write rows: returned outcomes and raised exceptions ---------------------- #
+
+_KEY = "identity:abc123"
+_VERSION = api.DecisionVersion(_KEY, "p", "c")
+_APPLY_BODY = {
+    "action": "merge",
+    "version": {"decision_key": _KEY, "payload_digest": "p", "content_digest": "c"},
+}
+_APPLY_PATH = f"/v1/decisions/{_KEY}/apply"
+_STALE_REASONS = get_args(get_type_hints(api.Stale)["reason"])
+_NOT_APPLIED_REASONS = get_args(get_type_hints(api.NotApplied)["reason"])
+
+
+def _returning(monkeypatch: pytest.MonkeyPatch, name: str, value: object) -> None:
+    def stub(*args: object, **kwargs: object) -> object:
+        return value
+
+    monkeypatch.setattr(api, name, stub)
+
+
+def _raising(monkeypatch: pytest.MonkeyPatch, name: str, exc: Exception) -> None:
+    def boom(*args: object, **kwargs: object) -> None:
+        raise exc
+
+    monkeypatch.setattr(api, name, boom)
+
+
+def test_the_parametrized_reasons_are_the_ones_the_api_declares() -> None:
+    assert set(_STALE_REASONS) == {
+        "content_changed",
+        "row_resolved",
+        "row_superseded",
+        "row_inputs_changed",
+        "unknown_key",
+    }
+    assert set(_NOT_APPLIED_REASONS) == {
+        "skipped",
+        "member_missing",
+        "record_failed",
+        "not_mergeable",
+        "not_offered",
+    }
+
+
+@pytest.mark.parametrize("reason", _STALE_REASONS)
+def test_every_stale_reason_is_409_stale_with_a_fixed_message(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    _returning(monkeypatch, "apply_decision", api.Stale(_KEY, reason))  # type: ignore[arg-type]
+
+    response = client.post(_APPLY_PATH, json=_APPLY_BODY, headers=AUTH)
+
+    body = response.json()
+    assert response.status_code == 409
+    assert (body["code"], body["retryable"]) == ("stale", False)
+    assert body["message"].endswith("preview it again")
+    assert _KEY not in response.text
+
+
+def test_each_stale_reason_has_its_own_message(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    messages = set()
+    for reason in _STALE_REASONS:
+        _returning(monkeypatch, "apply_decision", api.Stale(_KEY, reason))
+        messages.add(
+            client.post(_APPLY_PATH, json=_APPLY_BODY, headers=AUTH).json()["message"]
+        )
+
+    assert len(messages) == len(_STALE_REASONS)
+
+
+@pytest.mark.parametrize(
+    ("reason", "status", "code", "retryable"),
+    [
+        ("not_offered", 422, "action_not_offered", False),
+        ("skipped", 422, "skip_not_applicable", False),
+        ("not_mergeable", 409, "not_mergeable", False),
+        ("member_missing", 409, "member_missing", False),
+        ("record_failed", 409, "record_failed", True),
+    ],
+)
+def test_not_applied_reasons_map_to_their_rows_and_never_echo_the_detail(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    reason: str,
+    status: int,
+    code: str,
+    retryable: bool,
+) -> None:
+    assert reason in _NOT_APPLIED_REASONS
+    outcome = api.NotApplied(api.Action.MERGE, reason, detail="SENTINEL")  # type: ignore[arg-type]
+    _returning(monkeypatch, "apply_decision", outcome)
+
+    response = client.post(_APPLY_PATH, json=_APPLY_BODY, headers=AUTH)
+
+    body = response.json()
+    assert response.status_code == status
+    assert (body["code"], body["retryable"]) == (code, retryable)
+    assert body["message"]
+    assert "SENTINEL" not in response.text
+
+
+def test_a_preview_outcome_that_is_not_a_preview_is_an_error_row(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _returning(monkeypatch, "preview_decision", api.Stale(_KEY, "unknown_key"))
+
+    response = client.post(
+        f"/v1/decisions/{_KEY}/preview", json={"action": "merge"}, headers=AUTH
+    )
+
+    assert (response.status_code, response.json()["code"]) == (409, "stale")
+
+
+class _Unreachable(api.WriteRefused):
+    """Stands for the confirmation refusals this API never raises."""
+
+
+@pytest.mark.parametrize(
+    ("exc", "status", "code", "retryable"),
+    [
+        (api.WorkspaceBusyError("SENTINEL"), 503, "workspace_busy", True),
+        (
+            api.WorkspaceLockUnavailableError("SENTINEL"),
+            500,
+            "workspace_lock_unavailable",
+            False,
+        ),
+        (api.DriftDetected("SENTINEL"), 409, "write_drift", True),
+        (api.WriteFailed("merge", ("a",), "SENTINEL"), 500, "write_failed", False),
+        (api.QueueRefreshRefused("SENTINEL"), 503, "queue_refresh_refused", False),
+        (_Unreachable("SENTINEL"), 500, "internal_error", False),
+        (OSError("SENTINEL"), 500, "internal_error", False),
+        (ValueError("SENTINEL"), 500, "internal_error", False),
+    ],
+)
+def test_raised_write_failures_map_to_fixed_rows_that_never_echo(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    exc: Exception,
+    status: int,
+    code: str,
+    retryable: bool,
+) -> None:
+    _raising(monkeypatch, "apply_decision", exc)
+    _raising(monkeypatch, "refresh_decision_queue", exc)
+
+    for response in (
+        client.post(_APPLY_PATH, json=_APPLY_BODY, headers=AUTH),
+        client.post("/v1/queue/refresh", headers=AUTH),
+    ):
+        assert response.status_code == status
+        assert response.json()["code"] == code
+        assert response.json()["retryable"] is retryable
+        assert "SENTINEL" not in response.text
+
+
+def test_only_a_busy_workspace_sends_retry_after(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _raising(monkeypatch, "apply_decision", api.WorkspaceBusyError("x"))
+    busy = client.post(_APPLY_PATH, json=_APPLY_BODY, headers=AUTH)
+    _raising(monkeypatch, "apply_decision", api.DriftDetected("x"))
+    drift = client.post(_APPLY_PATH, json=_APPLY_BODY, headers=AUTH)
+
+    assert busy.headers["retry-after"] == str(_errors.RETRY_AFTER_SECONDS)
+    assert "retry-after" not in drift.headers
+
+
+def test_a_write_refusal_passes_its_own_user_facing_message(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for exc in (
+        api.WriteRefused("Cannot merge: b is open."),
+        api.Refused("Cannot merge: b is open."),
+    ):
+        _raising(monkeypatch, "apply_decision", exc)
+
+        response = client.post(_APPLY_PATH, json=_APPLY_BODY, headers=AUTH)
+
+        assert response.status_code == 422
+        assert response.json() == {
+            "code": "write_refused",
+            "retryable": False,
+            "message": "Cannot merge: b is open.",
+        }
+
+
+def test_an_empty_write_refusal_message_gets_a_fixed_one(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _raising(monkeypatch, "apply_decision", api.WriteRefused(""))
+
+    response = client.post(_APPLY_PATH, json=_APPLY_BODY, headers=AUTH)
+
+    assert response.json()["code"] == "write_refused"
+    assert response.json()["message"] == "the write was refused"
+
+
+def test_drift_is_not_reported_as_a_plain_refusal() -> None:
+    drift = _errors.error_body(api.DriftDetected("m"))
+    refused = _errors.error_body(api.WriteRefused("m"))
+
+    assert drift[1].code == "write_drift"
+    assert refused[1].code == "write_refused"

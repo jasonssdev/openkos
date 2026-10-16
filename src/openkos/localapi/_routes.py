@@ -8,8 +8,16 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.security import HTTPBearer
 
 from openkos import api
+from openkos.localapi import _errors
 from openkos.localapi._errors import ErrorBody, invoke
-from openkos.localapi._models import DecisionList, HealthBody
+from openkos.localapi._models import (
+    ApplyRequest,
+    ApplyResponse,
+    DecisionList,
+    HealthBody,
+    PreviewRequest,
+    RefreshRequest,
+)
 
 # Documents the scheme in the OpenAPI schema only: the guard enforces the token
 # before any route runs, so this never rejects (`auto_error=False`).
@@ -40,6 +48,11 @@ def _plain_mappings(s: api.WorkspaceStatus) -> api.WorkspaceStatus:
         concepts_by_type=dict(s.concepts_by_type),
         open_decisions_by_kind=dict(s.open_decisions_by_kind),
     )
+
+
+def _wait(requested: float) -> float:
+    """The lock wait: what the client asked for, never above the ceiling."""
+    return min(requested, _errors.WRITE_WAIT_SECONDS)
 
 
 def make_router() -> APIRouter:
@@ -75,5 +88,48 @@ def make_router() -> APIRouter:
         return DecisionList(
             decisions=list(invoke(lambda: api.list_decisions(workspace)))
         )
+
+    @router.post("/decisions/{decision_key}/preview")
+    def preview(
+        decision_key: str,
+        body: PreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.DecisionPreview:
+        result = invoke(
+            lambda: api.preview_decision(workspace, decision_key, body.action)
+        )
+        if isinstance(result, api.DecisionPreview):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post("/decisions/{decision_key}/apply")
+    def apply(
+        decision_key: str,
+        body: ApplyRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> ApplyResponse:
+        if body.version.decision_key != decision_key:
+            raise _errors.key_mismatch()
+        warnings: list[str] = []
+        result = invoke(
+            lambda: api.apply_decision(
+                workspace,
+                body.version,
+                body.action,
+                wait_seconds=_wait(body.wait_seconds),
+                on_warning=warnings.append,
+            )
+        )
+        if isinstance(result, api.Applied):
+            return ApplyResponse(applied=result, warnings=warnings)
+        raise _errors.outcome_problem(result)
+
+    @router.post("/queue/refresh")
+    def refresh(
+        body: RefreshRequest | None = None,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.QueueRefresh:
+        wait = _wait(body.wait_seconds if body else _errors.WRITE_WAIT_SECONDS)
+        return invoke(lambda: api.refresh_decision_queue(workspace, wait_seconds=wait))
 
     return router
