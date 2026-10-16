@@ -117,3 +117,54 @@ def test_the_run_start_route_is_202_with_a_job_and_a_run_refusal_row() -> None:
     assert start["responses"]["202"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/RunStatus"
     }
+
+
+_ERROR_REF = {"$ref": "#/components/schemas/ErrorBody"}
+_EVERY_ROUTE = {"401", "403", "422", "500"}
+# The statuses a route answers beyond the ones every route can.
+_ROUTE_ERRORS: dict[tuple[str, str], set[str]] = {
+    ("get", "/v1/health"): set(),
+    ("get", "/v1/status"): set(),
+    ("get", "/v1/pending"): {"503"},
+    ("get", "/v1/decisions"): set(),
+    ("post", "/v1/decisions/{decision_key}/preview"): {"409"},
+    ("post", "/v1/decisions/{decision_key}/apply"): {"409", "503"},
+    ("post", "/v1/queue/refresh"): {"503"},
+    ("post", "/v1/judging/quote"): {"424", "502", "503"},
+    ("post", "/v1/judging/runs"): {"409"},
+    ("get", "/v1/judging/runs/{run_id}"): {"404"},
+    ("post", "/v1/judging/runs/{run_id}/stop"): {"404"},
+}
+_RETRY_AFTER = {
+    ("post", "/v1/decisions/{decision_key}/apply"),
+    ("post", "/v1/queue/refresh"),
+}
+
+
+def _operations() -> dict[tuple[str, str], dict[str, dict[str, object]]]:
+    paths = openapi_document()["paths"]
+    assert isinstance(paths, dict)
+    return {
+        (m, p): op["responses"] for p, ops in paths.items() for m, op in ops.items()
+    }
+
+
+def test_every_route_is_listed_here() -> None:
+    assert set(_operations()) == set(_ROUTE_ERRORS)
+
+
+def test_every_route_declares_its_error_statuses_with_the_error_body() -> None:
+    for key, responses in _operations().items():
+        errors = {s for s in responses if not s.startswith("2")}
+
+        assert errors == _EVERY_ROUTE | _ROUTE_ERRORS[key], key
+        for status in errors:
+            body = responses[status]["content"]["application/json"]["schema"]  # type: ignore[index]
+            assert body == _ERROR_REF, (key, status)
+
+
+def test_a_busy_503_declares_its_retry_after_header() -> None:
+    for key in _RETRY_AFTER:
+        headers = _operations()[key]["503"]["headers"]  # type: ignore[index]
+
+        assert "Retry-After" in headers, key
