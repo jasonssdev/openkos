@@ -195,3 +195,19 @@ def test_the_preview_plan_is_a_discriminated_union_on_kind() -> None:
     }.items():
         assert schemas[name]["properties"]["kind"]["const"] == kind
         assert "kind" in schemas[name]["required"]
+
+
+def test_the_group_selection_is_one_component_the_preview_request_names() -> None:
+    schemas = openapi_document()["components"]["schemas"]  # type: ignore[index]
+
+    assert [n for n in schemas if "GroupSelection" in n] == ["GroupSelection"]
+    request = schemas["PreviewRequest"]
+    assert "selection" in request["properties"]
+    assert "selection" not in request.get("required", [])
+    assert (
+        request.get("additionalProperties") is None
+    )  # unknown keys are rejected above the schema
+    assert schemas["GroupSelection"]["required"] == ["survivor_id", "member_ids"]
+    version = schemas["DecisionVersion"]
+    assert "selection" in version["properties"]
+    assert "selection" not in version["required"]

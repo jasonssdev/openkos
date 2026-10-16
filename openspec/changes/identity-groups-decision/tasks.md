@@ -279,31 +279,31 @@ Covers C1, C2, C7 (bulk), P1, and the dispatch half of C3. D1, D2, D9, D10.
 
 Covers H1, H2, H3. D12.
 
-- [ ] 5.1 RED `tests/unit/localapi/test_decisions_write.py`:
-  - [ ] 5.1.1 Preview `merge_group` with a selection, then apply the echoed
+- [x] 5.1 RED `tests/unit/localapi/test_decisions_write.py`:
+  - [x] 5.1.1 Preview `merge_group` with a selection, then apply the echoed
     version: 200, `applied.merged` lists both pairs (H3).
-  - [ ] 5.1.2 An echoed version with one marked member removed from
+  - [x] 5.1.2 An echoed version with one marked member removed from
     `selection.member_ids`: 409 `stale`, nothing written (H3).
-  - [ ] 5.1.3 `selection.member_ids` as a string: 422 `invalid_request`, the
+  - [x] 5.1.3 `selection.member_ids` as a string: 422 `invalid_request`, the
     API function not called; an unknown top-level key: 422; a well-formed invalid
     selection: 422 `invalid_selection` (H2, H3).
-  - [ ] 5.1.4 A preview without `selection` behaves as today for every other
+  - [x] 5.1.4 A preview without `selection` behaves as today for every other
     action (existing tests unchanged).
-- [ ] 5.2 RED `tests/unit/localapi/test_errors.py`: `MergeGroupInterrupted` maps
+- [x] 5.2 RED `tests/unit/localapi/test_errors.py`: `MergeGroupInterrupted` maps
   to 500 `merge_group_interrupted`, not `write_failed`, not retryable, fixed
   message containing no id; the spec-code set gains it (H2).
-- [ ] 5.3 RED round trip (`tests/unit/localapi/test_reads.py` or the write test
+- [x] 5.3 RED round trip (`tests/unit/localapi/test_reads.py` or the write test
   module): a populated merge-group plan over a cross-type group of three with one
   unmarked member parses back equal to the Python preview; its `kind` is `merge`
   (H1).
-- [ ] 5.4 RED `tests/unit/localapi/test_openapi_snapshot.py`: `GroupSelection`
+- [x] 5.4 RED `tests/unit/localapi/test_openapi_snapshot.py`: `GroupSelection`
   appears once, with no `-Input`/`-Output` variant (H3).
-- [ ] 5.5 GREEN `localapi/_models.py`: `PreviewRequest` onto `_EchoRequest`,
+- [x] 5.5 GREEN `localapi/_models.py`: `PreviewRequest` onto `_EchoRequest`,
   `selection: api.GroupSelection | None = None`. `_routes.py`: pass
   `selection=body.selection`. `_errors.py`: the `merge_group_interrupted` row
   before `WriteFailed`.
-- [ ] 5.6 Regenerate `tests/unit/localapi/openapi.json`.
-- [ ] 5.7 Gates. Commit: `feat(api): carry the group selection over the local HTTP API`
+- [x] 5.6 Regenerate `tests/unit/localapi/openapi.json`.
+- [x] 5.7 Gates. Commit: `feat(api): carry the group selection over the local HTTP API`
 
 ## S5: Decision wording, CHANGELOG, spec merge, ADR-0063 Accepted, archive
 

@@ -251,6 +251,12 @@ class _Unreachable(api.WriteRefused):
         ),
         (api.DriftDetected("SENTINEL"), 409, "write_drift", True),
         (api.WriteFailed("merge", ("a",), "SENTINEL"), 500, "write_failed", False),
+        (
+            api.MergeGroupInterrupted((("SENTINEL", "b"),), "abc1234", "SENTINEL", "x"),
+            500,
+            "merge_group_interrupted",
+            False,
+        ),
         (api.QueueRefreshRefused("SENTINEL"), 503, "queue_refresh_refused", False),
         (_Unreachable("SENTINEL"), 500, "internal_error", False),
         (OSError("SENTINEL"), 500, "internal_error", False),
@@ -320,6 +326,18 @@ def test_an_empty_write_refusal_message_gets_a_fixed_one(
     assert response.json()["message"] == "the write was refused"
 
 
+def test_an_interrupted_group_is_its_own_row_not_a_plain_write_failure() -> None:
+    interrupted = _errors.error_body(
+        api.MergeGroupInterrupted((("a", "b"),), None, "c", "boom")
+    )
+    plain = _errors.error_body(api.WriteFailed("merge", ("a",), "boom"))
+
+    assert (interrupted[0], interrupted[1].code) == (500, "merge_group_interrupted")
+    assert interrupted[1].retryable is False
+    assert interrupted[1].message != plain[1].message
+    assert plain[1].code == "write_failed"
+
+
 def test_drift_is_not_reported_as_a_plain_refusal() -> None:
     drift = _errors.error_body(api.DriftDetected("m"))
     refused = _errors.error_body(api.WriteRefused("m"))
@@ -356,6 +374,7 @@ SPEC_CODES = {
     "write_drift",
     "write_refused",
     "write_failed",
+    "merge_group_interrupted",
     "workspace_busy",
     "workspace_lock_unavailable",
     "queue_unavailable",

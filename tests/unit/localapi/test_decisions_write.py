@@ -639,3 +639,204 @@ def test_the_snapshot_publishes_the_write_types_and_the_wait_bounds() -> None:
     assert (refresh["minimum"], refresh["maximum"]) == (0, 5)
     applied = schemas["Applied"]
     assert "committed_confidential" in applied["properties"]
+
+
+# -- a real group workspace (the identity-groups-decision change) ---------------- #
+
+A, B, C = "concepts/a", "concepts/b", "concepts/c"
+GROUP = (A, B, C)
+
+
+def _typed_concept(root: Path, concept_id: str, okf_type: str) -> None:
+    path = root / "bundle" / f"{concept_id}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: {okf_type}\ntitle: {concept_id}\n---\n\n# {concept_id}\n\n"
+        f"Body of {concept_id}.\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.fixture
+def group_root(
+    settings: ServerSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """A judged SAME group of a (Person), b (Organization) and c (Person)."""
+    _pin_identity(monkeypatch, tmp_path)
+    root = settings.workspace.root
+    for concept_id, okf_type in ((A, "Person"), (B, "Organization"), (C, "Person")):
+        _typed_concept(root, concept_id, okf_type)
+    vcs_git.commit_paths(root, ["bundle"], "seed concepts")
+    support.enqueue_identity(root, GROUP, verdict="same", fresh=True)
+    support.forbid_model_clients(monkeypatch, "a group preview or apply")
+    return root
+
+
+def _group_preview(
+    client: TestClient, key: str, selection: dict[str, Any] | None
+) -> Any:
+    body: dict[str, Any] = {"action": "merge_group"}
+    if selection is not None:
+        body["selection"] = selection
+    return client.post(f"/v1/decisions/{key}/preview", json=body, headers=AUTH)
+
+
+def _marking(survivor: str, *members: str) -> dict[str, Any]:
+    return {"survivor_id": survivor, "member_ids": list(members)}
+
+
+def test_a_group_is_listed_previewed_with_a_selection_and_applied_over_http(
+    client: TestClient, group_root: Path
+) -> None:
+    key = _identity_key(client)
+    listed = client.get("/v1/decisions", headers=AUTH).json()["decisions"][0]
+    assert listed["actions"] == ["merge_group", "keep_distinct", "skip"]
+    before = support.snapshot(group_root)
+
+    response = _group_preview(client, key, _marking(A, A, B, C))
+
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert support.snapshot(group_root) == before  # a preview writes nothing
+    assert preview["plan"]["kind"] == "merge"
+    assert preview["plan"]["survivor_criterion"] == "chosen"
+    assert [s["absorbed_id"] for s in preview["plan"]["steps"]] == [B, C]
+    assert [s["type_outcome"] for s in preview["plan"]["steps"]] == [
+        "recorded",
+        "same_type",
+    ]
+    assert preview["version"]["selection"] == _marking(A, A, B, C)
+
+    applied = _apply(
+        client, key, {"action": "merge_group", "version": preview["version"]}
+    )
+
+    assert applied.status_code == 200, applied.text
+    body = applied.json()["applied"]
+    assert body["merged"] == [[A, B], [A, C]]
+    assert body["kept_distinct"] == []
+    assert body["action"] == "merge_group"
+    assert not (group_root / "bundle" / f"{B}.md").exists()
+    assert not (group_root / "bundle" / f"{C}.md").exists()
+
+
+def test_a_marked_member_removed_from_the_echoed_selection_is_409_stale(
+    client: TestClient, group_root: Path
+) -> None:
+    key = _identity_key(client)
+    version = _group_preview(client, key, _marking(A, A, B, C)).json()["version"]
+    altered = {**version, "selection": _marking(A, A, B)}
+    before = support.snapshot(group_root)
+
+    response = _apply(client, key, {"action": "merge_group", "version": altered})
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "stale"
+    assert support.snapshot(group_root) == before
+
+
+def test_a_selection_without_a_survivor_among_the_marked_is_422_invalid_selection(
+    client: TestClient, group_root: Path
+) -> None:
+    key = _identity_key(client)
+    before = support.snapshot(group_root)
+
+    response = _group_preview(client, key, _marking(C, A, B))
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "code": "invalid_selection",
+        "retryable": False,
+        "message": (
+            "the selection does not name a survivor and the members to combine with it"
+        ),
+    }
+    assert support.snapshot(group_root) == before
+
+
+def test_a_missing_selection_and_a_selection_with_another_action_are_invalid(
+    client: TestClient, group_root: Path
+) -> None:
+    key = _identity_key(client)
+
+    missing = _group_preview(client, key, None)
+    with_keep = client.post(
+        f"/v1/decisions/{key}/preview",
+        json={"action": "keep_distinct", "selection": _marking(A, A, B)},
+        headers=AUTH,
+    )
+
+    assert (missing.status_code, missing.json()["code"]) == (422, "invalid_selection")
+    assert (with_keep.status_code, with_keep.json()["code"]) == (
+        422,
+        "invalid_selection",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"action": "merge_group", "selection": {"survivor_id": A, "member_ids": A}},
+        {"action": "merge_group", "selection": {"survivor_id": 1, "member_ids": [A]}},
+        {"action": "merge_group", "selection": {"member_ids": [A, B]}},
+        {"action": "merge_group", "selection": "a"},
+        {"action": "merge_group", "selection": None, "extra": 1},
+    ],
+)
+def test_a_malformed_selection_body_is_422_invalid_request_and_the_api_is_not_called(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, body: Any
+) -> None:
+    recorder = _stub(monkeypatch, "preview_decision", _preview_result())
+
+    response = client.post(f"/v1/decisions/{KEY}/preview", json=body, headers=AUTH)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_request"
+    assert recorder.calls == []
+
+
+def test_the_selection_reaches_the_api_as_the_group_selection_dataclass(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _stub(monkeypatch, "preview_decision", _preview_result())
+
+    response = client.post(
+        f"/v1/decisions/{KEY}/preview",
+        json={"action": "merge_group", "selection": _marking(A, A, B)},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 200, response.text
+    assert recorder.calls[0]["kwargs"] == {"selection": api.GroupSelection(A, (A, B))}
+
+
+def test_a_preview_without_a_selection_passes_none(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _stub(monkeypatch, "preview_decision", _preview_result())
+
+    client.post(f"/v1/decisions/{KEY}/preview", json={"action": "merge"}, headers=AUTH)
+
+    assert recorder.calls[0]["kwargs"] == {"selection": None}
+
+
+def test_a_populated_group_plan_round_trips_to_the_python_preview(
+    client: TestClient, group_root: Path
+) -> None:
+    key = _identity_key(client)
+    selection = api.GroupSelection(A, (A, B))
+    expected = api.preview_decision(
+        settings_workspace(group_root), key, api.Action.MERGE_GROUP, selection=selection
+    )
+
+    response = _group_preview(client, key, _marking(A, A, B))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["plan"]["kind"] == "merge"
+    assert body["plan"]["kept_distinct_ids"] == [C]
+    assert TypeAdapter(api.DecisionPreview).validate_python(body) == expected
+
+
+def settings_workspace(root: Path) -> api.Workspace:
+    return api.Workspace.open(root)

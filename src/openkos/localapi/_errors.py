@@ -51,6 +51,7 @@ WORKSPACE_LOCK_UNAVAILABLE: Final = "workspace_lock_unavailable"
 WRITE_DRIFT: Final = "write_drift"
 WRITE_REFUSED: Final = "write_refused"
 WRITE_FAILED: Final = "write_failed"
+MERGE_GROUP_INTERRUPTED: Final = "merge_group_interrupted"
 QUEUE_REFRESH_REFUSED: Final = "queue_refresh_refused"
 
 # Judging rows.
@@ -78,8 +79,9 @@ class _Row(NamedTuple):
 
 _BUSY_HEADERS: Final = {"Retry-After": str(RETRY_AFTER_SECONDS)}
 
-# Subclass-first: the first isinstance match wins. `WriteFailed` and
-# `DriftDetected` come before `WriteRefused`, which they extend, and the three
+# Subclass-first: the first isinstance match wins. `MergeGroupInterrupted` comes
+# before `WriteFailed`, and `WriteFailed` and `DriftDetected` before
+# `WriteRefused`, which they extend, and the three
 # specific backend errors come before the `BackendError` they extend.
 _ROWS: Final[tuple[_Row, ...]] = (
     _Row(
@@ -124,6 +126,16 @@ _ROWS: Final[tuple[_Row, ...]] = (
         WRITE_DRIFT,
         True,
         "the files changed while the write was prepared; try again",
+    ),
+    # Before `WriteFailed`, which it extends. Not retryable: re-posting the
+    # version is `Stale("row_resolved")`, because the first merge resolved the
+    # row. The body names no id; the client lists the decisions again.
+    _Row(
+        api.MergeGroupInterrupted,
+        500,
+        MERGE_GROUP_INTERRUPTED,
+        False,
+        "the group was combined only in part; the completed merges are kept",
     ),
     _Row(api.WriteFailed, 500, WRITE_FAILED, False, "the write failed"),
     _Row(api.WriteRefused, 422, WRITE_REFUSED, False, None),

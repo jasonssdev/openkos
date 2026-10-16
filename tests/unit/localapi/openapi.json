@@ -1137,11 +1137,20 @@
         "title": "PreviewPlan"
       },
       "PreviewRequest": {
-        "additionalProperties": false,
-        "description": "Which action to preview for the decision named in the path.",
+        "description": "Which action to preview for the decision named in the path, and, for\n`merge_group` only, the members the person marked and the survivor.\n\nA request model that carries a nested API dataclass, so it rejects unknown\ntop-level keys itself (see `_EchoRequest`) rather than through `extra=\"forbid\"`,\nwhich would split `GroupSelection` into `-Input` and `-Output` components.",
         "properties": {
           "action": {
             "$ref": "#/components/schemas/Action"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
