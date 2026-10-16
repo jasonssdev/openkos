@@ -248,7 +248,7 @@ Product constraints the arc builds to:
 - **Online to set up, offline to work.** Setup may use the network to fetch the model runtime, the models and updates; nothing the user owns is sent. When setup finishes, the app says it is ready and works offline, and offline is the default from then on
 - **A cloud model is optional, off by default, and never offered during setup.** It is turned on in settings, behind a plain-language warning that states what leaves the machine, what never does, who receives it and that the provider may charge. The send rule is the engine's existing one: everything except `confidential` is sent, which includes `private`, the default sensitivity, so the warning says so explicitly. While it is on, the app shows it is on, and marking something confidential is one action away
 
-Exit criteria are fixed in a pre-registration before the app stages start, as The Quiet Engine's were. At minimum: a person who has never used a terminal installs OpenKOS on a clean machine, drops a file, gets an answer that cites it, and settles a pending decision, without help and without opening a terminal.
+Exit criteria are fixed in a [pre-registration](../evals/desktop_app/PREREGISTRATION.md) before the app stages start, as The Quiet Engine's were. At minimum: a person who has never used a terminal installs OpenKOS on a clean machine, drops a file, gets an answer that cites it, and settles a pending decision, without help and without opening a terminal.
 
 Out of scope: a mobile app; syncing a workspace through a cloud or across devices; accounts; the Horizon's third-party extension points, which build on the stable API but are not part of this arc.
 
