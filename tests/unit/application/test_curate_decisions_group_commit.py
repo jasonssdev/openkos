@@ -233,6 +233,32 @@ def test_unmerging_each_step_newest_first_restores_every_concept_byte_for_byte(
     assert _absorbed_in_order(seed, B) == []
 
 
+def test_unwinding_to_the_first_absorbed_member_restores_the_whole_group(
+    tmp_path: Path,
+) -> None:
+    seed = _seed(tmp_path, selection_of(B, A, B, C))
+    before = {
+        concept_id: (seed.layout.bundle_dir / f"{concept_id}.md").read_bytes()
+        for concept_id in (A, B, C)
+    }
+    _commit(seed, _Recorder())
+
+    unmerge_service.unwind_merges(
+        seed.root,
+        B,
+        A,
+        unmerge_service.UnmergePolicy(auto=True),
+        ports=unmerge_service.UnmergePorts(autocommit=CommitRecorder()),
+    )
+
+    after = {
+        concept_id: (seed.layout.bundle_dir / f"{concept_id}.md").read_bytes()
+        for concept_id in (A, B, C)
+    }
+    assert after == before
+    assert _absorbed_in_order(seed, B) == []
+
+
 # -- 2.1.3 one commit -------------------------------------------------------- #
 
 
@@ -471,6 +497,29 @@ def test_later_steps_are_prepared_against_what_the_earlier_steps_wrote(
     assert B in body
     assert C in body
     assert survivor.encode() != survivor_bytes_at_preview
+
+
+def test_the_member_of_the_chosen_type_survives_and_records_the_other_type(
+    tmp_path: Path,
+) -> None:
+    seed = _seed(
+        tmp_path,
+        selection_of(B, A, B),
+        types={A: "Person", B: "Organization"},
+        members=(A, B),
+    )
+    assert seed.preview.cross_type_concern is not None
+
+    outcome = _commit(seed, _Recorder())
+
+    assert isinstance(outcome, Applied)
+    assert outcome.merged == ((B, A),)
+    assert not _exists(seed, A)
+    metadata, _body = okf.load_frontmatter(
+        (seed.layout.bundle_dir / f"{B}.md").read_text("utf-8")
+    )
+    assert metadata["type"] == "Organization"
+    assert metadata[okf.TYPE_ALTERNATIVE_KEY] == "Person"
 
 
 def test_the_group_row_ends_applied_not_stale(tmp_path: Path) -> None:

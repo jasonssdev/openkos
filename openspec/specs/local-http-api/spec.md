@@ -450,11 +450,13 @@ content. Where a result is one of several variants (the preview's plan, the
 decision's detail, the apply outcome, the run result), the response MUST let a
 client distinguish the variants from the body. A preview's `plan` carries a
 literal `kind` discriminator (`merge`, `relate`, `set_tier` or `keep_distinct`,
-the action it plans; `relate_reversed` plans a `relate`), and the OpenAPI
-document declares `plan` as a `oneOf` with that discriminator, so a generated
-typed client narrows it with `switch (preview.plan.kind)`. Every response type MUST be exercised with a populated value (not
+the action it plans; `relate_reversed` plans a `relate`, and `merge_group` plans a `merge` whose `steps` list every pairwise merge), and the OpenAPI
+document declares `plan` through a `PreviewPlan` component that is a `oneOf`
+with that discriminator, so a generated typed client narrows it with
+`switch (preview.plan.kind)`. Every response type MUST be exercised with a populated value (not
 only an empty list) in a test that serializes it over HTTP and parses it back
 without loss.
+(Previously: no action planned a merge of more than one pair, and `relate_reversed` was the only action whose plan kind differed from its name.)
 
 #### Scenario: A populated status round-trips
 
@@ -474,7 +476,16 @@ without loss.
 - GIVEN a preview for each action
 - WHEN the responses are read
 - THEN each plan carries a `kind` that matches its action (`relate_reversed`
-  yields `relate`), and the plans can be told apart by `kind` alone
+  yields `relate`, `merge_group` yields `merge`), and the plans can be told
+  apart by `kind` alone
+
+#### Scenario: A merge-group plan round-trips populated
+
+- GIVEN a merge-group preview over a cross-type group of three with one
+  unmarked member
+- WHEN the response is parsed
+- THEN `steps`, `kept_distinct_ids`, `survivor_type` and `cross_type_concern`
+  equal the Python preview's values
 
 ### Requirement: Echoed Tokens Make The Wire Form Stateless
 
@@ -599,12 +610,14 @@ mapping MUST be evaluated subclass-first and MUST be:
 | `QuoteStale` outcome | 409 | `quote_stale` | false |
 | `NotApplied("not_offered")` | 422 | `action_not_offered` | false |
 | `NotApplied("skipped")` | 422 | `skip_not_applicable` | false |
+| `NotApplied("invalid_selection")` | 422 | `invalid_selection` | false |
 | `NotApplied("not_mergeable")` | 409 | `not_mergeable` | false |
 | `NotApplied("member_missing")` | 409 | `member_missing` | false |
 | `NotApplied("record_failed")` | 409 | `record_failed` | true |
 | `RunRefused` outcome | 422 | `run_refused` | false |
 | A judging run already active | 409 | `run_active` | true |
 | `DriftDetected` | 409 | `write_drift` | true |
+| `MergeGroupInterrupted` | 500 | `merge_group_interrupted` | false |
 | `WriteRefused` (not drift, not failed) | 422 | `write_refused` | false |
 | `WriteFailed` | 500 | `write_failed` | false |
 | `WorkspaceBusyError` | 503 | `workspace_busy` | true |
@@ -627,7 +640,10 @@ stored content, with one exception: for `write_refused` the message MUST be the
 user-facing text. An unexpected exception MUST be logged to stderr (without the
 token) and MUST yield `internal_error`; the process MUST keep serving. The
 confirmation-declined and confirmation-unavailable refusals are unreachable
-through this API and, if raised, MUST be reported as `internal_error`.
+through this API and, if raised, MUST be reported as `internal_error`. The
+`merge_group_interrupted` body carries no completed steps: a client learns the
+group's state by listing the decisions again.
+(Previously: the table had no `invalid_selection` and no `merge_group_interrupted` row.)
 
 #### Scenario: A stale decision is a 409
 
@@ -654,6 +670,13 @@ through this API and, if raised, MUST be reported as `internal_error`.
 - WHEN apply is posted for it
 - THEN the response is 422 with code `skip_not_applicable`
 
+#### Scenario: An invalid group selection is a 422
+
+- GIVEN a merge-group preview request whose survivor is not among the marked
+  members
+- WHEN it is posted
+- THEN the response is 422 with code `invalid_selection` and `retryable` false
+
 #### Scenario: A state conflict is a 409
 
 - GIVEN an apply that finds its merge not possible, a member missing, or the
@@ -673,6 +696,13 @@ through this API and, if raised, MUST be reported as `internal_error`.
 - GIVEN a write refused because the files drifted
 - WHEN the response is read
 - THEN the status is 409, the code is `write_drift` and `retryable` is true
+
+#### Scenario: An interrupted group is not a generic write failure
+
+- GIVEN a merge-group apply whose second step fails
+- WHEN the response is read
+- THEN the status is 500, the code is `merge_group_interrupted`, not
+  `write_failed`, and `retryable` is false
 
 #### Scenario: A write refusal passes its documented message
 
@@ -1020,3 +1050,44 @@ CI is out of scope for this stage.
 - GIVEN no workspace on disk
 - WHEN the application's OpenAPI document is generated
 - THEN it is produced without error and without a socket
+
+### Requirement: The Group Selection Travels In The Preview Body And The Echoed Version
+
+`POST /v1/decisions/{key}/preview` MUST accept an optional `selection` object
+holding `survivor_id` and `member_ids` and MUST pass it to `preview_decision`
+unchanged; a body without it previews as before. The preview response's
+`version` MUST carry the selection as a field of `DecisionVersion` (null for
+every action but `merge_group`), and the apply request MUST echo that version
+unchanged, so the server keeps no selection between the two calls and the apply
+request body gains no field. A selection of the wrong shape MUST be 422
+`invalid_request` before any operation runs; a well-formed but invalid
+selection is the operation's own `invalid_selection` outcome. The request model
+MUST reject an unknown top-level key without splitting the selection's schema
+into separate input and output components.
+
+#### Scenario: Preview and apply a group over HTTP
+
+- GIVEN an open identity decision judged SAME over three members
+- WHEN a preview is posted with `action` `merge_group` and a selection, and the
+  returned version is posted unchanged to apply with `action` `merge_group`
+- THEN the decision is applied and the response's `applied.merged` lists both
+  pairs
+
+#### Scenario: An altered echoed selection is stale
+
+- GIVEN a merge-group preview response
+- WHEN its version is posted to apply with one marked member removed from
+  `version.selection.member_ids`
+- THEN the response is 409 with code `stale` and nothing is written
+
+#### Scenario: A malformed selection is a validation error
+
+- GIVEN a preview request whose `selection.member_ids` is a string
+- WHEN it is posted
+- THEN the response is 422 with code `invalid_request` and no operation ran
+
+#### Scenario: One selection component in the contract
+
+- GIVEN the generated OpenAPI document
+- WHEN its components are listed
+- THEN `GroupSelection` appears once, with no `-Input` or `-Output` variant

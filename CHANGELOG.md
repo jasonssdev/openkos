@@ -18,6 +18,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- `openkos.api` resolves an identity group of more than two pages, or of pages of different kinds, through a new `merge_group` action: `preview_decision(..., selection=GroupSelection(survivor_id, member_ids))` names the pages the person marked the same and the one that stays, and the returned `DecisionVersion` carries the selection, so an altered selection is a stale version. Committing merges each marked page into the survivor in order under one lock, one auto-commit and one reversible `unmerge` ledger entry per step, resolves the group's row `applied`, and records a keep-distinct ruling between the survivor and every page left unmarked. A group cut short raises `MergeGroupInterrupted`, a `WriteFailed` that keeps and reports the merges already written. `merge` stays withheld for those groups, identity is still never bulk-accepted, and `API_VERSION` is unchanged. The local HTTP API accepts `selection` in the preview body and adds the codes `invalid_selection` (422) and `merge_group_interrupted` (500) (#1430).
 - Each preview plan in `openkos.api` (`MergePlan`, `RelatePlan`, `TierPlan`, `KeepDistinctPlan`) carries a literal `kind` field, and the local HTTP API's OpenAPI document declares `DecisionPreview.plan` as a discriminated union on it, so a generated TypeScript client narrows the plan with `switch (preview.plan.kind)`. The change is additive; `API_VERSION` is unchanged (#1422).
 
 ### Fixed

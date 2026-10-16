@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0063: An identity group is one decision that merges the marked members pairwise into a chosen survivor"
 description: A judged-SAME identity group of more than two members, or of members of different types, is resolved through the decision surface by a new merge_group action whose selection (survivor and marked members) travels inside the version token; the commit checks once, holds the lock once, merges pairwise in one commit, keeps what landed on failure, and records keep-distinct rulings for unmarked members.
-status: Proposed
+status: Accepted
 date: 2026-10-16
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0063: An identity group is one decision that merges the marked members pairwise into a chosen survivor
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-16
 
 ## Context
