@@ -1403,6 +1403,14 @@
       "kind": "dataclass",
       "members": {}
     },
+    "UnmergeInterrupted": {
+      "bases": [
+        "WriteFailed"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
     "UnmergePreview": {
       "fields": [
         {
@@ -1429,6 +1437,28 @@
           "annotation": "UnmergeVersion",
           "default": false,
           "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "UnmergeStale": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "absorbed_id"
+        },
+        {
+          "annotation": "Literal['content_changed']",
+          "default": true,
+          "name": "reason"
         }
       ],
       "frozen": true,
@@ -1498,6 +1528,33 @@
           "annotation": "bool",
           "default": true,
           "name": "discard_survivor_edits"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "Unmerged": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "survivor_id"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "restored_ids"
+        },
+        {
+          "annotation": "tuple[str | None, ...]",
+          "default": false,
+          "name": "commit_shas"
+        },
+        {
+          "annotation": "bool",
+          "default": true,
+          "name": "committed_confidential"
         }
       ],
       "frozen": true,
@@ -1736,6 +1793,36 @@
         }
       ],
       "returns": "Applied | NotApplied | Stale"
+    },
+    "apply_unmerge": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "UnmergeVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "Unmerged | NotUnmergeable | UnmergeStale"
     },
     "list_decisions": {
       "kind": "function",

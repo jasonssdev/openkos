@@ -5,10 +5,14 @@ only, over merges made through the decision surface itself.
 Every test runs in a real git-backed workspace whose identity is pinned.
 """
 
+import dataclasses
+import shutil
+import threading
 from pathlib import Path
 
 import pytest
 
+from openkos import lock
 from openkos.api import (
     Action,
     Applied,
@@ -16,19 +20,26 @@ from openkos.api import (
     GroupSelection,
     MergeRecord,
     NotUnmergeable,
+    Refused,
+    Unmerged,
+    UnmergeInterrupted,
     UnmergePreview,
+    UnmergeStale,
     UnmergeStep,
     UnmergeVersion,
     Workspace,
+    WorkspaceBusyError,
+    WriteFailed,
     apply_decision,
+    apply_unmerge,
     merge_history,
     preview_decision,
     preview_unmerge,
 )
-from openkos.application import curate_decisions
+from openkos.application import curate_decisions, unmerge_service
 from openkos.vcs import git as vcs_git
 from tests.unit.api import support
-from tests.unit.api.test_decisions_apply import _pin_identity
+from tests.unit.api.test_decisions_apply import _git, _pin_identity
 from tests.unit.application.curation_support import make_workspace
 from tests.unit.cli.commit_phase_support import write_doc
 
@@ -171,3 +182,213 @@ def test_an_edited_survivor_needs_the_opt_in(pair: Path) -> None:
     assert isinstance(allowed, UnmergePreview)
     assert allowed.survivor_edits_discarded
     assert allowed.version.discard_survivor_edits is True
+
+
+# -- apply -------------------------------------------------------------------- #
+
+
+def _version(root: Path, survivor: str, absorbed: str, **kw: bool) -> UnmergeVersion:
+    preview = preview_unmerge(Workspace.open(root), survivor, absorbed, **kw)
+    assert isinstance(preview, UnmergePreview), preview
+    return preview.version
+
+
+def _commits(root: Path) -> list[str]:
+    return _git(root, "log", "--format=%s").splitlines()
+
+
+def test_a_pairwise_merge_is_split_again_to_its_bytes_before_the_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _workspace(tmp_path, monkeypatch, (A, B))
+    before_merge = {
+        k: v for k, v in support.snapshot(root).items() if k.startswith("bundle/")
+    }
+    _apply(root, (A, B))
+    version = _version(root, A, B)
+
+    outcome = apply_unmerge(Workspace.open(root), version)
+
+    assert isinstance(outcome, Unmerged)
+    assert outcome.survivor_id == A
+    assert outcome.restored_ids == (B,)
+    [sha] = outcome.commit_shas
+    assert sha is not None
+    assert _git(root, "rev-parse", "--short", "HEAD") == sha
+    assert _commits(root)[0] == f"openkos: unmerge {B}"
+    assert outcome.committed_confidential is False
+    after = {k: v for k, v in support.snapshot(root).items() if k.startswith("bundle/")}
+    changed = {
+        k
+        for k in before_merge.keys() | after.keys()
+        if before_merge.get(k) != after.get(k)
+    }
+    assert changed == {"bundle/log.md"}
+
+
+def test_a_group_is_split_again_one_commit_per_step(group: Path) -> None:
+    version = _version(group, A, B)
+
+    outcome = apply_unmerge(Workspace.open(group), version)
+
+    assert isinstance(outcome, Unmerged)
+    assert outcome.restored_ids == (C, B)
+    assert len(outcome.commit_shas) == 2
+    assert _commits(group)[:2] == [f"openkos: unmerge {B}", f"openkos: unmerge {C}"]
+    assert (group / "bundle" / f"{B}.md").is_file()
+    assert (group / "bundle" / f"{C}.md").is_file()
+    assert merge_history(Workspace.open(group), A) == ()
+
+
+def test_a_bundle_changed_since_the_preview_is_stale(pair: Path) -> None:
+    version = _version(pair, A, B)
+    _doc(pair, C)
+    before = support.snapshot(pair)
+
+    outcome = apply_unmerge(Workspace.open(pair), version)
+
+    assert outcome == UnmergeStale(survivor_id=A, absorbed_id=B)
+    assert outcome.reason == "content_changed"
+    assert support.snapshot(pair) == before
+
+
+def test_a_flipped_echoed_flag_is_stale(pair: Path) -> None:
+    version = _version(pair, A, B)
+    before = support.snapshot(pair)
+
+    outcome = apply_unmerge(
+        Workspace.open(pair), dataclasses.replace(version, discard_survivor_edits=True)
+    )
+
+    assert isinstance(outcome, UnmergeStale)
+    assert support.snapshot(pair) == before
+
+
+def test_a_replayed_version_is_not_merged(pair: Path) -> None:
+    version = _version(pair, A, B)
+    assert isinstance(apply_unmerge(Workspace.open(pair), version), Unmerged)
+
+    assert apply_unmerge(Workspace.open(pair), version) == NotUnmergeable(
+        survivor_id=A, absorbed_id=B, reason="not_merged"
+    )
+
+
+def test_an_edited_survivor_is_split_when_the_preview_opted_in(pair: Path) -> None:
+    path = pair / "bundle" / f"{A}.md"
+    path.write_text(path.read_text(encoding="utf-8") + "\nEdited.\n", "utf-8")
+    version = _version(pair, A, B, discard_survivor_edits=True)
+
+    outcome = apply_unmerge(Workspace.open(pair), version)
+
+    assert isinstance(outcome, Unmerged)
+    assert "Edited." not in path.read_text(encoding="utf-8")
+
+
+def test_a_held_lock_raises_busy_and_writes_nothing(pair: Path) -> None:
+    version = _version(pair, A, B)
+    before = support.snapshot(pair)
+
+    with lock.workspace_lock(pair), pytest.raises(WorkspaceBusyError):
+        apply_unmerge(Workspace.open(pair), version, wait_seconds=0)
+
+    assert support.snapshot(pair) == before
+
+
+@pytest.mark.parametrize("wait", [-1.0, float("nan")])
+def test_a_wait_outside_the_range_is_refused_before_anything_runs(
+    pair: Path, wait: float
+) -> None:
+    version = _version(pair, A, B)
+    before = support.snapshot(pair)
+
+    with pytest.raises(ValueError, match="wait_seconds"):
+        apply_unmerge(Workspace.open(pair), version, wait_seconds=wait)
+
+    assert support.snapshot(pair) == before
+
+
+def test_a_non_repository_still_splits_and_warns_once(pair: Path) -> None:
+    version = _version(pair, A, B)
+    shutil.rmtree(pair / ".git")
+    warnings: list[str] = []
+
+    outcome = apply_unmerge(Workspace.open(pair), version, on_warning=warnings.append)
+
+    assert isinstance(outcome, Unmerged)
+    assert outcome.commit_shas == (None,)
+    assert warnings == [
+        "the unmerge was applied but not committed: the workspace is not "
+        "inside a git repository"
+    ]
+
+
+def test_a_commit_restoring_a_confidential_concept_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_identity(monkeypatch, tmp_path)
+    root = make_workspace(tmp_path, monkeypatch)
+    _doc(root, A)
+    write_doc(
+        root,
+        B,
+        {"type": "Concept", "title": f"Title {B}", "sensitivity": "confidential"},
+        f"Body of {B}.\n",
+    )
+    vcs_git.commit_paths(root, ["bundle"], "seed concepts")
+    support.enqueue_identity(root, (A, B), verdict="same", fresh=True)
+    _apply(root, (A, B))
+
+    outcome = apply_unmerge(Workspace.open(root), _version(root, A, B))
+
+    assert isinstance(outcome, Unmerged)
+    assert outcome.committed_confidential is True
+
+
+def test_an_interrupted_unwind_is_caught_as_a_write_failure(
+    group: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    version = _version(group, A, B)
+    real = unmerge_service._unmerge_step
+    calls: list[str] = []
+
+    def second_fails(
+        root: Path, request: object, absorbed: str, *args: object, **kwargs: object
+    ) -> None:
+        calls.append(absorbed)
+        if len(calls) == 2:
+            raise Refused("openkos unmerge: refused.")
+        real(root, request, absorbed, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(unmerge_service, "_unmerge_step", second_fails)
+
+    with pytest.raises(WriteFailed) as caught:
+        apply_unmerge(Workspace.open(group), version)
+
+    assert isinstance(caught.value, UnmergeInterrupted)
+    assert caught.value.restored_ids == (C,)
+    assert caught.value.failed_absorbed_id == B
+
+
+def test_a_lock_released_within_the_wait_lets_the_unmerge_through(
+    pair: Path,
+) -> None:
+    version = _version(pair, A, B)
+    holding = threading.Event()
+    release = threading.Event()
+
+    def hold() -> None:
+        with lock.workspace_lock(pair):
+            holding.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    holding.wait(5)
+    threading.Timer(0.3, release.set).start()
+    try:
+        outcome = apply_unmerge(Workspace.open(pair), version, wait_seconds=10)
+    finally:
+        release.set()
+        holder.join(5)
+
+    assert isinstance(outcome, Unmerged)

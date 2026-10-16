@@ -59,16 +59,16 @@ JSON is never hand-merged).
 
 ## S2b Apply (P2 apply half, P3)
 
-- [ ] S2b.1 RED: application apply under one section: digest mismatch is stale
+- [x] S2b.1 RED: application apply under one section: digest mismatch is stale
   with nothing written; a refusal at apply is returned; `UnwindStopped` at step 1
   re-raises its cause; at step N > 1 it becomes `UnmergeInterrupted`.
-- [ ] S2b.2 GREEN: `unwind_to_version` in `unmerge_service`;
+- [x] S2b.2 GREEN: `unwind_to_version` in `unmerge_service`;
   `UnmergeInterrupted(WriteFailed)` in `write_gate` (`operation="unmerge"`).
-- [ ] S2b.3 RED then GREEN: facade `apply_unmerge`, `Unmerged`, `UnmergeStale`,
+- [x] S2b.3 RED then GREEN: facade `apply_unmerge`, `Unmerged`, `UnmergeStale`,
   `UnmergeInterrupted` export; real round trips (pair: byte parity except
   `log.md`, one commit; group: two steps, two commits), busy lock writes nothing,
   flipped echoed flag is stale, `on_warning` and `committed_confidential` wiring.
-- [ ] S2b.4 Regenerate the surface snapshot; mutation-check the digest comparison
+- [x] S2b.4 Regenerate the surface snapshot; mutation-check the digest comparison
   and the step-number branch.
 
 ## S3 Local HTTP API (H1, H2, H3)

@@ -12,7 +12,9 @@ per service, is what stops the three exit-code contracts drifting apart:
 * `WriteFailed` -- exit 1, a `Refused` that names WHICH write failed
   (`merge`, `relate` or `set_tier`), over which subjects, with what error, and
   chains its cause. `MergeGroupInterrupted` is the one subclass: a group decision
-  that stopped after at least one of its merges was written. It carries structured fields so an adapter formats its own
+  that stopped after at least one of its merges was written, and
+  `UnmergeInterrupted` the same for an unwind of several unmerges. Both carry
+  structured fields so an adapter formats its own
   line; `message` is a neutral rendering with no `openkos <verb>:` prefix.
 * `DriftDetected` -- exit 3, the ONE failure a script may safely retry
   (#319): a target changed, vanished or left the workspace after Phase A read
@@ -66,7 +68,7 @@ class WriteFailed(Refused):
 
     def __init__(
         self,
-        operation: Literal["merge", "relate", "set_tier", "merge_group"],
+        operation: Literal["merge", "relate", "set_tier", "merge_group", "unmerge"],
         subjects: tuple[str, ...],
         error: str,
     ) -> None:
@@ -98,6 +100,30 @@ class MergeGroupInterrupted(WriteFailed):
         self.completed = completed
         """The `(survivor, absorbed)` pairs written, in order."""
         self.commit_sha = commit_sha
+        self.failed_absorbed_id = failed_absorbed_id
+
+
+class UnmergeInterrupted(WriteFailed):
+    """A stateless unmerge of several steps stopped after at least one of them
+    was written (ADR-0064). The completed steps are kept, each committed on its
+    own (`commit_shas`, `None` for a commit that degraded), and every one left
+    a consistent bundle; the failed step and every after it were not written.
+    A failure of the FIRST step is that step's own refusal, because nothing
+    completed."""
+
+    def __init__(
+        self,
+        survivor_id: str,
+        restored_ids: tuple[str, ...],
+        commit_shas: tuple[str | None, ...],
+        failed_absorbed_id: str,
+        error: str,
+    ) -> None:
+        super().__init__("unmerge", (survivor_id, failed_absorbed_id), error)
+        self.survivor_id = survivor_id
+        self.restored_ids = restored_ids
+        """The absorbed ids restored, in the order they ran."""
+        self.commit_shas = commit_shas
         self.failed_absorbed_id = failed_absorbed_id
 
 

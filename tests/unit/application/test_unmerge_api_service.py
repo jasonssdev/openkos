@@ -6,6 +6,8 @@ Every merge is made through `merge_service`, the same write the CLI makes, so
 the ledgers read here are real ones.
 """
 
+import contextlib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -13,7 +15,12 @@ import pytest
 from openkos.application import merge_service
 from openkos.application import unmerge_service as svc
 from openkos.application.lifecycle import PreparedMerge
-from openkos.application.write_gate import Refused
+from openkos.application.write_gate import (
+    DriftDetected,
+    Refused,
+    UnmergeInterrupted,
+    WriteFailed,
+)
 from openkos.bundle import ledger as bundle_ledger
 from openkos.model import okf
 from tests.unit.application.curation_support import (
@@ -359,3 +366,159 @@ def test_a_delta_entry_leaves_the_catalog_out_of_the_digest(chain: Path) -> None
     log.write_text(log.read_text(encoding="utf-8") + "\n", encoding="utf-8")
 
     assert _preview(chain, _B).content_digest == before
+
+
+# -- apply against the version ------------------------------------------------ #
+
+
+class _Section:
+    """A commit section that counts how often it is entered."""
+
+    def __init__(self) -> None:
+        self.entered = 0
+
+    @contextlib.contextmanager
+    def __call__(self) -> Iterator[None]:
+        self.entered += 1
+        yield
+
+
+def _apply(
+    root: Path,
+    preview: svc.UnwindPreview,
+    *,
+    section: _Section | None = None,
+    commits: CommitRecorder | None = None,
+    digest: str | None = None,
+    discard: bool | None = None,
+) -> svc.UnwindApplied | svc.UnwindRefusal | svc.UnwindStale:
+    return svc.unwind_to_version(
+        root,
+        preview.survivor_id,
+        preview.absorbed_id,
+        content_digest=preview.content_digest if digest is None else digest,
+        discard_survivor_edits=(
+            preview.discard_survivor_edits if discard is None else discard
+        ),
+        ports=svc.UnmergePorts(
+            autocommit=commits or CommitRecorder(),
+            commit_section=section or _Section(),
+        ),
+    )
+
+
+def test_apply_runs_every_step_inside_one_section_one_commit_each(
+    chain: Path,
+) -> None:
+    section = _Section()
+    commits = CommitRecorder()
+
+    result = _apply(chain, _preview(chain, _B), section=section, commits=commits)
+
+    assert result == svc.UnwindApplied(
+        survivor_id=_SURVIVOR,
+        restored_ids=(_C, _B),
+        commit_shas=("abc1234", "abc1234"),
+    )
+    assert section.entered == 1
+    assert [message for _, _, message in commits.calls] == [
+        f"openkos: unmerge {_C}",
+        f"openkos: unmerge {_B}",
+    ]
+    assert (chain / "bundle" / f"{_B}.md").is_file()
+    assert (chain / "bundle" / f"{_C}.md").is_file()
+
+
+def test_a_degraded_commit_is_reported_as_none(chain: Path) -> None:
+    result = _apply(chain, _preview(chain, _C), commits=CommitRecorder(sha=None))
+
+    assert isinstance(result, svc.UnwindApplied)
+    assert result.commit_shas == (None,)
+
+
+def test_a_moved_digest_is_stale_and_writes_nothing(chain: Path) -> None:
+    preview = _preview(chain, _B)
+    before = tree(chain)
+
+    result = _apply(chain, preview, digest="0" * 64)
+
+    assert result == svc.UnwindStale()
+    assert tree(chain) == before
+
+
+def test_a_flipped_discard_flag_is_stale(chain: Path) -> None:
+    preview = _preview(chain, _B)
+    before = tree(chain)
+
+    assert _apply(chain, preview, discard=True) == svc.UnwindStale()
+    assert tree(chain) == before
+
+
+def test_a_refusal_found_at_apply_is_returned(chain: Path) -> None:
+    preview = _preview(chain, _C)
+    _apply(chain, preview)
+    before = tree(chain)
+
+    assert _apply(chain, preview) == svc.UnwindRefusal("not_merged")
+    assert tree(chain) == before
+
+
+def test_a_first_step_failure_raises_its_own_refusal_and_writes_nothing(
+    chain: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def drift(*args: object, **kwargs: object) -> None:
+        raise DriftDetected("moved")
+
+    monkeypatch.setattr(svc, "_unmerge_step", drift)
+    before = tree(chain)
+
+    with pytest.raises(DriftDetected):
+        _apply(chain, _preview(chain, _B))
+    assert tree(chain) == before
+
+
+def test_a_later_step_failure_keeps_what_completed(
+    chain: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = svc._unmerge_step
+    calls: list[str] = []
+
+    def second_fails(
+        root: Path, request: object, absorbed: str, *args: object, **kwargs: object
+    ) -> None:
+        calls.append(absorbed)
+        if len(calls) == 2:
+            raise Refused("openkos unmerge: step two refused.")
+        real(root, request, absorbed, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(svc, "_unmerge_step", second_fails)
+
+    with pytest.raises(UnmergeInterrupted) as caught:
+        _apply(chain, _preview(chain, _B))
+
+    assert isinstance(caught.value, WriteFailed)
+    assert caught.value.restored_ids == (_C,)
+    assert caught.value.commit_shas == ("abc1234",)
+    assert caught.value.failed_absorbed_id == _B
+    assert caught.value.operation == "unmerge"
+    assert (chain / "bundle" / f"{_C}.md").is_file()
+    assert not (chain / "bundle" / f"{_B}.md").exists()
+
+
+def test_a_hand_authored_self_merge_entry_is_refused_not_raised_raw(
+    chain: Path,
+) -> None:
+    """A ledger entry naming the survivor itself cannot come from `merge`, but a
+    hand-edited sidecar can hold one; the planner's `ValueError` must surface as
+    the typed refusal, never as a bare error out of the API."""
+    path = bundle_ledger.ledger_path_for(_SURVIVOR, chain / "bundle")
+    metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    raw = metadata["merged_from"]
+    assert isinstance(raw, list)
+    entries = [dict(e) for e in raw]
+    entries[-1]["absorbed_id"] = _SURVIVOR
+    metadata["merged_from"] = entries
+    path.write_text(okf.dump_frontmatter(metadata), encoding="utf-8")
+
+    with pytest.raises(Refused):
+        svc.preview_unwind(chain, _SURVIVOR, _SURVIVOR)
