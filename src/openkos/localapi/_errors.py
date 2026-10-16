@@ -23,6 +23,7 @@ FORBIDDEN: Final = "forbidden"
 HOST_NOT_ALLOWED: Final = "host_not_allowed"
 ORIGIN_NOT_ALLOWED: Final = "origin_not_allowed"
 PREFLIGHT_REJECTED: Final = "preflight_rejected"
+REQUEST_TOO_LARGE: Final = "request_too_large"
 
 
 # Framework rows.

@@ -1,12 +1,17 @@
 """The ADR-0058 guard, called directly with synthetic ASGI scopes."""
 
+import asyncio
 import hmac
 from typing import Any
 
 import pytest
 
 from openkos.localapi import _errors
-from openkos.localapi._guard import LocalApiGuard, _GuardConfig
+from openkos.localapi._guard import (
+    MAX_REQUEST_BODY_BYTES,
+    LocalApiGuard,
+    _GuardConfig,
+)
 from tests.unit.localapi.conftest import (
     PORT,
     TAURI,
@@ -326,3 +331,131 @@ def test_duplicated_origin_is_refused(
     scope = make_scope([("origin", TAURI), ("origin", TAURI)])
     _assert_envelope(call(guard, scope), 403, "origin_not_allowed")
     assert inner.scopes == []
+
+
+# --- request body cap ---------------------------------------------------------
+
+
+class _Body:
+    """A scripted request body, delivered one chunk per `receive()` call."""
+
+    def __init__(self, *chunks: bytes) -> None:
+        self._chunks = list(chunks)
+        self.delivered = 0
+
+    async def receive(self) -> dict[str, Any]:
+        if not self._chunks:
+            return {"type": "http.disconnect"}
+        chunk = self._chunks.pop(0)
+        self.delivered += 1
+        return {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": bool(self._chunks),
+        }
+
+
+class _Reader:
+    """An inner app that drains the body, like a route that parses it."""
+
+    def __init__(self) -> None:
+        self.read = 0
+        self.reached = False
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        self.reached = True
+        while True:
+            message = await receive()
+            self.read += len(message.get("body", b""))
+            if not message.get("more_body"):
+                break
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+
+def _post(app: Any, scope: Any, body: _Body) -> Reply:
+    reply = Reply()
+
+    async def send(message: dict[str, Any]) -> None:
+        reply.messages.append(message)
+
+    asyncio.run(app(scope, body.receive, send))
+    return reply
+
+
+def _guarded(app: Any) -> LocalApiGuard:
+    return LocalApiGuard(app, _GuardConfig(port=PORT, token_digest=TOKEN_DIGEST))
+
+
+def test_declared_oversized_content_length_is_413_without_reading() -> None:
+    reader = _Reader()
+    body = _Body(b"x")
+    scope = make_scope(
+        [("content-length", str(MAX_REQUEST_BODY_BYTES + 1))], method="POST"
+    )
+
+    reply = _post(_guarded(reader), scope, body)
+
+    _assert_envelope(reply, 413, "request_too_large")
+    assert reader.reached is False
+    assert body.delivered == 0
+
+
+def test_chunked_body_over_the_cap_is_413_and_aborts_the_read() -> None:
+    reader = _Reader()
+    half = b"x" * (MAX_REQUEST_BODY_BYTES // 2 + 1)
+    body = _Body(half, half, half, half)
+    scope = make_scope([("transfer-encoding", "chunked")], method="POST")
+
+    reply = _post(_guarded(reader), scope, body)
+
+    _assert_envelope(reply, 413, "request_too_large")
+    assert body.delivered == 2  # aborted at the chunk that crossed the cap
+    assert [m["status"] for m in reply.messages if "status" in m] == [413]
+
+
+def test_lying_content_length_cannot_smuggle_a_larger_body() -> None:
+    reader = _Reader()
+    body = _Body(b"x" * (MAX_REQUEST_BODY_BYTES + 1))
+    scope = make_scope([("content-length", "10")], method="POST")
+
+    reply = _post(_guarded(reader), scope, body)
+
+    _assert_envelope(reply, 413, "request_too_large")
+
+
+def test_body_of_exactly_the_cap_is_accepted() -> None:
+    reader = _Reader()
+    body = _Body(b"x" * MAX_REQUEST_BODY_BYTES)
+    scope = make_scope([("content-length", str(MAX_REQUEST_BODY_BYTES))], method="POST")
+
+    reply = _post(_guarded(reader), scope, body)
+
+    assert reply.status == 200
+    assert reader.read == MAX_REQUEST_BODY_BYTES
+
+
+def test_unauthenticated_oversized_request_is_401_not_413() -> None:
+    reader = _Reader()
+    scope = make_scope(
+        [("content-length", str(MAX_REQUEST_BODY_BYTES + 1))],
+        method="POST",
+        token=None,
+    )
+
+    reply = _post(_guarded(reader), scope, _Body(b"x"))
+
+    _assert_envelope(reply, 401, "unauthorized")
+    assert reader.reached is False
+
+
+def test_foreign_host_oversized_request_is_403_not_413() -> None:
+    scope = make_scope(
+        [("content-length", str(MAX_REQUEST_BODY_BYTES + 1))],
+        method="POST",
+        host="evil.com",
+    )
+
+    reply = _post(_guarded(_Reader()), scope, _Body(b"x"))
+
+    _assert_envelope(reply, 403, "host_not_allowed")

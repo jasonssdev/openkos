@@ -262,6 +262,17 @@ produced by a model rather than by code, but NOT tolerant of the keyword
 appearing mid-sentence: requiring the line start is what keeps an answer
 that legitimately contains the word from being truncated at it."""
 
+_ATTRIBUTION_TRAILING_RE = re.compile(
+    rf"[ \t]+{re.escape(_ATTRIBUTION_KEYWORD)}[ \t]*:[ \t]*"
+    rf"(?P<payload>{_ATTRIBUTION_NONE}|\d+(?:[ \t]*,[ \t]*\d+)*)[ \t]*\.?\s*\Z"
+)
+"""The attribution marker appended to the reply's last sentence (#1384).
+
+A fallback for when no own-line marker exists. Unlike the own-line form it is
+case-sensitive on the keyword, anchored to the END of the reply, and its
+payload is restricted to integers or `none`: compiled loosely it would strip
+the tail of ordinary prose such as "... the recipe I used: 3"."""
+
 _ATTRIBUTION_INDEX_RE = re.compile(r"\d+")
 
 
@@ -291,13 +302,20 @@ def _split_attribution(
     empty set -- an empty set is a positive claim ("none of them"), which is
     not what a hallucinated index says.
 
+    When no own-line marker exists, a marker appended to the final sentence
+    (`... Euros. USED: 2, 3`) is accepted and reported as `"reported"`; an
+    own-line marker always takes precedence.
+
     The marker is stripped whether or not it parsed. It is machinery either
     way, and `query --save` files this prose as a real bundle concept, so
     leaving an unparsed one behind writes it into the bundle permanently.
     """
     matches = list(_ATTRIBUTION_LINE_RE.finditer(reply))
     if not matches:
-        return reply, None, "absent"
+        trailing = _ATTRIBUTION_TRAILING_RE.search(reply)
+        if trailing is None:
+            return reply, None, "absent"
+        matches = [trailing]
     last = matches[-1]
     prose = (reply[: last.start()] + reply[last.end() :]).strip()
     payload = last.group("payload").strip()

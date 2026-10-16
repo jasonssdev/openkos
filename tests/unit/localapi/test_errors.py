@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from openkos import api
 from openkos.localapi import _errors
 from openkos.localapi._app import ServerSettings, create_app
+from openkos.localapi._guard import MAX_REQUEST_BODY_BYTES
 from tests.unit.localapi.conftest import AUTH, PORT, TOKEN
 
 SENTINEL = "sentinel-value-9f3a"
@@ -335,6 +336,7 @@ SPEC_CODES = {
     "host_not_allowed",
     "origin_not_allowed",
     "preflight_rejected",
+    "request_too_large",
     "not_found",
     "method_not_allowed",
     "invalid_request",
@@ -379,6 +381,11 @@ def _produced_by_the_guard_and_the_framework(client: TestClient) -> list[str]:
         client.get("/v1/nothing", headers=AUTH),
         client.delete("/v1/health", headers=AUTH),
         client.post("/v1/_probe_body", json={"count": "x"}, headers=AUTH),
+        client.post(
+            "/v1/_probe_body",
+            content=b"x" * (MAX_REQUEST_BODY_BYTES + 1),
+            headers=AUTH,
+        ),
     ]
     return [r.json()["code"] for r in responses]
 
