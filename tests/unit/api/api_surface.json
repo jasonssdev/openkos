@@ -602,6 +602,11 @@
           "annotation": "tuple[str, ...]",
           "default": false,
           "name": "member_ids"
+        },
+        {
+          "annotation": "Literal['keep_distinct']",
+          "default": true,
+          "name": "kind"
         }
       ],
       "frozen": true,
@@ -753,6 +758,11 @@
           "annotation": "str | None",
           "default": false,
           "name": "cross_type_concern"
+        },
+        {
+          "annotation": "Literal['merge']",
+          "default": true,
+          "name": "kind"
         }
       ],
       "frozen": true,
@@ -1067,6 +1077,11 @@
           "annotation": "str",
           "default": false,
           "name": "relation_type"
+        },
+        {
+          "annotation": "Literal['relate']",
+          "default": true,
+          "name": "kind"
         }
       ],
       "frozen": true,
@@ -1235,6 +1250,11 @@
           "annotation": "str",
           "default": false,
           "name": "tier"
+        },
+        {
+          "annotation": "Literal['set_tier']",
+          "default": true,
+          "name": "kind"
         }
       ],
       "frozen": true,

@@ -207,7 +207,7 @@ def test_a_preview_serves_the_plan_and_its_version_and_the_action_reaches_the_ap
     assert response.status_code == 200
     body = response.json()
     assert body["version"] == VERSION_JSON
-    assert body["plan"] == {"member_ids": list(PAIR)}
+    assert body["plan"] == {"kind": "keep_distinct", "member_ids": list(PAIR)}
     assert body["action"] == "merge"
     args = recorder.calls[0]["args"]
     assert args[0].root == workspace.root
