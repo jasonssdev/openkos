@@ -4,8 +4,9 @@ An allowlist is stronger than a denylist: every module under `src/openkos/api/`
 may import only the standard library, itself, and a short list of engine
 modules. The layers that print, prompt, disclose or open databases are also
 asserted by name, so each scenario has a direct check. A second guard bars every
-other module from importing the facade, and a fresh interpreter proves that
-importing it never loads the CLI.
+other module from importing the facade, except the local HTTP adapter under
+`localapi/` (ADR-0061), and a fresh interpreter proves that importing it never
+loads the CLI.
 """
 
 import ast
@@ -173,7 +174,7 @@ def test_only_the_wiring_module_may_import_a_backend_client_or_the_commit_core()
     ]
 
 
-# -- nothing imports the API ---------------------------------------------------- #
+# -- only the local HTTP adapter imports the API ---------------------------- #
 
 
 def _importers_of_the_api(sources: dict[str, str]) -> list[str]:
@@ -186,15 +187,39 @@ def _importers_of_the_api(sources: dict[str, str]) -> list[str]:
     ]
 
 
-def test_no_module_outside_the_api_imports_it() -> None:
+def _foreign_importers(importers: list[str]) -> list[str]:
+    """The importers that are neither the API itself nor the sanctioned local
+    HTTP adapter (`localapi/`, ADR-0061)."""
+    return [name for name in importers if not name.startswith("localapi/")]
+
+
+def test_only_the_local_api_adapter_imports_the_api() -> None:
     sources = {
         str(p.relative_to(_SRC)): p.read_text(encoding="utf-8")
         for p in sorted(_SRC.rglob("*.py"))
         if _API not in p.parents
     }
+    importers = _importers_of_the_api(sources)
 
     assert len(sources) > 100  # the scan is not vacuous
-    assert _importers_of_the_api(sources) == []
+    assert importers  # the adapter uses the API, so the admission is exercised
+    assert _foreign_importers(importers) == []
+
+
+def test_a_module_outside_both_importing_the_api_fails_naming_it() -> None:
+    sources = {
+        "mcp/server.py": "from openkos import api\n",
+        "localapi/_routes.py": "from openkos import api\n",
+    }
+
+    assert _foreign_importers(_importers_of_the_api(sources)) == ["mcp/server.py"]
+
+
+def test_a_localapi_module_importing_the_api_passes() -> None:
+    sources = {"localapi/_routes.py": "from openkos import api\n"}
+
+    assert _importers_of_the_api(sources) == ["localapi/_routes.py"]
+    assert _foreign_importers(_importers_of_the_api(sources)) == []
 
 
 @pytest.mark.parametrize(

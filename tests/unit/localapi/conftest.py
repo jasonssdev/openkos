@@ -9,9 +9,14 @@ import hashlib
 import json
 from collections.abc import Iterable, MutableMapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
+
+from openkos.api import Workspace
+from openkos.localapi._app import ServerSettings
+from tests.unit.application.curation_support import make_workspace
 
 PORT = 49152
 TOKEN = "t0ken-for-the-guard-tests"  # noqa: S105 -- a fixture value, not a credential
@@ -138,3 +143,16 @@ def call(app: Any, scope: Scope) -> Reply:
 @pytest.fixture
 def inner() -> RecordingApp:
     return RecordingApp()
+
+
+@pytest.fixture
+def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Workspace:
+    return Workspace.open(make_workspace(tmp_path, monkeypatch))
+
+
+@pytest.fixture
+def settings(workspace: Workspace) -> ServerSettings:
+    return ServerSettings(workspace=workspace, port=PORT, token_digest=TOKEN_DIGEST)
+
+
+AUTH = {"Authorization": f"Bearer {TOKEN}"}
