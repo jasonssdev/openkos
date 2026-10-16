@@ -10,6 +10,8 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict
 
+from openkos import api
+
 # A write waits at most this long for the workspace lock (seconds).
 WRITE_WAIT_SECONDS: Final = 5.0
 # Sent as `Retry-After` on a busy 503; an unmeasured placeholder.
@@ -28,6 +30,23 @@ INVALID_REQUEST: Final = "invalid_request"
 NOT_FOUND: Final = "not_found"
 METHOD_NOT_ALLOWED: Final = "method_not_allowed"
 INTERNAL_ERROR: Final = "internal_error"
+
+# Read-path rows.
+QUEUE_UNAVAILABLE: Final = "queue_unavailable"
+WORKSPACE_NOT_FOUND: Final = "workspace_not_found"
+WORKSPACE_UNREADABLE: Final = "workspace_unreadable"
+
+# Subclass-first: the first isinstance match wins. (status, code, message).
+_ROWS: Final[tuple[tuple[type[BaseException], int, str, str], ...]] = (
+    (
+        api.QueueUnavailableError,
+        503,
+        QUEUE_UNAVAILABLE,
+        "the pending queue is unreadable",
+    ),
+    (api.WorkspaceNotFound, 500, WORKSPACE_NOT_FOUND, "the workspace was not found"),
+    (api.WorkspaceUnreadable, 500, WORKSPACE_UNREADABLE, "the workspace is unreadable"),
+)
 
 _LOG = logging.getLogger(__name__.rsplit(".", 1)[0])
 
@@ -60,9 +79,12 @@ class ApiProblem(Exception):
 def error_body(exc: BaseException) -> tuple[int, ErrorBody, dict[str, str]]:
     """The status, body and headers an exception is answered with.
 
-    Only the generic row exists so far; later slices add rows ahead of it,
-    subclass first. The message is fixed text: nothing echoes `str(exc)`."""
+    Rows are matched subclass first and the generic 500 closes the table. The
+    message is fixed text: nothing echoes `str(exc)`."""
     _LOG.error("local api request failed", exc_info=exc)
+    for kind, status, code, message in _ROWS:
+        if isinstance(exc, kind):
+            return status, ErrorBody(code=code, retryable=False, message=message), {}
     return (
         500,
         ErrorBody(code=INTERNAL_ERROR, retryable=False, message="internal error"),
