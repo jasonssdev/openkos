@@ -795,12 +795,12 @@ def preview_unwind(
         ) from exc
     if all(entry.absorbed_id != target_canonical for entry in entries):
         return UnwindRefusal("not_merged")
-    sequence = bundle_merge.plan_unwind_sequence(
-        survivor_id=survivor_canonical,
-        to_absorbed_id=target_canonical,
-        entries=entries,
-    )
     try:
+        sequence = bundle_merge.plan_unwind_sequence(
+            survivor_id=survivor_canonical,
+            to_absorbed_id=target_canonical,
+            entries=entries,
+        )
         # Prepared with the override on, so an edit is REPORTED rather than
         # raised: the refusal below is then decided from a flag, never from
         # error text.

@@ -503,3 +503,22 @@ def test_a_later_step_failure_keeps_what_completed(
     assert caught.value.operation == "unmerge"
     assert (chain / "bundle" / f"{_C}.md").is_file()
     assert not (chain / "bundle" / f"{_B}.md").exists()
+
+
+def test_a_hand_authored_self_merge_entry_is_refused_not_raised_raw(
+    chain: Path,
+) -> None:
+    """A ledger entry naming the survivor itself cannot come from `merge`, but a
+    hand-edited sidecar can hold one; the planner's `ValueError` must surface as
+    the typed refusal, never as a bare error out of the API."""
+    path = bundle_ledger.ledger_path_for(_SURVIVOR, chain / "bundle")
+    metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    raw = metadata["merged_from"]
+    assert isinstance(raw, list)
+    entries = [dict(e) for e in raw]
+    entries[-1]["absorbed_id"] = _SURVIVOR
+    metadata["merged_from"] = entries
+    path.write_text(okf.dump_frontmatter(metadata), encoding="utf-8")
+
+    with pytest.raises(Refused):
+        svc.preview_unwind(chain, _SURVIVOR, _SURVIVOR)
