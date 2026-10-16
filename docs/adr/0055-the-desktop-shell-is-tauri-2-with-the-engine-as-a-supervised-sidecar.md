@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0055: The desktop shell is Tauri 2, with the engine as a supervised sidecar"
 description: The MVP 6 desktop app is a Tauri 2 shell that starts, supervises and stops the engine as a sidecar process, updated through Tauri's own signed updater.
-status: Accepted
+status: Amended by ADR-0056
 date: 2026-10-14
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0055: The desktop shell is Tauri 2, with the engine as a supervised sidecar
 
-- **Status:** Accepted
+- **Status:** Amended by ADR-0056
 - **Date:** 2026-10-14
 
 ## Context
