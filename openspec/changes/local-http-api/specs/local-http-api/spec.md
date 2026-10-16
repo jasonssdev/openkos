@@ -554,7 +554,7 @@ mapping MUST be evaluated subclass-first and MUST be:
 | Known path, method not allowed | 405 | `method_not_allowed` | false |
 | Invalid request body or parameter | 422 | `invalid_request` | false |
 | Path key differs from `version.decision_key` | 422 | `key_mismatch` | false |
-| `Stale` outcome | 409 | `stale` | false |
+| `Stale` outcome (any reason, `unknown_key` included) | 409 | `stale` | false |
 | `QuoteStale` outcome | 409 | `quote_stale` | false |
 | `NotApplied("not_offered")` | 422 | `action_not_offered` | false |
 | `NotApplied("skipped")` | 422 | `skip_not_applicable` | false |
