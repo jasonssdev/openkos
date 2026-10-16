@@ -1,37 +1,54 @@
-:root {
-  color-scheme: light dark;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+/* Uses only the custom properties of tokens.css. */
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-regular);
   line-height: 1.5;
 }
 
 main {
   max-width: 44rem;
-  margin: 2rem auto;
-  padding: 0 1.5rem;
+  margin: var(--space-8) auto;
+  padding: 0 var(--space-6);
+}
+
+h1 {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-medium);
+  text-transform: lowercase;
+}
+
+h2 {
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
 }
 
 section {
-  margin-top: 1.5rem;
+  margin-top: var(--space-6);
 }
 
 pre {
   white-space: pre-wrap;
+  font-family: var(--font-mono);
   font-size: 0.85rem;
-  padding: 0.75rem;
-  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
-  border-radius: 6px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
 }
 
 dl {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 0.25rem 1rem;
+  gap: var(--space-1) var(--space-4);
 }
 
 dt {
-  font-weight: 600;
+  font-weight: var(--weight-medium);
 }
 
 dd {
   margin: 0;
+  font-family: var(--font-mono);
 }

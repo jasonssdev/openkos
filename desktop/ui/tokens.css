@@ -1,0 +1,53 @@
+/* Design tokens: docs/brand.md is the source. Dark is the default. */
+:root {
+  /* Brand palette */
+  --color-ink: #14172b;
+  --color-paper: #ecedf5;
+  --color-indigo: #6366e8;
+  --color-amber: #e0a32e;
+  --color-slate: #565a78;
+
+  /* State colors: encode meaning only, always paired with a label */
+  --state-info: var(--color-indigo);
+  --state-warning: var(--color-amber);
+  --state-success: #57ab5a;
+  --state-error: #f47067;
+
+  /* Semantic roles (dark default) */
+  --surface: var(--color-ink);
+  --text: var(--color-paper);
+  --text-muted: #9a9db8;
+  --border: var(--color-slate);
+  --accent: var(--color-indigo);
+
+  /* Typography: system stacks only, the app is offline */
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --weight-regular: 400;
+  --weight-medium: 500;
+
+  /* Spacing scale */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 12px;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --surface: var(--color-paper);
+    --text: var(--color-ink);
+    --text-muted: #4a4e6b;
+    --border: var(--color-slate);
+    color-scheme: light;
+  }
+}
