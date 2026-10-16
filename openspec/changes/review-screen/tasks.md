@@ -121,15 +121,26 @@ Delivery strategy: stacked-to-main.
 
 ## S5 The Screen
 
-- [ ] S5.1 `ui/components.ts` and `ui/review/render.ts`: draw from state with
-  `textContent` only; focus restored after a redraw; labelled groups; status
-  and alert regions (R8, D7).
-- [ ] S5.2 Navigation between the status page and To review in `main.ts` and
-  `index.html`; styles on tokens only, with a visible focus ring.
-- [ ] S5.3 A test that no file under `desktop/ui/` uses `innerHTML`,
-  `outerHTML`, `insertAdjacentHTML` or `document.write`, and that `style.css`
-  uses no color literal outside `tokens.css`.
-- [ ] S5.4 `docs/architecture.md` (the `ui/` tree) only if its shape changes.
+- [x] S5.1 `ui/components.ts` (`el`, `button`, `notice`, `heading`, `card`,
+  `choiceGroup`, `redraw`) and `ui/review/render.ts`: draw from state with
+  `textContent` only; focus restored after a redraw, or moved to the view's
+  heading; labelled groups; persistent polite and alert live regions; a notice
+  is a symbol, a word and a color (R8, D7). Two transitions the render layer
+  needed joined the model test-first: `back()` from a preview (RED:
+  `model.back is not a function`), the open decision refreshed after a check,
+  and the Undo taken away once its combine is split (RED: both failed on the
+  stale decision and the remaining Undo).
+- [x] S5.2 Navigation between Status and To review in `main.ts` and
+  `index.html` (`aria-current`); one client and one review model per engine
+  launch; To review read again on each visit. Styles on tokens only, with a
+  visible focus ring on every control.
+- [x] S5.3 `ui/source.test.ts`: no file under `desktop/ui/` uses `innerHTML`,
+  `outerHTML`, `insertAdjacentHTML`, `document.write` or an inline style, and
+  `style.css` uses no color literal and only custom properties `tokens.css`
+  defines. RED by mutation, each restored from a byte copy: an `innerHTML`
+  write, a hex color and an undefined custom property each failed it.
+- [x] S5.4 `docs/architecture.md`: one bullet for the screen's shape
+  (ADR-0066).
 
 ## S6 Archive
 

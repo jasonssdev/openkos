@@ -9,18 +9,33 @@
     <script type="module" src="./main.ts"></script>
   </head>
   <body>
+    <header>
+      <p class="wordmark">openkos</p>
+      <nav aria-label="Main">
+        <button type="button" class="nav__item" id="nav-status" aria-current="page">Status</button>
+        <button type="button" class="nav__item" id="nav-review">To review</button>
+      </nav>
+    </header>
     <main>
-      <h1>openkos</h1>
-      <section aria-labelledby="engine-heading">
-        <h2 id="engine-heading">Engine</h2>
-        <p id="engine-status" role="status">Starting the engine…</p>
-        <pre id="engine-detail" hidden></pre>
-      </section>
-      <section aria-labelledby="workspace-heading">
-        <h2 id="workspace-heading">Workspace</h2>
-        <p id="workspace-message">Waiting for the engine.</p>
-        <dl id="workspace-facts" hidden></dl>
-      </section>
+      <div id="status-view">
+        <h1 tabindex="-1">Status</h1>
+        <section aria-labelledby="engine-heading">
+          <h2 id="engine-heading">Engine</h2>
+          <p id="engine-status" role="status">Starting the engine…</p>
+          <pre id="engine-detail" hidden></pre>
+        </section>
+        <section aria-labelledby="workspace-heading">
+          <h2 id="workspace-heading">Workspace</h2>
+          <p id="workspace-message">Waiting for the engine.</p>
+          <dl id="workspace-facts" hidden></dl>
+        </section>
+      </div>
+      <div id="review-view" hidden>
+        <p id="review-waiting">Waiting for OpenKOS to start…</p>
+        <div id="review"></div>
+      </div>
+      <p id="review-live-status" class="visually-hidden" role="status"></p>
+      <p id="review-live-alert" class="visually-hidden" role="alert"></p>
     </main>
   </body>
 </html>

@@ -1,8 +1,11 @@
-// Proves the round trip: the shell supervises the engine, and this page reads
-// the workspace status through the client (client/), created from the engine
-// state the shell reports. Every value is written with textContent, never as
-// HTML, and nothing is logged.
+// The app's shell: the shell process supervises the engine, and this page reads
+// its state, shows the status page and the review screen, and creates one
+// client and one review model per engine launch (a restarted engine has a new
+// port and token). Every value is written with textContent, never as HTML,
+// and nothing is logged.
 import { createClient, type EngineState } from "../client/index.ts";
+import { ReviewModel } from "./review/model.ts";
+import { renderReview } from "./review/render.ts";
 import { describeEngine, statusFacts, statusFailure } from "./view.ts";
 
 declare global {
@@ -24,10 +27,40 @@ const engineStatus = element("engine-status");
 const engineDetail = element<HTMLPreElement>("engine-detail");
 const workspaceMessage = element("workspace-message");
 const workspaceFacts = element<HTMLDListElement>("workspace-facts");
+const statusView = element("status-view");
+const reviewView = element("review-view");
+const reviewWaiting = element("review-waiting");
+const reviewRoot = element("review");
+const live = { status: element("review-live-status"), alert: element("review-live-alert") };
+const navStatus = element<HTMLButtonElement>("nav-status");
+const navReview = element<HTMLButtonElement>("nav-review");
 
-// The status is read once per engine launch; a restarted engine has a new port
-// and token, so its status is read again.
-let statusReadFor: string | null = null;
+type View = "status" | "review";
+let view: View = "status";
+
+// One launch: its client's model, and whether its status was read.
+let launch: string | null = null;
+let statusRead = false;
+let review: ReviewModel | null = null;
+let unsubscribe: (() => void) | null = null;
+
+function show(next: View): void {
+  view = next;
+  statusView.hidden = next !== "status";
+  reviewView.hidden = next !== "review";
+  const [current, other] = next === "status" ? [navStatus, navReview] : [navReview, navStatus];
+  current.setAttribute("aria-current", "page");
+  other.removeAttribute("aria-current");
+  if (next === "review") {
+    // Everything is read again on each visit: To review is never stale.
+    if (review !== null) void review.load();
+  } else {
+    statusView.querySelector<HTMLElement>("h1")?.focus();
+  }
+}
+
+navStatus.addEventListener("click", () => show("status"));
+navReview.addEventListener("click", () => show("review"));
 
 function showDetail(detail: string | undefined): void {
   engineDetail.hidden = !detail;
@@ -48,6 +81,24 @@ function showFacts(facts: [string, string][]): void {
   workspaceFacts.hidden = false;
 }
 
+function startReview(state: Extract<EngineState, { state: "ready" }>): void {
+  unsubscribe?.();
+  review = new ReviewModel(createClient(state));
+  const model = review;
+  unsubscribe = model.subscribe((next) => renderReview(reviewRoot, live, model, next));
+  reviewWaiting.hidden = true;
+  renderReview(reviewRoot, live, model, model.state);
+  if (view === "review") void model.load();
+}
+
+function stopReview(): void {
+  unsubscribe?.();
+  unsubscribe = null;
+  review = null;
+  reviewWaiting.hidden = false;
+  reviewRoot.replaceChildren();
+}
+
 async function tick(): Promise<void> {
   let state: EngineState;
   try {
@@ -62,16 +113,23 @@ async function tick(): Promise<void> {
   showDetail(detail);
 
   if (state.state !== "ready") {
-    statusReadFor = null;
+    if (launch !== null) stopReview();
+    launch = null;
+    statusRead = false;
     return;
   }
-  const launch = `${state.pid}:${state.base_url}`;
-  if (statusReadFor === launch) return;
-  statusReadFor = launch;
+  const current = `${state.pid}:${state.base_url}`;
+  if (launch !== current) {
+    launch = current;
+    statusRead = false;
+    startReview(state);
+  }
+  if (statusRead) return;
+  statusRead = true;
   try {
     showFacts(statusFacts(await createClient(state).status()));
   } catch (error) {
-    statusReadFor = null;
+    statusRead = false;
     workspaceFacts.hidden = true;
     workspaceMessage.textContent = statusFailure(error);
   }

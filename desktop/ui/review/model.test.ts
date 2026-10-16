@@ -278,6 +278,15 @@ describe("one decision", () => {
     expect(model.state.combined).toEqual([]);
   });
 
+  it("goes back from a preview to the choice without applying", async () => {
+    const { model, client } = await opened([PAIR], "pair");
+    await model.choose({ choice: "merge", label: "", does: "" });
+    model.back();
+    expect(model.state.open?.step).toEqual({ name: "choosing" });
+    await model.confirm();
+    expect(client.applyDecision).not.toHaveBeenCalled();
+  });
+
   it("never sends skip", async () => {
     const { model, client } = await opened([PAIR], "pair");
     await model.choose({ choice: "skip", label: "", does: "" });
@@ -563,6 +572,16 @@ describe("the check", () => {
     expect(client.decisions).toHaveBeenCalledTimes(2);
   });
 
+  it("shows the open decision as it is after the check", async () => {
+    const { model, client } = await opened([UNJUDGED], "unjudged");
+    await model.choose({ choice: "check", label: "", does: "" });
+    const judged = { ...UNJUDGED, evaluation: "judged_same" as const, actions: ["merge", "keep_distinct", "skip"] as Schemas["Action"][] };
+    client.decisions.mockResolvedValue({ decisions: [judged] });
+    await model.agreeCheck();
+    expect(model.state.open?.decision).toEqual(judged);
+    expect(model.state.open?.step).toEqual({ name: "choosing" });
+  });
+
   it("closes the consent without running", async () => {
     const { model, client } = fake([UNJUDGED]);
     await model.load();
@@ -635,6 +654,15 @@ describe("split again", () => {
     expect(client.previewUnmerge).toHaveBeenCalledTimes(2);
     expect(model.state.split?.phase).toBe("confirm");
     expect(client.applyUnmerge).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the Undo away once the combine is split", async () => {
+    const { model } = await opened([PAIR], "pair");
+    await model.choose({ choice: "merge", label: "", does: "" });
+    await model.confirm();
+    await model.undo();
+    await model.confirmSplit();
+    expect(model.state.open?.step).toEqual({ name: "done", lines: ["Combined into 'Marguerite Osei'."], undo: null });
   });
 
   it("splits from a combine's Undo", async () => {

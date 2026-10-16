@@ -347,6 +347,11 @@ export class ReviewModel {
     await this.#preview(action, true);
   }
 
+  /** From a preview back to the choice; nothing is applied. */
+  back(): void {
+    if (this.#state.open?.step.name === "preview") this.#setOpen({ step: { name: "choosing" }, problem: null });
+  }
+
   /** Applies the previewed choice against its version, unchanged. */
   async confirm(): Promise<void> {
     const open = this.#state.open;
@@ -407,6 +412,14 @@ export class ReviewModel {
         this.open(open.key);
       }
     }
+  }
+
+  /** After a check, the open decision is shown as it now is, from its choice. */
+  #refreshOpen(): void {
+    const open = this.#state.open;
+    if (open === null) return;
+    const decision = this.#state.decisions.find((d) => d.decision_key === open.key);
+    if (decision !== undefined) this.#setOpen({ decision, step: { name: "choosing" }, problem: null });
   }
 
   /** A combine's Undo: split its first absorbed page again. */
@@ -475,6 +488,7 @@ export class ReviewModel {
     }
     this.#runId = null;
     await this.load();
+    this.#refreshOpen();
     if (status.state === "failed" || status.outcome === null) {
       const error = status.error ?? { code: "internal_error", retryable: false, message: "" };
       this.#checkProblem(problemFor(new ApiError({ status: 0, ...error, retryAfterSeconds: null }), "after"));
@@ -546,6 +560,10 @@ export class ReviewModel {
       await this.#retry(() => this.#client.applyUnmerge({ version: preview.version }));
       const titles = preview.steps.map((s) => s.absorbed_title ?? "a page");
       this.#set({ split: { ...split, phase: "done", text: splitDone(titles), problem: null } });
+      const step = this.#state.open?.step;
+      if (step?.name === "done" && step.undo?.survivor === split.survivor) {
+        this.#setOpen({ step: { ...step, undo: null } });
+      }
       await this.refreshHistory(split.survivor);
       await this.load();
     } catch (error) {
