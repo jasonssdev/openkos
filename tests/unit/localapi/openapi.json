@@ -1,6 +1,155 @@
 {
   "components": {
     "schemas": {
+      "Action": {
+        "description": "What a client may do with one open decision.",
+        "enum": [
+          "merge",
+          "keep_distinct",
+          "skip",
+          "relate",
+          "relate_reversed",
+          "set_tier"
+        ],
+        "title": "Action",
+        "type": "string"
+      },
+      "ActivityEntry": {
+        "description": "One `log.md` bullet: its section date and its text.",
+        "properties": {
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "text"
+        ],
+        "title": "ActivityEntry",
+        "type": "object"
+      },
+      "Decision": {
+        "additionalProperties": false,
+        "description": "One open decision, as data a client can render.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "decision_key": {
+            "title": "Decision Key",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityDetail"
+              },
+              {
+                "$ref": "#/components/schemas/RelationDetail"
+              },
+              {
+                "$ref": "#/components/schemas/TierDetail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "evaluation": {
+            "enum": [
+              "judged_same",
+              "judged_different",
+              "judged_uncertain",
+              "pending_evaluation",
+              "not_applicable"
+            ],
+            "title": "Evaluation",
+            "type": "string"
+          },
+          "fresh": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fresh"
+          },
+          "kind": {
+            "enum": [
+              "identity",
+              "relation_type",
+              "volatility",
+              "contradiction",
+              "revision",
+              "watch_refusal"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "resolves_via": {
+            "title": "Resolves Via",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Targets",
+            "type": "array"
+          },
+          "withheld": {
+            "items": {
+              "$ref": "#/components/schemas/WithheldAction"
+            },
+            "title": "Withheld",
+            "type": "array"
+          }
+        },
+        "required": [
+          "decision_key",
+          "kind",
+          "targets",
+          "fresh",
+          "evaluation",
+          "actions",
+          "withheld",
+          "resolves_via",
+          "detail"
+        ],
+        "title": "Decision",
+        "type": "object"
+      },
+      "DecisionList": {
+        "additionalProperties": false,
+        "description": "Every open decision, in an envelope that leaves room for additive fields.",
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/Decision"
+            },
+            "title": "Decisions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "decisions"
+        ],
+        "title": "DecisionList",
+        "type": "object"
+      },
       "ErrorBody": {
         "additionalProperties": false,
         "description": "The one body shape of every non-2xx response.",
@@ -51,6 +200,550 @@
         ],
         "title": "HealthBody",
         "type": "object"
+      },
+      "HealthCounts": {
+        "description": "How many findings each knowledge-health check reports. Counts only; the\nfindings themselves are not part of the surface.",
+        "properties": {
+          "below_source_sensitivity": {
+            "title": "Below Source Sensitivity",
+            "type": "integer"
+          },
+          "dangling": {
+            "title": "Dangling",
+            "type": "integer"
+          },
+          "dangling_provenance": {
+            "title": "Dangling Provenance",
+            "type": "integer"
+          },
+          "exact_title_groups": {
+            "title": "Exact Title Groups",
+            "type": "integer"
+          },
+          "open_contradictions": {
+            "title": "Open Contradictions",
+            "type": "integer"
+          },
+          "staging_dropped": {
+            "title": "Staging Dropped",
+            "type": "integer"
+          },
+          "stale_contradictions": {
+            "title": "Stale Contradictions",
+            "type": "integer"
+          },
+          "unbacked_provenance": {
+            "title": "Unbacked Provenance",
+            "type": "integer"
+          },
+          "unevidenced": {
+            "title": "Unevidenced",
+            "type": "integer"
+          },
+          "unextracted": {
+            "title": "Unextracted",
+            "type": "integer"
+          },
+          "unjudged": {
+            "title": "Unjudged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dangling",
+          "unextracted",
+          "unjudged",
+          "unevidenced",
+          "staging_dropped",
+          "below_source_sensitivity",
+          "dangling_provenance",
+          "unbacked_provenance",
+          "exact_title_groups",
+          "open_contradictions",
+          "stale_contradictions"
+        ],
+        "title": "HealthCounts",
+        "type": "object"
+      },
+      "IdentityDetail": {
+        "additionalProperties": false,
+        "description": "An identity decision: a group that may be one entity.",
+        "properties": {
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          },
+          "okf_type": {
+            "title": "Okf Type",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "tier": {
+            "title": "Tier",
+            "type": "string"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "same",
+                  "different",
+                  "uncertain"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "required": [
+          "member_ids",
+          "okf_type",
+          "tier",
+          "verdict",
+          "rationale"
+        ],
+        "title": "IdentityDetail",
+        "type": "object"
+      },
+      "JobSummary": {
+        "description": "One unattended job outcome.",
+        "properties": {
+          "detail_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail Code"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "needs_attention": {
+            "title": "Needs Attention",
+            "type": "boolean"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "units_deferred": {
+            "title": "Units Deferred",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "started_at",
+          "ended_at",
+          "outcome",
+          "detail_code",
+          "units_deferred",
+          "needs_attention"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "KindCounts": {
+        "description": "Lifetime counters of one pending-work kind.",
+        "properties": {
+          "applied_as_proposed": {
+            "title": "Applied As Proposed",
+            "type": "integer"
+          },
+          "applied_modified": {
+            "title": "Applied Modified",
+            "type": "integer"
+          },
+          "declined": {
+            "title": "Declined",
+            "type": "integer"
+          },
+          "enqueued": {
+            "title": "Enqueued",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "open": {
+            "title": "Open",
+            "type": "integer"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "enqueued",
+          "applied_as_proposed",
+          "applied_modified",
+          "declined",
+          "stale",
+          "open"
+        ],
+        "title": "KindCounts",
+        "type": "object"
+      },
+      "PendingReport": {
+        "description": "What `openkos pending` reads.",
+        "properties": {
+          "attention": {
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            },
+            "title": "Attention",
+            "type": "array"
+          },
+          "jobs_unreadable": {
+            "title": "Jobs Unreadable",
+            "type": "boolean"
+          },
+          "open_rows": {
+            "items": {
+              "$ref": "#/components/schemas/PendingRow"
+            },
+            "title": "Open Rows",
+            "type": "array"
+          },
+          "queue_computed": {
+            "title": "Queue Computed",
+            "type": "boolean"
+          },
+          "stats": {
+            "items": {
+              "$ref": "#/components/schemas/KindCounts"
+            },
+            "title": "Stats",
+            "type": "array"
+          }
+        },
+        "required": [
+          "queue_computed",
+          "open_rows",
+          "stats",
+          "attention",
+          "jobs_unreadable"
+        ],
+        "title": "PendingReport",
+        "type": "object"
+      },
+      "PendingRow": {
+        "description": "One open pending-work row and the command that resolves it.",
+        "properties": {
+          "decision_key": {
+            "title": "Decision Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "resolving_command": {
+            "title": "Resolving Command",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "decision_key",
+          "kind",
+          "targets",
+          "subject",
+          "resolving_command"
+        ],
+        "title": "PendingRow",
+        "type": "object"
+      },
+      "RelationDetail": {
+        "additionalProperties": false,
+        "description": "A relation-type decision: a suggested type for one untyped edge.",
+        "properties": {
+          "effective_source_id": {
+            "title": "Effective Source Id",
+            "type": "string"
+          },
+          "effective_target_id": {
+            "title": "Effective Target Id",
+            "type": "string"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "suggested_type": {
+            "title": "Suggested Type",
+            "type": "string"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "target_id",
+          "effective_source_id",
+          "effective_target_id",
+          "suggested_type",
+          "rationale"
+        ],
+        "title": "RelationDetail",
+        "type": "object"
+      },
+      "TierDetail": {
+        "additionalProperties": false,
+        "description": "A volatility decision: a suggested tier for one concept type.",
+        "properties": {
+          "current_default": {
+            "title": "Current Default",
+            "type": "string"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "suggested_tier": {
+            "title": "Suggested Tier",
+            "type": "string"
+          },
+          "type_name": {
+            "title": "Type Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type_name",
+          "current_default",
+          "suggested_tier",
+          "rationale"
+        ],
+        "title": "TierDetail",
+        "type": "object"
+      },
+      "WithheldAction": {
+        "additionalProperties": false,
+        "description": "An action the item's kind could offer but this item does not, and why.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "reason": {
+            "enum": [
+              "pending_evaluation",
+              "judged_different",
+              "judged_uncertain",
+              "cross_type",
+              "more_than_two_members",
+              "no_valid_suggestion"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "title": "WithheldAction",
+        "type": "object"
+      },
+      "WorkspaceStatus": {
+        "description": "What `openkos status` reads, as counts and strings.",
+        "properties": {
+          "concepts": {
+            "title": "Concepts",
+            "type": "integer"
+          },
+          "concepts_by_type": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Concepts By Type",
+            "type": "object"
+          },
+          "conformance_findings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conformance Findings",
+            "type": "array"
+          },
+          "edges": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edges"
+          },
+          "health": {
+            "$ref": "#/components/schemas/HealthCounts"
+          },
+          "jobs_unreadable": {
+            "title": "Jobs Unreadable",
+            "type": "boolean"
+          },
+          "last_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "open_decisions_by_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Open Decisions By Kind",
+            "type": "object"
+          },
+          "queue": {
+            "enum": [
+              "present",
+              "absent",
+              "unreadable"
+            ],
+            "title": "Queue",
+            "type": "string"
+          },
+          "recent_activity": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ActivityEntry"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Activity"
+          },
+          "root": {
+            "format": "path",
+            "title": "Root",
+            "type": "string"
+          },
+          "sources": {
+            "title": "Sources",
+            "type": "integer"
+          },
+          "stale_indexes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stale Indexes",
+            "type": "array"
+          },
+          "vectors_missing": {
+            "title": "Vectors Missing",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "root",
+          "sources",
+          "concepts",
+          "concepts_by_type",
+          "conformance_findings",
+          "recent_activity",
+          "health",
+          "vectors_missing",
+          "stale_indexes",
+          "edges",
+          "queue",
+          "open_decisions_by_kind",
+          "last_job",
+          "jobs_unreadable",
+          "warnings"
+        ],
+        "title": "WorkspaceStatus",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -66,6 +759,59 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/decisions": {
+      "get": {
+        "operationId": "decisions_v1_decisions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Decisions"
+      }
+    },
     "/v1/health": {
       "get": {
         "operationId": "health_v1_health_get",
@@ -117,6 +863,112 @@
           }
         ],
         "summary": "Health"
+      }
+    },
+    "/v1/pending": {
+      "get": {
+        "operationId": "pending_v1_pending_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Pending"
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "operationId": "status_v1_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Status"
       }
     }
   }
