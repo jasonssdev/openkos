@@ -100,4 +100,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0059](0059-judging-is-a-quote-bound-application-surface-that-persists-per-chunk-and-never-merges.md) | Judging is a quote-bound application surface that persists per chunk and never merges | Accepted | 2026-10-15 |
 | [0060](0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md) | The stable Python API is a versioned facade package with one error root | Accepted | 2026-10-15 |
 | [0061](0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra.md) | The local API is a FastAPI adapter over the Python API, shipped as an optional extra | Accepted | 2026-10-15 |
-| [0062](0062-query-limit-defaults-to-8-measured-against-5.md) | The query limit defaults to 8, measured against 5 | Proposed | 2026-10-16 |
+| [0062](0062-query-limit-defaults-to-8-measured-against-5.md) | The query limit defaults to 8, measured against 5 | Accepted | 2026-10-16 |

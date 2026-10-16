@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0062: The query limit defaults to 8, measured against 5"
 description: openkos query hands the model at most 8 concepts by default instead of an unexplained 5, because a pre-registered measurement showed 5 cannot hold the gold set of an enumeration question and 8 recovered it without hurting the questions that already worked.
-status: Proposed
+status: Accepted
 date: 2026-10-16
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0062: The query limit defaults to 8, measured against 5
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-16
 
 ## Context
