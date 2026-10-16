@@ -210,6 +210,12 @@ the caller MAY override, never from state the caller must remember. A token
 whose payload digest is absent, because no queue row backs the item, MUST be
 rejected as Stale on this path.
 
+A decision key that no queue row of any status ever carried MUST be reported as
+the typed Stale result `unknown_key`, in both the preview and the commit phase;
+`row_resolved` is reserved for a key whose row was settled or retired. When the
+queue exists but cannot be read, the key MUST NOT be reported as never having
+existed.
+
 #### Scenario: A current token commits
 
 - GIVEN a preview of an identity merge and no change since
@@ -235,6 +241,12 @@ rejected as Stale on this path.
 - GIVEN any write action
 - WHEN the client previews it
 - THEN no bundle file, sidecar, queue row or configuration changes
+
+#### Scenario: A key that never existed is Stale as unknown
+
+- GIVEN a decision key that no queue row ever carried
+- WHEN the client previews or commits it
+- THEN the typed Stale result `unknown_key` is returned and nothing is written
 
 ### Requirement: The Identity Merge Preview Discloses A Planned Reconciliation
 

@@ -1129,7 +1129,7 @@
           "name": "decision_key"
         },
         {
-          "annotation": "Literal['content_changed', 'row_resolved', 'row_superseded', 'row_inputs_changed']",
+          "annotation": "Literal['content_changed', 'row_resolved', 'row_superseded', 'row_inputs_changed', 'unknown_key']",
           "default": false,
           "name": "reason"
         }

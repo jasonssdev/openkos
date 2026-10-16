@@ -116,7 +116,11 @@ class Stale:
 
     decision_key: str
     reason: Literal[
-        "content_changed", "row_resolved", "row_superseded", "row_inputs_changed"
+        "content_changed",
+        "row_resolved",
+        "row_superseded",
+        "row_inputs_changed",
+        "unknown_key",
     ]
 
 
@@ -1359,6 +1363,14 @@ def _build_preview(
     return KeepDistinctDecisionPreview(members, row.item.decision_key)
 
 
+def _no_open_row(layout: config.WorkspaceLayout, decision_key: str) -> Stale:
+    """Why `decision_key` has no open row: `row_resolved` when a row carrying it
+    was settled or retired, `unknown_key` when no row ever carried it."""
+    if curate_queue.key_was_queued(layout, decision_key):
+        return Stale(decision_key, "row_resolved")
+    return Stale(decision_key, "unknown_key")
+
+
 def preview_decision(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -1369,13 +1381,14 @@ def preview_decision(
 ) -> DecisionPreview | NotApplied | Stale:
     """What `action` would do to the open decision `decision_key`, with the
     version to commit it against. Writes nothing, takes no lock, calls no
-    model. A key with no open row is `Stale("row_resolved")`; an action the item
+    model. A key whose row was settled is `Stale("row_resolved")` and a key no
+    row ever carried is `Stale("unknown_key")`; an action the item
     does not take is `NotApplied` (`not_mergeable` for a withheld merge,
     `not_offered` otherwise); skip has no plan, so it is
     `NotApplied("skipped")`."""
     row = curate_queue.open_row_by_key(layout, decision_key)
     if row is None:
-        return Stale(decision_key, "row_resolved")
+        return _no_open_row(layout, decision_key)
     item = _item_of(layout, row, None)
     if (refusal := _refusal(item, action)) is not None:
         return refusal
@@ -1410,10 +1423,11 @@ def apply_decision(
     `NotApplied("skipped")`, leaving the row `pending`. Otherwise the action is
     re-previewed from current bytes and committed on the token path of its
     kind, which returns `Stale` (and writes nothing) when the version no longer
-    holds. A decision with no open row is `Stale("row_resolved")`."""
+    holds. A decision whose row was settled is `Stale("row_resolved")` and a key
+    no row ever carried is `Stale("unknown_key")`."""
     row = curate_queue.open_row_by_key(layout, version.decision_key)
     if row is None:
-        return Stale(version.decision_key, "row_resolved")
+        return _no_open_row(layout, version.decision_key)
     if (refusal := _refusal(_item_of(layout, row, None), action)) is not None:
         return refusal
     if action is Action.SKIP:

@@ -124,6 +124,28 @@ def open_row_by_key(
     )
 
 
+def key_was_queued(layout: config.WorkspaceLayout, decision_key: str) -> bool:
+    """Whether a row of ANY status (open, resolved, declined or retired) carries
+    `decision_key`: what tells a decision that was settled from a key that
+    never existed. Read-only, like `open_row_by_key`.
+
+    An absent queue holds no key. A queue that exists but cannot be read is
+    `True`: the key cannot be shown never to have existed, and claiming it did
+    not would be the wrong guess."""
+    try:
+        if not layout.findings_db_path.is_file():
+            return False
+        conn = derived.open_derived_connection(layout.findings_db_path)
+    except sqlite3.Error, OSError:
+        return True
+    try:
+        return any(item.decision_key == decision_key for item in pq.all_items(conn))
+    except sqlite3.Error:
+        return True
+    finally:
+        conn.close()
+
+
 def row_is_fresh(
     row: OpenRow,
     current_digest: Callable[[str], str | None],

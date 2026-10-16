@@ -405,10 +405,12 @@ and to apply one decision, over the same services the `curate` decision
 surface uses. Listing and preview MUST write nothing, take no lock, build no
 model client and make no model call. Applying MUST act on one named decision per
 call, taking the version token a preview returned, and MUST NOT apply any other
-item. A decision that is no longer open, or whose inputs changed since the
-preview, MUST NOT be applied: the apply and preview operations MUST return the
+item. A decision that is no longer open, a key that no queue row ever carried, or a
+decision whose inputs changed since the preview, MUST NOT be applied: the apply and preview operations MUST return the
 shipped `Stale` or `NotApplied` outcome as a value (they do not raise it), so a
-caller cannot forget to handle it. A successful apply returns `Applied` and
+caller cannot forget to handle it. A key that no queue row ever carried MUST be
+reported with the `Stale` reason `unknown_key`, distinct from `row_resolved`,
+which means a row carrying the key was settled or retired. A successful apply returns `Applied` and
 MUST record the resolution the same way the corresponding human-facing path
 does (a row resolves as `applied`) and, as the CLI does, attempt a local git
 auto-commit of the paths it wrote; when no commit can be made (not a
@@ -482,6 +484,14 @@ API-owned per-action plans holding only identifiers, types and flags.
 - GIVEN the workspace lock held by another process and `wait_seconds` of zero
 - WHEN a decision is applied
 - THEN the workspace-busy error is raised and nothing is written
+
+#### Scenario: A key that never existed is distinguishable from a resolved decision
+
+- GIVEN a decision key that no queue row ever carried, and a decision that was
+  already applied
+- WHEN each is previewed or applied
+- THEN the first is `Stale` with reason `unknown_key` and the second is `Stale`
+  with reason `row_resolved`, and nothing is written
 
 ### Requirement: Judging Is Quoted, Then Run Against That Quote
 
