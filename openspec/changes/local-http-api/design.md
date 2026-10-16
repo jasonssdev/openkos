@@ -347,7 +347,7 @@ Messages are fixed strings from these tables; nothing echoes `str(exc)` except t
 
 | Outcome | Status | `code` | `retryable` | Message |
 |---|---|---|---|---|
-| `Stale(reason)` | 409 | `stale` | false | fixed per reason (`content_changed`, `row_resolved`, `row_superseded`, `row_inputs_changed`), ending "preview it again" |
+| `Stale(reason)` | 409 | `stale` | false | fixed per reason (`content_changed`, `row_resolved`, `row_superseded`, `row_inputs_changed`, `unknown_key`), ending "preview it again" |
 | `NotApplied("not_offered")` | 422 | `action_not_offered` | false | "this decision does not offer that action" |
 | `NotApplied("skipped")` | 422 | `skip_not_applicable` | false | "skip writes nothing; the client moves on without a request" |
 | `NotApplied("not_mergeable")` | 409 | `not_mergeable` | false | fixed |

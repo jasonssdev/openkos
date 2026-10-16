@@ -201,10 +201,28 @@ def test_a_preview_carries_no_prepared_merge_anywhere(root: Path) -> None:
     ]
 
 
-def test_a_resolved_decision_previews_as_a_returned_stale(root: Path) -> None:
+def test_a_key_that_never_existed_previews_as_a_returned_unknown_stale(
+    root: Path,
+) -> None:
     result = preview_decision(Workspace.open(root), "identity:gone", Action.MERGE)
 
-    assert result == Stale("identity:gone", "row_resolved")
+    assert result == Stale("identity:gone", "unknown_key")
+
+
+def test_a_key_that_never_existed_applies_as_a_returned_unknown_stale(
+    root: Path,
+) -> None:
+    _enqueue_merge(root)
+    version = _preview(root, IDENTITY_KEY, Action.MERGE).version
+    fabricated = DecisionVersion(
+        "identity:gone", version.payload_digest, version.content_digest
+    )
+    before = support.snapshot(root)
+
+    outcome = apply_decision(Workspace.open(root), fabricated, Action.MERGE)
+
+    assert outcome == Stale("identity:gone", "unknown_key")
+    assert support.snapshot(root) == before
 
 
 def test_an_action_the_decision_does_not_offer_is_returned_not_raised(

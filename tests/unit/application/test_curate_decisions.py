@@ -3219,7 +3219,7 @@ def test_preview_decision_refuses_what_the_item_does_not_offer(tmp_path: Path) -
     assert wrong_kind == NotApplied(Action.SET_TIER, "not_offered")
 
 
-def test_previewing_a_decision_with_no_open_row_is_stale_as_resolved(
+def test_previewing_a_key_that_never_existed_is_stale_as_unknown(
     tmp_path: Path,
 ) -> None:
     root, layout = _merge_workspace(tmp_path)
@@ -3227,7 +3227,64 @@ def test_previewing_a_decision_with_no_open_row_is_stale_as_resolved(
 
     result = curate_decisions.preview_decision(root, layout, key, Action.MERGE)
 
-    assert result == Stale(key, "row_resolved")
+    assert result == Stale(key, "unknown_key")
+
+
+def _decline_every_row(layout: config.WorkspaceLayout) -> None:
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        conn.execute(
+            "UPDATE pending_items SET status = 'declined', resolution = 'declined'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_previewing_a_resolved_row_is_stale_as_resolved_not_unknown(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+    _decline_every_row(layout)
+
+    result = curate_decisions.preview_decision(
+        root, layout, proposal.decision_key, Action.MERGE
+    )
+
+    assert result == Stale(proposal.decision_key, "row_resolved")
+
+
+def test_applying_a_key_that_never_existed_is_stale_as_unknown_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+    version = _must_decision_preview(
+        root, layout, proposal.decision_key, Action.MERGE
+    ).version
+    fabricated = DecisionVersion(
+        "identity:never-existed", version.payload_digest, version.content_digest
+    )
+    before = _snapshot(root)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, fabricated, Action.MERGE, recorder)
+
+    assert outcome == Stale("identity:never-existed", "unknown_key")
+    assert recorder.commits == []
+    assert _snapshot(root) == before
+
+
+def test_a_queue_that_cannot_be_read_does_not_claim_the_key_never_existed(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path)
+    layout.findings_db_path.write_bytes(b"not a sqlite database" * 64)
+
+    result = curate_decisions.preview_decision(
+        root, layout, proposal.decision_key, Action.MERGE
+    )
+
+    assert result == Stale(proposal.decision_key, "row_resolved")
 
 
 def test_the_policy_defaults_and_none_of_its_fields_enters_the_token(
