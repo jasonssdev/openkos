@@ -42,7 +42,12 @@ from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import pending as application_pending
 from openkos.application.lock_wait import CommitSection
-from openkos.application.write_gate import DriftDetected, Refused, WriteFailed
+from openkos.application.write_gate import (
+    DriftDetected,
+    MergeGroupInterrupted,
+    Refused,
+    WriteFailed,
+)
 from openkos.graph.base import Edge
 from openkos.model import okf
 from openkos.model import types as model_types
@@ -978,6 +983,51 @@ def _write_group_step(
     )
 
 
+_RULING_UNRECORDED = (
+    "a keep-distinct ruling could not be recorded; the merges were kept"
+)
+
+
+def _group_ruling_sets(
+    preview: MergeGroupDecisionPreview,
+) -> tuple[tuple[str, ...], ...]:
+    """The member sets a group decision declares distinct: the survivor with
+    each unmarked member, and, when two or more are unmarked, the survivor with
+    all of them. Never two unmarked members on their own: the person said
+    nothing about whether those are one thing. Rulings match an exact member
+    set, so the pairs stop the pairs coming back and the remainder set stops
+    the group most likely to be detected again once the absorbed members are
+    gone."""
+    unmarked = preview.kept_distinct_ids
+    sets = [tuple(sorted((preview.survivor_id, member))) for member in unmarked]
+    if len(unmarked) >= 2:
+        sets.append(tuple(sorted((preview.survivor_id, *unmarked))))
+    return tuple(sets)
+
+
+def _record_group_rulings(
+    layout: config.WorkspaceLayout,
+    preview: MergeGroupDecisionPreview,
+    ports: DecisionPorts,
+    paths: list[str],
+) -> tuple[tuple[str, ...], ...]:
+    """Record every ruling of `_group_ruling_sets` through the keep-distinct
+    writer, appending each sidecar path to `paths`. Fail-open: the merges
+    already landed, so a ruling that cannot be written is reported through the
+    warning sink (fixed text, once) and left out of the result."""
+    recorded: list[tuple[str, ...]] = []
+    for members in _group_ruling_sets(preview):
+        try:
+            rel_path = ports.record_identity_ruling(layout, members, ports.on_warning)
+        except OSError, ValueError:
+            ports.on_warning(_RULING_UNRECORDED)
+            continue
+        if rel_path not in paths:
+            paths.append(rel_path)
+        recorded.append(members)
+    return tuple(recorded)
+
+
 def commit_merge_group_decision(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -1071,8 +1121,21 @@ def commit_merge_group_decision(
                     layout, prepared, group_row=group_row if index == 0 else None
                 )
             except (OSError, ValueError) as exc:
-                raise WriteFailed(
-                    "merge", (preview.survivor_id, absorbed_id), str(exc)
+                if index == 0:
+                    raise WriteFailed(
+                        "merge", (preview.survivor_id, absorbed_id), str(exc)
+                    ) from exc
+                # Keep what landed: those merges are real, so commit them and
+                # say which step stopped. No ruling is recorded.
+                sha = ports.autocommit(
+                    root,
+                    paths,
+                    merge_service.merge_group_commit_message(
+                        preview.survivor_id, absorbed_ids[:index]
+                    ),
+                )
+                raise MergeGroupInterrupted(
+                    tuple(written), sha, absorbed_id, str(exc)
                 ) from exc
             paths.extend(
                 path
@@ -1080,16 +1143,20 @@ def commit_merge_group_decision(
                 if path not in paths
             )
             written.append((preview.survivor_id, absorbed_id))
+        kept = _record_group_rulings(layout, preview, ports, paths)
         commit_sha = ports.autocommit(
             root,
             paths,
-            merge_service.merge_group_commit_message(preview.survivor_id, absorbed_ids),
+            merge_service.merge_group_commit_message(
+                preview.survivor_id, absorbed_ids, kept
+            ),
         )
     return Applied(
         preview.decision_key,
         Action.MERGE_GROUP,
         commit_sha,
         merged=tuple(written),
+        kept_distinct=kept,
     )
 
 
