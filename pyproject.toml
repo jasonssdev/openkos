@@ -60,6 +60,10 @@ dependencies = [
 # (`unattended.watch_backend: native`, ADR-0040). Polling is the default and the
 # fallback, so the core never needs it.
 watch = ["watchdog>=4.0.0"]
+# The local HTTP API (`openkos serve`, ADR-0061) for the desktop app. Imported
+# only inside `openkos.localapi`; the core never needs it. Each package listed is
+# imported directly (pydantic by the request and response models).
+api = ["fastapi>=0.143.2", "pydantic>=2.14.1", "uvicorn>=0.54.0"]
 
 [project.urls]
 Homepage = "https://github.com/jasonssdev/openkos"
@@ -80,15 +84,22 @@ build-backend = "uv_build"
 # PATH probe finds it, so it fails on a machine without the binary.
 # `watchdog` is the optional `watch` extra's dependency, installed here so CI
 # type-checks the native backend and runs its one real-event smoke test.
+# `fastapi`, `pydantic` and `uvicorn` are the `api` extra's dependencies and
+# `httpx` backs FastAPI's `TestClient`, installed here so CI exercises the
+# local HTTP API.
 dev = [
+    "fastapi>=0.143.2",
     "git-filter-repo>=2.47.0",
+    "httpx>=0.28.1",
     "mypy>=2.3.0",
     "pre-commit>=4.6.0",
+    "pydantic>=2.14.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.21",
     "types-networkx>=3.6.1.20260624",
     "types-pyyaml>=6.0.12.20260518",
+    "uvicorn>=0.54.0",
     "watchdog>=4.0.0",
 ]
 
