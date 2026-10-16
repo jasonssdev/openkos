@@ -113,8 +113,9 @@ def test_daemon_is_the_self_locking_command_and_is_not_wrapped_in_the_lock() -> 
     phase through the runner instead."""
     commands = _registered_commands()
 
-    assert frozenset({"daemon"}) == _SELF_LOCKING_COMMANDS
+    assert frozenset({"daemon", "serve"}) == _SELF_LOCKING_COMMANDS
     assert getattr(commands["daemon"], "__openkos_locked_command__", None) is None
+    assert getattr(commands["serve"], "__openkos_locked_command__", None) is None
 
 
 def test_the_declared_lock_name_matches_the_registered_name() -> None:

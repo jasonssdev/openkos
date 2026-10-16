@@ -384,9 +384,10 @@ can drift without a red test.
 """
 
 
-_SELF_LOCKING_COMMANDS: frozenset[str] = frozenset({"daemon"})
+_SELF_LOCKING_COMMANDS: frozenset[str] = frozenset({"daemon", "serve"})
 """Long-running commands that take the lock per unit of work (a commit phase
-each), never for their own lifetime, so the guard must not wrap them (`daemon`);
+each), never for their own lifetime, so the guard must not wrap them (`daemon`,
+`serve`);
 a name here must be registered, and no command is in two classes
 (`test_every_command_is_classified`)."""
 
@@ -15928,6 +15929,50 @@ def mcp_cmd(
     raise typer.Exit(
         code=mcp_server.serve(root, expose_confidential=expose_confidential)
     )
+
+
+@app.command(
+    "serve",
+    help="Serve this workspace over a local HTTP API (token on stdin).",
+    rich_help_panel="Explore",
+)
+def serve_cmd(
+    workspace: Path = typer.Option(
+        Path(),
+        "--workspace",
+        help="Workspace directory to serve (default: the current directory).",
+    ),
+) -> None:
+    """Serve one workspace over a loopback-only HTTP API.
+
+    The bearer token is read from the first line of stdin, never from argv, the
+    environment or a file; the single JSON ready line on stdout names the port.
+    EOF on stdin or SIGTERM ends the server. Exit 0 on a graceful stop, 1 on a
+    runtime failure, 2 on a usage failure (no token, or the `[api]` extra is
+    missing). Like `daemon`, `serve` takes the workspace lock per unit of work
+    inside the API, never for its lifetime (`_SELF_LOCKING_COMMANDS`).
+
+    `openkos.localapi` is imported LAZILY, inside this body, so the optional
+    extra never loads on any other verb's start-up path
+    (`tests/unit/cli/test_serve_cmd.py` pins it in a fresh interpreter).
+    """
+    try:
+        from openkos.localapi import launch  # lazy: the optional [api] extra
+    except ModuleNotFoundError as exc:
+        if exc.name is None or exc.name.split(".")[0] not in {
+            "fastapi",
+            "uvicorn",
+            "pydantic",
+        }:
+            raise
+        typer.echo(
+            "openkos serve: the local API needs the optional [api] extra. "
+            "Install it with: pip install 'openkos[api]'",
+            err=True,
+        )
+        raise typer.Exit(code=2) from exc
+
+    raise typer.Exit(code=launch.serve(Path(workspace).absolute()))
 
 
 PANEL_ORDER: Final[tuple[str, ...]] = (
