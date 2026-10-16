@@ -30,6 +30,7 @@ leaves steps 1..N-1 completed and a consistent, git-recoverable bundle.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -48,6 +49,7 @@ from openkos.application.write_gate import (
     ConfirmCallback,
     DriftDetected,
     Refused,
+    UnmergeInterrupted,
     WriteRefused,
     require_confirmation,
 )
@@ -837,3 +839,89 @@ def preview_unwind(
 def _no_commit(root: Path, paths: Sequence[str], message: str) -> str | None:
     """The auto-commit port of a plan that never writes."""
     return None
+
+
+@dataclass(frozen=True)
+class UnwindStale:
+    """The bundle or the ledger changed since the preview; nothing was written."""
+
+    reason: Literal["content_changed"] = "content_changed"
+
+
+@dataclass(frozen=True)
+class UnwindApplied:
+    """What a stateless unwind restored, in the order it ran, and each step's
+    commit (`None` for one that degraded)."""
+
+    survivor_id: str
+    restored_ids: tuple[str, ...]
+    commit_shas: tuple[str | None, ...]
+
+
+def unwind_to_version(
+    root: Path,
+    survivor_id: str,
+    absorbed_id: str,
+    *,
+    content_digest: str,
+    discard_survivor_edits: bool,
+    ports: UnmergePorts,
+) -> UnwindApplied | UnwindRefusal | UnwindStale:
+    """Perform the unwind a `preview_unwind` digested as `content_digest`.
+
+    Inside ONE entry of `ports.commit_section` (design D3): the unwind is
+    planned again from current bytes, a refusal is returned as is and a moved
+    digest is `UnwindStale`, neither writing anything; then `unwind_merges`
+    runs every step with the confirmation satisfied by the version (the caller
+    previewed exactly this plan), each step committed on its own and none
+    taking the section again. A first step that fails raises its own refusal,
+    with nothing written; a later one raises `UnmergeInterrupted`, keeping the
+    completed steps."""
+    with ports.commit_section():
+        preview = preview_unwind(
+            root,
+            survivor_id,
+            absorbed_id,
+            discard_survivor_edits=discard_survivor_edits,
+            clock=ports.clock,
+        )
+        if isinstance(preview, UnwindRefusal):
+            return preview
+        if preview.content_digest != content_digest:
+            return UnwindStale()
+        shas: list[str | None] = []
+
+        def autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
+            sha = ports.autocommit(root, paths, message)
+            shas.append(sha)
+            return sha
+
+        try:
+            unwind_merges(
+                root,
+                preview.survivor_id,
+                preview.absorbed_id,
+                UnmergePolicy(auto=True, discard_survivor_edits=discard_survivor_edits),
+                ports=dataclasses.replace(
+                    ports,
+                    autocommit=autocommit,
+                    commit_section=commit_phase.unlocked_section,
+                ),
+            )
+        except UnwindStopped as exc:
+            if exc.step_number == 1:
+                raise exc.cause from exc
+            raise UnmergeInterrupted(
+                preview.survivor_id,
+                tuple(
+                    step.absorbed_id for step in preview.steps[: exc.step_number - 1]
+                ),
+                tuple(shas),
+                exc.absorbed_id,
+                exc.cause.message,
+            ) from exc
+    return UnwindApplied(
+        survivor_id=preview.survivor_id,
+        restored_ids=tuple(step.absorbed_id for step in preview.steps),
+        commit_shas=tuple(shas),
+    )

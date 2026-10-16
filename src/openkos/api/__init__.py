@@ -12,12 +12,13 @@ relying on it:
    discloses to anyone else must apply the local API's gate itself (ADR-0058).
 3. Judging is the only operation that sends content anywhere, and only to the
    backend the workspace configures. The only other process the surface runs is
-   the local git auto-commit of a decision it applies, which never pushes.
+   the local git auto-commit of a decision or an unmerge it applies, which never
+   pushes.
 4. Cancellation is cooperative: a stop is observed between chunks, so it waits
    for the chunk in flight. A model call is never preempted.
-5. Applying a decision does not reconcile merged concept bodies with a model
-   and does not refresh the derived stores; `status` reports stale indexes and a
-   maintenance pass or a reindex refreshes them.
+5. Applying a decision or an unmerge does not reconcile merged concept bodies
+   with a model and does not refresh the derived stores; `status` reports stale
+   indexes and a maintenance pass or a reindex refreshes them.
 6. `API_VERSION`, not the package version, is the compatibility promise. Within
    one value changes are additive; a breaking change raises it. A committed
    snapshot of every public name pins this in CI.
@@ -68,9 +69,12 @@ from openkos.api._refresh import KindRefresh, QueueRefresh, refresh_decision_que
 from openkos.api._unmerge import (
     MergeRecord,
     NotUnmergeable,
+    Unmerged,
     UnmergePreview,
+    UnmergeStale,
     UnmergeStep,
     UnmergeVersion,
+    apply_unmerge,
     merge_history,
     preview_unmerge,
 )
@@ -106,6 +110,7 @@ from openkos.application.write_gate import (
     DriftDetected,
     MergeGroupInterrupted,
     Refused,
+    UnmergeInterrupted,
     WriteFailed,
     WriteRefused,
 )
@@ -184,9 +189,12 @@ __all__ = [
     "StopToken",
     "TierDetail",
     "TierPlan",
+    "UnmergeInterrupted",
     "UnmergePreview",
+    "UnmergeStale",
     "UnmergeStep",
     "UnmergeVersion",
+    "Unmerged",
     "WithheldAction",
     "WorkItem",
     "Workspace",
@@ -198,6 +206,7 @@ __all__ = [
     "WriteFailed",
     "WriteRefused",
     "apply_decision",
+    "apply_unmerge",
     "list_decisions",
     "merge_history",
     "pending_report",

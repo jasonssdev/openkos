@@ -26,7 +26,13 @@ from typing import cast
 
 from openkos import config
 from openkos.api._workspace import Workspace
-from openkos.application import backends, curate_decisions, judging, lock_wait
+from openkos.application import (
+    backends,
+    curate_decisions,
+    judging,
+    lock_wait,
+    unmerge_service,
+)
 from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import OllamaClient
 from openkos.llm.openai_compatible import OpenAICompatibleClient
@@ -39,7 +45,7 @@ from openkos.vcs.autocommit import (
     plan_config_edit,
 )
 
-_NOT_COMMITTED = "the decision was applied but not committed: "
+_NOT_COMMITTED = "{what} was applied but not committed: "
 
 
 def validated_wait(wait_seconds: float) -> float:
@@ -55,15 +61,16 @@ def validated_wait(wait_seconds: float) -> float:
     return wait_seconds
 
 
-def skipped_warning(outcome: CommitOutcome) -> str | None:
-    """The API's words for a commit that was not made, or `None` when the
-    commit landed or had nothing to hold."""
+def skipped_warning(outcome: CommitOutcome, what: str = "the decision") -> str | None:
+    """The API's words for a commit of `what` that was not made, or `None` when
+    the commit landed or had nothing to hold."""
+    prefix = _NOT_COMMITTED.format(what=what)
     if outcome.skipped == "not_a_repository":
-        return _NOT_COMMITTED + "the workspace is not inside a git repository"
+        return prefix + "the workspace is not inside a git repository"
     if outcome.skipped == "identity_unset":
-        return _NOT_COMMITTED + "git user.name and user.email are not set"
+        return prefix + "git user.name and user.email are not set"
     if outcome.skipped == "failed":
-        return _NOT_COMMITTED + f"the git commit did not complete ({outcome.detail})"
+        return prefix + f"the git commit did not complete ({outcome.detail})"
     return None
 
 
@@ -138,6 +145,36 @@ def decision_ports(
         on_warning=warn,
         plan_config_commit=plan_config_commit,
         autocommit_config_edit=autocommit_config_edit,
+    )
+
+
+def unmerge_ports(
+    workspace: Workspace,
+    *,
+    wait_seconds: float,
+    on_warning: Callable[[str], None] | None,
+    notes: CommitNotes,
+) -> unmerge_service.UnmergePorts:
+    """The effects `apply_unmerge` needs, bound to `workspace`: each step's
+    commit, reported as a decision's is, and the lock, taken once around the
+    whole unwind, waiting at most `wait_seconds`. No derived refresh and no
+    keep-distinct ruling are wired."""
+    warn = on_warning if on_warning is not None else _ignore
+
+    def autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
+        outcome = commit_paths(root, paths, message)
+        if outcome.includes_confidential:
+            notes.confidential = True
+        warning = skipped_warning(outcome, "the unmerge")
+        if warning is not None:
+            warn(warning)
+        return outcome.sha
+
+    return unmerge_service.UnmergePorts(
+        autocommit=autocommit,
+        commit_section=lock_wait.locked_commit_section(
+            workspace.root, wait_seconds=wait_seconds
+        ),
     )
 
 

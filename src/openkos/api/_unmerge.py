@@ -6,9 +6,11 @@ by the survivor and the absorbed id, and the version it returns carries both
 with a digest of every byte the plan rests on.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from openkos.api import _wiring
 from openkos.api._workspace import Workspace
 from openkos.application import unmerge_service
 
@@ -88,6 +90,30 @@ class NotUnmergeable:
     absorbed_into: str | None = None
 
 
+@dataclass(frozen=True)
+class UnmergeStale:
+    """The bundle or the merge ledger changed since the preview, or the echoed
+    version was altered; nothing was written. Preview again."""
+
+    survivor_id: str
+    absorbed_id: str
+    reason: Literal["content_changed"] = "content_changed"
+
+
+@dataclass(frozen=True)
+class Unmerged:
+    """The unmerge took effect: `restored_ids` are back beside the survivor, in
+    the order they were restored, each step committed on its own.
+    `commit_shas[i]` is `None` when that step's commit could not be made (the
+    restore itself still landed). `committed_confidential` is true when a
+    commit holds a concept explicitly marked confidential."""
+
+    survivor_id: str
+    restored_ids: tuple[str, ...]
+    commit_shas: tuple[str | None, ...]
+    committed_confidential: bool = False
+
+
 def merge_history(workspace: Workspace, concept_id: str) -> tuple[MergeRecord, ...]:
     """What was merged into `concept_id`, newest first.
 
@@ -155,4 +181,57 @@ def preview_unmerge(
             content_digest=result.content_digest,
             discard_survivor_edits=result.discard_survivor_edits,
         ),
+    )
+
+
+def apply_unmerge(
+    workspace: Workspace,
+    version: UnmergeVersion,
+    *,
+    wait_seconds: float = 0.0,
+    on_warning: Callable[[str], None] | None = None,
+) -> Unmerged | NotUnmergeable | UnmergeStale:
+    """Perform the unmerge `version` was previewed for, every step of it.
+
+    The workspace lock is taken once, waiting at most `wait_seconds` (0 to
+    3600; beyond it `WorkspaceBusyError` is raised and nothing is written), and
+    held while the plan is made again from current bytes and every step runs.
+    A changed bundle, ledger or version is the returned `UnmergeStale`, and a
+    cause `preview_unmerge` would report the returned `NotUnmergeable`; neither
+    writes anything. Each step restores both documents to their bytes before
+    that merge and is committed on its own, only the paths it wrote; a commit
+    that cannot be made is reported once through `on_warning`.
+
+    A first step that fails raises its own refusal (`Refused` or
+    `DriftDetected`), with nothing written. A later one raises
+    `UnmergeInterrupted` (a `WriteFailed`): the completed steps are kept and
+    committed. The derived indexes are not refreshed."""
+    wait = _wiring.validated_wait(wait_seconds)
+    notes = _wiring.CommitNotes()
+    result = unmerge_service.unwind_to_version(
+        workspace.root,
+        version.survivor_id,
+        version.absorbed_id,
+        content_digest=version.content_digest,
+        discard_survivor_edits=version.discard_survivor_edits,
+        ports=_wiring.unmerge_ports(
+            workspace, wait_seconds=wait, on_warning=on_warning, notes=notes
+        ),
+    )
+    if isinstance(result, unmerge_service.UnwindRefusal):
+        return NotUnmergeable(
+            survivor_id=version.survivor_id,
+            absorbed_id=version.absorbed_id,
+            reason=result.reason,
+            absorbed_into=result.absorbed_into,
+        )
+    if isinstance(result, unmerge_service.UnwindStale):
+        return UnmergeStale(
+            survivor_id=version.survivor_id, absorbed_id=version.absorbed_id
+        )
+    return Unmerged(
+        survivor_id=result.survivor_id,
+        restored_ids=result.restored_ids,
+        commit_shas=result.commit_shas,
+        committed_confidential=notes.confidential,
     )
