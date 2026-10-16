@@ -498,7 +498,7 @@ outcome and error matrices are the point; no split keeps each endpoint with its 
 Goal: the judging job machinery with unit tests that need no HTTP. Satisfies: L2
 (bounded stop), L13. Depends on: S2b.
 
-- [ ] S4a.1 RED: `tests/unit/localapi/test_runs_registry.py` with a stubbed
+- [x] S4a.1 RED: `tests/unit/localapi/test_runs_registry.py` with a stubbed
   `api.run_judging` gated on `threading.Event`s (bounded waits only, no sleeps):
   `start` registers one active run and returns `RunStatus` once the stub calls
   `stop.is_set()` (admission); the stub returning `QuoteStale` before admission makes
@@ -512,7 +512,7 @@ Goal: the judging job machinery with unit tests that need no HTTP. Satisfies: L2
   admission timeout (`ADMISSION_TIMEOUT_SECONDS` patched small) returns `running`
   and a later `QuoteStale` lands in `error` with state `failed`. Observe RED (module
   missing). Satisfies: L13.
-- [ ] S4a.2 RED: poll and stop: `status` shows `index`, `total` from the latest
+- [x] S4a.2 RED: poll and stop: `status` shows `index`, `total` from the latest
   `JudgingProgress` (null before the first event) and `persisted` from the latest
   cumulative `chunk_persisted`; `stop` sets the token, returns `state: "stopping"`,
   and after the stub observes it the run ends `finished` with a `stopped` outcome;
@@ -520,11 +520,11 @@ Goal: the judging job machinery with unit tests that need no HTTP. Satisfies: L2
   `ApiProblem` 404 `not_found`; eviction keeps the newest 16 finished or failed runs
   (older ones 404); a poll never reflects the run's own result in a status. Satisfies:
   L13.
-- [ ] S4a.3 RED: `shutdown(grace)` returns within the grace while a stub stays
+- [x] S4a.3 RED: `shutdown(grace)` returns within the grace while a stub stays
   blocked (the stub never returns), sets every stop token, and leaves a daemon
   thread; `shutdown` with no active run returns at once; chunks the stub reported as
   persisted are unaffected. Satisfies: L2, L13.
-- [ ] S4a.4 GREEN: create `src/openkos/localapi/_runs.py`: `ADMISSION_TIMEOUT_SECONDS`,
+- [x] S4a.4 GREEN: create `src/openkos/localapi/_runs.py`: `ADMISSION_TIMEOUT_SECONDS`,
   `SHUTDOWN_GRACE_SECONDS`, `FINISHED_RUNS_KEPT`, `_AdmissionStop` (a `StopToken`
   subclass whose first `is_set()` sets an admission event), the run observer,
   `RunRegistry` with one `threading.Lock`, `start`/`status`/`stop`/`shutdown`, and a
@@ -533,12 +533,12 @@ Goal: the judging job machinery with unit tests that need no HTTP. Satisfies: L2
   needs `JudgingOutcomeBody` and `RunStatus`; add both to `_models.py` here with
   `failure: ErrorBody | None` (the DTO shape in Interfaces / Contracts) and the
   exception-to-`ErrorBody` mapping reused from `_errors.error_body`. Satisfies: L13.
-- [ ] S4a.5 Run the guard tests: `test_localapi_guards.py` still passes (stdlib
+- [x] S4a.5 Run the guard tests: `test_localapi_guards.py` still passes (stdlib
   `threading` only) and the owner-local boundary scan does not flag `_runs.py`.
   Mutation: set the admission event on `start` instead of on the first `is_set()`
   and observe the stale-quote test fail; drop the single-active check and observe
   `run_active` fail; revert, purge, GREEN. Satisfies: L13, L15.
-- [ ] S4a.6 Run the five gates; commit `feat(api):`. Satisfies: L2, L13.
+- [x] S4a.6 Run the five gates; commit `feat(api):`. Satisfies: L2, L13.
 
 Branch/PR: `feat/local-api-run-registry`. Independent mutation: have `shutdown` join
 without a timeout; the blocked-stub test must hang-fail within its bounded wait.
