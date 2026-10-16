@@ -98,10 +98,10 @@ Delivery strategy: stacked-to-main.
 
 ## S4 Archive
 
-- [ ] S4.1 CHANGELOG, roadmap status line.
-- [ ] S4.2 Merge the delta specs into `openspec/specs/` (new `desktop-client`;
+- [x] S4.1 CHANGELOG, roadmap status line.
+- [x] S4.2 Merge the delta specs into `openspec/specs/` (new `desktop-client`;
   modified `desktop-shell` and `desktop-packaging`); name-match every heading;
   check each requirement against the shipped code.
-- [ ] S4.3 ADR-0065 Accepted in all three places.
-- [ ] S4.4 Move the change to `openspec/changes/archive/<date>-ts-client/` with
+- [x] S4.3 ADR-0065 Accepted in all three places.
+- [x] S4.4 Move the change to `openspec/changes/archive/<date>-ts-client/` with
   `archive-report.md`.

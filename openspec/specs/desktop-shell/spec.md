@@ -36,7 +36,6 @@ serve --workspace <workspace>`. The engine MUST run with the workspace as its
 working directory. When the workspace is not a directory, the shell MUST NOT
 spawn anything and MUST report the failure as final.
 
-
 #### Scenario: The development engine is the default
 
 - GIVEN neither `OPENKOS_ENGINE` nor `OPENKOS_WORKSPACE` is set
@@ -181,11 +180,15 @@ The shell MUST expose the engine's state to the web view through one command,
 `ready` (with `attempt`, `base_url`, `token` and `pid`), `restarting` (with
 `attempt`, `delay_ms`, `reason` and `detail`), `failed` (with `reason` and
 `detail`) or `stopped`. The page MUST show the engine's state in English and,
-once per ready engine, MUST read `GET <base_url>/status` with
-`Authorization: Bearer <token>` and show the workspace's folder, source count,
-concept count and number of open decisions. The page MUST write engine and
-workspace values as text, never as markup. The web view's content security policy
-MUST restrict connections to the shell's IPC and `http://127.0.0.1` ports.
+once per ready engine, MUST read the workspace status through the desktop
+client created from that ready state (`GET <base_url>/status` with
+`Authorization: Bearer <token>`) and show the workspace's folder, source count,
+concept count and number of open decisions. When the read fails the page MUST
+say so in English without showing the token. The page MUST write engine and
+workspace values as text, never as markup. The page MUST be built from
+`desktop/ui/` into `desktop/dist/`, the shell's `frontendDist`. The web view's
+content security policy MUST restrict connections to the shell's IPC and
+`http://127.0.0.1` ports.
 
 #### Scenario: The status page reads the workspace through the engine
 
@@ -194,3 +197,10 @@ MUST restrict connections to the shell's IPC and `http://127.0.0.1` ports.
 - THEN the CORS preflight for `GET /v1/status` is answered 204
 - AND `GET /v1/status` is answered 200 with the workspace's counts
 - AND the same request without the token is answered 401
+
+#### Scenario: The page words a failed read without the token
+
+- GIVEN a ready engine whose status read fails with an error envelope, a body that is not the envelope, or no connection
+- WHEN the page shows the failure
+- THEN it shows an English sentence saying the status could not be read
+- AND the sentence does not contain the token
