@@ -151,7 +151,7 @@ OpenKOS ships in arcs, each usable on its own. Full detail in [`docs/roadmap.md`
 - **MVP 4 — The Unattended Engine. (Complete.)** A foreground daemon runs scheduled maintenance and watches an inbox folder inside a call budget you set; it does the non-consequential work and queues the consequential decisions as pending work for you to review, instead of asking you to remember them. The workspace lock is held only for short commit phases, so a person and the daemon can share one workspace.
 - **The Quiet Engine (a named arc before MVP 5). (Complete.)** Fewer decisions per ingested source: concepts that already exist are attached to rather than forked, indexes stay fresh after unattended writes, and review becomes an after-the-fact digest with undo.
 - **MVP 5 — Interoperability. (Complete.)** Full OKF export, then import, so knowledge moves in and out of the wider ecosystem without losing its structure.
-- **MVP 6 — The Desktop App.** One installer and an icon, so a non-technical user can drop files in, ask, and settle the pending queue without a terminal; it brings a local API and a stable Python API with the app as its first client.
+- **MVP 6 — The Desktop App.** One installer and an icon, so a non-technical user can drop files in, ask, and settle the pending queue without a terminal; it is built on the stable Python API and the local API over it, which have shipped, with the app as their first client.
 
 Beyond that: extension points for third-party producers and consumers, memory projections, graph visualization, and federation — explored only after the MVPs prove out with real users.
 

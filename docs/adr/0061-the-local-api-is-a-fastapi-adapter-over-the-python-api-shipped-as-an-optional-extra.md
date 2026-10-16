@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0061: The local API is a FastAPI adapter over the Python API, shipped as an optional extra"
 description: The local HTTP API is a thin FastAPI-on-uvicorn adapter over openkos.api only, with Pydantic confined to openkos.localapi, shipped as the optional openkos[api] extra, guarded by one ASGI layer, and launched with a stdin token and a one-line ready line.
-status: Proposed
+status: Accepted
 date: 2026-10-15
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0061: The local API is a FastAPI adapter over the Python API, shipped as an optional extra
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
 
 ## Context

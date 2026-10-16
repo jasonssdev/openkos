@@ -767,32 +767,32 @@ reading `docs/architecture.md` against `ls src/openkos/localapi`.
 Goal: close the change. Docs only; no source or snapshot edit. Satisfies: L1..L16,
 P1. Depends on: S6.
 
-- [ ] S7.1 Merge delta specs: create `openspec/specs/local-http-api/spec.md` from
+- [x] S7.1 Merge delta specs: create `openspec/specs/local-http-api/spec.md` from
   `specs/local-http-api/spec.md`; MODIFY the one requirement in
   `openspec/specs/stable-python-api/spec.md` ("An Import Guard Bars Interactive And
   Disclosing Layers From The API") and its scenarios; name-match every heading of the
   16 requirements and the scenarios against the main specs after the merge (four had
   drifted in a previous change). Satisfies: all.
-- [ ] S7.2 ADR-0061 status Proposed -> Accepted in all three places: the ADR file,
+- [x] S7.2 ADR-0061 status Proposed -> Accepted in all three places: the ADR file,
   the `docs/adr/README.md` row, and any status-keeping test input. Do not edit any
   other accepted ADR; ADR-0058 stays Proposed. Satisfies: D13.
-- [ ] S7.3 Check each requirement against shipped code, not the task list (a passing
+- [x] S7.3 Check each requirement against shipped code, not the task list (a passing
   spec is not a met goal): read the spec Purposes, the proposal's Intent and Success
   Criteria; list any requirement the code does not meet. In particular confirm the
   measured behaviors the spec states (404 on docs paths, the `Retry-After` header,
   `run_active` retryable, exit codes 0/1/2) against the tests that pin them.
   Satisfies: all.
-- [ ] S7.4 Record open follow-ups in the archive report: the dev-server origin
+- [x] S7.4 Record open follow-ups in the archive report: the dev-server origin
   (`--allow-origin`), the unmeasured constants (`Retry-After: 2`,
   `ADMISSION_TIMEOUT_SECONDS`, `SHUTDOWN_GRACE_SECONDS`), the uncapped request body
   size, the TypeScript measurement result, and the deferred disclosure gate for
   ask/query.
-- [ ] S7.5 Archive: move (not copy) `openspec/changes/local-http-api/` to
+- [x] S7.5 Archive: move (not copy) `openspec/changes/local-http-api/` to
   `openspec/changes/archive/<date>-local-http-api/`, including `exploration.md` if
   present, and write `archive-report.md`. Diff against the sibling
   `openspec/changes/archive/2026-10-15-stable-python-api/` and check the disk: the
   archive agent has overclaimed completion before.
-- [ ] S7.6 Run the five gates plus the ADR-status test; commit
+- [x] S7.6 Run the five gates plus the ADR-status test; commit
   `docs(sdd): archive ...`. Satisfies: all.
 
 Branch/PR: `docs/local-api-archive`. Independent mutation: set the ADR README row to
