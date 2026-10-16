@@ -58,6 +58,16 @@
           "annotation": "bool",
           "default": true,
           "name": "committed_confidential"
+        },
+        {
+          "annotation": "tuple[tuple[str, str], ...]",
+          "default": true,
+          "name": "merged"
+        },
+        {
+          "annotation": "tuple[tuple[str, ...], ...]",
+          "default": true,
+          "name": "kept_distinct"
         }
       ],
       "frozen": true,

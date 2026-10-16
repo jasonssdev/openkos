@@ -67,6 +67,35 @@
               }
             ],
             "title": "Decision Key"
+          },
+          "kept_distinct": {
+            "default": [],
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Kept Distinct",
+            "type": "array"
+          },
+          "merged": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Merged",
+            "type": "array"
           }
         },
         "required": [

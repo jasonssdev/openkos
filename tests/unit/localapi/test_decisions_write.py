@@ -235,6 +235,8 @@ def test_the_echoed_version_reaches_apply_unchanged_with_the_default_wait(
             "action": "merge",
             "commit_sha": "abc1234",
             "committed_confidential": False,
+            "merged": [],
+            "kept_distinct": [],
         },
         "warnings": [],
     }
