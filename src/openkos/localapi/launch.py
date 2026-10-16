@@ -15,6 +15,7 @@ startup failure); 2 usage failure (token missing or invalid).
 
 import hashlib
 import json
+import os
 import re
 import signal
 import socket
@@ -79,8 +80,17 @@ def ready_line(port: int) -> str:
 def _watch_stdin(stream: BinaryIO, server: uvicorn.Server) -> None:
     """Discard stdin until EOF, then ask the server to exit."""
     try:
-        while stream.read(_DRAIN_BYTES):
-            pass
+        try:
+            fd = stream.fileno()
+        except OSError, ValueError:  # not fd-backed (an in-memory stream)
+            while stream.read(_DRAIN_BYTES):
+                pass
+        else:
+            # Raw `os.read`, not the buffered reader: a daemon thread parked in
+            # `BufferedReader.read` holds its lock, and interpreter shutdown
+            # after SIGTERM aborts ("could not acquire lock") when it does.
+            while os.read(fd, _DRAIN_BYTES):
+                pass
     except OSError, ValueError:
         pass  # a closed stream is the shell going away, the same as EOF
     server.should_exit = True
