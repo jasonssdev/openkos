@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use openkos_desktop::locator::{self, DEV_CHECKOUT, WORKSPACE_ENV};
+use openkos_desktop::locator::{self, DEV_CHECKOUT, EngineSource, WORKSPACE_ENV};
 use openkos_desktop::supervisor::{EngineState, Supervisor, SupervisorConfig};
 
 /// The web view's origin on macOS, one of the engine's allowed origins.
@@ -75,8 +75,10 @@ fn live_the_web_views_request_reads_the_workspace_status() {
             let lookup = |name: &str| -> Option<OsString> {
                 (name == WORKSPACE_ENV).then(|| env_workspace.clone().into_os_string())
             };
-            locator::locate(&lookup, Path::new("/"), Path::new(DEV_CHECKOUT))
-                .map_err(|error| error.to_string())
+            let source = EngineSource::Development {
+                checkout: PathBuf::from(DEV_CHECKOUT),
+            };
+            locator::locate(&lookup, Path::new("/"), &source).map_err(|error| error.to_string())
         }),
         SupervisorConfig::default(),
     );

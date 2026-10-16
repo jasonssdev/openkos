@@ -67,22 +67,34 @@ previous one is squash-merged).
 
 ## S3 The Bundle
 
-- [ ] S3.1 RED: locator tests for the bundled engine, the missing bundled engine,
-  the override inside a bundle, the bundle detection from an executable path,
-  and the overlay configuration naming the locator's directory (L1, D4).
-- [ ] S3.2 GREEN: the locator; mutation-check the bundle detection and the
-  missing-engine guard.
-- [ ] S3.3 `desktop/src-tauri/tauri.bundle.conf.json` and
+- [x] S3.1 RED: locator tests for the bundled engine, the missing bundled engine,
+  a directory in place of the engine, the override inside a bundle, the bundle
+  detection from an executable path, and the overlay configuration naming the
+  locator's directory (L1, D4). Five failed against `todo!()` stubs; the
+  override and the overlay tests passed from the start, as pins.
+- [x] S3.2 GREEN: the locator (`EngineSource`, `engine_source`,
+  `bundled_engine`, `LocateError::BundledEngineMissing`). Seven mutations on the
+  exact lines, each restored from a byte copy, all killed: the `MacOS` and
+  `Contents` checks, `is_file` to `exists`, the missing-engine guard removed, the
+  `Resources` name, and the overlay's target and source directory names.
+- [x] S3.3 `desktop/src-tauri/tauri.bundle.conf.json` and
   `desktop/scripts/build-app.sh`: bundle, re-sign, verify, interpreter check,
-  smoke against the bundled engine, dmg (P3, D3).
-- [ ] S3.4 Re-run the orphan measurement on the built app with the new locator
-  (no `OPENKOS_ENGINE`): SIGKILL and SIGTERM of the shell (D5).
+  smoke against the bundled engine, a second verify, dmg (P3, D3). Local run:
+  45 s end to end; `.app` 51 MB, `.dmg` 28 MB; the bundled engine ready in
+  0.33 s, `/v1/status` in 0.35 s.
+- [x] S3.4 The orphan measurement on the built app with the new locator (no
+  `OPENKOS_ENGINE`, so the locator chose the bundled engine): the engine was
+  the shell's direct child, alone in its process group, with no child of its
+  own; SIGKILL of the shell left no engine (gone in 0.25 s, twice), SIGTERM none
+  (0.26 s and 0.30 s); a graceful quit of the app launched with `open` and quit
+  through Apple Events left none (D5).
 - [ ] S3.5 CI: extend the `desktop-bundle` job to `build-app.sh` (the Rust
   toolchain, the Tauri CLI, the bundle); record its time (P4, D7).
-- [ ] S3.6 Docs: `CONTRIBUTING.md` (building the app), `docs/architecture.md`
+- [x] S3.6 Docs: `CONTRIBUTING.md` (building the app), `docs/architecture.md`
   (the new directories).
-- [ ] S3.7 Gates: `cargo fmt --check`, `cargo clippy -- -D warnings`,
-  `cargo test` and the live test; Ruff, MyPy, eval self-tests.
+- [x] S3.7 Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D
+  warnings`, `cargo test` (42) and the live test; Ruff, MyPy, eval self-tests
+  (58 of 58).
 
 ## S4 Archive
 

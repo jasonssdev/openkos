@@ -107,6 +107,17 @@ cargo test                               # the supervisor, against fake engines
 cargo test --test live_engine -- --ignored   # the shell against the real engine
 ```
 
+#### Building the app
+
+The app ships the engine frozen with [PyInstaller](https://pyinstaller.org/) inside its bundle ([ADR-0056](docs/adr/0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md)). Building it needs macOS on Apple Silicon, `uv`, the Rust toolchain and the Tauri CLI (`cargo install tauri-cli --version 2.12.3 --locked`). From the repository root:
+
+```bash
+desktop/scripts/build-engine.sh   # the frozen engine only: build/freeze/dist/openkos-engine/
+desktop/scripts/build-app.sh      # the engine, then OpenKOS.app and build/desktop/OpenKOS.dmg
+```
+
+`build-engine.sh` syncs its own environment under `build/freeze/` from `uv.lock` (the `[api]` extra and the `freeze` dependency group, on a uv-managed Python 3.14) and fails unless the freeze carries that interpreter. `build-app.sh` then bundles the shell with the freeze under `Contents/Resources/engine`, re-signs the whole `.app` ad hoc and verifies it, and runs `desktop/scripts/smoke_engine.py` against the engine inside it before it writes the `.dmg`. The `.app` lands in `desktop/src-tauri/target/release/bundle/macos/`; nothing it writes is tracked. A bundled app runs its own frozen engine; `OPENKOS_ENGINE` still overrides it, and `cargo run` keeps running the engine of your checkout.
+
 ---
 
 ## Pull request process
