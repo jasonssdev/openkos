@@ -24,6 +24,9 @@ EXPECTED_ROUTES = {
     ("POST", "/v1/decisions/{decision_key}/preview"),
     ("POST", "/v1/decisions/{decision_key}/apply"),
     ("POST", "/v1/queue/refresh"),
+    ("GET", "/v1/merges"),
+    ("POST", "/v1/unmerge/preview"),
+    ("POST", "/v1/unmerge/apply"),
     ("POST", "/v1/judging/quote"),
     ("POST", "/v1/judging/runs"),
     ("GET", "/v1/judging/runs/{run_id}"),
@@ -204,6 +207,8 @@ _BODY_ROUTES = [
     "/v1/decisions/identity:abc/preview",
     "/v1/decisions/identity:abc/apply",
     "/v1/queue/refresh",
+    "/v1/unmerge/preview",
+    "/v1/unmerge/apply",
     "/v1/judging/quote",
     "/v1/judging/runs",
 ]

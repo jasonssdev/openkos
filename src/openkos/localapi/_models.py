@@ -176,3 +176,41 @@ class ApplyResponse(BaseModel):
 
     applied: api.Applied
     warnings: list[str]
+
+
+class MergeHistory(BaseModel):
+    """What was merged into a concept, newest first, in an envelope that leaves
+    room for additive fields."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    merges: list[api.MergeRecord]
+
+
+class UnmergePreviewRequest(BaseModel):
+    """Which merge to undo: the survivor and the absorbed concept, and whether
+    the first step may discard an edit made to the survivor since its merge."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    survivor_id: str
+    absorbed_id: str
+    discard_survivor_edits: bool = False
+
+
+class UnmergeApplyRequest(_EchoRequest):
+    """The version the unmerge preview issued (echoed unchanged) and how long to
+    wait for the workspace lock; a client can shorten the wait only."""
+
+    version: api.UnmergeVersion
+    wait_seconds: float = Field(default=WRITE_WAIT_SECONDS, ge=0, le=WRITE_WAIT_SECONDS)
+
+
+class UnmergeResponse(BaseModel):
+    """What the unmerge restored, and the warnings it raised along the way (for
+    example a commit that could not be made)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    unmerged: api.Unmerged
+    warnings: list[str]

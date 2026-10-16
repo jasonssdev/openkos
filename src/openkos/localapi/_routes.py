@@ -17,12 +17,16 @@ from openkos.localapi._models import (
     DecisionList,
     DecisionPreview,
     HealthBody,
+    MergeHistory,
     PreviewPlan,
     PreviewRequest,
     QuoteRequest,
     RefreshRequest,
     RunRequest,
     RunStatus,
+    UnmergeApplyRequest,
+    UnmergePreviewRequest,
+    UnmergeResponse,
 )
 from openkos.localapi._runs import RunRegistry
 
@@ -172,6 +176,53 @@ def make_router() -> APIRouter:
     ) -> api.QueueRefresh:
         wait = _wait(body.wait_seconds if body else _errors.WRITE_WAIT_SECONDS)
         return invoke(lambda: api.refresh_decision_queue(workspace, wait_seconds=wait))
+
+    @router.get("/merges")
+    def merges(
+        concept_id: str,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> MergeHistory:
+        # A Concept ID contains `/`, so it travels as a query parameter.
+        return MergeHistory(
+            merges=list(invoke(lambda: api.merge_history(workspace, concept_id)))
+        )
+
+    @router.post("/unmerge/preview", responses=_errors_of(409, 413))
+    def unmerge_preview(
+        body: UnmergePreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.UnmergePreview:
+        result = invoke(
+            lambda: api.preview_unmerge(
+                workspace,
+                body.survivor_id,
+                body.absorbed_id,
+                discard_survivor_edits=body.discard_survivor_edits,
+            )
+        )
+        if isinstance(result, api.UnmergePreview):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post(
+        "/unmerge/apply", responses=_errors_of(409, 413, 503, retry_after=True)
+    )
+    def unmerge_apply(
+        body: UnmergeApplyRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> UnmergeResponse:
+        warnings: list[str] = []
+        result = invoke(
+            lambda: api.apply_unmerge(
+                workspace,
+                body.version,
+                wait_seconds=_wait(body.wait_seconds),
+                on_warning=warnings.append,
+            )
+        )
+        if isinstance(result, api.Unmerged):
+            return UnmergeResponse(unmerged=result, warnings=warnings)
+        raise _errors.outcome_problem(result)
 
     @router.post("/judging/quote", responses=_errors_of(413, 424, 502, 503))
     def quote(

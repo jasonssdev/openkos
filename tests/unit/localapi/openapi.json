@@ -899,6 +899,24 @@
         "title": "KindRefresh",
         "type": "object"
       },
+      "MergeHistory": {
+        "additionalProperties": false,
+        "description": "What was merged into a concept, newest first, in an envelope that leaves\nroom for additive fields.",
+        "properties": {
+          "merges": {
+            "items": {
+              "$ref": "#/components/schemas/MergeRecord"
+            },
+            "title": "Merges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "merges"
+        ],
+        "title": "MergeHistory",
+        "type": "object"
+      },
       "MergePlan": {
         "description": "Merging concepts into a survivor: one pairwise merge, or, for\n`merge_group`, one per marked member.",
         "properties": {
@@ -980,6 +998,43 @@
           "survivor_type"
         ],
         "title": "MergePlan",
+        "type": "object"
+      },
+      "MergeRecord": {
+        "additionalProperties": false,
+        "description": "One merge recorded on a concept: `survivor_id` absorbed `absorbed_id`.",
+        "properties": {
+          "absorbed_id": {
+            "title": "Absorbed Id",
+            "type": "string"
+          },
+          "absorbed_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Absorbed Title"
+          },
+          "merged_at": {
+            "title": "Merged At",
+            "type": "string"
+          },
+          "survivor_id": {
+            "title": "Survivor Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "survivor_id",
+          "absorbed_id",
+          "absorbed_title",
+          "merged_at"
+        ],
+        "title": "MergeRecord",
         "type": "object"
       },
       "MergeStep": {
@@ -1644,6 +1699,232 @@
           "kind"
         ],
         "title": "TierPlan",
+        "type": "object"
+      },
+      "UnmergeApplyRequest": {
+        "description": "The version the unmerge preview issued (echoed unchanged) and how long to\nwait for the workspace lock; a client can shorten the wait only.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/UnmergeVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "UnmergeApplyRequest",
+        "type": "object"
+      },
+      "UnmergePreview": {
+        "description": "What undoing a merge would do: every step in the order it runs, the\nsurvivor's newer merges first, down to and including the named one.",
+        "properties": {
+          "absorbed_id": {
+            "title": "Absorbed Id",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/UnmergeStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "survivor_edits_discarded": {
+            "title": "Survivor Edits Discarded",
+            "type": "boolean"
+          },
+          "survivor_id": {
+            "title": "Survivor Id",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/UnmergeVersion"
+          }
+        },
+        "required": [
+          "survivor_id",
+          "absorbed_id",
+          "steps",
+          "survivor_edits_discarded",
+          "version"
+        ],
+        "title": "UnmergePreview",
+        "type": "object"
+      },
+      "UnmergePreviewRequest": {
+        "additionalProperties": false,
+        "description": "Which merge to undo: the survivor and the absorbed concept, and whether\nthe first step may discard an edit made to the survivor since its merge.",
+        "properties": {
+          "absorbed_id": {
+            "title": "Absorbed Id",
+            "type": "string"
+          },
+          "discard_survivor_edits": {
+            "default": false,
+            "title": "Discard Survivor Edits",
+            "type": "boolean"
+          },
+          "survivor_id": {
+            "title": "Survivor Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "survivor_id",
+          "absorbed_id"
+        ],
+        "title": "UnmergePreviewRequest",
+        "type": "object"
+      },
+      "UnmergeResponse": {
+        "additionalProperties": false,
+        "description": "What the unmerge restored, and the warnings it raised along the way (for\nexample a commit that could not be made).",
+        "properties": {
+          "unmerged": {
+            "$ref": "#/components/schemas/Unmerged"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "unmerged",
+          "warnings"
+        ],
+        "title": "UnmergeResponse",
+        "type": "object"
+      },
+      "UnmergeStep": {
+        "description": "One single-step unmerge of a plan: `absorbed_id` is restored beside\n`survivor_id`, both to their bytes before that merge.",
+        "properties": {
+          "absorbed_id": {
+            "title": "Absorbed Id",
+            "type": "string"
+          },
+          "absorbed_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Absorbed Title"
+          },
+          "files_rewritten": {
+            "title": "Files Rewritten",
+            "type": "integer"
+          },
+          "merged_at": {
+            "title": "Merged At",
+            "type": "string"
+          },
+          "restores_catalog_snapshot": {
+            "title": "Restores Catalog Snapshot",
+            "type": "boolean"
+          },
+          "survivor_edits_unverifiable": {
+            "title": "Survivor Edits Unverifiable",
+            "type": "boolean"
+          },
+          "survivor_id": {
+            "title": "Survivor Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "survivor_id",
+          "absorbed_id",
+          "absorbed_title",
+          "merged_at",
+          "files_rewritten",
+          "survivor_edits_unverifiable",
+          "restores_catalog_snapshot"
+        ],
+        "title": "UnmergeStep",
+        "type": "object"
+      },
+      "UnmergeVersion": {
+        "description": "The version a stateless caller applies an unmerge against: echo it\nunchanged. `content_digest` covers the ledger entries being reversed, every\nfile the steps restore, rewrite or recreate, and `discard_survivor_edits`,\nso a changed bundle or an altered field is stale.",
+        "properties": {
+          "absorbed_id": {
+            "title": "Absorbed Id",
+            "type": "string"
+          },
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "discard_survivor_edits": {
+            "default": false,
+            "title": "Discard Survivor Edits",
+            "type": "boolean"
+          },
+          "survivor_id": {
+            "title": "Survivor Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "survivor_id",
+          "absorbed_id",
+          "content_digest"
+        ],
+        "title": "UnmergeVersion",
+        "type": "object"
+      },
+      "Unmerged": {
+        "additionalProperties": false,
+        "description": "The unmerge took effect: `restored_ids` are back beside the survivor, in\nthe order they were restored, each step committed on its own.\n`commit_shas[i]` is `None` when that step's commit could not be made (the\nrestore itself still landed). `committed_confidential` is true when a\ncommit holds a concept explicitly marked confidential.",
+        "properties": {
+          "commit_shas": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Commit Shas",
+            "type": "array"
+          },
+          "committed_confidential": {
+            "default": false,
+            "title": "Committed Confidential",
+            "type": "boolean"
+          },
+          "restored_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Restored Ids",
+            "type": "array"
+          },
+          "survivor_id": {
+            "title": "Survivor Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "survivor_id",
+          "restored_ids",
+          "commit_shas"
+        ],
+        "title": "Unmerged",
         "type": "object"
       },
       "WithheldAction": {
@@ -2581,6 +2862,80 @@
         "summary": "Stop Run"
       }
     },
+    "/v1/merges": {
+      "get": {
+        "operationId": "merges_v1_merges_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "concept_id",
+            "required": true,
+            "schema": {
+              "title": "Concept Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeHistory"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Merges"
+      }
+    },
     "/v1/pending": {
       "get": {
         "operationId": "pending_v1_pending_get",
@@ -2823,6 +3178,210 @@
           }
         ],
         "summary": "Status"
+      }
+    },
+    "/v1/unmerge/apply": {
+      "post": {
+        "operationId": "unmerge_apply_v1_unmerge_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnmergeApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnmergeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Unmerge Apply"
+      }
+    },
+    "/v1/unmerge/preview": {
+      "post": {
+        "operationId": "unmerge_preview_v1_unmerge_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnmergePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnmergePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Unmerge Preview"
       }
     }
   }

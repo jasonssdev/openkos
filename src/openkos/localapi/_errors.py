@@ -52,6 +52,10 @@ WRITE_DRIFT: Final = "write_drift"
 WRITE_REFUSED: Final = "write_refused"
 WRITE_FAILED: Final = "write_failed"
 MERGE_GROUP_INTERRUPTED: Final = "merge_group_interrupted"
+UNMERGE_INTERRUPTED: Final = "unmerge_interrupted"
+SURVIVOR_MISSING: Final = "survivor_missing"
+NOT_MERGED: Final = "not_merged"
+SURVIVOR_EDITED: Final = "survivor_edited"
 QUEUE_REFRESH_REFUSED: Final = "queue_refresh_refused"
 
 # Judging rows.
@@ -79,8 +83,8 @@ class _Row(NamedTuple):
 
 _BUSY_HEADERS: Final = {"Retry-After": str(RETRY_AFTER_SECONDS)}
 
-# Subclass-first: the first isinstance match wins. `MergeGroupInterrupted` comes
-# before `WriteFailed`, and `WriteFailed` and `DriftDetected` before
+# Subclass-first: the first isinstance match wins. `MergeGroupInterrupted` and
+# `UnmergeInterrupted` come before `WriteFailed`, and `WriteFailed` and `DriftDetected` before
 # `WriteRefused`, which they extend, and the three
 # specific backend errors come before the `BackendError` they extend.
 _ROWS: Final[tuple[_Row, ...]] = (
@@ -136,6 +140,16 @@ _ROWS: Final[tuple[_Row, ...]] = (
         MERGE_GROUP_INTERRUPTED,
         False,
         "the group was combined only in part; the completed merges are kept",
+    ),
+    # Before `WriteFailed`, which it extends. Not retryable: the completed
+    # steps are committed, so re-posting the version is stale. The body names no
+    # id; the client reads the survivor's merge history again.
+    _Row(
+        api.UnmergeInterrupted,
+        500,
+        UNMERGE_INTERRUPTED,
+        False,
+        "the unmerge stopped part way; the completed steps are kept",
     ),
     _Row(api.WriteFailed, 500, WRITE_FAILED, False, "the write failed"),
     _Row(api.WriteRefused, 422, WRITE_REFUSED, False, None),
@@ -215,6 +229,28 @@ _NOT_APPLIED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
         INVALID_SELECTION,
         False,
         "the selection does not name a survivor and the members to combine with it",
+    ),
+}
+
+# Unmerge refusals returned by the unmerge operations, keyed by reason.
+_NOT_UNMERGEABLE: Final[Mapping[str, tuple[int, str, bool, str]]] = {
+    "survivor_missing": (
+        409,
+        SURVIVOR_MISSING,
+        False,
+        "the concept was itself merged into another; undo that merge first",
+    ),
+    "not_merged": (
+        409,
+        NOT_MERGED,
+        False,
+        "that concept is not recorded as merged into this one",
+    ),
+    "survivor_edited": (
+        409,
+        SURVIVOR_EDITED,
+        False,
+        "the concept was edited since the merge; undoing it would discard the edit",
     ),
 }
 
@@ -330,9 +366,19 @@ def run_active() -> ApiProblem:
 
 
 def outcome_problem(
-    outcome: api.NotApplied | api.Stale | api.QuoteStale | api.RunRefused,
+    outcome: (
+        api.NotApplied
+        | api.Stale
+        | api.QuoteStale
+        | api.RunRefused
+        | api.NotUnmergeable
+        | api.UnmergeStale
+    ),
 ) -> ApiProblem:
     """The failure a returned (not raised) outcome is answered with."""
+    if isinstance(outcome, api.UnmergeStale):
+        message = _STALE_MESSAGES["content_changed"]
+        return ApiProblem(409, ErrorBody(code=STALE, retryable=False, message=message))
     if isinstance(outcome, api.QuoteStale):
         # Only the `ChangedField` literals, never anything a client supplied.
         changed = ", ".join(outcome.changed)
@@ -352,7 +398,10 @@ def outcome_problem(
     if isinstance(outcome, api.Stale):
         message = _STALE_MESSAGES.get(outcome.reason, _STALE_FALLBACK)
         return ApiProblem(409, ErrorBody(code=STALE, retryable=False, message=message))
-    row = _NOT_APPLIED.get(outcome.reason)
+    if isinstance(outcome, api.NotUnmergeable):
+        row = _NOT_UNMERGEABLE.get(outcome.reason)
+    else:
+        row = _NOT_APPLIED.get(outcome.reason)
     if row is None:  # a reason added after this table: report it, do not guess
         return ApiProblem(
             500,
