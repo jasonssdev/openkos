@@ -380,6 +380,9 @@ operations MUST be reachable as follows, and the server MUST call the matching
 | `POST /v1/decisions/{key}/preview` | `preview_decision` |
 | `POST /v1/decisions/{key}/apply` | `apply_decision` |
 | `POST /v1/queue/refresh` | `refresh_decision_queue` |
+| `GET /v1/merges?concept_id={id}` | `merge_history` |
+| `POST /v1/unmerge/preview` | `preview_unmerge` |
+| `POST /v1/unmerge/apply` | `apply_unmerge` |
 | `POST /v1/judging/quote` | `quote_judging` |
 | `POST /v1/judging/runs` | `run_judging`, as a job (see the job requirement) |
 | `GET /v1/judging/runs/{id}` | the job's state |
@@ -391,7 +394,9 @@ unknown action, a kind outside the allowed values, a malformed echoed token,
 a wrong type) MUST be rejected with 422 and the standard error body, before any
 operation runs. The server MUST NOT add side effects: a `GET` MUST NOT write,
 take the workspace lock or call a model, as the corresponding Python reads do
-not.
+not. A Concept ID contains `/`, so the unmerge and history routes carry it in a
+query parameter or the body, never in a path segment.
+(Previously: the table had no merge-history or unmerge rows.)
 
 #### Scenario: Status maps to the status read
 
@@ -438,6 +443,13 @@ not.
 - GIVEN the application's route table
 - WHEN every operation route is mapped to an `openkos.api` function
 - THEN each maps to one, and none exists for ingest, query, doctor or setup
+
+#### Scenario: Merge history maps to the history read
+
+- GIVEN a survivor that absorbed one concept
+- WHEN `GET /v1/merges?concept_id=<survivor>` is requested
+- THEN the response is 200 with one record naming the absorbed id, and nothing
+  is written
 
 ### Requirement: Responses Are The Python API's Result Types, Populated And Round-Tripping
 
@@ -614,10 +626,15 @@ mapping MUST be evaluated subclass-first and MUST be:
 | `NotApplied("not_mergeable")` | 409 | `not_mergeable` | false |
 | `NotApplied("member_missing")` | 409 | `member_missing` | false |
 | `NotApplied("record_failed")` | 409 | `record_failed` | true |
+| `UnmergeStale` outcome | 409 | `stale` | false |
+| `NotUnmergeable("survivor_missing")` | 409 | `survivor_missing` | false |
+| `NotUnmergeable("not_merged")` | 409 | `not_merged` | false |
+| `NotUnmergeable("survivor_edited")` | 409 | `survivor_edited` | false |
 | `RunRefused` outcome | 422 | `run_refused` | false |
 | A judging run already active | 409 | `run_active` | true |
 | `DriftDetected` | 409 | `write_drift` | true |
 | `MergeGroupInterrupted` | 500 | `merge_group_interrupted` | false |
+| `UnmergeInterrupted` | 500 | `unmerge_interrupted` | false |
 | `WriteRefused` (not drift, not failed) | 422 | `write_refused` | false |
 | `WriteFailed` | 500 | `write_failed` | false |
 | `WorkspaceBusyError` | 503 | `workspace_busy` | true |
@@ -642,8 +659,11 @@ token) and MUST yield `internal_error`; the process MUST keep serving. The
 confirmation-declined and confirmation-unavailable refusals are unreachable
 through this API and, if raised, MUST be reported as `internal_error`. The
 `merge_group_interrupted` body carries no completed steps: a client learns the
-group's state by listing the decisions again.
-(Previously: the table had no `invalid_selection` and no `merge_group_interrupted` row.)
+group's state by listing the decisions again; the `unmerge_interrupted` body
+carries no completed steps either: a client reads the survivor's merge history
+again.
+(Previously: the table had no unmerge rows: no `UnmergeStale`, `survivor_missing`,
+`not_merged`, `survivor_edited` or `unmerge_interrupted`.)
 
 #### Scenario: A stale decision is a 409
 
@@ -758,6 +778,22 @@ group's state by listing the decisions again.
 - WHEN the response is read
 - THEN it is 422 with exactly the keys `code`, `retryable` and `message`, and
   the code is `invalid_request`
+
+#### Scenario: An unmerge refusal is a 409
+
+- GIVEN an unmerge preview whose survivor was itself absorbed, one naming an id
+  never merged into the survivor, and one whose survivor was edited since the
+  merge
+- WHEN each is posted
+- THEN each is 409 with code `survivor_missing`, `not_merged` or
+  `survivor_edited` respectively, and none is retryable
+
+#### Scenario: An interrupted unwind is not a generic write failure
+
+- GIVEN an unmerge apply whose second step fails
+- WHEN the response is read
+- THEN the status is 500, the code is `unmerge_interrupted`, not `write_failed`,
+  and `retryable` is false
 
 ### Requirement: Writes Wait At Most Five Seconds For The Workspace Lock
 
@@ -1091,3 +1127,41 @@ into separate input and output components.
 - GIVEN the generated OpenAPI document
 - WHEN its components are listed
 - THEN `GroupSelection` appears once, with no `-Input` or `-Output` variant
+
+### Requirement: The Unmerge Version Travels Unchanged From Preview To Apply
+
+`POST /v1/unmerge/preview` MUST accept `survivor_id`, `absorbed_id` and an
+optional `discard_survivor_edits` (default false) and pass them to
+`preview_unmerge` unchanged; its response MUST be the `UnmergePreview`, with the
+version under `version`. `POST /v1/unmerge/apply` MUST accept that version echoed
+unchanged and an optional `wait_seconds` (at most the write ceiling), so the server
+keeps no state between the two calls; its success response MUST be
+`{"unmerged": <Unmerged>, "warnings": [<string>...]}`. Both request models MUST
+reject an unknown top-level key, and `UnmergeVersion` MUST appear once in the
+OpenAPI document, with no `-Input` or `-Output` variant.
+
+#### Scenario: Split a merge over HTTP
+
+- GIVEN two concepts merged through a decision
+- WHEN an unmerge preview is posted for them and its version is posted unchanged
+  to apply
+- THEN the response is 200, `unmerged.restored_ids` names the absorbed concept
+  and the concept's document exists again
+
+#### Scenario: An altered echoed version is stale
+
+- GIVEN an unmerge preview response
+- WHEN its version is posted to apply with `discard_survivor_edits` flipped
+- THEN the response is 409 with code `stale` and nothing is written
+
+#### Scenario: An unknown key is a validation error
+
+- GIVEN an unmerge apply request with an extra top-level key
+- WHEN it is posted
+- THEN the response is 422 with code `invalid_request` and no operation ran
+
+#### Scenario: One unmerge version component in the contract
+
+- GIVEN the generated OpenAPI document
+- WHEN its components are listed
+- THEN `UnmergeVersion` appears once, with no `-Input` or `-Output` variant

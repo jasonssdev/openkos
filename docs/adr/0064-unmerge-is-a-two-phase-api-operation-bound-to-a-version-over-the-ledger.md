@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0064: Unmerge is a two-phase API operation bound to a version over the ledger, not a queue decision"
 description: openkos.api undoes a merge with preview_unmerge and apply_unmerge, keyed by the survivor and the absorbed id rather than a decision key; one operation plans a single step or the whole unwind down to the named merge, the version digests the ledger entries and every file the steps touch, and the apply checks it and runs every step under one lock, one commit per step.
-status: Proposed
+status: Accepted
 date: 2026-10-16
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0064: Unmerge is a two-phase API operation bound to a version over the ledger, not a queue decision
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-16
 
 ## Context

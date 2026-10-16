@@ -90,8 +90,8 @@ A withheld combine is never shown as a disabled button with no reason. The line 
 
 **Undo, and how it is shown:**
 
-- After combining: the confirmation says "Combined into '{title}'." with an **Undo** button. Later, the combined page shows "Combined from '{other title}' on {date}" with **Split again**. Splitting restores both pages exactly as they were (`unmerge`). Only the most recent combine on a page can be split directly; when there are later ones, the app explains: "To split this, the later combines on this page are split first: {list}. Continue?" and does them in order (`unmerge --to`). **(H)** that "split again" is understood as the undo of "combine".
-- After combining a group: the page shows one "Combined from '{other title}' on {date}" line per page that was combined into it, newest first, each with **Split again**. A group is undone step by step, with the same "the later combines on this page are split first" wording. The app can offer this only once `openkos.api` has an unmerge operation (see "Open questions").
+- After combining: the confirmation says "Combined into '{title}'." with an **Undo** button. Later, the combined page shows "Combined from '{other title}' on {date}" with **Split again**; the lines come from `merge_history`, which keeps each other page's title as it was when combined. Splitting restores both pages exactly as they were (`preview_unmerge`, then `apply_unmerge`; `unmerge` on the CLI). Only the most recent combine on a page can be split directly; when there are later ones, the preview lists them first and the app explains: "To split this, the later combines on this page are split first: {list}. Continue?" and does them in order, all in one apply (`unmerge --to`). **(H)** that "split again" is understood as the undo of "combine".
+- After combining a group: the page shows one "Combined from '{other title}' on {date}" line per page that was combined into it, newest first, each with **Split again**. A whole group is undone by splitting its oldest combine: the preview lists every later one first, with the same "the later combines on this page are split first" wording.
 - After keeping separate: "Kept separate." with **Undo**. Later, under the library's settings, "Pages you kept separate" lists each pair with **Ask me again** (`duplicates --reopen`; the list is `duplicates --kept-distinct`).
 
 ### More than two pages — "Which of these are the same?"
@@ -189,6 +189,10 @@ Every message says whether anything changed, and offers the one action that help
 | Saving the choice failed | `record_failed` | "Your choice couldn't be saved. Nothing was changed." | **Try again** |
 | The marked pages don't fit the group | `invalid_selection` | "Something about your choice didn't match these pages. Please choose again." | reload **(H)** |
 | Only part of a group was combined | `merge_group_interrupted` | "Only some of these were combined. Nothing else changed, and each combine can be split again." | reload **(H)** |
+| The page to split was itself combined into another | `survivor_missing` | "This page was combined into another one. Split that first." | open the other page **(H)** |
+| The combine is no longer on this page | `not_merged` | "These pages are already separate." | reload **(H)** |
+| The page was changed after it was combined | `survivor_edited` | "This page was changed after it was combined, so it can't be split here." | **OK** (whether the app offers to split anyway is #1442) |
+| Only some of the later combines were split | `unmerge_interrupted` | "Only some of these were split. Each page that was split is back as it was." | reload **(H)** |
 
 ## Who can see a page
 
@@ -206,5 +210,5 @@ The cloud model's warning, in settings only and never during setup, uses the sam
 
 ## Open questions
 
-- **Undo from the app.** Splitting a combine, a pair or a group, needs an unmerge operation in `openkos.api` and the local API, tracked in #1432. Until it exists the app cannot offer **Undo** or **Split again** for a combine.
+- **Splitting an edited page.** A page changed after it was combined cannot be split without losing the change. The engine can do it when asked (`discard_survivor_edits`); whether and how the app offers it is #1442.
 - **Translation.** The Spanish copy follows this brief once the English wording is checked; the type nouns and the tier lines are the parts most likely to need more than a literal translation.
