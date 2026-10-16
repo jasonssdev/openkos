@@ -2911,6 +2911,54 @@ def test_prose_after_the_marker_is_stitched_onto_the_prose_before_it(
     assert len(result.citations) == 1
 
 
+def test_trailing_marker_is_parsed_and_stripped_from_the_prose() -> None:
+    """A marker appended to the last sentence still attributes (#1384)."""
+    prose, reported, status = answer_mod._split_attribution(
+        "It costs twenty five Euros. USED: 2, 3", 3
+    )
+
+    assert prose == "It costs twenty five Euros."
+    assert reported == frozenset({2, 3})
+    assert status == "reported"
+
+
+def test_trailing_none_marker_reports_an_empty_set() -> None:
+    prose, reported, status = answer_mod._split_attribution(
+        "From my own knowledge. USED: none.\n", 3
+    )
+
+    assert prose == "From my own knowledge."
+    assert reported == frozenset()
+    assert status == "reported"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The recipe I used: 3",  # lowercase, end of reply
+        "The tool USED: in the lab was a pump. It works.",  # mid-text
+        "It costs ten. USED: the pump",  # non-integer payload
+        "It costs ten. USED: 1, two",  # mixed payload
+    ],
+)
+def test_trailing_marker_does_not_misfire_on_ordinary_prose(reply: str) -> None:
+    prose, reported, status = answer_mod._split_attribution(reply, 3)
+
+    assert prose == reply
+    assert reported is None
+    assert status == "absent"
+
+
+def test_own_line_marker_takes_precedence_over_a_trailing_one() -> None:
+    prose, reported, status = answer_mod._split_attribution(
+        "USED: 1\n\nAnswer. USED: 2, 3", 3
+    )
+
+    assert reported == frozenset({1})
+    assert status == "reported"
+    assert prose == "Answer. USED: 2, 3"
+
+
 def test_context_block_count_reports_what_the_model_was_shown(
     tmp_path: Path,
 ) -> None:
