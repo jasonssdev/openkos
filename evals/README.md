@@ -40,6 +40,7 @@ of a harness's own scoring code.
 - [`decision_extraction`](decision_extraction/README.md) — extraction of the nine OpenKOS types over the AMI meeting corpus.
 - [`decision_granularity`](decision_granularity/README.md) — whether one-sentence prompt edits split multi-decision sources or keep a twice-named person.
 - [`decision_revisions`](decision_revisions/README.md) — the decision-revision detector's subject pass, direction rule and judge.
+- [`desktop_app`](desktop_app/README.md) — MVP 6's exit criteria: one observed session with a person who has never used a terminal (pre-registered; no runner).
 - [`discarded_generation`](discarded_generation/README.md) — how much extraction generates and then throws away.
 - [`duplicate_function_words`](duplicate_function_words/README.md) — function words deciding a title-containment near-match.
 - [`edge_typing`](edge_typing/README.md) — the edge-type suggester's typing quality.
