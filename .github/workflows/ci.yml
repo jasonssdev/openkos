@@ -279,27 +279,41 @@ jobs:
   # never see. Its supervisor tests spawn real processes -- fake engines that
   # speak the `openkos serve` handshake through POSIX `sh` -- including one that
   # SIGKILLs a shell holding an engine and asserts the engine exits, which is
-  # the orphan guarantee itself. They need no Python and no model, and run in
-  # about a second; this job runs beside the Python suite, not after it, so it
-  # adds no time to a pull request's wall clock.
+  # the orphan guarantee itself. A second, ignored-by-default test then runs the
+  # shell against the REAL engine of this checkout, so a change to the engine's
+  # handshake or its Origin allowlist breaks here rather than in the app. No
+  # model is involved. The job runs beside the Python suite, not after it, so
+  # it adds no time to a pull request's wall clock.
   #
-  # The runner image's preinstalled rustup provides the toolchain, so no
-  # third-party action is involved; `--locked` fails on a Cargo.lock that has
-  # drifted from Cargo.toml, as `uv sync --locked` does for uv.lock.
+  # Tauri links the system web view, which on Linux is WebKitGTK: those are the
+  # packages below. The runner image's preinstalled rustup provides the
+  # toolchain; `--locked` fails on a Cargo.lock that has drifted from
+  # Cargo.toml, as `uv sync --locked` does for uv.lock. The Rust build cache is
+  # keyed on that lock file.
   desktop:
     name: desktop shell (fmt, clippy, test)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: desktop/src-tauri
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Install the system web view
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev
+
       - name: Install the Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
           rustup default stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: desktop/src-tauri
 
       - name: Check formatting
         run: cargo fmt --check
@@ -309,6 +323,20 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked
+
+      # The engine the live test starts is `uv run openkos serve` in this
+      # checkout, so it needs the same environment the Python jobs install.
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Install the engine
+        working-directory: .
+        run: uv sync --locked
+
+      - name: Run the shell against the real engine
+        run: cargo test --locked --test live_engine -- --ignored
 
   # Every job above runs on `ubuntu-latest` only. macOS and Windows behavior
   # is otherwise UNVERIFIED until a user hits it, and this repo has already

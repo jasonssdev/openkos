@@ -124,16 +124,20 @@ The desktop app's shell lives beside the engine, not inside it: `desktop/` is a 
 
 ```
 desktop/
-└── src-tauri/                    # the shell's Rust crate (Tauri's conventional layout)
-    ├── Cargo.toml · Cargo.lock
-    └── src/
-        ├── engine.rs             # one engine process: token over stdin, the ready line, stop
-        ├── supervisor.rs         # start, watch, bounded restarts, stop; the state the UI reads
-        └── locator.rs            # which engine to run: the one place the frozen engine will swap in
+├── src-tauri/                    # the shell's Rust crate (Tauri's conventional layout)
+│   ├── Cargo.toml · Cargo.lock · build.rs · tauri.conf.json · icons/
+│   ├── src/
+│   │   ├── main.rs  lib.rs       # the Tauri app: start the supervisor, expose its state, stop it on exit
+│   │   ├── engine.rs             # one engine process: token over stdin, the ready line, stop
+│   │   ├── supervisor.rs         # start, watch, bounded restarts, stop; the state the UI reads
+│   │   └── locator.rs            # which engine to run: the one place the frozen engine will swap in
+│   └── tests/live_engine.rs      # the shell against the real engine of the checkout
+└── ui/                           # the web view's page: static HTML, CSS and JavaScript, no build step
 ```
 
 - **The engine contract is the engine's.** The shell conforms to `openkos serve` as `localapi/launch.py` defines it: a per-launch token as the first line of stdin, one JSON ready line on stdout naming the loopback port, and EOF on stdin as the engine's lifeline.
 - **No orphaned engine.** The shell keeps the engine's stdin open for the engine's whole life, so when the shell dies by any route, a force-quit included, the pipe closes and the engine exits. On a normal stop the shell closes stdin first, waits, and only then kills the engine's process group.
+- **The web view talks to the engine directly.** It asks the shell for the engine's state (its base URL and per-launch token) and calls the local API itself; its origin is one of the engine's allowed origins ([ADR-0058](adr/0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md)), and its content security policy allows connections to loopback only.
 - **The engine locator is the seam for packaging.** It runs the development engine of a source checkout today; the frozen engine of [ADR-0056](adr/0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md) replaces it there and nowhere else.
 
 ## Repository conventions
@@ -240,7 +244,7 @@ The result: connecting a bundle to GitHub is safe by default — you push the kn
 
 Local-first constrains *where the data and compute live* — on the user's machine, offline, theirs — not the *interface technology*. What breaks local-first is a **cloud-hosted** app that holds users' data on someone else's server, not the browser or web tech per se. So OpenKOS is not limited to a single kind of UI. Several delivery paths are all local-first:
 
-- **Desktop app** (Tauri/Electron/native; planned as MVP 6, shell technology undecided) — one installer and an icon, no terminal; the friendliest path for non-technical users, and where a runtime and model can be bundled. Note that a Tauri/Electron app *is* a web UI in a native shell, so "web vs desktop" is a false dichotomy at the technical level.
+- **Desktop app** (a Tauri 2 shell supervising the engine as a sidecar, [ADR-0055](adr/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar.md); MVP 6, in progress) — one installer and an icon, no terminal; the friendliest path for non-technical users, and where a runtime and model can be bundled. Note that a Tauri/Electron app *is* a web UI in a native shell, so "web vs desktop" is a false dichotomy at the technical level.
 - **Local web UI (`localhost`)** — the engine serves its local API with `openkos serve`, the surface a browser UI is built on (the UI itself is part of the desktop app, MVP 6; not built). Nothing leaves the machine; this is how Jupyter, Ollama, and most self-hosted tools work. Best wrapped inside the desktop app so the user never starts a server by hand.
 - **Static HTML explorer** — a single self-contained HTML file that reads a bundle with no server (the approach of Google's OKF visualizer). Zero install, ideal for browsing knowledge read-only.
 - **Editor plugin** — because the bundle is plain markdown, Obsidian and VS Code already act as a GUI over the knowledge; a plugin adds OpenKOS actions inside a tool the user already uses.
