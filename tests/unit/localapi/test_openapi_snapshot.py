@@ -165,6 +165,8 @@ def test_every_route_declares_its_error_statuses_with_the_error_body() -> None:
 
 def test_a_busy_503_declares_its_retry_after_header() -> None:
     for key in _RETRY_AFTER:
-        headers = _operations()[key]["503"]["headers"]  # type: ignore[index]
+        busy = _operations()[key]["503"]
+        headers = busy["headers"]
+        assert isinstance(headers, dict)
 
         assert "Retry-After" in headers, key
