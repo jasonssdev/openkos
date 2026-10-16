@@ -1,0 +1,120 @@
+# Desktop Packaging Specification
+
+## Purpose
+
+How the desktop app is built for a person without Python (ADR-0056): the engine
+frozen with PyInstaller in one-directory mode from `uv.lock` on a pinned
+interpreter, shipped inside the macOS app bundle as a resource, the bundle deep
+ad-hoc re-signed and verified, and every build checked by running the engine it
+ships. The frozen engine keeps the engine's launch contract (`local-http-api`)
+and runs as one process, so the desktop shell supervises it exactly as it
+supervises a development engine (`desktop-shell`).
+
+## Requirements
+
+### Requirement: The Engine Is Frozen From The Lock On A Pinned Interpreter
+
+The repository MUST provide one command that freezes the engine with PyInstaller
+in one-directory mode, never one-file, from an environment synced from
+`uv.lock` with `--locked`, holding the `openkos` distribution installed
+non-editable with its `[api]` extra and the `freeze` dependency group, on a
+uv-managed CPython 3.14. PyInstaller MUST be a member of the `freeze` dependency
+group only, never a runtime dependency or an extra of the `openkos` package. The
+frozen executable MUST be named `openkos-engine` and MUST accept the same
+arguments as the `openkos` command line. The build MUST fail unless the frozen
+tree carries exactly one interpreter library, `libpython3.14.dylib`, and no
+`Python.framework`.
+
+#### Scenario: The freeze is built from the lock
+
+- GIVEN a checkout whose `uv.lock` matches `pyproject.toml`
+- WHEN a contributor runs `desktop/scripts/build-engine.sh`
+- THEN `build/freeze/dist/openkos-engine/openkos-engine` exists
+- AND its `_internal` directory carries `libpython3.14.dylib`
+
+#### Scenario: A wrong interpreter fails the build
+
+- GIVEN the frozen tree carries no `libpython3.14.dylib`, another interpreter library, or a `Python.framework`
+- WHEN the build verifies the interpreter
+- THEN the build fails naming what it found
+
+#### Scenario: The package metadata is unchanged
+
+- GIVEN the `freeze` dependency group exists
+- WHEN the wheel and the sdist are built
+- THEN neither declares PyInstaller as a dependency or an extra
+
+### Requirement: The Frozen Engine Keeps The Engine Contract
+
+A frozen engine MUST serve the local API exactly as `openkos serve` does: it
+reads the token from the first line of stdin, writes one ready line, and
+answers `GET /v1/status` with the token. It MUST load the `sqlite-vec`
+extension. It MUST run as a single process, with no launcher process between
+the shell and the engine, so EOF on its stdin and the death of the process that
+holds the other end of that pipe end it. A smoke check MUST verify each of these
+against a given frozen engine, using only the Python standard library and no
+model.
+
+#### Scenario: The frozen engine starts and answers
+
+- GIVEN a frozen engine and a fresh workspace
+- WHEN the smoke check starts it with a token on stdin
+- THEN one ready line arrives within 30 seconds
+- AND `GET /v1/status` with the token returns 200 and a JSON object with `concepts`
+
+#### Scenario: The frozen engine is one process and exits on EOF
+
+- GIVEN a ready frozen engine
+- WHEN the smoke check lists its process group and then closes its stdin
+- THEN the group holds exactly the engine's own PID
+- AND the engine exits with status 0 within 10 seconds
+
+#### Scenario: A killed parent leaves no frozen engine
+
+- GIVEN a frozen engine started by a holder process that keeps its stdin
+- WHEN the holder is killed with SIGKILL
+- THEN the engine is gone within 10 seconds
+
+#### Scenario: sqlite-vec loads in the frozen engine
+
+- GIVEN a frozen engine and no reachable model backend
+- WHEN the smoke check runs its `doctor`
+- THEN the output reports the vector extension as loadable
+
+### Requirement: The App Bundle Ships The Freeze Under Resources, Deep Ad-Hoc Signed
+
+The repository MUST provide one command that builds the macOS app bundle with
+the frozen engine as the resource `Contents/Resources/engine`, never under
+`Contents/MacOS`. After the bundle is built the command MUST deep ad-hoc re-sign
+the whole `.app` and MUST fail unless `codesign --verify --deep --strict`
+passes. It MUST fail unless the engine inside the `.app` passes the interpreter
+check and the smoke check. It MUST build a `.dmg` from the re-signed and verified
+`.app`. Every output MUST be written under directories the repository ignores.
+
+#### Scenario: The app carries a verified frozen engine
+
+- GIVEN a checkout on macOS with the Rust toolchain and the Tauri CLI
+- WHEN a contributor runs `desktop/scripts/build-app.sh`
+- THEN `OpenKOS.app/Contents/Resources/engine/openkos-engine` exists
+- AND `codesign --verify --deep --strict` passes on the `.app`
+- AND the smoke check passes against the engine inside the `.app`
+- AND a `.dmg` holding that `.app` is written
+
+#### Scenario: A broken signature fails the build
+
+- GIVEN the re-signed `.app` does not verify
+- WHEN the build checks the signature
+- THEN the build fails and no `.dmg` is written
+
+### Requirement: CI Builds The App And Smoke-Checks Its Engine On macOS
+
+Continuous integration MUST build the frozen engine and the app bundle on an
+Apple Silicon macOS runner and run the smoke check against the engine inside
+the bundle, on every pull request and push the CI workflow runs on, beside
+the existing jobs and without changing them.
+
+#### Scenario: A freeze that breaks the engine fails CI
+
+- GIVEN a change after which the frozen engine no longer answers `/v1/status` or no longer loads `sqlite-vec`
+- WHEN CI runs on the pull request
+- THEN the macOS bundle job fails

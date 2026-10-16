@@ -88,8 +88,12 @@ previous one is squash-merged).
   own; SIGKILL of the shell left no engine (gone in 0.25 s, twice), SIGTERM none
   (0.26 s and 0.30 s); a graceful quit of the app launched with `open` and quit
   through Apple Events left none (D5).
-- [ ] S3.5 CI: extend the `desktop-bundle` job to `build-app.sh` (the Rust
-  toolchain, the Tauri CLI, the bundle); record its time (P4, D7).
+- [x] S3.5 CI: extend the `desktop-bundle` job to `build-app.sh` (the Rust
+  toolchain, the Tauri CLI, the bundle); record its time (P4, D7). First run,
+  with every cache cold: 12m27s, of which the Tauri CLI install was 7m28s and
+  `build-app.sh` 3m58s (the release compile 2m53s); the smoke check passed
+  against the engine inside the `.app` (ready in 1.42 s). Under the ~15 minute
+  bar, so it stays on every pull request without a path filter.
 - [x] S3.6 Docs: `CONTRIBUTING.md` (building the app), `docs/architecture.md`
   (the new directories).
 - [x] S3.7 Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D
@@ -98,12 +102,14 @@ previous one is squash-merged).
 
 ## S4 Archive
 
-- [ ] S4.1 CHANGELOG, the roadmap's MVP 6 status line.
-- [ ] S4.2 Merge the delta specs into `openspec/specs/` (a new
-  `desktop-packaging` domain; `desktop-shell` R1 modified); name-match every
-  heading; check every requirement against the shipped code.
-- [ ] S4.3 ADR-0056 Accepted, with its deviations and `Amends: ADR-0055`;
-  ADR-0055 `Amended by ADR-0056` (frontmatter, body, index row).
-- [ ] S4.4 Move the change to `openspec/changes/archive/<date>-engine-freeze/`
+- [x] S4.1 CHANGELOG, the roadmap's MVP 6 status line and its freeze bullet.
+- [x] S4.2 Merge the delta specs into `openspec/specs/` (a new
+  `desktop-packaging` domain; `desktop-shell` R1 modified and its Purpose
+  updated); name-match every heading; check every requirement against the
+  shipped code (see `archive-report.md`).
+- [x] S4.3 ADR-0056 Accepted, with its implementation evidence and
+  `Amends: ADR-0055`; ADR-0055 `Amended by ADR-0056` (frontmatter, body, index
+  row).
+- [x] S4.4 Move the change to `openspec/changes/archive/2026-10-16-engine-freeze/`
   with `archive-report.md`; confirm on `origin/main` that the original folder is
   gone.
