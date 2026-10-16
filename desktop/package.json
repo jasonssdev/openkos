@@ -9,6 +9,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "build": "vite build",
     "generate": "node scripts/schema.mjs",
     "check:schema": "node scripts/schema.mjs --check",
     "typecheck": "tsc --noEmit",

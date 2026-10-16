@@ -79,15 +79,21 @@ Delivery strategy: stacked-to-main.
 
 ## S3 The Page
 
-- [ ] S3.1 `ui/view.ts` with its tests, `ui/main.ts` over the client,
+- [x] S3.1 `ui/view.ts` with its tests, `ui/main.ts` over the client,
   `index.html` loading the module; `vite.config.ts` (root `ui`, out `dist`)
-  (W1, D7). RED first.
-- [ ] S3.2 `tauri.conf.json` `frontendDist` to `../dist`; remove `ui/main.js`.
-- [ ] S3.3 `build-app.sh` installs and builds the page, and fails without
-  `dist/index.html` (B1).
-- [ ] S3.4 The `desktop` and `desktop-bundle` jobs set up Node and pnpm and
-  build the page (D8).
-- [ ] S3.5 `docs/architecture.md` (the `desktop/` tree and the page bullet),
+  (W1, D7). RED: `ui/view.test.ts` failed to load (`Cannot find module
+  './view.ts'`). GREEN: 76 tests. Mutations, each restored from a byte copy: 5,
+  all killed (each failure branch, the unknown-error fallback showing the
+  error's text, the open-decision sum, the restart attempt number).
+- [x] S3.2 `tauri.conf.json` `frontendDist` to `../dist`; remove `ui/main.js`.
+  `cargo fmt --check`, `clippy -D warnings` and `cargo test` (42) pass over the
+  built page; the debug binary carries `/assets/index-*.js` and `.css`.
+- [x] S3.3 `build-app.sh` installs and builds the page, and fails without
+  `dist/index.html` (B1). The page section, run with a `pnpm` that builds
+  nothing, exits 1 naming the missing file; with one that writes it, passes.
+- [x] S3.4 The `desktop` and `desktop-bundle` jobs set up Node and pnpm and
+  build the page; the `desktop client` job builds it too (D8).
+- [x] S3.5 `docs/architecture.md` (the `desktop/` tree and the page bullet),
   `CONTRIBUTING.md` (the page build in the shell's dev loop).
 
 ## S4 Archive

@@ -315,6 +315,23 @@ jobs:
         with:
           workspaces: desktop/src-tauri
 
+      # Tauri embeds the built page (desktop/dist, its frontendDist) at compile
+      # time and refuses to compile without it (ADR-0065), so it is built first.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: desktop/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: desktop/.node-version
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Build the page
+        working-directory: desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
       - name: Check formatting
         run: cargo fmt --check
 
@@ -345,12 +362,12 @@ jobs:
   # equal to the snapshot, so an API change that regenerates the snapshot but
   # not the client fails here. The typecheck then fails on any field the client
   # or the page uses that the API no longer has, and the tests hold the
-  # client's error codes equal to the engine's table. `--frozen-lockfile` fails
-  # on a pnpm-lock.yaml that has drifted from package.json, as `uv sync
-  # --locked` does for uv.lock. pnpm's version comes from `packageManager` and
+  # client's error codes equal to the engine's table, and the page is built as
+  # the app bundles it. `--frozen-lockfile` fails on a pnpm-lock.yaml that has
+  # drifted from package.json, as `uv sync --locked` does for uv.lock. pnpm's version comes from `packageManager` and
   # Node's from desktop/.node-version. No engine and no model are involved.
   desktop-client:
-    name: desktop client (typecheck, test, schema)
+    name: desktop client (typecheck, test, schema, build)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -378,6 +395,9 @@ jobs:
 
       - name: Check the client against the OpenAPI snapshot
         run: pnpm check:schema
+
+      - name: Build the page
+        run: pnpm build
 
   # Every job above runs on `ubuntu-latest` only. macOS and Windows behavior
   # is otherwise UNVERIFIED until a user hits it, and this repo has already
@@ -523,6 +543,16 @@ jobs:
         with:
           workspaces: desktop/src-tauri
           key: bundle
+
+      # build-app.sh builds the page with pnpm before it bundles (ADR-0065).
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: desktop/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: desktop/.node-version
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
 
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version 2.12.3 --locked
