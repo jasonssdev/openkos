@@ -39,7 +39,12 @@ from openkos.llm.openai_compatible import (
     OpenAICompatibleModelNotFound,
     OpenAICompatibleUnavailable,
 )
-from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
+from openkos.retrieval.answer import (
+    DEFAULT_QUERY_LIMIT,
+    NO_MATCH,
+    AnswerResult,
+    Citation,
+)
 from openkos.state import fts, vectorstore
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import VecUnavailable
@@ -439,11 +444,11 @@ def test_query_limit_flag_is_forwarded_unchanged(
     assert kwargs["vector_store"] is not None
 
 
-def test_query_omitted_limit_defaults_to_five(
+def test_query_omitted_limit_defaults_to_the_measured_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Omitting `--limit` forwards the default `limit=5` (spec: Caller omits
-    `--limit`)."""
+    """Omitting `--limit` forwards `DEFAULT_QUERY_LIMIT` (8, measured in
+    #1377; spec: Caller omits `--limit`)."""
     _init_workspace(tmp_path, monkeypatch)
     captured: dict[str, object] = {}
 
@@ -465,7 +470,8 @@ def test_query_omitted_limit_defaults_to_five(
     assert result.exit_code == 0
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
-    assert kwargs["limit"] == 5
+    assert kwargs["limit"] == 8
+    assert kwargs["limit"] == DEFAULT_QUERY_LIMIT
 
 
 def test_query_builds_and_injects_embedder_and_vector_store(

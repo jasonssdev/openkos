@@ -152,7 +152,7 @@ from openkos.resolution.volatility_typing import (
     TierSuggestion,
     suggest_volatility,
 )
-from openkos.retrieval.answer import NO_MATCH, NoMatchCause
+from openkos.retrieval.answer import DEFAULT_QUERY_LIMIT, NO_MATCH, NoMatchCause
 from openkos.sensitivity import ExportReason
 from openkos.state import adjudications as adjudications_store
 from openkos.state import derived, findings
@@ -14075,7 +14075,7 @@ def query(
         ..., help="Natural-language question to answer from the bundle."
     ),
     limit: int = typer.Option(
-        5, "--limit", help="Max concepts to retrieve as context."
+        DEFAULT_QUERY_LIMIT, "--limit", help="Max concepts to retrieve as context."
     ),
     include_deprecated: bool = typer.Option(
         False,

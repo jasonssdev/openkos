@@ -1400,6 +1400,15 @@ def _dense_search(
         return [], True
 
 
+DEFAULT_QUERY_LIMIT = 8
+"""How many concepts reach the model when the caller names no `limit`.
+
+Measured, not chosen (#1377, ADR-0062, `evals/query_limit/`): 5 cannot hold
+the gold set of an enumeration question that needs six or more concepts,
+and 8 recovered it on a pre-registered bar without hurting the questions
+that already worked. One constant so the CLI, MCP and `answer()` agree."""
+
+
 def answer(
     question: str,
     *,
@@ -1408,7 +1417,7 @@ def answer(
     embedder: Embedder | None = None,
     vector_store: VectorStore | None = None,
     fts_index: fts.FtsSearchHandle | None = None,
-    limit: int = 5,
+    limit: int = DEFAULT_QUERY_LIMIT,
     include_deprecated: bool = False,
     include_confidential: bool = False,
     local_exemption: bool = False,
