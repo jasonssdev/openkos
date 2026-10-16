@@ -40,17 +40,30 @@ previous one is squash-merged).
 
 ## S2 The Freeze
 
-- [ ] S2.1 Add the `freeze` dependency group (PyInstaller) to `pyproject.toml`
-  and relock; confirm `uv build` metadata is unchanged (P1).
-- [ ] S2.2 `desktop/engine/openkos-engine.spec` and `openkos_engine.py`; the
+- [x] S2.1 Add the `freeze` dependency group (PyInstaller) to `pyproject.toml`
+  and relock; confirm `uv build` metadata is unchanged (P1). RED:
+  `tests/unit/test_freeze_group.py` failed with `KeyError: 'freeze'` before the
+  group existed; each of its three exclusion tests failed when PyInstaller was
+  added to the core dependencies, the `watch` extra and the `dev` group. The
+  built wheel's `Requires-Dist` and `Provides-Extra` are unchanged; the sdist
+  holds no `desktop/` file.
+- [x] S2.2 `desktop/engine/openkos-engine.spec` and `openkos_engine.py`; the
   `.gitignore` negation for the spec (D1).
-- [ ] S2.3 `desktop/scripts/build-engine.sh`: sync, freeze, interpreter check;
-  feed the check a tree without `libpython3.14.dylib` and confirm it fails (P1, D2).
-- [ ] S2.4 `desktop/scripts/smoke_engine.py`; confirm each check fails against a
-  broken engine (a fake that never answers, one that ignores EOF, one that
-  forks a child) before trusting it (P2, D6).
-- [ ] S2.5 Gates: Ruff, Ruff format, MyPy, eval self-tests; the Python suite in
-  CI.
+- [x] S2.3 `desktop/scripts/build-engine.sh`: sync, freeze, interpreter check
+  (P1, D2). The check failed, naming what it found, on a tree with no
+  interpreter library, with `libpython3.12.dylib`, with both 3.12 and 3.14, and
+  with a `Python.framework`.
+- [x] S2.4 `desktop/scripts/smoke_engine.py` (P2, D6). Against fake engines each
+  check failed on its own fault: one that never writes a ready line, one that
+  forks a child, one that ignores stdin EOF (also orphaned by the killed-parent
+  check run alone), one whose `doctor` omits the vector line. Against the real
+  freeze: ready in 0.47 s, `/v1/status` in 0.49 s, all five checks pass.
+- [x] S2.5 CI: the `desktop-bundle` macOS job, building the freeze and running
+  the smoke check (P4; S3 extends it to the app bundle). `mypy .` now honours
+  `.gitignore` (`exclude_gitignore`), since the freeze under `build/` carries a
+  second copy of the `openkos` package.
+- [x] S2.6 Gates: Ruff, Ruff format, MyPy, eval self-tests (58 of 58); the
+  Python suite in CI.
 
 ## S3 The Bundle
 
@@ -64,7 +77,8 @@ previous one is squash-merged).
   smoke against the bundled engine, dmg (P3, D3).
 - [ ] S3.4 Re-run the orphan measurement on the built app with the new locator
   (no `OPENKOS_ENGINE`): SIGKILL and SIGTERM of the shell (D5).
-- [ ] S3.5 CI: the `desktop-bundle` macOS job; record its time (P4, D7).
+- [ ] S3.5 CI: extend the `desktop-bundle` job to `build-app.sh` (the Rust
+  toolchain, the Tauri CLI, the bundle); record its time (P4, D7).
 - [ ] S3.6 Docs: `CONTRIBUTING.md` (building the app), `docs/architecture.md`
   (the new directories).
 - [ ] S3.7 Gates: `cargo fmt --check`, `cargo clippy -- -D warnings`,

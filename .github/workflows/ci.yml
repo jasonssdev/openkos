@@ -443,3 +443,34 @@ jobs:
         env:
           OPENKOS_SMOKE_EXPECT_WHEEL: "1"
         run: uv run --no-sync pytest -m cross_platform_smoke -v
+
+  # The desktop app ships the engine frozen with PyInstaller (ADR-0056), and a
+  # freeze breaks only at run time: a hidden import it missed, a native
+  # extension left behind, an interpreter that is not 3.14. So this job builds
+  # the freeze exactly as a contributor does (`desktop/scripts/build-engine.sh`,
+  # from uv.lock on a uv-managed 3.14, which fails on a wrong interpreter) and
+  # runs the smoke check against it: the engine starts and answers
+  # `/v1/status`, is one process, exits on stdin EOF and when its parent is
+  # killed, and loads sqlite-vec. No model is involved.
+  #
+  # Apple Silicon only, the one platform the freeze targets; PyInstaller is not
+  # a cross-compiler, so this cannot run on the Linux runners. No path filter,
+  # for the reason the top of this file gives. The freeze takes seconds.
+  desktop-bundle:
+    name: desktop bundle (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Freeze the engine
+        run: desktop/scripts/build-engine.sh
+
+      - name: Smoke-check the frozen engine
+        run: >-
+          build/freeze/venv/bin/python desktop/scripts/smoke_engine.py
+          build/freeze/dist/openkos-engine/openkos-engine
