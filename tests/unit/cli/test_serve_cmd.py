@@ -8,6 +8,7 @@ loads on any other verb's start-up path. A missing extra is a usage failure
 
 from __future__ import annotations
 
+import importlib.abc
 import subprocess
 import sys
 from pathlib import Path
@@ -35,13 +36,42 @@ def test_help_exposes_workspace_and_no_token_option() -> None:
     assert flags == {"--workspace"}
 
 
+class _FailingFinder(importlib.abc.MetaPathFinder):
+    """Make `import openkos.localapi.launch` raise `ModuleNotFoundError(name)`.
+
+    Works whether or not another test already imported the module: the cached
+    module and the package attribute are removed (and restored by the
+    monkeypatch), so `from openkos.localapi import launch` must import again.
+    """
+
+    def __init__(self, missing: str) -> None:
+        self.missing = missing
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: object = None,
+        target: object = None,
+    ) -> None:
+        if fullname == "openkos.localapi.launch":
+            raise ModuleNotFoundError(
+                f"No module named {self.missing!r}", name=self.missing
+            )
+
+
+def _fail_launch_import(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
+    import openkos.localapi
+
+    monkeypatch.delitem(sys.modules, "openkos.localapi.launch", raising=False)
+    monkeypatch.delattr(openkos.localapi, "launch", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_FailingFinder(missing), *sys.meta_path])
+
+
+@pytest.mark.parametrize("missing", ["fastapi", "uvicorn", "pydantic"])
 def test_missing_api_extra_exits_2_with_the_install_remedy(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, missing: str
 ) -> None:
-    for name in [m for m in sys.modules if m.startswith("openkos.localapi")]:
-        monkeypatch.delitem(sys.modules, name)
-    for name in ("fastapi", "uvicorn", "pydantic"):
-        monkeypatch.setitem(sys.modules, name, None)
+    _fail_launch_import(monkeypatch, missing)
 
     result = runner.invoke(app, ["serve"])
 
@@ -55,12 +85,12 @@ def test_missing_api_extra_exits_2_with_the_install_remedy(
 def test_another_import_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
     """Only the three extra packages mean "extra missing"; any other missing
     module is a real defect and must not be dressed up as a remedy."""
-    monkeypatch.setitem(sys.modules, "openkos.localapi.launch", None)
+    _fail_launch_import(monkeypatch, "anyio")
 
     result = runner.invoke(app, ["serve"])
 
     assert isinstance(result.exception, ModuleNotFoundError)
-    assert result.exception.name == "openkos.localapi.launch"
+    assert result.exception.name == "anyio"
     assert result.exit_code != 2
 
 
