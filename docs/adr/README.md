@@ -103,4 +103,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0062](0062-query-limit-defaults-to-8-measured-against-5.md) | The query limit defaults to 8, measured against 5 | Accepted | 2026-10-16 |
 | [0063](0063-an-identity-group-is-one-decision-that-merges-marked-members-pairwise-into-a-chosen-survivor.md) | An identity group is one decision that merges the marked members pairwise into a chosen survivor | Accepted | 2026-10-16 |
 | [0064](0064-unmerge-is-a-two-phase-api-operation-bound-to-a-version-over-the-ledger.md) | Unmerge is a two-phase API operation bound to a version over the ledger, not a queue decision | Accepted | 2026-10-16 |
-| [0065](0065-the-desktop-web-view-is-typescript-built-with-vite-over-a-client-generated-from-the-openapi-snapshot.md) | The desktop web view is TypeScript built with Vite, over a client generated from the OpenAPI snapshot | Proposed | 2026-10-16 |
+| [0065](0065-the-desktop-web-view-is-typescript-built-with-vite-over-a-client-generated-from-the-openapi-snapshot.md) | The desktop web view is TypeScript built with Vite, over a client generated from the OpenAPI snapshot | Accepted | 2026-10-16 |
