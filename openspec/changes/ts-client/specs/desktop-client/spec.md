@@ -11,7 +11,8 @@ committed snapshot `tests/unit/localapi/openapi.json` into
 command that writes the generated file and one that fails, naming the command
 that regenerates it, when the committed file differs from what the snapshot
 generates. Both MUST use the same generation. The client's operations MUST be
-typed from the generated `paths`, so that a field the client or the page uses
+typed from the generated `paths`, each taking and returning exactly the
+schema's types (tuples included), so that a field the client or the page uses
 and the snapshot no longer has fails typechecking. The error codes the client
 names MUST equal the codes the engine's error table defines.
 
