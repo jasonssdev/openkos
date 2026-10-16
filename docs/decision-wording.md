@@ -66,7 +66,7 @@ Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../eva
 
 ## Identity — "Are these the same?"
 
-`kind: identity`. Actions `merge`, `keep_distinct`, `skip`; merge is withheld unless the model has judged the pair the same.
+`kind: identity`. Actions `merge`, `merge_group`, `keep_distinct`, `skip`. Neither merge is offered unless the model has judged the group the same. `merge` combines a pair of the same kind; `merge_group` takes its place for more than two pages, or for pages of different kinds, and asks the person to choose which pages are the same and which one stays.
 
 **Question:** "Are these the same {person / place / …}?" with the two pages side by side. **(H)** that a person answers this question faster and more correctly than one about "duplicates".
 
@@ -91,9 +91,30 @@ A withheld combine is never shown as a disabled button with no reason. The line 
 **Undo, and how it is shown:**
 
 - After combining: the confirmation says "Combined into '{title}'." with an **Undo** button. Later, the combined page shows "Combined from '{other title}' on {date}" with **Split again**. Splitting restores both pages exactly as they were (`unmerge`). Only the most recent combine on a page can be split directly; when there are later ones, the app explains: "To split this, the later combines on this page are split first: {list}. Continue?" and does them in order (`unmerge --to`). **(H)** that "split again" is understood as the undo of "combine".
+- After combining a group: the page shows one "Combined from '{other title}' on {date}" line per page that was combined into it, newest first, each with **Split again**. A group is undone step by step, with the same "the later combines on this page are split first" wording. The app can offer this only once `openkos.api` has an unmerge operation (see "Open questions").
 - After keeping separate: "Kept separate." with **Undo**. Later, under the library's settings, "Pages you kept separate" lists each pair with **Ask me again** (`duplicates --reopen`; the list is `duplicates --kept-distinct`).
 
-**Not combinable in the app:** a group of more than two pages, or two pages of different kinds (`more_than_two_members`, `cross_type`). The app shows "These can't be combined here yet." with Keep separate and Decide later only. This is a known gap: today only the CLI resolves those groups, which a first-time user cannot reach. It is listed under "Open questions".
+### More than two pages — "Which of these are the same?"
+
+`merge_group`, offered in place of `merge` when the group has more than two pages (`more_than_two_members`). **(H)** for the whole subsection.
+
+The screen shows every page side by side, each with a mark the person can set or clear, and asks the question above them. The marked pages are the ones that are the same thing; a second question, "Which one should the combined page keep its name from?", is asked over the marked pages only. The app never picks the name for the person.
+
+**Options and what they do:**
+
+- **Combine the ones I marked** — "We'll make one page from the {n} pages you marked. It keeps the name '{survivor title}'. The pages you didn't mark stay as they are, and we won't suggest combining them with '{survivor title}' again." The button stays disabled, with the line "Mark at least two pages", until two are marked. Shown from the preview (`MergePlan` with its `steps` and `kept_distinct_ids`): the surviving title, the marked titles and the number of other pages that will point to the combined page. When every page is marked, the last sentence is left out.
+- **Keep all separate** — "We won't suggest combining any of these again." Shown from `KeepDistinctPlan`.
+- **Decide later** — "Nothing changes. This stays in To review."
+
+The "different files" line and the cross-type warning are shown as for a pair.
+
+### Different kinds — "What is {title}?"
+
+`merge_group`, offered in place of `merge` when the pages are of different kinds (`cross_type`). **(H)** for the whole subsection.
+
+**Question:** "What is {title}?" with the pages side by side, each labelled by its kind in the type nouns above. **Options:** one per kind among the pages, worded as "It's a person", "It's an organization", and so on; **They're different things** (keep separate); **Decide later**.
+
+**What it does,** from the plan: "We'll keep one page, as a {person}, named '{survivor title}', and remember it was also described as {an organization}." When the plan says the other kind is not recorded because the page already notes one (`type_outcome: discarded`): "It was already noted as possibly {a place}, so we won't note {an organization}." When two pages share the chosen kind, the app first asks which of them keeps its name **(H)**. The "different files" line and the cross-type warning line are shown as for a pair: choosing what something is never happens without them. The app never chooses the kind for the person.
 
 ## Connection — "Is this right?"
 
@@ -166,6 +187,8 @@ Every message says whether anything changed, and offers the one action that help
 | A page in the decision is gone | `member_missing` | "One of these pages no longer exists, so there's nothing to decide." | **OK** (removes it from view) |
 | The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to check pages." | **Start it** (the guided-setup step) |
 | Saving the choice failed | `record_failed` | "Your choice couldn't be saved. Nothing was changed." | **Try again** |
+| The marked pages don't fit the group | `invalid_selection` | "Something about your choice didn't match these pages. Please choose again." | reload **(H)** |
+| Only part of a group was combined | `merge_group_interrupted` | "Only some of these were combined. Nothing else changed, and each combine can be split again." | reload **(H)** |
 
 ## Who can see a page
 
@@ -183,5 +206,5 @@ The cloud model's warning, in settings only and never during setup, uses the sam
 
 ## Open questions
 
-- **Groups the app cannot combine.** A group of more than two pages, or of different kinds, is resolvable only from the CLI today. Until the engine offers an app path, the app lists it as "can't be combined here yet". Whether that path is built in MVP 6 is a scope decision for the app stage.
+- **Undo from the app.** Splitting a combine, a pair or a group, needs an unmerge operation in `openkos.api` and the local API, tracked in #1432. Until it exists the app cannot offer **Undo** or **Split again** for a combine.
 - **Translation.** The Spanish copy follows this brief once the English wording is checked; the type nouns and the tier lines are the parts most likely to need more than a literal translation.
