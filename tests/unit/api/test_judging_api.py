@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from openkos import lock
+from openkos import config, lock
 from openkos.api import (
     BackendError,
     BackendUnavailable,
@@ -22,6 +22,7 @@ from openkos.api import (
     JudgingOutcome,
     JudgingQuote,
     OpenKosError,
+    QuoteNotice,
     QuoteStale,
     RunRefused,
     StopToken,
@@ -299,3 +300,66 @@ def test_a_wait_out_of_range_is_refused_before_any_call(root: Path) -> None:
             )
 
     assert factory.client.calls == 0
+
+
+# -- the insecure-key advisory ------------------------------------------------- #
+
+
+_KEY = "sk-test-from-the-environment"
+
+
+def _use_remote_backend(root: Path, base_url: str) -> None:
+    path = root / "openkos.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + f"\nbackend: openai-compatible\nbase_url: {base_url}\n",
+        encoding="utf-8",
+    )
+
+
+def _insecure_notices(quote: JudgingQuote) -> list[QuoteNotice]:
+    return [n for n in quote.notices if n.code == "insecure_key"]
+
+
+def test_a_quote_carries_the_insecure_key_advisory_before_any_consent(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_remote_backend(root, "http://llm.example.test/v1")
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", _KEY)
+    expected = backends.insecure_key_warning(config.read_config(root))
+
+    quote = _quote(root, Factory())
+
+    assert expected is not None
+    assert "llm.example.test" in expected
+    assert _insecure_notices(quote) == [QuoteNotice("insecure_key", text=expected)]
+    assert _KEY not in repr(quote)
+
+
+@pytest.mark.parametrize("scheme", ["https", "http"])
+def test_a_quote_without_an_insecure_key_carries_no_advisory(
+    root: Path, monkeypatch: pytest.MonkeyPatch, scheme: str
+) -> None:
+    _use_remote_backend(root, f"{scheme}://llm.example.test/v1")
+    if scheme == "https":
+        monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", _KEY)
+    else:
+        monkeypatch.delenv("OPENKOS_OPENAI_API_KEY", raising=False)
+
+    quote = _quote(root, Factory())
+
+    assert _insecure_notices(quote) == []
+
+
+@pytest.mark.parametrize("kind", ["identity", "relation_type", "volatility"])
+def test_every_kind_of_quote_carries_the_insecure_key_advisory(
+    root: Path, monkeypatch: pytest.MonkeyPatch, kind: judging.JudgingKind
+) -> None:
+    _use_remote_backend(root, "http://llm.example.test/v1")
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", _KEY)
+    expected = backends.insecure_key_warning(config.read_config(root))
+
+    quote = quote_judging(Workspace.open(root), kind, chat_client=Factory())
+
+    assert quote.kind == kind
+    assert _insecure_notices(quote) == [QuoteNotice("insecure_key", text=expected)]
