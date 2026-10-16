@@ -375,6 +375,10 @@ SPEC_CODES = {
     "write_refused",
     "write_failed",
     "merge_group_interrupted",
+    "unmerge_interrupted",
+    "survivor_missing",
+    "not_merged",
+    "survivor_edited",
     "workspace_busy",
     "workspace_lock_unavailable",
     "queue_unavailable",
@@ -417,6 +421,7 @@ def test_every_code_in_the_spec_table_is_produced_exactly_once_and_no_other(
 ) -> None:
     rows = [row.code for row in _errors._ROWS]
     not_applied = [row[1] for row in _errors._NOT_APPLIED.values()]
+    not_applied += [row[1] for row in _errors._NOT_UNMERGEABLE.values()]
     helpers = [
         _errors.key_mismatch().body.code,
         _errors.outcome_problem(api.Stale(_KEY, "content_changed")).body.code,

@@ -73,10 +73,10 @@ JSON is never hand-merged).
 
 ## S3 Local HTTP API (H1, H2, H3)
 
-- [ ] S3.1 RED: `tests/unit/localapi/test_unmerge_routes.py`: history, preview,
+- [x] S3.1 RED: `tests/unit/localapi/test_unmerge_routes.py`: history, preview,
   apply round trip, the three `NotUnmergeable` rows, `stale`,
   `unmerge_interrupted`, unknown key 422, wait ceiling.
-- [ ] S3.2 GREEN: routes in `_routes.py`, request/response models in
+- [x] S3.2 GREEN: routes in `_routes.py`, request/response models in
   `_models.py`, rows in `_errors.py`; regenerate `openapi.json` and check
   `UnmergeVersion` is one component. Mutation-check each new row.
 

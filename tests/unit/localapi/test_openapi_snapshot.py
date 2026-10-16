@@ -130,6 +130,9 @@ _ROUTE_ERRORS: dict[tuple[str, str], set[str]] = {
     ("post", "/v1/decisions/{decision_key}/preview"): {"409", "413"},
     ("post", "/v1/decisions/{decision_key}/apply"): {"409", "413", "503"},
     ("post", "/v1/queue/refresh"): {"413", "503"},
+    ("get", "/v1/merges"): set(),
+    ("post", "/v1/unmerge/preview"): {"409", "413"},
+    ("post", "/v1/unmerge/apply"): {"409", "413", "503"},
     ("post", "/v1/judging/quote"): {"413", "424", "502", "503"},
     ("post", "/v1/judging/runs"): {"409", "413"},
     ("get", "/v1/judging/runs/{run_id}"): {"404"},
@@ -138,6 +141,7 @@ _ROUTE_ERRORS: dict[tuple[str, str], set[str]] = {
 _RETRY_AFTER = {
     ("post", "/v1/decisions/{decision_key}/apply"),
     ("post", "/v1/queue/refresh"),
+    ("post", "/v1/unmerge/apply"),
 }
 
 
