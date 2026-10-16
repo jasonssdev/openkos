@@ -28,11 +28,14 @@ from tests.unit.localapi.conftest import AUTH, PORT
 PAIR = ("concepts/a", "concepts/b")
 KEY = "identity:abc123"
 VERSION = api.DecisionVersion(KEY, "payload-digest-1", "content-digest-1")
-VERSION_JSON = {
+# What a client that predates group decisions echoes: no `selection` key.
+LEGACY_VERSION_JSON = {
     "decision_key": KEY,
     "payload_digest": "payload-digest-1",
     "content_digest": "content-digest-1",
 }
+# What a preview serves now: the same three keys and a null selection.
+VERSION_JSON = {**LEGACY_VERSION_JSON, "selection": None}
 
 
 def _make_client(settings: ServerSettings) -> TestClient:
@@ -89,7 +92,7 @@ def _preview_result() -> api.DecisionPreview:
 
 # -- request validation (S3.1) --------------------------------------------------- #
 
-_APPLY_OK = {"action": "merge", "version": VERSION_JSON}
+_APPLY_OK = {"action": "merge", "version": LEGACY_VERSION_JSON}
 
 
 @pytest.mark.parametrize(

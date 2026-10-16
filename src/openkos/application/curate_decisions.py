@@ -61,6 +61,21 @@ class Action(StrEnum):
     RELATE = "relate"
     RELATE_REVERSED = "relate_reversed"
     SET_TIER = "set_tier"
+    MERGE_GROUP = "merge_group"
+
+
+@dataclass(frozen=True)
+class GroupSelection:
+    """The members a person marked the same, and the one that stays.
+
+    `member_ids` are the marked members, the survivor included. A selection
+    is data the caller supplies to a `merge_group` preview and is carried in
+    the `DecisionVersion` it returns, so an altered selection is a stale
+    version. It is canonicalised (deduplicated, ascending) by
+    `validate_selection` before it enters a version."""
+
+    survivor_id: str
+    member_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -76,15 +91,24 @@ class DecisionVersion:
     decision_key: str
     payload_digest: str | None
     content_digest: str
+    selection: GroupSelection | None = None
+    """The group selection a `merge_group` was previewed with, set on that
+    action's version only. It is the one input a re-preview needs that the
+    queue row cannot supply."""
 
     def token(self) -> str:
-        """An opaque hex digest of the three components, for transport.
-        Parsing a token back is deferred to the API stage."""
-        parts = (
+        """An opaque hex digest of the components, for transport.
+        Parsing a token back is deferred to the API stage. A version with no
+        selection hashes exactly the three original components, so every
+        token issued before group decisions is unchanged."""
+        parts = [
             self.decision_key,
             "-" if self.payload_digest is None else f"+{self.payload_digest}",
             self.content_digest,
-        )
+        ]
+        if self.selection is not None:
+            parts.append(f"select\tsurvivor\t{self.selection.survivor_id}")
+            parts.extend(f"select\tmember\t{m}" for m in self.selection.member_ids)
         return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
@@ -110,7 +134,12 @@ class NotApplied:
 
     action: Action
     reason: Literal[
-        "skipped", "member_missing", "record_failed", "not_mergeable", "not_offered"
+        "skipped",
+        "member_missing",
+        "record_failed",
+        "not_mergeable",
+        "not_offered",
+        "invalid_selection",
     ]
     detail: str | None = None
 
@@ -517,6 +546,7 @@ def _tier_content_lines(preview: TierDecisionPreview) -> list[str]:
 def version_of(
     preview: (
         MergeDecisionPreview
+        | MergeGroupDecisionPreview
         | RelateDecisionPreview
         | TierDecisionPreview
         | KeepDistinctDecisionPreview
@@ -529,7 +559,11 @@ def version_of(
 
     `payload_digest` is the open queue row's, or `None` when no row backs the
     item. The CLI never calls this, so its walk pays no hashing cost."""
-    if isinstance(preview, RelateDecisionPreview):
+    selection = None
+    if isinstance(preview, MergeGroupDecisionPreview):
+        lines = _group_content_lines(layout, preview)
+        selection = preview.selection
+    elif isinstance(preview, RelateDecisionPreview):
         lines = _relate_content_lines(preview.prepared)
     elif isinstance(preview, TierDecisionPreview):
         lines = _tier_content_lines(preview)
@@ -541,6 +575,7 @@ def version_of(
         decision_key=preview.decision_key,
         payload_digest=payload_digest,
         content_digest=_sha256("\n".join(lines).encode("utf-8")),
+        selection=selection,
     )
 
 
@@ -686,6 +721,200 @@ def commit_merge_decision(
                 str(exc),
             ) from exc
     return Applied(preview.decision_key, Action.MERGE, commit_sha)
+
+
+# -- identity merge of a group ---------------------------------------------- #
+
+TypeOutcome = Literal["same_type", "recorded", "discarded", "unknown"]
+"""What one step does with the absorbed member's OKF type: nothing to do (same
+type as the survivor), recorded as the survivor's `type_alternative`,
+discarded because the survivor already records one (#1293), or unknown because
+a type cannot be read."""
+
+
+@dataclass(frozen=True)
+class GroupStep:
+    """One pairwise merge of a group: the pure plan, the absorbed member's
+    type, and what the step does with it."""
+
+    prepared: application_lifecycle.PreparedMerge
+    absorbed_type: str | None
+    type_outcome: TypeOutcome
+
+
+@dataclass(frozen=True)
+class MergeGroupDecisionPreview:
+    """What committing one identity group would do, computed without writing.
+
+    `steps` merge the marked members other than the survivor into it, in
+    ascending absorbed order, each planned against the bundle as it is now.
+    `kept_distinct_ids` are the group members the person did not mark; no step
+    names them. `group` and `selection` are how this preview was made, kept so
+    a token commit can re-preview from current bytes. A group never reconciles
+    merged bodies, so there is no reconciliation to plan."""
+
+    steps: tuple[GroupStep, ...]
+    survivor_id: str
+    survivor_type: str | None
+    kept_distinct_ids: tuple[str, ...]
+    selection: GroupSelection
+    decision_key: str
+    cross_source_same_pair: bool
+    cross_type_concern: str | None
+    group: CandidateGroup
+    as_proposed: bool
+    """Whether every member of the group was marked."""
+
+
+def validate_selection(
+    group_members: Sequence[str], selection: GroupSelection | None
+) -> GroupSelection | NotApplied:
+    """The canonical selection (marked members deduplicated, ascending), or the
+    RETURNED `NotApplied("invalid_selection")`.
+
+    Valid only when every marked member and the survivor belong to the group,
+    the survivor is among the marked members and at least two distinct members
+    are marked. The surface never picks a survivor: a missing selection is
+    invalid too."""
+    invalid = NotApplied(Action.MERGE_GROUP, "invalid_selection")
+    if selection is None:
+        return invalid
+    members = set(group_members)
+    marked = tuple(sorted(set(selection.member_ids)))
+    if (
+        selection.survivor_id not in marked
+        or len(marked) < 2
+        or not set(marked) <= members
+    ):
+        return invalid
+    return GroupSelection(survivor_id=selection.survivor_id, member_ids=marked)
+
+
+def _type_of(
+    layout: config.WorkspaceLayout, concept_id: str
+) -> tuple[str | None, bool]:
+    """`(declared type, records a type_alternative)` of one member, `(None,
+    False)` when the document or its type cannot be read. Read through the OKF
+    adapter, the one place that knows the on-disk shape."""
+    path = okf.concept_path_for(concept_id, layout.bundle_dir)
+    try:
+        metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return None, False
+    declared = metadata.get("type")
+    usable = declared if isinstance(declared, str) and declared.strip() else None
+    return usable, okf.TYPE_ALTERNATIVE_KEY in metadata
+
+
+def _type_outcomes(
+    layout: config.WorkspaceLayout, survivor_id: str, absorbed_ids: Sequence[str]
+) -> tuple[str | None, tuple[tuple[str | None, TypeOutcome], ...]]:
+    """The survivor's type and, per absorbed member in merge order, its type and
+    outcome. The survivor's `type_alternative` is one scalar, so the first
+    differing type is recorded when it holds none and every later one is
+    discarded: this simulates the order the commit writes in, which is the plan
+    the person read."""
+    survivor_type, has_alternative = _type_of(layout, survivor_id)
+    outcomes: list[tuple[str | None, TypeOutcome]] = []
+    for absorbed_id in absorbed_ids:
+        absorbed_type, _ = _type_of(layout, absorbed_id)
+        if survivor_type is None or absorbed_type is None:
+            outcomes.append((absorbed_type, "unknown"))
+        elif absorbed_type == survivor_type:
+            outcomes.append((absorbed_type, "same_type"))
+        elif has_alternative:
+            outcomes.append((absorbed_type, "discarded"))
+        else:
+            has_alternative = True
+            outcomes.append((absorbed_type, "recorded"))
+    return survivor_type, tuple(outcomes)
+
+
+def preview_merge_group(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    group: CandidateGroup,
+    *,
+    verdict: Verdict | None,
+    selection: GroupSelection | None,
+) -> MergeGroupDecisionPreview | NotApplied:
+    """Preview merging the members `selection` marks into its survivor.
+
+    Writes nothing and calls no model. Only a persisted SAME judgment is
+    mergeable (`NotApplied("not_mergeable")` otherwise); a selection that
+    names no survivor, or members outside the group, is
+    `NotApplied("invalid_selection")`; a member that no longer resolves is
+    `NotApplied("member_missing")`; a plan that cannot be built raises
+    `WriteFailed`. Each absorbed member's plan is pinned to
+    `(survivor, absorbed)` so the engine's own survivor rule never overrides
+    the person's choice."""
+    if verdict is not Verdict.SAME:
+        return NotApplied(Action.MERGE_GROUP, "not_mergeable")
+    valid = validate_selection(group.member_ids, selection)
+    if isinstance(valid, NotApplied):
+        return valid
+    survivor_id = valid.survivor_id
+    absorbed_ids = tuple(m for m in valid.member_ids if m != survivor_id)
+    prepared_steps: list[application_lifecycle.PreparedMerge] = []
+    for absorbed_id in absorbed_ids:
+        try:
+            prepared = application_lifecycle.prepare_one_merge(
+                root,
+                layout,
+                layout.bundle_dir / "index.md",
+                layout.bundle_dir / "log.md",
+                group,
+                ordered_pair=(survivor_id, absorbed_id),
+            )
+        except (OSError, ValueError) as exc:
+            raise WriteFailed("merge", (survivor_id, absorbed_id), str(exc)) from exc
+        if prepared is None:
+            return NotApplied(Action.MERGE_GROUP, "member_missing")
+        prepared_steps.append(prepared)
+    survivor_type, outcomes = _type_outcomes(layout, survivor_id, absorbed_ids)
+    steps = tuple(
+        GroupStep(prepared, absorbed_type, outcome)
+        for prepared, (absorbed_type, outcome) in zip(
+            prepared_steps, outcomes, strict=True
+        )
+    )
+    marked = valid.member_ids
+    return MergeGroupDecisionPreview(
+        steps=steps,
+        survivor_id=survivor_id,
+        survivor_type=survivor_type,
+        kept_distinct_ids=tuple(sorted(set(group.member_ids) - set(marked))),
+        selection=valid,
+        decision_key=identity_decision_key(group.member_ids),
+        cross_source_same_pair=application_lifecycle.cross_source_same_pair(
+            layout.bundle_dir, marked
+        ),
+        cross_type_concern=application_lifecycle.cross_type_concern(
+            layout.bundle_dir, marked
+        ),
+        group=group,
+        as_proposed=set(marked) == set(group.member_ids),
+    )
+
+
+def _group_content_lines(
+    layout: config.WorkspaceLayout, preview: MergeGroupDecisionPreview
+) -> list[str]:
+    """The selection, every step's own lines and one `keep` line per member
+    that is not marked, so editing or forgetting an unmarked member moves the
+    version too."""
+    lines = [f"select\tsurvivor\t{preview.selection.survivor_id}"]
+    lines.extend(f"select\tmember\t{m}" for m in preview.selection.member_ids)
+    for step in preview.steps:
+        lines.extend(_merge_content_lines(layout, step.prepared))
+    for member_id in preview.kept_distinct_ids:
+        path = okf.concept_path_for(member_id, layout.bundle_dir)
+        try:
+            digest = _sha256(path.read_bytes())
+        except OSError:
+            digest = "-"
+        lines.append(f"keep\t{member_id}\t{digest}")
+    return sorted(lines)
 
 
 # -- relate ---------------------------------------------------------------- #

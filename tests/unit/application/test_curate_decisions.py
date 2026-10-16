@@ -192,6 +192,7 @@ def test_the_action_values_are_the_wire_names() -> None:
         "relate",
         "relate_reversed",
         "set_tier",
+        "merge_group",
     ]
 
 

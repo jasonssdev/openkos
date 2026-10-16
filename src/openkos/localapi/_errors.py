@@ -45,6 +45,7 @@ SKIP_NOT_APPLICABLE: Final = "skip_not_applicable"
 NOT_MERGEABLE: Final = "not_mergeable"
 MEMBER_MISSING: Final = "member_missing"
 RECORD_FAILED: Final = "record_failed"
+INVALID_SELECTION: Final = "invalid_selection"
 WORKSPACE_BUSY: Final = "workspace_busy"
 WORKSPACE_LOCK_UNAVAILABLE: Final = "workspace_lock_unavailable"
 WRITE_DRIFT: Final = "write_drift"
@@ -196,6 +197,12 @@ _NOT_APPLIED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
         RECORD_FAILED,
         True,
         "the decision could not be recorded; try again",
+    ),
+    "invalid_selection": (
+        422,
+        INVALID_SELECTION,
+        False,
+        "the selection does not name a survivor and the members to combine with it",
     ),
 }
 

@@ -9,7 +9,8 @@
           "skip",
           "relate",
           "relate_reversed",
-          "set_tier"
+          "set_tier",
+          "merge_group"
         ],
         "title": "Action",
         "type": "string"
@@ -240,7 +241,7 @@
         "type": "object"
       },
       "DecisionPreview": {
-        "description": "`api.DecisionPreview` with its plan declared as a discriminated union.\n\nThe plan types carry a literal `kind`, so the OpenAPI document names it as the\ndiscriminator and a generated client narrows `plan` with `switch (plan.kind)`.\nThe field names and the plan types are `openkos.api`'s own. A response model\nonly: no `extra=\"forbid\"`, which would reach the nested dataclasses and split\ntheir components into `-Input` and `-Output` variants. A defaulted `kind` is\nstill always sent, so the response schema marks it required.",
+        "description": "`api.DecisionPreview` with its plan declared as a discriminated union. The\nfield names are `openkos.api`'s own. A response model only: no\n`extra=\"forbid\"`, which would reach the nested dataclasses and split their\ncomponents into `-Input` and `-Output` variants.",
         "properties": {
           "action": {
             "$ref": "#/components/schemas/Action"
@@ -250,30 +251,7 @@
             "type": "string"
           },
           "plan": {
-            "discriminator": {
-              "mapping": {
-                "keep_distinct": "#/components/schemas/KeepDistinctPlan",
-                "merge": "#/components/schemas/MergePlan",
-                "relate": "#/components/schemas/RelatePlan",
-                "set_tier": "#/components/schemas/TierPlan"
-              },
-              "propertyName": "kind"
-            },
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MergePlan"
-              },
-              {
-                "$ref": "#/components/schemas/RelatePlan"
-              },
-              {
-                "$ref": "#/components/schemas/TierPlan"
-              },
-              {
-                "$ref": "#/components/schemas/KeepDistinctPlan"
-              }
-            ],
-            "title": "Plan"
+            "$ref": "#/components/schemas/PreviewPlan"
           },
           "version": {
             "$ref": "#/components/schemas/DecisionVersion"
@@ -309,6 +287,16 @@
               }
             ],
             "title": "Payload Digest"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -342,6 +330,28 @@
           "message"
         ],
         "title": "ErrorBody",
+        "type": "object"
+      },
+      "GroupSelection": {
+        "description": "The members a person marked the same, and the one that stays.\n\n`member_ids` are the marked members, the survivor included. A selection\nis data the caller supplies to a `merge_group` preview and is carried in\nthe `DecisionVersion` it returns, so an altered selection is a stale\nversion. It is canonicalised (deduplicated, ascending) by\n`validate_selection` before it enters a version.",
+        "properties": {
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          },
+          "survivor_id": {
+            "title": "Survivor Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "survivor_id",
+          "member_ids"
+        ],
+        "title": "GroupSelection",
         "type": "object"
       },
       "HealthBody": {
@@ -992,6 +1002,33 @@
         ],
         "title": "PendingRow",
         "type": "object"
+      },
+      "PreviewPlan": {
+        "description": "The plan of a preview, declared as a discriminated union.\n\nThe plan types carry a literal `kind`, so the OpenAPI document names it as the\ndiscriminator and a generated client narrows `plan` with `switch (plan.kind)`.\nThe plan types are `openkos.api`'s own, and the wrapper serialises as the bare\nplan. A defaulted `kind` is always sent, so the response schema marks it (and\nevery other defaulted plan field) required. That flag lives HERE and not on\n`DecisionPreview`, because it reaches every nested dataclass: on the preview it\nwould also mark `DecisionVersion.selection` required in the response only, and\n`DecisionVersion`, which a client echoes back in a request, would split into\n`-Input` and `-Output` components.",
+        "discriminator": {
+          "mapping": {
+            "keep_distinct": "#/components/schemas/KeepDistinctPlan",
+            "merge": "#/components/schemas/MergePlan",
+            "relate": "#/components/schemas/RelatePlan",
+            "set_tier": "#/components/schemas/TierPlan"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/MergePlan"
+          },
+          {
+            "$ref": "#/components/schemas/RelatePlan"
+          },
+          {
+            "$ref": "#/components/schemas/TierPlan"
+          },
+          {
+            "$ref": "#/components/schemas/KeepDistinctPlan"
+          }
+        ],
+        "title": "PreviewPlan"
       },
       "PreviewRequest": {
         "additionalProperties": false,
