@@ -275,6 +275,41 @@ jobs:
             exit 1
           }
 
+  # The desktop shell (`desktop/`, ADR-0055) is a Rust crate the Python jobs
+  # never see. Its supervisor tests spawn real processes -- fake engines that
+  # speak the `openkos serve` handshake through POSIX `sh` -- including one that
+  # SIGKILLs a shell holding an engine and asserts the engine exits, which is
+  # the orphan guarantee itself. They need no Python and no model, and run in
+  # about a second; this job runs beside the Python suite, not after it, so it
+  # adds no time to a pull request's wall clock.
+  #
+  # The runner image's preinstalled rustup provides the toolchain, so no
+  # third-party action is involved; `--locked` fails on a Cargo.lock that has
+  # drifted from Cargo.toml, as `uv sync --locked` does for uv.lock.
+  desktop:
+    name: desktop shell (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop/src-tauri
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked
+
   # Every job above runs on `ubuntu-latest` only. macOS and Windows behavior
   # is otherwise UNVERIFIED until a user hits it, and this repo has already
   # paid for that twice: platform-gated tests that first ran on Linux cost

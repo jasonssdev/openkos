@@ -103,6 +103,7 @@ openkos/
 ├── evals/                        # measurement harnesses
 ├── examples/                     # runnable example bundles
 ├── docs/                         # including adr/
+├── desktop/                      # the desktop shell (Rust, Tauri 2): see below
 ├── openspec/                     # the spec contract: specs/{domain}/ · changes/ · config.yaml
 ├── pyproject.toml · uv.lock
 └── README.md · LICENSE · NOTICE · CHANGELOG.md · .github/
@@ -116,6 +117,24 @@ The principles that shape it:
 - **One declared public Python surface.** `openkos.api` is the only public Python import path; `application/` and every other package stay internal, and no `application/` module is declared public in place ([ADR-0060](adr/0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md)). The facade is synchronous and in-process, owner-local like the CLI, and applies no sensitivity disclosure gate: an adapter that discloses to anyone else applies the gate itself. Compatibility is promised by an integer `API_VERSION` and a committed snapshot of every public name, not by the package version. Its refusals share one root, `OpenKosError` in `errors.py`, which existing refusal families join without losing a base. It covers the review queue; other verbs reach it as they are needed by a client.
 - **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. The write use cases are `query.py`, `ingest.py`, and `lifecycle.py`; the read verbs (`status`, `list`, `lint`, `doctor`, `get`) have their own read cores, so an adapter is a thin layer over shared code rather than a second implementation; and `consent.py` holds the confirmation contracts as typed data so a non-TTY adapter can answer a gate without re-deriving its prompt. `cli/` keeps parsing, presentation, exit codes, and the shared write mechanics the services call through rather than own.
 - **The derived layer is reconstructible — but not uniformly, and not for free.** The derived SQLite stores under `.openkos/` sit at several different points on that scale. See [State taxonomy](#state-taxonomy) below, which is the one place that distinction is written down.
+
+## Repository structure (the desktop shell)
+
+The desktop app's shell lives beside the engine, not inside it: `desktop/` is a Rust crate for the Tauri 2 shell ([ADR-0055](adr/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar.md)), outside `src/` so the Python package, its wheel and its gates never see it. The shell holds no product behaviour; it starts the engine as a sidecar running `openkos serve` and keeps it running.
+
+```
+desktop/
+└── src-tauri/                    # the shell's Rust crate (Tauri's conventional layout)
+    ├── Cargo.toml · Cargo.lock
+    └── src/
+        ├── engine.rs             # one engine process: token over stdin, the ready line, stop
+        ├── supervisor.rs         # start, watch, bounded restarts, stop; the state the UI reads
+        └── locator.rs            # which engine to run: the one place the frozen engine will swap in
+```
+
+- **The engine contract is the engine's.** The shell conforms to `openkos serve` as `localapi/launch.py` defines it: a per-launch token as the first line of stdin, one JSON ready line on stdout naming the loopback port, and EOF on stdin as the engine's lifeline.
+- **No orphaned engine.** The shell keeps the engine's stdin open for the engine's whole life, so when the shell dies by any route, a force-quit included, the pipe closes and the engine exits. On a normal stop the shell closes stdin first, waits, and only then kills the engine's process group.
+- **The engine locator is the seam for packaging.** It runs the development engine of a source checkout today; the frozen engine of [ADR-0056](adr/0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md) replaces it there and nowhere else.
 
 ## Repository conventions
 

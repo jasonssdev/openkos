@@ -43,23 +43,23 @@ previous one is squash-merged).
 
 ## S2a The Supervisor Crate
 
-- [ ] S2a.1 RED: tests for the token, the ready-line parser, the handshake,
+- [x] S2a.1 RED: tests for the token, the ready-line parser, the handshake,
   stop (graceful, killed with its group, already exited), start failures
   (exited before ready, bad ready line, not ready, cancelled, spawn failure) and
   the stderr tail against fake `sh` engines (R2, R4).
-- [ ] S2a.2 RED: tests for the locator (R1).
-- [ ] S2a.3 RED: tests for the restart budget, the serialised state, and the
+- [x] S2a.2 RED: tests for the locator (R1).
+- [x] S2a.3 RED: tests for the restart budget, the serialised state, and the
   supervisor (ready, restart with a fresh token, bounded failure, final locator
   failure, shutdown during a backoff, drop) plus the force-quit probe (R3, R4).
-- [ ] S2a.4 GREEN: `engine.rs`, `locator.rs`, `supervisor.rs`.
-- [ ] S2a.5 Mutation-check the guards on their exact lines (stdin close, process
+- [x] S2a.4 GREEN: `engine.rs`, `locator.rs`, `supervisor.rs`.
+- [x] S2a.5 Mutation-check the guards on their exact lines (stdin close, process
   group, each ready-line check, window and budget comparisons, backoff cap,
   workspace check, cancellation, stderr bound); confirm the force-quit probe fails
   with a fake engine that ignores EOF.
-- [ ] S2a.6 CI: the `desktop` job (fmt, clippy, test).
-- [ ] S2a.7 Docs: the `desktop` scope in `AGENTS.md`, `CONTRIBUTING.md` and
+- [x] S2a.6 CI: the `desktop` job (fmt, clippy, test).
+- [x] S2a.7 Docs: the `desktop` scope in `AGENTS.md`, `CONTRIBUTING.md` and
   `openspec/config.yaml`; `docs/architecture.md` gains the shell's directory.
-- [ ] S2a.8 Gates: `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D
+- [x] S2a.8 Gates: `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D
   warnings`, `cargo test --locked`; `uv build` ships no `desktop/` file.
 
 ## S2b The Tauri App And The Status Page
