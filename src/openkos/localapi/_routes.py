@@ -3,6 +3,7 @@ attribute, so a test that patches `openkos.api.<fn>` intercepts the call."""
 
 import dataclasses
 from importlib import metadata
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.security import HTTPBearer
@@ -65,6 +66,23 @@ def _wait(requested: float) -> float:
     return min(requested, _errors.WRITE_WAIT_SECONDS)
 
 
+def _errors_of(
+    *statuses: int, retry_after: bool = False
+) -> dict[int | str, dict[str, Any]]:
+    """`responses=` rows for the statuses a route answers with an `ErrorBody`.
+
+    `retry_after` documents the header a busy 503 carries."""
+    rows: dict[int | str, dict[str, Any]] = {s: {"model": ErrorBody} for s in statuses}
+    if retry_after:
+        rows[503]["headers"] = {
+            "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {"type": "integer"},
+            }
+        }
+    return rows
+
+
 def make_router() -> APIRouter:
     router = APIRouter(
         prefix=prefix(),
@@ -73,6 +91,7 @@ def make_router() -> APIRouter:
             401: {"model": ErrorBody},
             403: {"model": ErrorBody},
             422: {"model": ErrorBody},
+            500: {"model": ErrorBody},
         },
     )
 
@@ -89,7 +108,7 @@ def make_router() -> APIRouter:
         # FastAPI cannot serialise the read-only mappings the API returns.
         return invoke(lambda: _plain_mappings(api.status(workspace)))
 
-    @router.get("/pending")
+    @router.get("/pending", responses=_errors_of(503))
     def pending(workspace: api.Workspace = Depends(_workspace)) -> api.PendingReport:  # noqa: B008
         return invoke(lambda: api.pending_report(workspace))
 
@@ -99,7 +118,7 @@ def make_router() -> APIRouter:
             decisions=list(invoke(lambda: api.list_decisions(workspace)))
         )
 
-    @router.post("/decisions/{decision_key}/preview")
+    @router.post("/decisions/{decision_key}/preview", responses=_errors_of(409))
     def preview(
         decision_key: str,
         body: PreviewRequest,
@@ -112,7 +131,10 @@ def make_router() -> APIRouter:
             return result
         raise _errors.outcome_problem(result)
 
-    @router.post("/decisions/{decision_key}/apply")
+    @router.post(
+        "/decisions/{decision_key}/apply",
+        responses=_errors_of(409, 503, retry_after=True),
+    )
     def apply(
         decision_key: str,
         body: ApplyRequest,
@@ -134,7 +156,7 @@ def make_router() -> APIRouter:
             return ApplyResponse(applied=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
-    @router.post("/queue/refresh")
+    @router.post("/queue/refresh", responses=_errors_of(503, retry_after=True))
     def refresh(
         body: RefreshRequest | None = None,
         workspace: api.Workspace = Depends(_workspace),  # noqa: B008
@@ -142,7 +164,7 @@ def make_router() -> APIRouter:
         wait = _wait(body.wait_seconds if body else _errors.WRITE_WAIT_SECONDS)
         return invoke(lambda: api.refresh_decision_queue(workspace, wait_seconds=wait))
 
-    @router.post("/judging/quote")
+    @router.post("/judging/quote", responses=_errors_of(424, 502, 503))
     def quote(
         body: QuoteRequest,
         workspace: api.Workspace = Depends(_workspace),  # noqa: B008
@@ -156,7 +178,7 @@ def make_router() -> APIRouter:
             )
         )
 
-    @router.post("/judging/runs", status_code=202)
+    @router.post("/judging/runs", status_code=202, responses=_errors_of(409))
     def start_run(
         body: RunRequest,
         response: Response,
@@ -169,14 +191,14 @@ def make_router() -> APIRouter:
         response.headers["Location"] = f"{prefix()}/judging/runs/{status.run_id}"
         return status
 
-    @router.get("/judging/runs/{run_id}")
+    @router.get("/judging/runs/{run_id}", responses=_errors_of(404))
     def run_status(
         run_id: str,
         registry: RunRegistry = Depends(_registry),  # noqa: B008
     ) -> RunStatus:
         return registry.status(run_id)
 
-    @router.post("/judging/runs/{run_id}/stop")
+    @router.post("/judging/runs/{run_id}/stop", responses=_errors_of(404))
     def stop_run(
         run_id: str,
         registry: RunRegistry = Depends(_registry),  # noqa: B008

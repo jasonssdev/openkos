@@ -733,7 +733,7 @@ Goal: measure, once, that the published schema yields a usable TypeScript client
 update the docs whose general shape changed. Satisfies: L16 (measured, not in CI),
 D11. Depends on: S5b.
 
-- [ ] S6.1 One-off measurement in a scratch directory outside the repository (never
+- [x] S6.1 One-off measurement in a scratch directory outside the repository (never
   committed): copy `tests/unit/localapi/openapi.json` (read-only); `npx
   openapi-typescript@7 openapi.json -o api.d.ts`; write `check.ts` that narrows
   `Decision.detail` with `"member_ids" in detail`, switches on
@@ -746,14 +746,16 @@ D11. Depends on: S5b.
   generated line count, whether `prefixItems` became a tuple type, whether each
   narrowing compiled without casts, and any `-Input`/`-Output` names. If Node is not
   available, record "not measured", never a pass. Satisfies: L16.
-- [ ] S6.2 Record the result in the S6 PR description and, after merge, in the verify
+- [x] S6.2 Record the result in the S6 PR description and, after merge, in the verify
   report. If narrowing is unusable, the fix belongs in `openkos.api` (an additive
   defaulted field), not an HTTP DTO (D2): open a follow-up rather than editing
   `openkos.api` here. Satisfies: L16.
-- [ ] S6.3 `docs/architecture.md` (the adapter package ships; the stale statements of
+- [x] S6.3 `docs/architecture.md` (the adapter package ships; the stale statements of
   the planned adapter and the shipped tree, located by content) and `docs/roadmap.md`
   (the MVP 6 local API stage status). No counts, no "since #NNN". Satisfies: L15.
-- [ ] S6.4 Run the five gates and the docs tests; commit `docs(docs):`.
+- [x] S6.4 Run the five gates and the docs tests; commit `docs(docs):`.
+
+S6 also declares the error responses of every route in the OpenAPI (`responses=` on the routes, snapshot regenerated) so the generated client types them, and ADR-0061 states the one `asyncio` module.
 
 Branch/PR: `docs/local-api-shape`. Independent mutation: n/a (docs). Verify by
 reading `docs/architecture.md` against `ls src/openkos/localapi`.
