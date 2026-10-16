@@ -1,0 +1,187 @@
+---
+type: Reference
+title: OpenKOS Decision Wording
+description: Design brief for how the desktop app words each pending decision for someone who has never heard the word "merge" — the question, the options, what each does, how it is undone, and the rules the copy follows.
+tags:
+  - openkos
+  - design-system
+  - user-experience
+  - reference
+resource: https://github.com/jasonssdev/openkos
+timestamp: 2026-10-16T00:00:00Z
+sensitivity: public
+---
+
+# Decision Wording
+
+This brief settles how the desktop app words a pending decision for a person who has never used a terminal and has never heard "merge", "concept" or "tier". It is the design brief the [roadmap](roadmap.md#mvp-6--the-desktop-app) requires before the review screens are built. It fixes words and rules, not screens: layout, visuals and interaction belong to the app stage and to the [brand](brand.md).
+
+The copy is **English first**. Spanish follows as a translation of this brief, written once the English wording has met a real reader; it is not a separate design.
+
+Each decision maps onto the curation surface of `openkos.api` ([ADR-0053](adr/0053-curation-decisions-are-a-two-phase-application-surface.md), [ADR-0060](adr/0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md)) and its judging service ([ADR-0059](adr/0059-judging-is-a-quote-bound-application-surface-that-persists-per-chunk-and-never-merges.md)). The engine terms appear here, in code, only so the app stage can find what each wording belongs to; none of them reaches the screen.
+
+Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../evals/desktop_app/PREREGISTRATION.md) checks the ones it reaches: the participant settles one decision and then says, in their own words, what it did, which is compared with the "what it does" line below. Hypotheses that session does not reach stay hypotheses until a later session does.
+
+## Rules
+
+1. **No engine words on screen.** Never: merge, concept, bundle, OKF, tier, volatility, provenance, ingest, adjudicate, judge, canonical, survivor, absorbed, relation, sensitivity, workspace, queue, pending, decision key, token, model call. The table under "Words" gives the plain replacement.
+2. **Second person, plain verbs.** "You added", "Do you want to", "We'll keep". "We" is the app.
+3. **One decision per screen.** The screen shows one question, its evidence and its options. A list may show many decisions, but deciding happens one at a time — except the bulk acceptances allowed in rule 6.
+4. **Say what happens, before and after.** Every option has a one-line "what it does" under it. After the choice, the confirmation repeats it in the past tense and offers the undo where one exists.
+5. **"Not now" is not "No".** Every decision offers "Decide later", which changes nothing and keeps the decision in the list. It is never styled as a refusal ([roadmap](roadmap.md), The Quiet Engine: "no" is distinguishable from "not now").
+6. **Consent rules carry over unchanged** ([ADR-0053](adr/0053-curation-decisions-are-a-two-phase-application-surface.md), [ADR-0059](adr/0059-judging-is-a-quote-bound-application-surface-that-persists-per-chunk-and-never-merges.md)):
+   - **Spending is agreed to in bulk.** One "Check all" agreement covers a batch of checks, with the batch's size shown first. The person is never asked per item to spend.
+   - **Combining is never automatic and never in bulk.** Each "same thing?" question is answered on its own screen. No "accept all" ever reaches an identity decision, and checking never combines anything.
+   - Bulk acceptance is offered only where the engine already allows it: suggested connections that read the same both ways, and "how quickly does this go out of date" suggestions.
+7. **List, never hide.** A decision that cannot be acted on in the app is still listed, with a plain reason. A stale decision is shown as changed, not dropped.
+8. **Never show a command.** Where the engine names a CLI command (`resolves_via`), the app shows a plain reason and, if the app cannot act, says so. A screen that tells the person to open a terminal is a defect.
+9. **No confidence numbers.** The model's confidence is never shown or used to rank (ADR-0053). The model's reason, in its words, may be shown, labelled as the model's.
+
+## Words
+
+| Engine | On screen | |
+| --- | --- | --- |
+| workspace | **your library** | (H) |
+| concept, document, object | **page** | (H) |
+| source (a file in `raw/`) | **file** you added, by its file name | |
+| pending queue, open decisions | **To review** | (H) |
+| merge | **combine** | (H) |
+| keep distinct | **keep separate** | (H) |
+| skip | **decide later** | |
+| judge, adjudicate, evaluate | **check** ("let the AI model on this Mac check") | (H) |
+| relation, edge | **connection** | (H) |
+| provenance, citations | **"From:"** followed by file names | (H) |
+| volatility tier | **how quickly it goes out of date** | (H) |
+| query | **ask** | |
+| model | **AI model**, and where it runs: "on this Mac" or the provider's name | (H) |
+
+**What a page is about** is named from its OKF type, so the question can say "the same person" rather than "the same thing" **(H)**: Person → person; Organization → organization; Place → place; Event → event; Project → project; Decision → decision; Procedure → how-to; Concept → idea; Entity → thing; Insight → saved answer; Source → file.
+
+## Evidence on every decision screen
+
+- **The pages involved,** each by its title and a short opening excerpt, so the person can compare them side by side.
+- **Where each came from:** "From: allotment-volunteers.md, added 12 October", one line per file. When a page draws on several files, all are listed. **(H)** that file names and dates are enough evidence for a first-time reader.
+- **The model's reason,** when there is one, under "Why the AI model thinks so", in quotation marks, as written. Never paraphrased into the app's own voice, so the person can tell the app's statement from the model's guess.
+- **A changed decision** (`fresh` is false, or a preview returns `Stale`) says: "Something about these pages changed since this was suggested. Here is the current version." and reloads, never applying the old one.
+
+## Identity — "Are these the same?"
+
+`kind: identity`. Actions `merge`, `keep_distinct`, `skip`; merge is withheld unless the model has judged the pair the same.
+
+**Question:** "Are these the same {person / place / …}?" with the two pages side by side. **(H)** that a person answers this question faster and more correctly than one about "duplicates".
+
+What the screen says above the question, by `evaluation`:
+
+| Evaluation | Line above the question | Options |
+| --- | --- | --- |
+| `judged_same` | "The AI model thinks these are the same {person}." | Combine them · Keep separate · Decide later |
+| `judged_different` | "The AI model thinks these are different {people}." | Keep separate · Decide later |
+| `judged_uncertain` | "The AI model couldn't tell." | Keep separate · Decide later |
+| `pending_evaluation` | "These haven't been checked yet." | Check these · Keep separate · Decide later |
+
+A withheld combine is never shown as a disabled button with no reason. The line above the question is the reason. **(H)** that people accept "keep separate" being the only firm answer when the model is unsure, without feeling the app is broken.
+
+**Options and what they do:**
+
+- **Combine them** — "We'll make one page with everything from both. The page keeps the name '{survivor title}'. {n} other pages that mention it will point to the combined page." Shown from the preview (`MergePlan`): the surviving title, the absorbed title and the number of files rewritten. When the plan reports that the pair came from different files, or a type concern, add one line: "These came from different files: check that they really are the same {person}." **(H)** that naming which title survives is enough, without explaining why.
+- **Keep separate** — "We won't suggest combining these again." Shown from `KeepDistinctPlan`.
+- **Decide later** — "Nothing changes. This stays in To review."
+- **Check these** (pending evaluation only) — opens the check consent below. "Checking doesn't change anything. You'll still decide."
+
+**Undo, and how it is shown:**
+
+- After combining: the confirmation says "Combined into '{title}'." with an **Undo** button. Later, the combined page shows "Combined from '{other title}' on {date}" with **Split again**. Splitting restores both pages exactly as they were (`unmerge`). Only the most recent combine on a page can be split directly; when there are later ones, the app explains: "To split this, the later combines on this page are split first: {list}. Continue?" and does them in order (`unmerge --to`). **(H)** that "split again" is understood as the undo of "combine".
+- After keeping separate: "Kept separate." with **Undo**. Later, under the library's settings, "Pages you kept separate" lists each pair with **Ask me again** (`duplicates --reopen`; the list is `duplicates --kept-distinct`).
+
+**Not combinable in the app:** a group of more than two pages, or two pages of different kinds (`more_than_two_members`, `cross_type`). The app shows "These can't be combined here yet." with Keep separate and Decide later only. This is a known gap: today only the CLI resolves those groups, which a first-time user cannot reach. It is listed under "Open questions".
+
+## Connection — "Is this right?"
+
+`kind: relation_type`. Actions `relate`, `relate_reversed` (for one-way kinds only), `skip`. There is no "no" action in the engine: declining is "Decide later".
+
+**Question:** "Is this right?" over one plain sentence built from the suggested type, the two page titles and, as evidence, both pages:
+
+| Suggested type | Sentence | Offers "the other way round"? |
+| --- | --- | --- |
+| `related_to` | "{A} and {B} are related." | no |
+| `references` | "{A} mentions {B}." | no |
+| `part_of` | "{A} is part of {B}." | yes |
+| `member_of` | "{A} is a member of {B}." | yes |
+| `depends_on` | "{A} depends on {B}." | yes |
+| `caused_by` | "{A} was caused by {B}." | yes |
+| `produced_by` | "{A} was made by {B}." | yes |
+
+**Options:**
+
+- **Yes, connect them** — "We'll record that {sentence}."
+- **Yes, the other way round** (where the table says so) — shown as the reversed sentence itself: "No — {B} is part of {A}." "We'll record that instead." **(H)** that showing the reversed sentence beats any "reverse direction" label. One-way suggestions are always decided one at a time, because the model's choice of direction is not reliable.
+- **Decide later** — "Nothing changes."
+
+**Bulk:** for `related_to` only, the list may offer "Accept all {n} 'related' suggestions", with the sentences listed before the agreement.
+
+**Undo:** the confirmation offers **Undo**; later the page lists its connections, each with **Remove** (`unrelate`).
+
+## How quickly it goes out of date
+
+`kind: volatility`. Actions `set_tier`, `skip`. The engine suggests one tier for a whole kind of page; the person accepts it or decides later.
+
+**Question:** "How quickly do facts about {kind, plural} go out of date?" with the suggestion: **(H)** for the whole section.
+
+| Tier | Plain line | What it changes |
+| --- | --- | --- |
+| `static` | "Rarely — they stay true." | "We won't remind you to recheck them." |
+| `slow` | "Slowly — over months or years." | "We'll remind you to recheck them now and then." |
+| `volatile` | "Quickly — they can change within weeks." | "We'll remind you to recheck them often." |
+
+The screen shows the current setting and the suggestion, each by its plain line, and the model's reason. **Options:** **Use this** ("From now on, {kinds} are treated as changing {slowly}.") and **Decide later**. Bulk acceptance of all such suggestions is allowed. **Undo:** **Undo** on the confirmation; later, the same setting is changeable under the library's settings. The windows behind "now and then" and "often" are the engine's, named in its configuration, and are not repeated in copy.
+
+## Items the app lists but cannot act on
+
+Contradictions, revisions and refused files (`contradiction`, `revision`, `watch_refusal`) carry no actions. They are listed in To review with a plain sentence of what was found ("Two pages say different things about {subject}."; "A newer file may replace an older one."; "A file was not added: {plain reason}.") and no command. The app does not invent actions the engine does not offer.
+
+## The check: agreeing to spend
+
+Judging runs the AI model, which costs time and, with a cloud model, money. It follows the quote → consent → run protocol of ADR-0059; the quote is free.
+
+**Consent screen,** one per batch, never per item:
+
+- Heading: "Check {n} pairs?" ("Check these two?" when one).
+- "The AI model on this Mac will compare them. Nothing leaves this Mac." When the backend is not local: "The text of these pages will be sent to {provider} to compare them. Pages marked 'Only on this Mac' are not sent. {provider} may charge you." — the same send rule as the cloud warning below.
+- When some are already checked: "{k} are already checked and won't be checked again."
+- When the engine is busy in the background: "OpenKOS is also working in the background, so this may be slower."
+- "Checking never combines anything. You'll still decide each one."
+- Buttons: **Check {n}** · **Not now**. **(H)** that a count, without a time estimate, is enough to consent; the quote gives an upper bound on calls, not a duration.
+
+**While it runs:** "Checking {done} of {n}…" and **Stop**. On stop: "Stopping after the current one. Everything already checked is kept." **After:** "Checked {n}. {m} are ready for you to decide." **Changed since agreeing** (`QuoteStale`): "Something changed since you agreed — the AI model or the pages. Please look again." with the consent screen reloaded; the check never runs on an old agreement.
+
+## Busy, try again, and other refusals
+
+Every message says whether anything changed, and offers the one action that helps. Codes are the local API's ([spec](../openspec/specs/local-http-api/spec.md)).
+
+| Situation | Code | Message | Action |
+| --- | --- | --- | --- |
+| The library is busy with another change | `workspace_busy` | "OpenKOS is finishing something else. Nothing was changed." | **Try again** (H: automatic retry for a few seconds first) |
+| A check is already running | `run_active` | "A check is already running." | **Show it** |
+| The pages changed under the person | `stale`, `write_drift` | "These pages changed while you were looking. Here is the current version." | reload |
+| A page in the decision is gone | `member_missing` | "One of these pages no longer exists, so there's nothing to decide." | **OK** (removes it from view) |
+| The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to check pages." | **Start it** (the guided-setup step) |
+| Saving the choice failed | `record_failed` | "Your choice couldn't be saved. Nothing was changed." | **Try again** |
+
+## Who can see a page
+
+Sensitivity is shown as **who can see it**, never as the word "sensitivity" or its levels. **(H)** for the whole section.
+
+| Level | Label | One-line meaning |
+| --- | --- | --- |
+| `public` | **Shareable** | "Fine to share or export." |
+| `private` (default) | **Private** | "Stays in your library. Sent to a cloud AI model only if you turn one on." |
+| `confidential` | **Only on this Mac** | "Never sent anywhere, even with a cloud AI model on." |
+
+The middle line is load-bearing: the engine sends everything except `confidential` to a remote backend, so "Private" must not read as "never leaves". Changing the label is one action from any page. When a combined page holds a page marked "Only on this Mac" (`committed_confidential`), the confirmation adds: "The combined page is marked Only on this Mac."
+
+The cloud model's warning, in settings only and never during setup, uses the same words: what leaves the Mac (pages marked Shareable and Private), what never does (Only on this Mac), who receives it (the provider, by name) and that the provider may charge. While it is on, the app says so on every screen that asks the AI model.
+
+## Open questions
+
+- **Groups the app cannot combine.** A group of more than two pages, or of different kinds, is resolvable only from the CLI today. Until the engine offers an app path, the app lists it as "can't be combined here yet". Whether that path is built in MVP 6 is a scope decision for the app stage.
+- **Translation.** The Spanish copy follows this brief once the English wording is checked; the type nouns and the tier lines are the parts most likely to need more than a literal translation.
