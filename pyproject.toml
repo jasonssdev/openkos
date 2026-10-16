@@ -102,6 +102,12 @@ dev = [
     "uvicorn>=0.54.0",
     "watchdog>=4.0.0",
 ]
+# PyInstaller freezes the engine for the desktop app (ADR-0056) and nothing
+# else: `desktop/scripts/build-engine.sh` syncs it into its own build
+# environment with `--group freeze`. A dependency group is not package metadata,
+# so the wheel and the sdist never declare it, and `uv sync` leaves it out of
+# the development environment.
+freeze = ["pyinstaller>=6.22.3"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -230,6 +236,11 @@ ignore = [
 "evals/**/*.py" = [
     "BLE001", # probe harnesses record a failed run and move on; they are not engine code
 ]
+"desktop/scripts/*.py" = [
+    "S603", # the smoke check exists to run the frozen engine it is given
+    "S607", # and `ps`, from PATH, to list the engine's process group
+    "S310", # its only URL is the engine's own loopback ready line, over http
+]
 
 [tool.ruff.lint.flake8-bugbear]
 # `typer.Argument(...)`/`typer.Option(...)` in a parameter default is the
@@ -246,6 +257,10 @@ extend-immutable-calls = ["typer.Argument", "typer.Option"]
 # interpreter cannot merge code that is broken on 3.14.
 python_version = "3.14"
 files = ["src", "tests"]
+# `mypy .` must not walk build outputs: the frozen engine under `build/` carries
+# a second copy of the `openkos` package (ADR-0056), which mypy would report as
+# a duplicate module.
+exclude_gitignore = true
 strict = true
 # Not implied by `strict`: dead code left by a wrong narrowing is a real bug,
 # and `py.typed` means our type errors become our consumers' type errors.
