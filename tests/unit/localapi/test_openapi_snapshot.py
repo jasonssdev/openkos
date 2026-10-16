@@ -170,3 +170,25 @@ def test_a_busy_503_declares_its_retry_after_header() -> None:
         assert isinstance(headers, dict)
 
         assert "Retry-After" in headers, key
+
+
+def test_the_preview_plan_is_a_discriminated_union_on_kind() -> None:
+    schemas = openapi_document()["components"]["schemas"]  # type: ignore[index]
+    plan = schemas["DecisionPreview"]["properties"]["plan"]
+
+    assert plan["discriminator"]["propertyName"] == "kind"
+    assert plan["discriminator"]["mapping"] == {
+        "merge": "#/components/schemas/MergePlan",
+        "relate": "#/components/schemas/RelatePlan",
+        "set_tier": "#/components/schemas/TierPlan",
+        "keep_distinct": "#/components/schemas/KeepDistinctPlan",
+    }
+    assert len(plan["oneOf"]) == 4
+    for name, kind in {
+        "MergePlan": "merge",
+        "RelatePlan": "relate",
+        "TierPlan": "set_tier",
+        "KeepDistinctPlan": "keep_distinct",
+    }.items():
+        assert schemas[name]["properties"]["kind"]["const"] == kind
+        assert "kind" in schemas[name]["required"]

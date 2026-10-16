@@ -108,6 +108,17 @@ def _preview(root: Path, key: str, action: Action) -> DecisionPreview:
     return result
 
 
+# The plan's `kind` is the action it plans, except that the reversed relation is
+# still a relation: the discriminator names the plan's shape, not the direction.
+_PLAN_KIND_OF_ACTION = {
+    Action.MERGE: "merge",
+    Action.KEEP_DISTINCT: "keep_distinct",
+    Action.RELATE: "relate",
+    Action.RELATE_REVERSED: "relate",
+    Action.SET_TIER: "set_tier",
+}
+
+
 def _enqueue_merge(root: Path) -> None:
     support.enqueue_identity(root, PAIR, verdict="same", fresh=True)
 
@@ -163,7 +174,7 @@ def test_preview_returns_an_api_plan_and_writes_nothing(
     enqueue: Callable[[Path], None],
     key: str,
     action: Action,
-    plan: object,
+    plan: MergePlan | RelatePlan | TierPlan | KeepDistinctPlan,
 ) -> None:
     enqueue(root)
     before = support.snapshot(root)
@@ -171,6 +182,7 @@ def test_preview_returns_an_api_plan_and_writes_nothing(
     result = _preview(root, key, action)
 
     assert result.plan == plan
+    assert result.plan.kind == _PLAN_KIND_OF_ACTION[action]
     assert result.decision_key == key
     assert result.action is action
     assert isinstance(result.version, DecisionVersion)
@@ -185,6 +197,7 @@ def test_a_preview_carries_no_prepared_merge_anywhere(root: Path) -> None:
 
     names = {f.name for f in dataclasses.fields(result.plan)}
     assert names == {
+        "kind",
         "survivor_id",
         "absorbed_id",
         "survivor_criterion",
@@ -606,3 +619,19 @@ def test_the_stored_decision_payload_is_never_part_of_a_preview(root: Path) -> N
     assert "confidence" not in rendered
     assert "Because." not in rendered
     assert '"payload"' not in rendered
+
+
+def test_each_plan_type_carries_its_own_literal_kind() -> None:
+    plans: dict[str, MergePlan | RelatePlan | TierPlan | KeepDistinctPlan] = {
+        "merge": MergePlan("a", "b", "c", 0, False, None),
+        "relate": RelatePlan("a", "b", "t"),
+        "set_tier": TierPlan("Person", "static"),
+        "keep_distinct": KeepDistinctPlan(("a", "b")),
+    }
+
+    assert {k: p.kind for k, p in plans.items()} == {
+        "merge": "merge",
+        "relate": "relate",
+        "set_tier": "set_tier",
+        "keep_distinct": "keep_distinct",
+    }

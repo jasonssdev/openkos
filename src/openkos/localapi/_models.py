@@ -1,6 +1,6 @@
 """HTTP models the adapter owns: only what `openkos.api` has no type for."""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -24,6 +24,29 @@ class DecisionList(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     decisions: list[api.Decision]
+
+
+class DecisionPreview(BaseModel):
+    """`api.DecisionPreview` with its plan declared as a discriminated union.
+
+    The plan types carry a literal `kind`, so the OpenAPI document names it as the
+    discriminator and a generated client narrows `plan` with `switch (plan.kind)`.
+    The field names and the plan types are `openkos.api`'s own. A response model
+    only: no `extra="forbid"`, which would reach the nested dataclasses and split
+    their components into `-Input` and `-Output` variants. A defaulted `kind` is
+    still always sent, so the response schema marks it required."""
+
+    model_config = ConfigDict(
+        frozen=True, json_schema_serialization_defaults_required=True
+    )
+
+    decision_key: str
+    action: api.Action
+    plan: Annotated[
+        api.MergePlan | api.RelatePlan | api.TierPlan | api.KeepDistinctPlan,
+        Field(discriminator="kind"),
+    ]
+    version: api.DecisionVersion
 
 
 class JudgingOutcomeBody(BaseModel):

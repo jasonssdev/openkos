@@ -150,6 +150,7 @@ class MergePlan:
     files_rewritten: int
     cross_source_same_pair: bool
     cross_type_concern: str | None
+    kind: Literal["merge"] = "merge"
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,7 @@ class RelatePlan:
     source_id: str
     target_id: str
     relation_type: str
+    kind: Literal["relate"] = "relate"
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,7 @@ class TierPlan:
 
     type_name: str
     tier: str
+    kind: Literal["set_tier"] = "set_tier"
 
 
 @dataclass(frozen=True)
@@ -174,6 +177,7 @@ class KeepDistinctPlan:
     """Recording that these concepts are different things."""
 
     member_ids: tuple[str, ...]
+    kind: Literal["keep_distinct"] = "keep_distinct"
 
 
 @dataclass(frozen=True)

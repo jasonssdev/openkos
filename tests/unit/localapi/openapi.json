@@ -240,7 +240,7 @@
         "type": "object"
       },
       "DecisionPreview": {
-        "description": "What an action would do, and the version to apply it against.",
+        "description": "`api.DecisionPreview` with its plan declared as a discriminated union.\n\nThe plan types carry a literal `kind`, so the OpenAPI document names it as the\ndiscriminator and a generated client narrows `plan` with `switch (plan.kind)`.\nThe field names and the plan types are `openkos.api`'s own. A response model\nonly: no `extra=\"forbid\"`, which would reach the nested dataclasses and split\ntheir components into `-Input` and `-Output` variants. A defaulted `kind` is\nstill always sent, so the response schema marks it required.",
         "properties": {
           "action": {
             "$ref": "#/components/schemas/Action"
@@ -250,7 +250,16 @@
             "type": "string"
           },
           "plan": {
-            "anyOf": [
+            "discriminator": {
+              "mapping": {
+                "keep_distinct": "#/components/schemas/KeepDistinctPlan",
+                "merge": "#/components/schemas/MergePlan",
+                "relate": "#/components/schemas/RelatePlan",
+                "set_tier": "#/components/schemas/TierPlan"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
               {
                 "$ref": "#/components/schemas/MergePlan"
               },
@@ -727,6 +736,12 @@
       "KeepDistinctPlan": {
         "description": "Recording that these concepts are different things.",
         "properties": {
+          "kind": {
+            "const": "keep_distinct",
+            "default": "keep_distinct",
+            "title": "Kind",
+            "type": "string"
+          },
           "member_ids": {
             "items": {
               "type": "string"
@@ -736,7 +751,8 @@
           }
         },
         "required": [
-          "member_ids"
+          "member_ids",
+          "kind"
         ],
         "title": "KeepDistinctPlan",
         "type": "object"
@@ -870,6 +886,12 @@
             "title": "Files Rewritten",
             "type": "integer"
           },
+          "kind": {
+            "const": "merge",
+            "default": "merge",
+            "title": "Kind",
+            "type": "string"
+          },
           "survivor_criterion": {
             "title": "Survivor Criterion",
             "type": "string"
@@ -885,7 +907,8 @@
           "survivor_criterion",
           "files_rewritten",
           "cross_source_same_pair",
-          "cross_type_concern"
+          "cross_type_concern",
+          "kind"
         ],
         "title": "MergePlan",
         "type": "object"
@@ -1243,6 +1266,12 @@
       "RelatePlan": {
         "description": "Writing one typed relation, as it would be written.",
         "properties": {
+          "kind": {
+            "const": "relate",
+            "default": "relate",
+            "title": "Kind",
+            "type": "string"
+          },
           "relation_type": {
             "title": "Relation Type",
             "type": "string"
@@ -1259,7 +1288,8 @@
         "required": [
           "source_id",
           "target_id",
-          "relation_type"
+          "relation_type",
+          "kind"
         ],
         "title": "RelatePlan",
         "type": "object"
@@ -1441,6 +1471,12 @@
       "TierPlan": {
         "description": "Setting one concept type's volatility tier.",
         "properties": {
+          "kind": {
+            "const": "set_tier",
+            "default": "set_tier",
+            "title": "Kind",
+            "type": "string"
+          },
           "tier": {
             "title": "Tier",
             "type": "string"
@@ -1452,7 +1488,8 @@
         },
         "required": [
           "type_name",
-          "tier"
+          "tier",
+          "kind"
         ],
         "title": "TierPlan",
         "type": "object"

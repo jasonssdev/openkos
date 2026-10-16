@@ -448,11 +448,11 @@ natively (for example a mapping, a fixed-size tuple, a path or an exception
 instance) MUST be represented by a documented JSON form that preserves its
 content. Where a result is one of several variants (the preview's plan, the
 decision's detail, the apply outcome, the run result), the response MUST let a
-client distinguish the variants from the body. A preview's `plan` is told apart
-by the `action` field of the enclosing preview, not by a discriminator on the
-plan itself, so a generated typed client narrows it by property presence, not by
-`switch (preview.action)`; a discriminated union on the plan is an open
-follow-up (#1422). Every response type MUST be exercised with a populated value (not
+client distinguish the variants from the body. A preview's `plan` carries a
+literal `kind` discriminator (`merge`, `relate`, `set_tier` or `keep_distinct`,
+the action it plans; `relate_reversed` plans a `relate`), and the OpenAPI
+document declares `plan` as a `oneOf` with that discriminator, so a generated
+typed client narrows it with `switch (preview.plan.kind)`. Every response type MUST be exercised with a populated value (not
 only an empty list) in a test that serializes it over HTTP and parses it back
 without loss.
 
@@ -473,8 +473,8 @@ without loss.
 
 - GIVEN a preview for each action
 - WHEN the responses are read
-- THEN each plan can be told apart from the others by the `action` field of the
-  enclosing preview
+- THEN each plan carries a `kind` that matches its action (`relate_reversed`
+  yields `relate`), and the plans can be told apart by `kind` alone
 
 ### Requirement: Echoed Tokens Make The Wire Form Stateless
 

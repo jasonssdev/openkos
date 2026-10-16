@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- Each preview plan in `openkos.api` (`MergePlan`, `RelatePlan`, `TierPlan`, `KeepDistinctPlan`) carries a literal `kind` field, and the local HTTP API's OpenAPI document declares `DecisionPreview.plan` as a discriminated union on it, so a generated TypeScript client narrows the plan with `switch (preview.plan.kind)`. The change is additive; `API_VERSION` is unchanged (#1422).
+
 ### Changed
 
 - **Python 3.14 is now the only supported interpreter.** `requires-python` is `>=3.14`, and development, CI and release all run 3.14 (ADR-0054). Users on Python 3.12 or 3.13 stay on 0.5.5, the last release that installs there, and must move to Python 3.14 to upgrade.

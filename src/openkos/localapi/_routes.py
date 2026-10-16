@@ -15,6 +15,7 @@ from openkos.localapi._models import (
     ApplyRequest,
     ApplyResponse,
     DecisionList,
+    DecisionPreview,
     HealthBody,
     PreviewRequest,
     QuoteRequest,
@@ -123,12 +124,17 @@ def make_router() -> APIRouter:
         decision_key: str,
         body: PreviewRequest,
         workspace: api.Workspace = Depends(_workspace),  # noqa: B008
-    ) -> api.DecisionPreview:
+    ) -> DecisionPreview:
         result = invoke(
             lambda: api.preview_decision(workspace, decision_key, body.action)
         )
         if isinstance(result, api.DecisionPreview):
-            return result
+            return DecisionPreview(
+                decision_key=result.decision_key,
+                action=result.action,
+                plan=result.plan,
+                version=result.version,
+            )
         raise _errors.outcome_problem(result)
 
     @router.post(
