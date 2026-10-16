@@ -11,7 +11,8 @@ per service, is what stops the three exit-code contracts drifting apart:
   the workspace is not one. Nothing further was written.
 * `WriteFailed` -- exit 1, a `Refused` that names WHICH write failed
   (`merge`, `relate` or `set_tier`), over which subjects, with what error, and
-  chains its cause. It carries structured fields so an adapter formats its own
+  chains its cause. `MergeGroupInterrupted` is the one subclass: a group decision
+  that stopped after at least one of its merges was written. It carries structured fields so an adapter formats its own
   line; `message` is a neutral rendering with no `openkos <verb>:` prefix.
 * `DriftDetected` -- exit 3, the ONE failure a script may safely retry
   (#319): a target changed, vanished or left the workspace after Phase A read
@@ -65,7 +66,7 @@ class WriteFailed(Refused):
 
     def __init__(
         self,
-        operation: Literal["merge", "relate", "set_tier"],
+        operation: Literal["merge", "relate", "set_tier", "merge_group"],
         subjects: tuple[str, ...],
         error: str,
     ) -> None:
@@ -73,6 +74,31 @@ class WriteFailed(Refused):
         self.operation = operation
         self.subjects = subjects
         self.error = error
+
+
+class MergeGroupInterrupted(WriteFailed):
+    """A group decision stopped after at least one of its merges was written
+    (ADR-0063). The merges that landed are kept and were auto-committed
+    (`commit_sha`, `None` when that commit degraded); no keep-distinct ruling
+    was recorded; the step that failed, and every after it, were not written.
+    Each completed merge is reversible with `unmerge`, and the group's row is
+    already resolved, so what is still true comes back through the producer's
+    next pass. A failure of the FIRST merge is the plain `WriteFailed`, because
+    nothing completed."""
+
+    def __init__(
+        self,
+        completed: tuple[tuple[str, str], ...],
+        commit_sha: str | None,
+        failed_absorbed_id: str,
+        error: str,
+    ) -> None:
+        survivor = completed[0][0] if completed else ""
+        super().__init__("merge_group", (survivor, failed_absorbed_id), error)
+        self.completed = completed
+        """The `(survivor, absorbed)` pairs written, in order."""
+        self.commit_sha = commit_sha
+        self.failed_absorbed_id = failed_absorbed_id
 
 
 class DriftDetected(WriteRefused):

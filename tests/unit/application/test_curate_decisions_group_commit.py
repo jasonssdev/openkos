@@ -35,7 +35,9 @@ from openkos.application.curate_decisions import (
     NotApplied,
     Stale,
 )
+from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import ledger as bundle_ledger
+from openkos.errors import OpenKosError
 from openkos.model import okf
 from openkos.resolution.adjudication import Verdict
 from openkos.state import derived
@@ -497,3 +499,252 @@ def test_merge_core_still_resolves_a_pairwise_row_without_a_group_row() -> None:
     ]
     assert parameter.default is None
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+# -- 3.1 unmarked rulings ---------------------------------------------------- #
+
+
+def _rulings(seed: _Seed, owner: str) -> dict[tuple[str, ...], str]:
+    return {
+        record.member_ids: record.state
+        for record in bundle_decisions.read_identity_decisions(
+            owner, seed.layout.bundle_dir
+        )
+    }
+
+
+def _row_statuses(seed: _Seed) -> dict[tuple[str, ...], str]:
+    conn = derived.open_derived_connection(seed.layout.findings_db_path)
+    try:
+        return {item.targets: item.status for item in pq.all_items(conn)}
+    finally:
+        conn.close()
+
+
+def _four(tmp_path: Path, selection: GroupSelection) -> _Seed:
+    return _seed(tmp_path, selection, members=(A, B, C, D))
+
+
+def test_two_unmarked_members_are_kept_distinct_from_the_survivor_and_together(
+    tmp_path: Path,
+) -> None:
+    seed = _four(tmp_path, selection_of(A, A, B))
+    for members in ((A, C), (A, D), (A, C, D)):
+        enqueue(seed.layout, identity_row(seed.layout, members))
+    c_before = (seed.layout.bundle_dir / f"{C}.md").read_bytes()
+    d_before = (seed.layout.bundle_dir / f"{D}.md").read_bytes()
+    recorder = _Recorder()
+
+    outcome = _commit(seed, recorder)
+
+    assert isinstance(outcome, Applied)
+    assert outcome.merged == ((A, B),)
+    assert outcome.kept_distinct == ((A, C), (A, D), (A, C, D))
+    assert (seed.layout.bundle_dir / f"{C}.md").read_bytes() == c_before
+    assert (seed.layout.bundle_dir / f"{D}.md").read_bytes() == d_before
+    assert _rulings(seed, A) == {
+        (A, C): "declined",
+        (A, D): "declined",
+        (A, C, D): "declined",
+    }
+    statuses = _row_statuses(seed)
+    assert statuses[(A, C)] == statuses[(A, D)] == statuses[(A, C, D)] == "declined"
+    [(paths, message)] = recorder.commits
+    assert sum("decisions" in p for p in paths) == 1  # one sidecar owns all three
+    assert message == (
+        "openkos: merge group into concepts/a (concepts/b); keep distinct "
+        "concepts/a/concepts/c, concepts/a/concepts/d, "
+        "concepts/a/concepts/c/concepts/d"
+    )
+
+
+def test_one_unmarked_member_gets_exactly_one_ruling_with_the_survivor(
+    tmp_path: Path,
+) -> None:
+    seed = _seed(tmp_path, selection_of(A, A, B))
+
+    outcome = _commit(seed, _Recorder())
+
+    assert isinstance(outcome, Applied)
+    assert outcome.kept_distinct == ((A, C),)
+    assert _rulings(seed, A) == {(A, C): "declined"}
+
+
+def test_no_ruling_is_recorded_between_two_unmarked_members_alone(
+    tmp_path: Path,
+) -> None:
+    seed = _four(tmp_path, selection_of(A, A, B))
+
+    _commit(seed, _Recorder())
+
+    assert (C, D) not in _rulings(seed, C)
+    assert (C, D) not in _rulings(seed, A)
+
+
+def test_a_group_with_every_member_marked_records_no_ruling(tmp_path: Path) -> None:
+    seed = _seed(tmp_path, selection_of(B, A, B, C))
+    written: list[tuple[str, ...]] = []
+
+    def record(
+        layout: config.WorkspaceLayout,
+        members: tuple[str, ...],
+        on_warning: Callable[[str], None],
+    ) -> str:
+        written.append(members)
+        return "unused"
+
+    recorder = _Recorder()
+    ports = dataclasses.replace(recorder.ports(), record_identity_ruling=record)
+
+    outcome = _commit(seed, recorder, ports=ports)
+
+    assert isinstance(outcome, Applied)
+    assert outcome.kept_distinct == ()
+    assert written == []
+    [(paths, _message)] = recorder.commits
+    assert not any("decisions" in p for p in paths)
+
+
+def test_a_ruling_that_cannot_be_recorded_is_fail_open_and_reported_once(
+    tmp_path: Path,
+) -> None:
+    seed = _four(tmp_path, selection_of(A, A, B))
+    real = DecisionPorts(autocommit=lambda *_a: None).record_identity_ruling
+
+    def record(
+        layout: config.WorkspaceLayout,
+        members: tuple[str, ...],
+        on_warning: Callable[[str], None],
+    ) -> str:
+        if members == (A, D):
+            raise OSError("disk full")
+        return real(layout, members, on_warning)
+
+    recorder = _Recorder()
+    ports = dataclasses.replace(recorder.ports(), record_identity_ruling=record)
+
+    outcome = _commit(seed, recorder, ports=ports)
+
+    assert isinstance(outcome, Applied)
+    assert outcome.merged == ((A, B),)
+    assert outcome.kept_distinct == ((A, C), (A, C, D))
+    assert len(recorder.warnings) == 1
+    assert "disk full" not in recorder.warnings[0]
+    assert not _exists(seed, B)
+    assert len(recorder.commits) == 1
+
+
+# -- 3.1.6 / 3.1.7 / 3.1.8 an interrupted group ------------------------------ #
+
+
+def _fail_second_merge(
+    monkeypatch: pytest.MonkeyPatch, error: Exception | None = None
+) -> list[int]:
+    calls: list[int] = []
+    real = application_lifecycle.merge_core
+
+    def merge_core(*args: object, **kwargs: object) -> object:
+        calls.append(len(calls) + 1)
+        if len(calls) == 2:
+            raise error or OSError("disk full")
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(application_lifecycle, "merge_core", merge_core)
+    return calls
+
+
+def test_a_failure_at_the_second_step_keeps_and_commits_the_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed = _seed(tmp_path, selection_of(A, A, B, C), members=(A, B, C, D))
+    _fail_second_merge(monkeypatch)
+    c_before = (seed.layout.bundle_dir / f"{C}.md").read_bytes()
+    recorder = _Recorder(sha="def5678")
+
+    with pytest.raises(write_gate.MergeGroupInterrupted) as caught:
+        _commit(seed, recorder)
+
+    failure = caught.value
+    assert failure.completed == ((A, B),)
+    assert failure.failed_absorbed_id == C
+    assert failure.commit_sha == "def5678"
+    assert failure.operation == "merge_group"
+    assert isinstance(failure.__cause__, OSError)
+    assert not _exists(seed, B)
+    assert (seed.layout.bundle_dir / f"{C}.md").read_bytes() == c_before
+    [(paths, message)] = recorder.commits
+    assert f"bundle/{B}.md" in paths
+    assert f"bundle/{C}.md" not in paths
+    assert message == "openkos: merge group into concepts/a (concepts/b)"
+    assert _rulings(seed, A) == {}
+    assert recorder.events == ["enter", "autocommit", "exit"]
+
+
+def test_an_interrupted_group_whose_commit_degrades_reports_no_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed = _seed(tmp_path, selection_of(A, A, B, C))
+    _fail_second_merge(monkeypatch)
+
+    with pytest.raises(write_gate.MergeGroupInterrupted) as caught:
+        _commit(seed, _Recorder(sha=None))
+
+    assert caught.value.commit_sha is None
+    assert caught.value.completed == ((A, B),)
+
+
+@pytest.mark.parametrize("vanishes", [True, False])
+def test_a_later_step_that_cannot_be_prepared_is_interrupted_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, vanishes: bool
+) -> None:
+    seed = _seed(tmp_path, selection_of(A, A, B, C))
+    armed = {"on": False}
+    real = application_lifecycle.prepare_one_merge
+
+    def prepare(*args: object, **kwargs: object) -> object:
+        if armed["on"]:
+            if vanishes:
+                return None
+            raise ValueError("cannot be planned")
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(application_lifecycle, "prepare_one_merge", prepare)
+    recorder = _Recorder(on_enter=lambda: armed.update(on=True))
+
+    with pytest.raises(write_gate.MergeGroupInterrupted) as caught:
+        _commit(seed, recorder)
+
+    assert caught.value.completed == ((A, B),)
+    assert caught.value.failed_absorbed_id == C
+    assert len(recorder.commits) == 1
+
+
+def test_a_first_step_write_failure_is_the_ordinary_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed = _seed(tmp_path, selection_of(A, A, B, C))
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(application_lifecycle, "merge_core", boom)
+    recorder = _Recorder()
+
+    with pytest.raises(write_gate.WriteFailed) as caught:
+        _commit(seed, recorder)
+
+    assert type(caught.value) is write_gate.WriteFailed
+    assert caught.value.operation == "merge"
+    assert recorder.commits == []
+
+
+def test_the_interruption_is_a_write_failure_and_an_openkos_error() -> None:
+    failure = write_gate.MergeGroupInterrupted(
+        completed=((A, B),), commit_sha=None, failed_absorbed_id=C, error="boom"
+    )
+
+    assert isinstance(failure, write_gate.WriteFailed)
+    assert isinstance(failure, write_gate.Refused)
+    assert isinstance(failure, OpenKosError)
+    assert failure.subjects == (A, C)
+    assert failure.error == "boom"

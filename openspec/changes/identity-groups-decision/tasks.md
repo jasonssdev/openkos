@@ -200,35 +200,35 @@ Covers C5 (commit half), C8 (except interruption), W1. D3, D4, D5, D7.
 
 Covers C6 and C8's interruption. D6, D8.
 
-- [ ] 3.1 RED (same test module as S2a):
-  - [ ] 3.1.1 Group of A, B, C, D marking A and B, survivor A: rulings over
+- [x] 3.1 RED (same test module as S2a):
+  - [x] 3.1.1 Group of A, B, C, D marking A and B, survivor A: rulings over
     {A, C}, {A, D} and {A, C, D} exist and are `declined`; C and D are
     byte-identical; `Applied.kept_distinct` lists the three sets; open identity
     rows over exactly those sets are `declined` (C6).
-  - [ ] 3.1.2 One unmarked member: exactly one ruling, over {survivor, it}.
-  - [ ] 3.1.3 No ruling over two unmarked members alone ({C, D} is not recorded).
-  - [ ] 3.1.4 All marked: no ruling and no ruling path in the commit.
-  - [ ] 3.1.5 A `record_identity_ruling` port that raises `OSError` for one set:
+  - [x] 3.1.2 One unmarked member: exactly one ruling, over {survivor, it}.
+  - [x] 3.1.3 No ruling over two unmarked members alone ({C, D} is not recorded).
+  - [x] 3.1.4 All marked: no ruling and no ruling path in the commit.
+  - [x] 3.1.5 A `record_identity_ruling` port that raises `OSError` for one set:
     the merges are written and committed, `on_warning` is called once,
     `Applied.kept_distinct` omits that set (fail-open).
-  - [ ] 3.1.6 Interrupted: `merge_core` patched (through the module attribute)
+  - [x] 3.1.6 Interrupted: `merge_core` patched (through the module attribute)
     to raise `OSError` on its second call. `MergeGroupInterrupted` is raised with
     `completed == (("A","B"),)`, `failed_absorbed_id == "C"`, `commit_sha` from
     the port; one `autocommit` call holds only step 1's paths; C is unchanged; no
     ruling is written. Mutate the "commit what landed" call away and see the test
     fail.
-  - [ ] 3.1.7 The second step's prepare fails (C deleted after the section's
+  - [x] 3.1.7 The second step's prepare fails (C deleted after the section's
     presence check, simulated by patching `prepare_one_merge`): the same
     `MergeGroupInterrupted`.
-  - [ ] 3.1.8 A first-step write failure raises plain `WriteFailed`, not the
+  - [x] 3.1.8 A first-step write failure raises plain `WriteFailed`, not the
     subclass; `isinstance(MergeGroupInterrupted(...), WriteFailed)` and
     `OpenKosError` hold.
-- [ ] 3.2 GREEN `application/write_gate.py`: `MergeGroupInterrupted(WriteFailed)`
+- [x] 3.2 GREEN `application/write_gate.py`: `MergeGroupInterrupted(WriteFailed)`
   with `completed`, `commit_sha`, `failed_absorbed_id`, `operation="merge_group"`.
-- [ ] 3.3 GREEN `commit_merge_group_decision`: the rulings after the last step
+- [x] 3.3 GREEN `commit_merge_group_decision`: the rulings after the last step
   (D8 sets, ascending, through `ports.record_identity_ruling`); the interruption
   path (D6).
-- [ ] 3.4 Gates (no public surface change: the exception is exported in S3).
+- [x] 3.4 Gates (no public surface change: the exception is exported in S3).
   Commit: `feat(api): keep unmarked group members distinct and report an interrupted group`
 
 ## S3: Offer `merge_group`: listing, dispatch, `openkos.api` facade
