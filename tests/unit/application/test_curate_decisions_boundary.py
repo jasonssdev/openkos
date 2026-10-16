@@ -1,8 +1,11 @@
 """The curation decision surface is OWNER-LOCAL (`curate-decisions-as-data`,
 ADR-0053 Decision 8): its payloads can derive from confidential concepts, so no
 adapter that discloses to a third party may import it. `mcp/` keeps its reduced
-`pending` projection, and a future local HTTP adapter must bring its own
-disclosure gate. The scan therefore covers EVERY top-level package except the
+`pending` projection. The local HTTP adapter (`localapi/`) is owner-local too: its
+caller is the workspace owner holding a per-launch token, so it applies no
+disclosure gate (ADR-0058); the gate is deferred to the first endpoint that
+answers an ask or a query. It reaches decisions only through `openkos.api`, so it
+is scanned like any other adapter and is not an allowed importer. The scan therefore covers EVERY top-level package except the
 three allowed importers (`application` itself, `cli`, and the owner-local Python
 API `api`), so a package added later is barred by construction.
 
@@ -83,6 +86,12 @@ def test_the_scan_covers_mcp_and_never_the_three_allowed_importers() -> None:
     assert "mcp" in adapters
     assert len(adapters) >= 8  # not vacuous: the real packages are enumerated
     assert not set(adapters) & _ALLOWED_IMPORTERS
+
+
+def test_the_local_api_adapter_is_scanned_and_is_not_an_allowed_importer() -> None:
+    assert "localapi" in _adapters(_SRC)
+    assert "localapi" not in _ALLOWED_IMPORTERS
+    assert _offenders(_SRC / "localapi") == []
 
 
 def test_a_package_added_later_is_barred_by_construction(tmp_path: Path) -> None:

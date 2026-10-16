@@ -291,7 +291,7 @@ out, the confinement guards and the contract snapshot machinery that every later
 regenerates. Satisfies: L7, L8 (health, prefix), L11 (framework rows), L14, L15, L16,
 P1. Depends on: S2a.
 
-- [ ] S2b.1 RED: `tests/unit/localapi/test_routes_security.py` against
+- [x] S2b.1 RED: `tests/unit/localapi/test_routes_security.py` against
   `TestClient(create_app(settings), base_url=f"http://127.0.0.1:{PORT}")` used as a
   context manager (runs the lifespan): the route set is asserted exactly (health
   only, so far); each route x {no token 401, wrong token 403, `Host: evil.com` 403,
@@ -303,13 +303,13 @@ P1. Depends on: S2a.
   `method_not_allowed`; health with a token returns `{status: "ok", api_version:
   API_VERSION, engine_version}`. Observe RED (no `create_app`). Satisfies: L4..L8,
   L11.
-- [ ] S2b.2 RED: `tests/unit/localapi/test_errors.py` (framework rows only, the
+- [x] S2b.2 RED: `tests/unit/localapi/test_errors.py` (framework rows only, the
   table grows in later slices): request-validation error is 422 `invalid_request`
   and never echoes the submitted value (post a body containing a sentinel); an
   unknown exception raised by a stubbed route is 500 `internal_error` with a fixed
   message, logged to stderr (captured) without the token, and the next request is
   still served; `ApiProblem` renders its status, body and headers. Satisfies: L11.
-- [ ] S2b.3 GREEN: extend `src/openkos/localapi/_errors.py` with `ApiProblem`,
+- [x] S2b.3 GREEN: extend `src/openkos/localapi/_errors.py` with `ApiProblem`,
   `invoke`, `error_body` (generic `internal_error` row only; later slices add rows)
   and the framework codes; create `_models.py` (`HealthBody`), `_routes.py`
   (`APIRouter(prefix=f"/v{api.API_VERSION}")`, router-level `responses` declaring
@@ -319,10 +319,10 @@ P1. Depends on: S2a.
   generic handlers, a lifespan with no run registry yet, `docs_url=None,
   redoc_url=None, openapi_url=None`, the guard as the only middleware). `_routes.py`
   calls the API through `from openkos import api`. Satisfies: L7, L8, L11, L14.
-- [ ] S2b.4 RED then GREEN: add a test that `ServerSettings` `repr` contains neither
+- [x] S2b.4 RED then GREEN: add a test that `ServerSettings` `repr` contains neither
   the token nor the digest, and that the prefix equals `/v1` and follows
   `API_VERSION` (monkeypatched value gives `/v<N>`). Satisfies: L8.
-- [ ] S2b.5 RED: `tests/unit/localapi/test_localapi_guards.py` (D10): every module
+- [x] S2b.5 RED: `tests/unit/localapi/test_localapi_guards.py` (D10): every module
   under `src/openkos/localapi/` imports only the standard library (excluding
   `sqlite3`), `fastapi`, `pydantic`, `uvicorn`, exactly `openkos.api` and
   `openkos.localapi.*`; direct failing examples, written to a temporary package, for
@@ -334,19 +334,19 @@ P1. Depends on: S2a.
   `fastapi`, `uvicorn`, `starlette`, `pydantic` and `openkos.localapi` out of
   `sys.modules`. Observe RED where the package or example is missing. Satisfies:
   L3 (CLI start-up never loads the framework), L14, L15.
-- [ ] S2b.6 RED then GREEN, API-importer amendment (P1): in
+- [x] S2b.6 RED then GREEN, API-importer amendment (P1): in
   `tests/unit/api/test_api_guards.py`, change the "nothing outside `api/` imports
   `openkos.api`" check so the importers of `openkos.api` outside the API must all be
   files under `localapi/` and there must be at least one now that `_routes.py`
   imports it; keep the parametrized spelling matrix and add the two scenarios
   "a module outside both imports it fails, naming the module" and "a `localapi`
   module importing it passes". Satisfies: P1.
-- [ ] S2b.7 Boundary docstring: reword `tests/unit/application/test_curate_decisions_boundary.py`
+- [x] S2b.7 Boundary docstring: reword `tests/unit/application/test_curate_decisions_boundary.py`
   module docstring (correction 8) to name the owner-local decision and the deferral
   of the gate to ask/query; the scan itself is unchanged. Add one assertion (or run
   the existing scan) that `localapi` is covered by construction and is not an
   allowed importer of `application/`. Satisfies: P1.
-- [ ] S2b.8 RED then GREEN, contract: create `tests/unit/localapi/openapi_snapshot.py`
+- [x] S2b.8 RED then GREEN, contract: create `tests/unit/localapi/openapi_snapshot.py`
   (generator with `--write`, canonical JSON) and
   `tests/unit/localapi/test_openapi_snapshot.py`: `openapi_document()` equals the
   committed `tests/unit/localapi/openapi.json`; `create_app(settings).openapi()`
@@ -354,12 +354,12 @@ P1. Depends on: S2a.
   path starts with `/v1/`; no component name ends in `-Input`/`-Output` or is
   module-qualified; `info.version == str(api.API_VERSION)`; a bearer security scheme
   is present. Generate and `git add` the first `openapi.json`. Satisfies: L16.
-- [ ] S2b.9 Test-layout check: `tests/unit/conftest.py` network guard is left
+- [x] S2b.9 Test-layout check: `tests/unit/conftest.py` network guard is left
   untouched; assert nothing here is marked `cross_platform_smoke`. Mutation: add a
   second route to `_routes.py` without a security-matrix entry and observe the
   enumeration test's exact-set assertion fail; add `import starlette` to a module and
   observe S2b.5 fail; revert, purge, GREEN. Satisfies: L7, L15.
-- [ ] S2b.10 Run the five gates; commits `feat(api):` (app) and `test(api):` (guards,
+- [x] S2b.10 Run the five gates; commits `feat(api):` (app) and `test(api):` (guards,
   amendment). Satisfies: L4..L8, L11, L14..L16, P1.
 
 Branch/PR: `feat/local-api-app-skeleton`. Independent mutation: register the router
