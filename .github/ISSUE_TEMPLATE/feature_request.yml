@@ -40,6 +40,7 @@ body:
         - "MVP 3 — The Ask Surface"
         - "MVP 4 — The Unattended Engine"
         - "MVP 5 — Interoperability"
+        - "MVP 6 — The Desktop App"
         - "Horizon (later / not yet committed)"
         - "Not sure"
     validations:
