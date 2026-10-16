@@ -537,6 +537,43 @@ token that is present but not of the documented shape MUST yield 422
 - WHEN it is sent
 - THEN the response is 422 with code `invalid_request`
 
+### Requirement: Every Request Body Is Capped, After The Token Check
+
+The server MUST refuse a request whose body exceeds 1 MiB (1,048,576 bytes) with
+413 and code `request_too_large`, before any route runs. A declared
+`Content-Length` above the cap MUST be refused without reading the body; a body
+with no `Content-Length`, or one that exceeds its declared length, MUST be
+counted as it streams and the read aborted once it crosses the cap. A body of
+exactly the cap MUST be accepted. The check MUST run after the Host, Origin and
+token checks, so an unauthenticated request is answered 403 or 401, never 413,
+and learns nothing about the cap. The cap is above the largest legitimate body,
+a judging run echoing its quote token.
+
+#### Scenario: A declared oversized body is refused unread
+
+- GIVEN a valid Host and token
+- WHEN a `POST` declares a `Content-Length` of 1 MiB plus one byte
+- THEN the response is 413 with code `request_too_large` and no route ran
+
+#### Scenario: A streamed oversized body is aborted
+
+- GIVEN a valid Host and token
+- WHEN a `POST` with no `Content-Length` streams more than 1 MiB
+- THEN the response is 413 with code `request_too_large` and the read stops at
+  the chunk that crossed the cap
+
+#### Scenario: A body of exactly the cap is accepted
+
+- GIVEN a valid Host and token
+- WHEN a `POST` body is exactly 1 MiB
+- THEN the request reaches the route
+
+#### Scenario: An unauthenticated oversized request is not told about the cap
+
+- GIVEN a request with no token declaring a `Content-Length` above the cap
+- WHEN it is sent
+- THEN the response is 401, not 413
+
 ### Requirement: Outcomes And Errors Map To Status Codes With A Uniform Body
 
 Every non-success response, from the security checks, request validation,
@@ -553,6 +590,7 @@ mapping MUST be evaluated subclass-first and MUST be:
 | Host not allowed | 403 | `host_not_allowed` | false |
 | Origin not allowed | 403 | `origin_not_allowed` | false |
 | Preflight rejected | 403 | `preflight_rejected` | false |
+| Request body above the cap | 413 | `request_too_large` | false |
 | Unknown path or run id | 404 | `not_found` | false |
 | Known path, method not allowed | 405 | `method_not_allowed` | false |
 | Invalid request body or parameter | 422 | `invalid_request` | false |
