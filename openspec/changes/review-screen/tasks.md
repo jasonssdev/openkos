@@ -75,14 +75,22 @@ Delivery strategy: stacked-to-main.
 
 ## S3 Wording
 
-- [ ] S3.1 `ui/review/wording.ts`: type nouns, the identity question and line
+- [x] S3.1 `ui/review/wording.ts`: type nouns, the identity question and line
   by evaluation, group and cross-type wording, connection sentences and their
   reversal, tier lines, options with "what it does", confirmations,
   sensitivity labels, source lines and dates, the list sentences for kinds
   without actions, the check's consent, progress and result, and the problem
-  table (R1, R2, R5, R6, R7; D4). Tests per brief section.
-- [ ] S3.2 A test that no wording output contains an engine word of the
+  table (R1, R2, R5, R6, R7; D4). Tests per brief section. RED: the test file
+  failed to load (`Cannot find module './wording.ts'`). GREEN: 71 tests.
+  `identityShape` decides from the engine's withheld reason only: a first draft
+  also compared the pages' types, which would have turned a pair with one
+  unreadable page into a choice of kinds.
+- [x] S3.2 A test that no wording output contains an engine word of the
   brief's rule 1 for the fixtures it is given.
+- [x] S3.3 Mutations, each restored from a byte copy: 13 run; 9 killed at
+  once; 4 survived (the type-based shape, the already-checked line, `fresh`
+  null versus false, a reversed connection's preview) and each got a test,
+  then was killed (the first by removing the branch it guarded).
 
 ## S4 The Review Model
 

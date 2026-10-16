@@ -1,0 +1,605 @@
+import { describe, expect, it } from "vitest";
+import { ApiError, EngineUnreachable, ProtocolError, type Schemas } from "../../client/index.ts";
+import {
+  CHECK_NEVER_COMBINES,
+  DECIDE_LATER,
+  ENGINE_WORDS,
+  checkConsent,
+  checkProgress,
+  checkResult,
+  confirmation,
+  describeDecision,
+  formatDate,
+  historyLine,
+  identityShape,
+  listEntry,
+  previewLines,
+  problemFor,
+  sourceLine,
+  splitQuestion,
+  splitDone,
+  typeNoun,
+  whoCanSee,
+  type Pages,
+} from "./wording.ts";
+
+type Decision = Schemas["Decision"];
+type Page = Schemas["Page"];
+
+const NOW = new Date("2026-10-16T12:00:00Z");
+
+function page(id: string, title: string, okf_type: string | null = "Person", extra: Partial<Page> = {}): Page {
+  return { concept_id: id, title, okf_type, excerpt: `About ${title}.`, sensitivity: "private", sources: [], ...extra };
+}
+
+function pagesOf(...list: Page[]): Pages {
+  return new Map(list.map((p) => [p.concept_id, p]));
+}
+
+const A = page("people/a", "Marguerite Osei");
+const B = page("people/b", "M. Osei");
+const C = page("people/c", "Maggie Osei");
+const ORG = page("orgs/acme", "Acme", "Organization");
+
+function identity(over: Partial<Decision> = {}, members = ["people/a", "people/b"]): Decision {
+  return {
+    decision_key: "k1",
+    kind: "identity",
+    targets: members,
+    fresh: true,
+    evaluation: "judged_same",
+    actions: ["merge", "keep_distinct", "skip"],
+    withheld: [],
+    resolves_via: "openkos duplicates --merge",
+    detail: { member_ids: members, okf_type: "Person", tier: "exact", verdict: "same", rationale: "Same email." },
+    ...over,
+  };
+}
+
+function relation(type: string, actions: Schemas["Action"][] = ["relate", "skip"]): Decision {
+  return {
+    decision_key: "r1",
+    kind: "relation_type",
+    targets: ["people/a", "orgs/acme"],
+    fresh: true,
+    evaluation: "not_applicable",
+    actions,
+    withheld: [],
+    resolves_via: "openkos relations --apply",
+    detail: {
+      source_id: "people/a",
+      target_id: "orgs/acme",
+      effective_source_id: "people/a",
+      effective_target_id: "orgs/acme",
+      suggested_type: type,
+      rationale: "She is on the board.",
+    },
+  };
+}
+
+const TIER: Decision = {
+  decision_key: "t1",
+  kind: "volatility",
+  targets: [],
+  fresh: true,
+  evaluation: "not_applicable",
+  actions: ["set_tier", "skip"],
+  withheld: [],
+  resolves_via: "openkos suggest-volatility",
+  detail: { type_name: "Person", current_default: "static", suggested_tier: "slow", rationale: "Roles change." },
+};
+
+describe("typeNoun", () => {
+  it.each([
+    ["Person", "person", "people", "a person"],
+    ["Organization", "organization", "organizations", "an organization"],
+    ["Procedure", "how-to", "how-tos", "a how-to"],
+    ["Concept", "idea", "ideas", "an idea"],
+    ["Insight", "saved answer", "saved answers", "a saved answer"],
+    ["Source", "file", "files", "a file"],
+    ["Gadget", "thing", "things", "a thing"],
+    [null, "thing", "things", "a thing"],
+  ] as const)("names %s", (type, one, many, withArticle) => {
+    expect(typeNoun(type)).toEqual({ one, many, withArticle });
+  });
+});
+
+describe("dates and sources", () => {
+  it("names a date in this year by day and month", () => {
+    expect(formatDate("2026-10-12T09:00:00Z", NOW)).toBe("12 October");
+  });
+
+  it("adds the year when it is not this year", () => {
+    expect(formatDate("2025-03-02T12:00:00Z", NOW)).toBe("2 March 2025");
+  });
+
+  it("gives nothing for a date it cannot read", () => {
+    expect(formatDate("soon", NOW)).toBeNull();
+  });
+
+  it("words a source with and without its date", () => {
+    expect(sourceLine({ source_id: "s", file_name: "notes.md", added_at: "2026-10-12T12:00:00Z" }, NOW)).toBe(
+      "From: notes.md, added 12 October",
+    );
+    expect(sourceLine({ source_id: "s", file_name: "notes.md", added_at: null }, NOW)).toBe("From: notes.md");
+  });
+
+  it("words who can see a page, never the level's name", () => {
+    expect(whoCanSee("public")).toEqual({ label: "Shareable", meaning: "Fine to share or export." });
+    expect(whoCanSee("private")).toEqual({
+      label: "Private",
+      meaning: "Stays in your library. Sent to a cloud AI model only if you turn one on.",
+    });
+    expect(whoCanSee("confidential")).toEqual({
+      label: "Only on this Mac",
+      meaning: "Never sent anywhere, even with a cloud AI model on.",
+    });
+  });
+});
+
+describe("identity decisions", () => {
+  const pages = pagesOf(A, B, C, ORG);
+
+  it("asks about a judged-same pair and offers to combine", () => {
+    const view = describeDecision(identity(), pages);
+    expect(view.question).toBe("Are these the same person?");
+    expect(view.lead).toBe("The AI model thinks these are the same person.");
+    expect(view.reason).toBe("“Same email.”");
+    expect(view.options.map((o) => [o.choice, o.label])).toEqual([
+      ["merge", "Combine them"],
+      ["keep_distinct", "Keep separate"],
+      ["later", "Decide later"],
+    ]);
+    expect(view.options[1]?.does).toBe("We won't suggest combining these again.");
+    expect(view.options[2]).toEqual(DECIDE_LATER);
+  });
+
+  it.each([
+    ["judged_different", "The AI model thinks these are different people.", ["keep_distinct", "later"]],
+    ["judged_uncertain", "The AI model couldn't tell.", ["keep_distinct", "later"]],
+    ["pending_evaluation", "These haven't been checked yet.", ["check", "keep_distinct", "later"]],
+  ] as const)("words %s and withholds the combine", (evaluation, lead, choices) => {
+    const view = describeDecision(identity({ evaluation, actions: ["keep_distinct", "skip"] }), pages);
+    expect(view.lead).toBe(lead);
+    expect(view.options.map((o) => o.choice)).toEqual(choices);
+  });
+
+  it("offers the check with its own line", () => {
+    const view = describeDecision(identity({ evaluation: "pending_evaluation", actions: ["keep_distinct", "skip"] }), pages);
+    expect(view.options[0]).toEqual({
+      choice: "check",
+      label: "Check these",
+      does: "Checking doesn't change anything. You'll still decide.",
+    });
+  });
+
+  it("asks which of a group are the same", () => {
+    const members = ["people/a", "people/b", "people/c"];
+    const decision = identity(
+      { actions: ["merge_group", "keep_distinct", "skip"], withheld: [{ action: "merge", reason: "more_than_two_members" }] },
+      members,
+    );
+    expect(identityShape(decision)).toBe("group");
+    const view = describeDecision(decision, pages);
+    expect(view.question).toBe("Which of these are the same?");
+    expect(view.options.map((o) => [o.choice, o.label])).toEqual([
+      ["merge_group", "Combine the ones I marked"],
+      ["keep_distinct", "Keep all separate"],
+      ["later", "Decide later"],
+    ]);
+    expect(view.options[1]?.does).toBe("We won't suggest combining any of these again.");
+  });
+
+  it("asks what a thing of two kinds is, with one option per kind", () => {
+    const decision = identity(
+      { actions: ["merge_group", "keep_distinct", "skip"], withheld: [{ action: "merge", reason: "cross_type" }] },
+      ["people/a", "orgs/acme"],
+    );
+    expect(identityShape(decision)).toBe("kinds");
+    const view = describeDecision(decision, pages);
+    expect(view.question).toBe("What is Marguerite Osei?");
+    expect(view.options.map((o) => [o.choice, o.label, o.okfType])).toEqual([
+      ["merge_group", "It's a person", "Person"],
+      ["merge_group", "It's an organization", "Organization"],
+      ["keep_distinct", "They're different things", undefined],
+      ["later", "Decide later", undefined],
+    ]);
+  });
+
+  it("names a page it could not read without its id", () => {
+    const view = describeDecision(identity(), pagesOf(A));
+    expect(view.pages.map((p) => p.title)).toEqual(["Marguerite Osei", "A page that couldn't be read"]);
+    expect(JSON.stringify(view)).not.toContain("people/b");
+  });
+
+  it("keeps a pair a pair when one page could not be read", () => {
+    expect(identityShape(identity())).toBe("pair");
+    expect(describeDecision(identity(), pagesOf(A)).question).toBe("Are these the same person?");
+  });
+
+  it("says when the decision changed since it was suggested", () => {
+    expect(describeDecision(identity({ fresh: false }), pages).changed).toBe(
+      "Something about these pages changed since this was suggested. Here is the current version.",
+    );
+    expect(describeDecision(identity(), pages).changed).toBeNull();
+    expect(describeDecision(identity({ fresh: null }), pages).changed).toBeNull();
+  });
+});
+
+describe("previews", () => {
+  const pages = pagesOf(A, B, C, ORG);
+  const plan = (over: Partial<Schemas["MergePlan"]> = {}): Schemas["MergePlan"] => ({
+    kind: "merge",
+    survivor_id: "people/a",
+    absorbed_id: "people/b",
+    survivor_criterion: "chosen",
+    survivor_type: "Person",
+    cross_source_same_pair: false,
+    cross_type_concern: null,
+    files_rewritten: 3,
+    kept_distinct_ids: [],
+    steps: [{ survivor_id: "people/a", absorbed_id: "people/b", absorbed_type: "Person", files_rewritten: 3, type_outcome: "same_type" }],
+    ...over,
+  });
+
+  it("says what combining a pair does", () => {
+    expect(previewLines(identity(), plan(), pages)).toEqual([
+      "We'll make one page with everything from both. The page keeps the name 'Marguerite Osei'. 3 other pages that mention it will point to the combined page.",
+    ]);
+  });
+
+  it("counts one other page and leaves out none", () => {
+    expect(previewLines(identity(), plan({ files_rewritten: 1 }), pages)[0]).toContain(
+      "1 other page that mentions it will point to the combined page.",
+    );
+    expect(previewLines(identity(), plan({ files_rewritten: 0 }), pages)[0]).toBe(
+      "We'll make one page with everything from both. The page keeps the name 'Marguerite Osei'.",
+    );
+  });
+
+  it("warns when the pair came from different files or kinds", () => {
+    const lines = previewLines(identity(), plan({ cross_source_same_pair: true }), pages);
+    expect(lines.at(-1)).toBe("These came from different files: check that they really are the same person.");
+    expect(previewLines(identity(), plan({ cross_type_concern: "x" }), pages).at(-1)).toBe(
+      "These came from different files: check that they really are the same person.",
+    );
+  });
+
+  it("says what combining the marked pages does", () => {
+    const group = identity({ actions: ["merge_group", "keep_distinct", "skip"] }, ["people/a", "people/b", "people/c"]);
+    const marked = plan({ kept_distinct_ids: ["people/c"], files_rewritten: 2 });
+    expect(previewLines(group, marked, pages)[0]).toBe(
+      "We'll make one page from the 2 pages you marked. It keeps the name 'Marguerite Osei'. 2 other pages that mention it will point to the combined page. The pages you didn't mark stay as they are, and we won't suggest combining them with 'Marguerite Osei' again.",
+    );
+    expect(previewLines(group, plan(), pages)[0]).not.toContain("didn't mark");
+  });
+
+  it("says what choosing a kind does, recorded or already noted", () => {
+    const kinds = identity({ actions: ["merge_group"], withheld: [{ action: "merge", reason: "cross_type" }] }, ["people/a", "orgs/acme"]);
+    const step = { survivor_id: "people/a", absorbed_id: "orgs/acme", absorbed_type: "Organization", files_rewritten: 0 };
+    expect(previewLines(kinds, plan({ steps: [{ ...step, type_outcome: "recorded" }], files_rewritten: 0 }), pages)[0]).toBe(
+      "We'll keep one page, as a person, named 'Marguerite Osei', and remember it was also described as an organization.",
+    );
+    expect(previewLines(kinds, plan({ steps: [{ ...step, type_outcome: "discarded" }], files_rewritten: 0 }), pages)[0]).toBe(
+      "We'll keep one page, as a person, named 'Marguerite Osei'. It was already noted as possibly something else, so we won't note an organization.",
+    );
+  });
+
+  it("says what keeping separate, connecting and a setting do", () => {
+    expect(previewLines(identity(), { kind: "keep_distinct", member_ids: ["people/a", "people/b"] }, pages)).toEqual([
+      "We won't suggest combining these again.",
+    ]);
+    expect(
+      previewLines(relation("part_of"), { kind: "relate", relation_type: "part_of", source_id: "people/a", target_id: "orgs/acme" }, pages),
+    ).toEqual(["We'll record that Marguerite Osei is part of Acme."]);
+    expect(
+      previewLines(relation("part_of"), { kind: "relate", relation_type: "part_of", source_id: "orgs/acme", target_id: "people/a" }, pages),
+    ).toEqual(["We'll record that Acme is part of Marguerite Osei."]);
+    expect(previewLines(TIER, { kind: "set_tier", tier: "slow", type_name: "Person" }, pages)).toEqual([
+      "From now on, people are treated as changing slowly.",
+    ]);
+  });
+});
+
+describe("connections", () => {
+  const pages = pagesOf(A, ORG);
+
+  it.each([
+    ["related_to", "Marguerite Osei and Acme are related.", false],
+    ["references", "Marguerite Osei mentions Acme.", false],
+    ["part_of", "Marguerite Osei is part of Acme.", true],
+    ["member_of", "Marguerite Osei is a member of Acme.", true],
+    ["depends_on", "Marguerite Osei depends on Acme.", true],
+    ["caused_by", "Marguerite Osei was caused by Acme.", true],
+    ["produced_by", "Marguerite Osei was made by Acme.", true],
+  ] as const)("words %s", (type, sentence, oneWay) => {
+    const actions: Schemas["Action"][] = oneWay ? ["relate", "relate_reversed", "skip"] : ["relate", "skip"];
+    const view = describeDecision(relation(type, actions), pages);
+    expect(view.question).toBe("Is this right?");
+    expect(view.statement).toBe(sentence);
+    expect(view.options[0]).toEqual({
+      choice: "relate",
+      label: "Yes, connect them",
+      does: `We'll record that ${sentence.slice(0, -1)}.`,
+    });
+    expect(view.options.some((o) => o.choice === "relate_reversed")).toBe(oneWay);
+  });
+
+  it("shows the reversed sentence itself as the other way round", () => {
+    const view = describeDecision(relation("part_of", ["relate", "relate_reversed", "skip"]), pages);
+    expect(view.options[1]).toEqual({
+      choice: "relate_reversed",
+      label: "No — Acme is part of Marguerite Osei.",
+      does: "We'll record that instead.",
+    });
+    expect(view.reason).toBe("“She is on the board.”");
+  });
+});
+
+describe("how quickly it goes out of date", () => {
+  it("asks about the kind and shows the current setting and the suggestion", () => {
+    const view = describeDecision(TIER, new Map());
+    expect(view.question).toBe("How quickly do facts about people go out of date?");
+    expect(view.facts).toEqual([
+      ["Now", "Rarely — they stay true."],
+      ["Suggested", "Slowly — over months or years."],
+    ]);
+    expect(view.options.map((o) => [o.choice, o.label, o.does])).toEqual([
+      ["set_tier", "Use this", "From now on, people are treated as changing slowly. We'll remind you to recheck them now and then."],
+      ["later", "Decide later", "Nothing changes. This stays in To review."],
+    ]);
+  });
+});
+
+describe("decisions the app cannot act on", () => {
+  const pages = pagesOf(A, B);
+
+  it.each([
+    ["contradiction", "Two pages say different things about Marguerite Osei."],
+    ["revision", "A newer file may replace an older one."],
+    ["watch_refusal", "A file was not added."],
+  ] as const)("lists a %s with a plain sentence and no options", (kind, sentence) => {
+    const decision: Decision = { ...identity(), kind, actions: [], detail: null, evaluation: "not_applicable" };
+    const view = describeDecision(decision, pages);
+    expect(view.question).toBe(sentence);
+    expect(view.options).toEqual([]);
+    expect(view.cannotAct).toBe("This can't be settled in the app yet.");
+    expect(JSON.stringify(view)).not.toContain("openkos");
+  });
+});
+
+describe("listEntry", () => {
+  it("summarises a decision by its question and its pages' titles", () => {
+    expect(listEntry(identity(), pagesOf(A, B))).toEqual({
+      question: "Are these the same person?",
+      pages: "Marguerite Osei · M. Osei",
+      changed: false,
+      canAct: true,
+    });
+  });
+
+  it("marks a changed decision and one the app cannot act on", () => {
+    const entry = listEntry({ ...identity(), kind: "revision", actions: [], fresh: false }, pagesOf(A, B));
+    expect(entry.changed).toBe(true);
+    expect(entry.canAct).toBe(false);
+  });
+});
+
+describe("confirmations", () => {
+  const pages = pagesOf(A, B, ORG);
+  const applied = (action: Schemas["Action"], over: Partial<Schemas["Applied"]> = {}): Schemas["Applied"] => ({
+    action,
+    commit_sha: "abc",
+    decision_key: "k1",
+    merged: [["people/a", "people/b"]],
+    ...over,
+  });
+
+  it("confirms a combine and says when the page is only on this Mac", () => {
+    expect(confirmation(identity(), applied("merge"), pages)).toEqual(["Combined into 'Marguerite Osei'."]);
+    expect(confirmation(identity(), applied("merge", { committed_confidential: true }), pages)).toEqual([
+      "Combined into 'Marguerite Osei'.",
+      "The combined page is marked Only on this Mac.",
+    ]);
+  });
+
+  it("confirms the other choices in the past tense", () => {
+    expect(confirmation(identity(), applied("keep_distinct", { merged: [] }), pages)).toEqual(["Kept separate."]);
+    expect(confirmation(relation("part_of"), applied("relate"), pages)).toEqual([
+      "We recorded that Marguerite Osei is part of Acme.",
+    ]);
+    expect(confirmation(relation("part_of"), applied("relate_reversed"), pages)).toEqual([
+      "We recorded that Acme is part of Marguerite Osei.",
+    ]);
+    expect(confirmation(TIER, applied("set_tier"), pages)).toEqual([
+      "From now on, people are treated as changing slowly.",
+    ]);
+  });
+});
+
+describe("the check", () => {
+  const quote = (over: Partial<Schemas["JudgingQuote"]> = {}): Schemas["JudgingQuote"] => {
+    const binding = { backend: "ollama", model: "llama3", is_local: true, kind: "identity" as const, effective_confidential: false, rubric_digest: null };
+    return {
+      kind: "identity",
+      total: 5,
+      served: 2,
+      uncertain: 0,
+      to_judge: 3,
+      calls: 3,
+      binding,
+      notices: [],
+      token: { binding, calls: 3, include_confidential: false, include_uncertain: false, work: [] },
+      ...over,
+    };
+  };
+
+  it("asks once for the batch, on this Mac", () => {
+    expect(checkConsent(quote())).toEqual({
+      heading: "Check 3 pairs?",
+      lines: [
+        "The AI model on this Mac will compare them. Nothing leaves this Mac.",
+        "2 are already checked and won't be checked again.",
+        CHECK_NEVER_COMBINES,
+      ],
+      agree: "Check 3",
+      decline: "Not now",
+    });
+  });
+
+  it("names one pair, a cloud model and background work", () => {
+    const cloud = quote({
+      to_judge: 1,
+      served: 1,
+      notices: [{ code: "unattended_active" }],
+      binding: { backend: "openai-compatible", model: "gpt-x", is_local: false, kind: "identity", effective_confidential: false, rubric_digest: null },
+    });
+    expect(checkConsent(cloud)).toEqual({
+      heading: "Check these two?",
+      lines: [
+        "The text of these pages will be sent to the provider of gpt-x to compare them. Pages marked 'Only on this Mac' are not sent. The provider may charge you.",
+        "1 is already checked and won't be checked again.",
+        "OpenKOS is also working in the background, so this may be slower.",
+        CHECK_NEVER_COMBINES,
+      ],
+      agree: "Check 1",
+      decline: "Not now",
+    });
+  });
+
+  it("leaves out the already-checked line when none are", () => {
+    expect(checkConsent(quote({ served: 0 })).lines).not.toContain(
+      "0 are already checked and won't be checked again.",
+    );
+    expect(checkConsent(quote({ served: 0 })).lines).toHaveLength(2);
+  });
+
+  it("says when there is nothing to check", () => {
+    expect(checkConsent(quote({ to_judge: 0 }))).toEqual({
+      heading: "These are already checked.",
+      lines: [],
+      agree: null,
+      decline: "OK",
+    });
+  });
+
+  it("words progress, stopping and the result", () => {
+    expect(checkProgress(1, 3, false)).toBe("Checking 1 of 3…");
+    expect(checkProgress(1, 3, true)).toBe("Stopping after the current one. Everything already checked is kept.");
+    expect(checkResult(3, 2)).toBe("Checked 3. 2 are ready for you to decide.");
+    expect(checkResult(1, 1)).toBe("Checked 1. 1 is ready for you to decide.");
+  });
+});
+
+describe("splitting again", () => {
+  const record: Schemas["MergeRecord"] = {
+    survivor_id: "people/a",
+    absorbed_id: "people/b",
+    absorbed_title: "M. Osei",
+    merged_at: "2026-10-14T12:00:00Z",
+  };
+  const step = (absorbed_id: string, absorbed_title: string | null): Schemas["UnmergeStep"] => ({
+    survivor_id: "people/a",
+    absorbed_id,
+    absorbed_title,
+    merged_at: "2026-10-14T12:00:00Z",
+    files_rewritten: 0,
+    survivor_edits_unverifiable: false,
+    restores_catalog_snapshot: false,
+  });
+
+  it("words a history line", () => {
+    expect(historyLine(record, NOW)).toBe("Combined from 'M. Osei' on 14 October");
+    expect(historyLine({ ...record, absorbed_title: null }, NOW)).toBe("Combined from a page on 14 October");
+  });
+
+  it("asks before one split, and lists the later combines first", () => {
+    expect(splitQuestion([step("people/b", "M. Osei")])).toBe(
+      "Split 'M. Osei' out again? Both pages go back exactly as they were.",
+    );
+    expect(splitQuestion([step("people/c", "Maggie"), step("people/d", null), step("people/b", "M. Osei")])).toBe(
+      "To split this, the later combines on this page are split first: 'Maggie', a page. Continue?",
+    );
+  });
+
+  it("confirms what was split", () => {
+    expect(splitDone(["M. Osei"])).toBe("Split. 'M. Osei' is back as it was.");
+    expect(splitDone(["Maggie", "M. Osei"])).toBe("Split. 'Maggie' and 'M. Osei' are back as they were.");
+  });
+});
+
+describe("problemFor", () => {
+  const api = (code: string) =>
+    new ApiError({ status: 409, code, retryable: false, message: "engine text", retryAfterSeconds: null });
+
+  it.each([
+    ["workspace_busy", "OpenKOS is finishing something else. Nothing was changed.", "try_again"],
+    ["run_active", "A check is already running.", "ok"],
+    ["stale", "These pages changed while you were looking. Here is the current version.", "reload"],
+    ["write_drift", "These pages changed while you were looking. Here is the current version.", "reload"],
+    ["member_missing", "One of these pages no longer exists, so there's nothing to decide.", "ok"],
+    ["backend_unavailable", "The AI model isn't running. OpenKOS needs it to check pages.", "try_again"],
+    ["backend_model_not_found", "The AI model isn't installed. OpenKOS needs it to check pages.", "ok"],
+    ["record_failed", "Your choice couldn't be saved. Nothing was changed.", "try_again"],
+    ["invalid_selection", "Something about your choice didn't match these pages. Please choose again.", "reload"],
+    [
+      "merge_group_interrupted",
+      "Only some of these were combined. Nothing else changed, and each combine can be split again.",
+      "reload",
+    ],
+    ["survivor_missing", "This page was combined into another one. Split that first.", "ok"],
+    ["not_merged", "These pages are already separate.", "reload"],
+    ["survivor_edited", "This page was changed after it was combined, so it can't be split here.", "ok"],
+    ["unmerge_interrupted", "Only some of these were split. Each page that was split is back as it was.", "reload"],
+    ["quote_stale", "Something changed since you agreed — the AI model or the pages. Please look again.", "requote"],
+  ] as const)("words %s", (code, message, action) => {
+    expect(problemFor(api(code), "before")).toEqual({ message, action });
+  });
+
+  it("never shows the engine's text, a code or a command for an unnamed failure", () => {
+    for (const error of [api("write_failed"), new ProtocolError({ status: 500, path: "/v1/x" }), new Error("openkos x")]) {
+      const before = problemFor(error, "before");
+      expect(before).toEqual({ message: "Something went wrong. Nothing was changed.", action: "try_again" });
+      expect(problemFor(error, "after")).toEqual({
+        message: "Something went wrong. Look at To review to see what changed.",
+        action: "reload",
+      });
+    }
+  });
+
+  it("words an engine that does not answer", () => {
+    const gone = new EngineUnreachable({ path: "/v1/x" });
+    expect(problemFor(gone, "before")).toEqual({ message: "OpenKOS isn't responding. Nothing was changed.", action: "try_again" });
+    expect(problemFor(gone, "after")).toEqual({
+      message: "OpenKOS stopped responding. Look at To review to see what changed.",
+      action: "reload",
+    });
+  });
+});
+
+describe("no engine words reach the screen", () => {
+  it("leaves every rule-1 word out of every wording above", () => {
+    const pages = pagesOf(A, B, C, ORG);
+    const texts = [
+      describeDecision(identity(), pages),
+      describeDecision(identity({ evaluation: "pending_evaluation", actions: ["keep_distinct"] }), pages),
+      describeDecision(
+        identity({ actions: ["merge_group", "keep_distinct"], withheld: [{ action: "merge", reason: "cross_type" }] }, [
+          "people/a",
+          "orgs/acme",
+        ]),
+        pages,
+      ),
+      describeDecision(relation("part_of", ["relate", "relate_reversed"]), pages),
+      describeDecision(TIER, pages),
+      ...["workspace_busy", "stale", "write_failed", "quote_stale"].map((code) =>
+        problemFor(new ApiError({ status: 409, code, retryable: false, message: "m", retryAfterSeconds: null }), "after"),
+      ),
+    ].map((value) => JSON.stringify(value).replaceAll(/"(choice|okfType)":"[^"]*"/g, ""));
+    for (const text of texts) {
+      for (const word of ENGINE_WORDS) {
+        expect(text.toLowerCase(), word).not.toMatch(new RegExp(`\\b${word}\\b`));
+      }
+    }
+  });
+});
