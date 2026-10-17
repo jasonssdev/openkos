@@ -16,6 +16,7 @@ describe("the gallery", () => {
     expect(titles).toEqual([
       "To review",
       "Status",
+      "Ask",
       "Surfaces and borders",
       "Text",
       "Type scale",
@@ -36,6 +37,14 @@ describe("the gallery", () => {
     const review = document.querySelector(".gallery-frame") as HTMLElement;
     expect(review.querySelector('[aria-current="page"]')?.textContent).toBe("To review4");
     expect(review.querySelectorAll(".ui-split__list .ui-row")).toHaveLength(4);
+  });
+
+  it("shows the real Ask screen with an answer and its pages", () => {
+    const ask = document.querySelector('[data-view="ask"]') as HTMLElement;
+    expect(ask.closest(".gallery-frame")?.querySelector('[aria-current="page"]')?.textContent).toBe("Ask");
+    expect(ask.querySelector(".ui-card__title")?.textContent).toBe("Who looks after the allotment on Saturdays?");
+    expect(ask.querySelector(".ui-card__footer")?.textContent).toBe("From: Allotment volunteers · Maria Lopez");
+    expect(ask.querySelector("details summary")?.textContent).toBe("Earlier questions");
   });
 
   it("opens a decision of the real screen when its row is clicked", async () => {

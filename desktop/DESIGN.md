@@ -4,7 +4,7 @@ How the desktop app looks and why. [`docs/brand.md`](../docs/brand.md) owns the 
 
 ## See it
 
-The gallery shows every component in every state, and the app's real To review and Status screens (`ui/review/render.ts`, `ui/status.ts`) on made-up data:
+The gallery shows every component in every state, and the app's real To review, Status and Ask screens (`ui/review/render.ts`, `ui/status.ts`, `ui/ask/`) on made-up data:
 
 ```sh
 pnpm --dir desktop install
@@ -99,11 +99,12 @@ Brand Indigo itself is 3.87:1 on Ink, so it is used as a fill (with white text) 
 
 ## The app
 
-`ui/index.html` loads `tokens.css` and `system.css`, and `ui/main.ts` draws the app shell into it: the sidebar holds the lockup, the navigation (**Ask**, listed as "Coming soon" and not offered until it exists; **To review**, with a count of what its list shows, or what the status counted before the list is read; **Status**) and the engine's badge at its foot. The main region shows one view at a time. Every screen is drawn from the system; there are no other styles.
+`ui/index.html` loads `tokens.css` and `system.css`, and `ui/main.ts` draws the app shell into it: the sidebar holds the lockup, the navigation (**Ask**; **To review**, with a count of what its list shows, or what the status counted before the list is read; **Status**) and the engine's badge at its foot. The main region shows one view at a time. Every screen is drawn from the system; there are no other styles.
 
 - **Status** (`ui/status.ts`): a page header; an Engine card with the engine's state in words and any detail behind "Show details"; a Your library card with the counts first, the folder behind "Show the folder", a skeleton while it waits for the engine and an error callout when the status cannot be read, and "Check setup" while the AI models are not ready.
 - **Welcome** (`ui/setup/`) replaces everything when no library is chosen yet, with the navigation held back: a page header asking for a folder, one primary ("Create a new library") and one secondary ("Open an existing library"), and a refusal as an error callout with its report behind "Show details".
 - **Setup** (`ui/setup/`) opens on its own, once per session, when the library's AI models are not ready, and from Status's "Check setup" while they are not: one card for the step in hand (install Ollama, then download the models, each model a row with its own download, progress and stop), an info callout when the memory is below the floor, and "You're ready" at the end. It is not in the navigation.
+- **Ask** (`ui/ask/`) is on the system: a page header; the question field with one primary **Ask**, unavailable with a reason while the engine starts; then the shown question as a card. While the answer is on its way the card holds a spinner with the step it is on; then the answer as text, the titles of the pages it came from in the card's footer ("From: …"), and at most a few quiet notes under it (a search that may miss recent changes, pages left out). An outcome with no answer names itself in the card's meta line and says why in one sentence; a failure is an error callout, with **Try again** only when asking again can help. Earlier questions of the session wait behind "Earlier questions", in memory only. The screen never asks the engine to name pages marked Only on this Mac: an answer that drew on one stays private and is counted, never named (ADR-0068's default). Where the person may agree otherwise is an open decision (#1507). Its few layout rules are in `ui/ask/ask.css`.
 - **To review** (`ui/review/`) is a list and a detail (`splitView`). The list pane holds the title, **Check all** when something waits for a check, one row per decision (what it is about, the question as its meta, a Changed badge only when it changed), and one row for the pages you combined. The detail shows one thing at a time: the open decision (the question, its pages compared side by side, the answers, each with what it does), the check, a split, or the combined pages; with nothing open, an empty state says what to do. An identity asks "Are these the same?" first, with **Same thing** and **Different things** side by side at one weight; which pages, or what it is, is asked only after Same thing, in the first question's place, with Back. The model's reason waits behind "Why the AI model thinks so". A decision the app cannot act on shows its plain sentence and "This can't be settled in the app yet."; its answers appear once the wording gives them, with no other change to the screen.
 
 ## Components

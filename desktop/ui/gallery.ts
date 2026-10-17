@@ -1,8 +1,10 @@
 // The component gallery (desktop/DESIGN.md): every component of the design
-// system in every state, and the real To review and Status screens, on made-up
-// OpenKOS data.
+// system in every state, and the real To review, Status and Ask screens, on
+// made-up OpenKOS data.
 // A development page only: nothing here reaches the engine.
 import type { Schemas } from "../client/index.ts";
+import type { AskState } from "./ask/model.ts";
+import { renderAsk } from "./ask/render.ts";
 import { ReviewModel, type ReviewClient } from "./review/model.ts";
 import { renderReview } from "./review/render.ts";
 import { renderStatus } from "./status.ts";
@@ -100,7 +102,7 @@ function pageCard(page: MockPage): HTMLElement {
 // -- composition: To review ------------------------------------------------------ //
 
 const NAV: NavEntry[] = [
-  { id: "ask", label: "Ask", disabled: true, hint: "Coming soon" },
+  { id: "ask", label: "Ask" },
   { id: "review", label: "To review", count: 4 },
   { id: "status", label: "Status" },
 ];
@@ -228,6 +230,50 @@ function statusComposition(): HTMLElement {
   return frame(shell.root);
 }
 
+// -- composition: ask ------------------------------------------------------------ //
+
+// The real Ask screen (ask/render.ts) on a made-up answer, with one earlier question.
+function askComposition(): HTMLElement {
+  const shell = appShell({ nav: NAV, current: "ask", onNavigate: noop, footer: badge("success", "Engine running") });
+  const view = el("div", { class: "ui-view" });
+  const answer: Schemas["Answer"] = {
+    question: "Who looks after the allotment on Saturdays?",
+    outcome: "answered",
+    answer:
+      "Maria Lopez opens the allotment on Saturday mornings and keeps the volunteer rota.\n\nShe hands over to the Sunday group at noon.",
+    no_match_cause: "none",
+    citations: [
+      { concept_id: "projects/allotment-volunteers", title: "Allotment volunteers", confidential: false, excerpted: false, history: null },
+      { concept_id: "people/maria-lopez", title: "Maria Lopez", confidential: false, excerpted: false, history: null },
+    ],
+    omitted: [],
+    attribution: "reported",
+    withheld: 0,
+    sufficiency_checked: true,
+    sufficiency_degraded: false,
+    lexical_unavailable: false,
+    dense_unavailable: false,
+    stale_indexes: [],
+  };
+  const state: AskState = {
+    ready: true,
+    running: false,
+    blank: false,
+    shown: 2,
+    turns: [
+      { id: 2, question: answer.question, result: { kind: "answer", answer } },
+      {
+        id: 1,
+        question: "When is the next team offsite?",
+        result: { kind: "answer", answer: { ...answer, outcome: "no_match", answer: null, citations: [], no_match_cause: "zero_hits" } },
+      },
+    ],
+  };
+  renderAsk(view, state, { ask: noop, retry: noop, show: noop, expanded: new Set(), onToggle: noop });
+  shell.main.append(view);
+  return frame(shell.root);
+}
+
 // -- the components --------------------------------------------------------------- //
 
 function foundations(): HTMLElement[] {
@@ -304,7 +350,7 @@ function badgesAndNav(): HTMLElement[] {
         specimen("current, with count", navItem({ id: "review", label: "To review", count: 4 }, true, noop)),
         specimen("rest", navItem({ id: "status", label: "Status" }, false, noop)),
         specimen("rest, with count", navItem({ id: "review", label: "To review", count: 12 }, false, noop)),
-        specimen("not offered yet", navItem({ id: "ask", label: "Ask", disabled: true, hint: "Coming soon" }, false, noop)),
+        specimen("not offered yet", navItem({ id: "settings", label: "Settings", disabled: true, hint: "Coming soon" }, false, noop)),
       ),
     ),
   ];
@@ -496,6 +542,7 @@ if (root) {
     ),
     section("To review", "The real screen on made-up data: the list of what waits, and the one you open. Click a row; nothing is written.", reviewComposition()),
     section("Status", "The engine and your library.", statusComposition()),
+    section("Ask", "A question, its answer and the pages it came from.", askComposition()),
     ...foundations(),
     buttons(),
     ...badgesAndNav(),

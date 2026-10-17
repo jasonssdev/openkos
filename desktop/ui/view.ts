@@ -59,10 +59,10 @@ export function engineBadge(state: EngineState | null): [BadgeTone, string] {
   }
 }
 
-/** The sidebar: Ask is not built yet, so it is listed but not offered. */
+/** The sidebar: Ask, To review with its count when one is known, and Status. */
 export function navEntries(reviewCount: number | undefined): NavEntry[] {
   return [
-    { id: "ask", label: "Ask", disabled: true, hint: "Coming soon" },
+    { id: "ask", label: "Ask" },
     reviewCount === undefined ? { id: "review", label: "To review" } : { id: "review", label: "To review", count: reviewCount },
     { id: "status", label: "Status" },
   ];

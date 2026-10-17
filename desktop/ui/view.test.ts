@@ -120,9 +120,9 @@ describe("engineBadge", () => {
 });
 
 describe("navEntries", () => {
-  it("offers Ask as coming soon, To review with its count, then Status", () => {
+  it("offers Ask, To review with its count, then Status", () => {
     expect(navEntries(3)).toEqual([
-      { id: "ask", label: "Ask", disabled: true, hint: "Coming soon" },
+      { id: "ask", label: "Ask" },
       { id: "review", label: "To review", count: 3 },
       { id: "status", label: "Status" },
     ]);
