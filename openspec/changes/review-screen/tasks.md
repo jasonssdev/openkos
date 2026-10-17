@@ -94,18 +94,30 @@ Delivery strategy: stacked-to-main.
 
 ## S4 The Review Model
 
-- [ ] S4.1 `ui/review/model.ts` with `ReviewClient`: load (decisions and
+- [x] S4.1 `ui/review/model.ts` with `ReviewClient`: load (decisions and
   pages), open, decide later (nothing sent), the group selection rules,
   preview, apply with `retryWhileBusy`, stale reload and re-preview,
   problems and their actions, the session's combined pages (R1-R5, R7; D2-D4,
-  D6).
-- [ ] S4.2 The check: quote, consent, run with the echoed token, polling with
+  D6). RED: the test file failed to load (`Cannot find module './model.ts'`).
+- [x] S4.2 The check: quote, consent, run with the echoed token, polling with
   an injected sleep, stop, result, `quote_stale` re-quote, failures (R6, D5).
-- [ ] S4.3 Split again: preview, the later-combines confirmation, apply,
+  `tsc` caught a phase comparison it had narrowed away (TS2367): `stopCheck`
+  changes the phase during the poll's wait, so the loop reads it through a
+  method.
+- [x] S4.3 Split again: preview, the later-combines confirmation, apply,
   refusals without `discard_survivor_edits`, the interrupted split (R7, D6).
-- [ ] S4.4 Mutations on the two-marked rule, the stale re-preview, never
-  sending `skip`, never sending `discard_survivor_edits`, the busy retry only
-  around writes, the quote-stale re-quote.
+  GREEN: 38 model tests, 186 in the package.
+- [x] S4.4 Mutations, each restored from a byte copy: 22 run. Killed at once:
+  the stale re-preview on preview and on apply, never sending `skip`, never
+  sending `discard_survivor_edits`, the busy retry around apply and not around
+  preview, the quote-stale re-quote and its message, the ready count, the name
+  cleared on unmark, the name restricted to the marked pages, nothing marked
+  for a group, the only page of a kind named, Try again repeating the apply.
+  Survived and got a test: the two-marked rule (one mark with a name), the
+  stopping text kept while the run still reports running, the history read
+  after a split. The name-among-marked check in `canCombineMarked` survived as
+  the redundant half of a pair (`chooseName` and `toggleMark` already keep it)
+  and was removed.
 
 ## S5 The Screen
 
