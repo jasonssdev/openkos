@@ -679,11 +679,11 @@ const PROBLEMS: Record<string, Problem> = {
   },
   member_missing: { message: "One of these pages no longer exists, so there's nothing to decide.", action: "ok" },
   backend_unavailable: {
-    message: "The AI model isn't running. OpenKOS needs it to check pages.",
+    message: "The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it.",
     action: "try_again",
   },
   backend_model_not_found: {
-    message: "The AI model isn't installed. OpenKOS needs it to check pages.",
+    message: "The AI model isn't installed. OpenKOS needs it to check pages. Check setup, on Status, can download it.",
     action: "ok",
   },
   record_failed: { message: "Your choice couldn't be saved. Nothing was changed.", action: "try_again" },

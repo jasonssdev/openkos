@@ -590,8 +590,8 @@ describe("problemFor", () => {
     ["stale", "These pages changed while you were looking. Here is the current version.", "reload"],
     ["write_drift", "These pages changed while you were looking. Here is the current version.", "reload"],
     ["member_missing", "One of these pages no longer exists, so there's nothing to decide.", "ok"],
-    ["backend_unavailable", "The AI model isn't running. OpenKOS needs it to check pages.", "try_again"],
-    ["backend_model_not_found", "The AI model isn't installed. OpenKOS needs it to check pages.", "ok"],
+    ["backend_unavailable", "The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it.", "try_again"],
+    ["backend_model_not_found", "The AI model isn't installed. OpenKOS needs it to check pages. Check setup, on Status, can download it.", "ok"],
     ["record_failed", "Your choice couldn't be saved. Nothing was changed.", "try_again"],
     ["invalid_selection", "Something about your choice didn't match these pages. Please choose again.", "reload"],
     [

@@ -2,13 +2,14 @@
 // system's components (ADR-0066, ADR-0069). It decides nothing: the state and
 // its transitions live in model.ts, every word in wording.ts, and every value
 // is written as text.
-import { el, redraw } from "../components.ts";
 import {
   badge,
   callout,
   disclosure,
+  el,
   pageHeader,
   progressBar,
+  redraw,
   skeleton,
   spinner,
   uiButton,

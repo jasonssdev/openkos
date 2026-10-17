@@ -241,8 +241,8 @@ Every message says whether anything changed, and offers the one action that help
 | A check is already running | `run_active` | "A check is already running." | **OK** (a check started elsewhere has no id the app can show) |
 | The pages changed under the person | `stale`, `write_drift` | "These pages changed while you were looking. Here is the current version." | reload |
 | A page in the decision is gone | `member_missing` | "One of these pages no longer exists, so there's nothing to decide." | **OK** (removes it from view) |
-| The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to check pages." | **Try again** (**Start it** arrives with guided setup) |
-| The AI model isn't installed | `backend_model_not_found` | "The AI model isn't installed. OpenKOS needs it to check pages." | **OK** |
+| The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it." | **Try again** (the app does not start Ollama; setup, from **Check setup** on Status, offers **Get Ollama** and **Check again**) |
+| The AI model isn't installed | `backend_model_not_found` | "The AI model isn't installed. OpenKOS needs it to check pages. Check setup, on Status, can download it." | **OK** (setup downloads the models) |
 | Saving the choice failed | `record_failed` | "Your choice couldn't be saved. Nothing was changed." | **Try again** |
 | The marked pages don't fit the group | `invalid_selection` | "Something about your choice didn't match these pages. Please choose again." | reload **(H)** |
 | Only part of a group was combined | `merge_group_interrupted` | "Only some of these were combined. Nothing else changed, and each combine can be split again." | reload **(H)** |

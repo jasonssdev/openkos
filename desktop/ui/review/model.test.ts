@@ -671,7 +671,7 @@ describe("the check", () => {
     client.quoteJudging.mockRejectedValueOnce(apiError("backend_unavailable", 503));
     await model.startCheck();
     expect(model.state.check?.problem).toEqual({
-      message: "The AI model isn't running. OpenKOS needs it to check pages.",
+      message: "The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it.",
       action: "try_again",
     });
     await model.resolveCheckProblem();
@@ -686,7 +686,7 @@ describe("the check", () => {
       run("failed", { error: { code: "backend_unavailable", retryable: true, message: "x" } }),
     );
     await model.agreeCheck();
-    expect(model.state.check?.problem?.message).toBe("The AI model isn't running. OpenKOS needs it to check pages.");
+    expect(model.state.check?.problem?.message).toBe("The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it.");
     // Listed on load, again before the quote, and again after the run.
     expect(client.decisions).toHaveBeenCalledTimes(3);
   });
