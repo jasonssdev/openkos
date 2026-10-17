@@ -189,3 +189,24 @@ export function facts(items: [name: string, value: string, kind?: "code"][]): HT
     ]),
   );
 }
+
+export interface DisclosureOptions {
+  /** What the hidden part holds, e.g. "Show details". */
+  summary: string;
+  open?: boolean;
+  onToggle?: (open: boolean) => void;
+  focusKey?: string;
+}
+
+/** Secondary content behind a native details/summary, closed unless asked. */
+export function disclosure(options: DisclosureOptions, ...children: Child[]): HTMLDetailsElement {
+  const summary = el("summary", { class: "ui-disclosure__summary" }, options.summary);
+  if (options.focusKey) summary.dataset["focus"] = options.focusKey;
+  const node = el("details", { class: "ui-disclosure" }, summary, el("div", { class: "ui-disclosure__body" }, ...children));
+  node.open = options.open ?? false;
+  if (options.onToggle) {
+    const onToggle = options.onToggle;
+    node.addEventListener("toggle", () => onToggle(node.open));
+  }
+  return node;
+}
