@@ -7,13 +7,16 @@ relying on it:
    event loop or a server; a caller that needs concurrency runs these functions
    on its own worker thread.
 2. The surface is owner-local, as the CLI is: its caller is the workspace
-   owner, and it applies no sensitivity disclosure gate. Results may carry
-   stored content, including from confidential concepts. An adapter that
-   discloses to anyone else must apply the local API's gate itself (ADR-0058).
-3. Judging is the only operation that sends content anywhere, and only to the
-   backend the workspace configures. The only other process the surface runs is
-   the local git auto-commit of a decision, an unmerge or an undo it applies,
-   which never pushes.
+   owner, and it applies no sensitivity disclosure gate to any result except
+   the answer `ask` returns, which follows the query disclosure rule of the
+   MCP `query` tool and `query --json` (ADR-0068). Every other result may
+   carry stored content, including from confidential concepts. An adapter
+   that discloses anything else to anyone else must apply the local API's
+   gate itself (ADR-0058).
+3. Judging and asking are the only operations that send content anywhere, and
+   only to the backends the workspace configures. The only other process the
+   surface runs is the local git auto-commit of a decision, an unmerge or an
+   undo it applies, which never pushes.
 4. Cancellation is cooperative: a stop is observed between chunks, so it waits
    for the chunk in flight. A model call is never preempted.
 5. Applying a decision, an unmerge or an undo does not reconcile merged concept
@@ -29,6 +32,7 @@ package and everything under `openkos.application` are not.
 
 from typing import Final as _Final
 
+from openkos.api._ask import Answer, AnswerCitation, AskProgress, OmittedConcept, ask
 from openkos.api._decisions import (
     ApplyOutcome,
     Decision,
@@ -141,6 +145,7 @@ from openkos.application.write_gate import (
 )
 from openkos.errors import OpenKosError
 from openkos.llm.base import (
+    BackendEmbeddingDimensionMismatch,
     BackendError,
     BackendGenerationCapped,
     BackendHostLocality,
@@ -158,8 +163,12 @@ __all__ = [
     "API_VERSION",
     "Action",
     "ActivityEntry",
+    "Answer",
+    "AnswerCitation",
     "Applied",
     "ApplyOutcome",
+    "AskProgress",
+    "BackendEmbeddingDimensionMismatch",
     "BackendError",
     "BackendGenerationCapped",
     "BackendHostLocality",
@@ -198,6 +207,7 @@ __all__ = [
     "NotApplied",
     "NotUndoable",
     "NotUnmergeable",
+    "OmittedConcept",
     "OpenKosError",
     "Page",
     "PageSource",
@@ -251,6 +261,7 @@ __all__ = [
     "apply_tier_change",
     "apply_unmerge",
     "apply_unrelate",
+    "ask",
     "kept_distinct",
     "list_decisions",
     "merge_history",
