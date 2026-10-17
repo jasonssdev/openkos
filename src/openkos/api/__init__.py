@@ -14,9 +14,12 @@ relying on it:
    that discloses anything else to anyone else must apply the local API's
    gate itself (ADR-0058).
 3. Judging and asking are the only operations that send content anywhere, and
-   only to the backends the workspace configures. The only other process the
-   surface runs is the local git auto-commit of a decision, an unmerge or an
-   undo it applies, which never pushes.
+   only to the backends the workspace configures. Setup readiness and the
+   model pull talk to the configured runtime too, but send no content: they
+   read its version and model list and ask it to fetch a model the workspace
+   configures. The only other process the surface runs is the local git
+   auto-commit of a decision, an unmerge or an undo it applies, which never
+   pushes.
 4. Cancellation is cooperative: a stop is observed between chunks, so it waits
    for the chunk in flight. A model call is never preempted.
 5. Applying a decision, an unmerge or an undo does not reconcile merged concept
@@ -71,7 +74,7 @@ from openkos.api._reads import (
     status,
 )
 from openkos.api._refresh import KindRefresh, QueueRefresh, refresh_decision_queue
-from openkos.api._setup import setup_readiness
+from openkos.api._setup import pull_model, setup_readiness
 from openkos.api._undo import (
     KeptDistinct,
     NotUndoable,
@@ -139,6 +142,11 @@ from openkos.application.runtime import StopToken
 from openkos.application.setup import (
     MemoryReadiness,
     ModelReadiness,
+    PullObserver,
+    PullOutcome,
+    PullPhase,
+    PullProgress,
+    PullRefused,
     RuntimeReadiness,
     SetupReadiness,
 )
@@ -222,6 +230,11 @@ __all__ = [
     "PageSource",
     "PendingReport",
     "PendingRow",
+    "PullObserver",
+    "PullOutcome",
+    "PullPhase",
+    "PullProgress",
+    "PullRefused",
     "QueueRefresh",
     "QueueRefreshRefused",
     "QueueUnavailableError",
@@ -283,6 +296,7 @@ __all__ = [
     "preview_tier_change",
     "preview_unmerge",
     "preview_unrelate",
+    "pull_model",
     "quote_judging",
     "read_page",
     "refresh_decision_queue",

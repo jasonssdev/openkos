@@ -1332,6 +1332,101 @@
       "kind": "dataclass",
       "members": {}
     },
+    "PullObserver": {
+      "bases": [
+        "Protocol"
+      ],
+      "kind": "protocol",
+      "members": {
+        "progress": {
+          "kind": "method",
+          "parameters": [
+            {
+              "annotation": "PullProgress",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "event"
+            }
+          ],
+          "returns": "None"
+        }
+      }
+    },
+    "PullOutcome": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "model"
+        },
+        {
+          "annotation": "Literal['completed', 'already_installed', 'stopped']",
+          "default": false,
+          "name": "status"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "completed_bytes"
+        },
+        {
+          "annotation": "int | None",
+          "default": false,
+          "name": "total_bytes"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "PullPhase": {
+      "kind": "alias",
+      "value": "Literal['preparing', 'downloading', 'verifying', 'finishing']"
+    },
+    "PullProgress": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "model"
+        },
+        {
+          "annotation": "Literal['preparing', 'downloading', 'verifying', 'finishing']",
+          "default": false,
+          "name": "phase"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "completed_bytes"
+        },
+        {
+          "annotation": "int | None",
+          "default": false,
+          "name": "total_bytes"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "PullRefused": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "model"
+        },
+        {
+          "annotation": "Literal['not_configured', 'backend_cannot_pull']",
+          "default": false,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "QueueRefresh": {
       "fields": [
         {
@@ -2771,6 +2866,36 @@
         }
       ],
       "returns": "UnrelatePreview | NotUndoable"
+    },
+    "pull_model": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "model"
+        },
+        {
+          "annotation": "StopToken | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "stop"
+        },
+        {
+          "annotation": "PullObserver | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "observer"
+        }
+      ],
+      "returns": "PullOutcome | PullRefused"
     },
     "quote_judging": {
       "kind": "function",

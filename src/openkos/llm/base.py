@@ -227,15 +227,40 @@ class BackendDiagnostics(Protocol):
         ...  # pragma: no cover -- Protocol stub body, never executed
 
 
+@dataclass(frozen=True)
+class PullEvent:
+    """One line of a model runtime's pull stream, as the runtime reported it.
+
+    `digest` names the layer a progress line is about; `completed` and `total`
+    are that layer's bytes. Each is `None` when the line does not carry it."""
+
+    status: str
+    digest: str | None = None
+    completed: int | None = None
+    total: int | None = None
+
+
 @runtime_checkable
 class ModelRuntime(BackendDiagnostics, Protocol):
     """A model runtime the engine can set up: diagnostics plus the runtime's own
-    version. Only the Ollama client implements it; an `openai-compatible`
+    version and a model pull. Only the Ollama client implements it; an `openai-compatible`
     server has no version or pull protocol, so setup asks it for the model list
     alone."""
 
     def version(self) -> str:
         """The runtime's version string."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def pull(
+        self,
+        model: str,
+        *,
+        on_event: Callable[[PullEvent], None],
+        should_stop: Callable[[], bool],
+    ) -> bool:
+        """Fetch `model`, reporting every stream line to `on_event` and asking
+        `should_stop` after each. `True` once the runtime reports success,
+        `False` when stopped."""
         ...  # pragma: no cover -- Protocol stub body, never executed
 
 

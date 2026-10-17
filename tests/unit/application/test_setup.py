@@ -50,6 +50,9 @@ class _Runtime(_Diagnostics):
             raise self.version_error
         return self.runtime_version
 
+    def pull(self, model: str, **kwargs: object) -> bool:
+        raise AssertionError("readiness never pulls")
+
 
 def _workspace(tmp_path: Path, extra: str = "") -> Path:
     config.write_config(tmp_path)

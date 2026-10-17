@@ -121,6 +121,15 @@ describe("the requests", () => {
     ["askJob", (c) => c.askJob("a/1"), "GET", "/v1/ask/a%2F1", null],
     ["setupReadiness", (c) => c.setupReadiness(), "GET", "/v1/setup/readiness", null],
     [
+      "startModelPull",
+      (c) => c.startModelPull({ model: "bge-m3" }),
+      "POST",
+      "/v1/setup/pulls",
+      { model: "bge-m3" },
+    ],
+    ["modelPull", (c) => c.modelPull("p/1"), "GET", "/v1/setup/pulls/p%2F1", null],
+    ["stopModelPull", (c) => c.stopModelPull("p1"), "POST", "/v1/setup/pulls/p1/stop", null],
+    [
       "mergeHistory",
       (c) => c.mergeHistory("concepts/a b"),
       "GET",
@@ -228,6 +237,14 @@ describe("the requests", () => {
 });
 
 describe("the failures", () => {
+  it("turn an active pull into a typed, retryable refusal", async () => {
+    const { client } = engine(envelope(409, "pull_active", true));
+    const error = await client.startModelPull({ model: "bge-m3" }).catch((e) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect([error.status, error.code, error.retryable]).toEqual([409, "pull_active", true]);
+    expect(isBusy(error)).toBe(false);
+  });
+
   it("turn an envelope into an ApiError", async () => {
     const { client } = engine(envelope(503, "workspace_busy", true, { "Retry-After": "2" }));
     const error = await client.applyDecision("k1", { action: "merge", version: VERSION }).catch((e) => e);
