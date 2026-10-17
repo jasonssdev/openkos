@@ -1,0 +1,199 @@
+// Draws the settings screen from its state with the design system's components
+// (ADR-0066, ADR-0069). It decides nothing: the state and its transitions live
+// in model.ts, every word in wording.ts, and every value is written as text.
+// The key field is write-only: it starts empty on every draw and its value only
+// goes to the model.
+import {
+  callout,
+  disclosure,
+  el,
+  facts,
+  openDialog,
+  pageHeader,
+  redraw,
+  segmented,
+  skeleton,
+  spinner,
+  textField,
+  uiButton,
+  uiCard,
+} from "../system/index.ts";
+import type { DraftField, SettingsModel, SettingsState } from "./model.ts";
+import { WORDS, modelFacts, whereItRuns } from "./wording.ts";
+
+type Dialog = ReturnType<typeof openDialog>;
+
+/** The warning dialog each model has open, so a redraw never opens a second one. */
+const dialogs = new WeakMap<SettingsModel, Dialog>();
+
+/** Redraws the settings screen into `root`, keeping focus on the same control. */
+export function renderSettings(root: HTMLElement, model: SettingsModel, state: SettingsState): void {
+  const key = state.editing ? `settings:edit:${state.draft.where}` : "settings";
+  redraw(root, key, () => root.replaceChildren(...screen(model, state)));
+  warning(model, state);
+}
+
+function warning(model: SettingsModel, state: SettingsState): void {
+  const open = dialogs.get(model);
+  if (state.confirming === null) {
+    if (open) {
+      dialogs.delete(model);
+      open.close();
+    }
+    return;
+  }
+  if (open) return;
+  const forget = () => dialogs.delete(model);
+  dialogs.set(
+    model,
+    openDialog({
+      title: WORDS.warningTitle,
+      body: state.confirming.lines.map((line) => el("p", {}, line)),
+      confirmLabel: WORDS.warningConfirm,
+      cancelLabel: WORDS.warningCancel,
+      // Consequential: it starts on keeping the model on this Mac.
+      destructive: true,
+      onConfirm: () => {
+        forget();
+        return model.confirm();
+      },
+      onCancel: () => {
+        forget();
+        model.dismiss();
+      },
+    }),
+  );
+}
+
+function screen(model: SettingsModel, state: SettingsState): HTMLElement[] {
+  const header = pageHeader({ title: WORDS.title });
+  if (state.settings === null) {
+    if (state.phase === "failed") {
+      const retry = uiButton(WORDS.tryAgain, () => model.load(), { size: "sm", focusKey: "settings:retry" });
+      return [header, callout("error", WORDS.loadFailed, { actions: [retry], live: "alert" })];
+    }
+    return [header, skeleton(3, WORDS.loading)];
+  }
+  const notes = [
+    state.note ? callout("success", state.note, { live: "status" }) : null,
+    state.problem ? callout("error", state.problem, { live: "alert" }) : null,
+  ].filter((node): node is HTMLElement => node !== null);
+  return [header, ...notes, modelCard(model, state), libraryCard(model, state)];
+}
+
+function modelCard(model: SettingsModel, state: SettingsState): HTMLElement {
+  return uiCard(
+    { title: WORDS.modelTitle, headingLevel: 2 },
+    ...(state.editing ? modelForm(model, state) : modelSummary(model, state)),
+  );
+}
+
+function modelSummary(model: SettingsModel, state: SettingsState): HTMLElement[] {
+  const settings = state.settings as NonNullable<SettingsState["settings"]>;
+  const cloud = settings.takes_api_key;
+  const keyLine = cloud && state.key !== null ? keyStatus(state) : null;
+  const removable = cloud && state.key === "saved";
+  const actions = [
+    uiButton(WORDS.change, () => model.edit(), { focusKey: "settings:change" }),
+    removable
+      ? uiButton(WORDS.removeKey, () => model.removeKey(), {
+          variant: "quiet",
+          loading: state.removingKey,
+          loadingLabel: WORDS.removingKey,
+          focusKey: "settings:remove-key",
+        })
+      : null,
+  ].filter((node): node is HTMLButtonElement => node !== null);
+  return [
+    el("p", {}, whereItRuns(settings)),
+    ...(keyLine ? [keyLine] : []),
+    disclosure({ summary: WORDS.showDetails, focusKey: "settings:details" }, facts(modelFacts(settings))),
+    el("div", { class: "ui-actions" }, ...actions),
+  ];
+}
+
+function keyStatus(state: SettingsState): HTMLElement {
+  if (state.key === "unsupported") return el("p", { class: "ui-field__hint" }, WORDS.keyNotSupported);
+  return el("p", {}, `${WORDS.key}: ${state.key === "saved" ? WORDS.keySaved : WORDS.noKey}`);
+}
+
+function modelForm(model: SettingsModel, state: SettingsState): HTMLElement[] {
+  const { draft } = state;
+  const where = segmented(
+    WORDS.whereLabel,
+    [
+      { value: "local", label: WORDS.local },
+      { value: "cloud", label: WORDS.cloud },
+    ],
+    draft.where,
+    (value) => model.choose(value === "cloud" ? "cloud" : "local"),
+  );
+  const field = (id: DraftField, label: string, value: string, hint: string) =>
+    textField({ id: `settings-${id}`, label, value, hint, onInput: (typed) => model.setField(id, typed) });
+  const body: HTMLElement[] = [el("p", { class: "ui-field__label" }, WORDS.whereLabel), where];
+  if (draft.where === "local") {
+    body.push(el("p", {}, WORDS.localText));
+  } else {
+    body.push(
+      el("p", {}, WORDS.cloudText),
+      field("baseUrl", WORDS.address, draft.baseUrl, WORDS.addressHint),
+      field("model", WORDS.chatModel, draft.model, WORDS.chatModelHint),
+      field("embeddingModel", WORDS.searchModel, draft.embeddingModel, WORDS.searchModelHint),
+    );
+    if (state.key === "unsupported") {
+      body.push(el("p", { class: "ui-field__hint" }, WORDS.keyNotSupported));
+    } else {
+      const hint = state.key === "saved" ? `${WORDS.keySaved}. ${WORDS.keyHint}` : WORDS.keyHint;
+      body.push(
+        textField({ id: "settings-key", label: WORDS.key, type: "password", hint, onInput: (typed) => model.setField("key", typed) }),
+      );
+    }
+  }
+  body.push(
+    el(
+      "div",
+      { class: "ui-actions" },
+      uiButton(WORDS.save, () => model.save(), {
+        variant: "primary",
+        loading: state.saving,
+        loadingLabel: WORDS.saving,
+        focusKey: "settings:save",
+      }),
+      uiButton(WORDS.cancel, () => model.cancel(), { variant: "quiet", disabled: state.saving, focusKey: "settings:cancel" }),
+    ),
+  );
+  return body;
+}
+
+function libraryCard(model: SettingsModel, state: SettingsState): HTMLElement {
+  const library = state.library;
+  const body: HTMLElement[] = [el("p", {}, WORDS.libraryText)];
+  body.push(library?.path ? facts([[WORDS.folder, library.path, "code"]]) : el("p", {}, WORDS.noLibrary));
+  if (library?.source === "environment") {
+    body.push(el("p", { class: "ui-field__hint" }, WORDS.libraryFromOutside));
+  } else if (state.librarySwitching) {
+    body.push(spinner(WORDS.switching));
+  } else {
+    body.push(
+      el(
+        "div",
+        { class: "ui-actions" },
+        uiButton(WORDS.openAnother, () => model.openLibrary(), {
+          loading: state.libraryBusy === "open",
+          loadingLabel: WORDS.opening,
+          disabled: state.libraryBusy === "create",
+          focusKey: "settings:open-library",
+        }),
+        uiButton(WORDS.createNew, () => model.createLibrary(), {
+          variant: "quiet",
+          loading: state.libraryBusy === "create",
+          loadingLabel: WORDS.creating,
+          disabled: state.libraryBusy === "open",
+          focusKey: "settings:create-library",
+        }),
+      ),
+    );
+  }
+  if (state.libraryProblem) body.push(callout("error", state.libraryProblem.text, { live: "alert" }));
+  return uiCard({ title: WORDS.libraryTitle, headingLevel: 2 }, ...body);
+}

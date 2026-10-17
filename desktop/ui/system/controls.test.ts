@@ -137,6 +137,14 @@ describe("textField", () => {
     const described = (input.getAttribute("aria-describedby") ?? "").split(" ").map((id) => field.querySelector(`#${id}`)?.textContent);
     expect(described).toEqual(["As it appears on the page.", "✕ A name is needed."]);
   });
+
+  it("masks a secret and keeps it out of autofill and spell checking", () => {
+    const field = textField({ id: "key", label: "API key", type: "password" });
+    const input = field.querySelector("input") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    expect(input.autocomplete).toBe("off");
+    expect(input.spellcheck).toBe(false);
+  });
 });
 
 describe("choiceList", () => {

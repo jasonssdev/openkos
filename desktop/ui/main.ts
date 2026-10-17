@@ -1,10 +1,12 @@
 // The app's shell: the shell process supervises the engine, and this page reads
 // its state, draws the app shell (sidebar and main), the status page, the
-// review screen, the welcome (no library yet) and guided setup, and creates one
-// client, one review model and one setup model per engine launch (a restarted
-// engine has a new port and token). Every value is written with textContent,
-// never as HTML, and nothing is logged.
+// review screen, the welcome (no library yet), guided setup and settings, and
+// creates one client, one review model and one setup model per engine launch
+// (a restarted engine has a new port and token). Settings outlives a launch:
+// saving a key restarts the engine, and each launch is handed to it. Every value
+// is written with textContent, never as HTML, and nothing is logged.
 import {
+  createApiKeys,
   createClient,
   createWorkspaces,
   openRuntimeDownload,
@@ -13,10 +15,13 @@ import {
 } from "../client/index.ts";
 import { ReviewModel } from "./review/model.ts";
 import { renderReview } from "./review/render.ts";
+import { SettingsModel, cloudOn } from "./settings/model.ts";
+import { renderSettings } from "./settings/render.ts";
+import { WORDS as SETTINGS_WORDS } from "./settings/wording.ts";
 import { SetupModel, WelcomeModel } from "./setup/model.ts";
 import { renderSetup, renderWelcome } from "./setup/render.ts";
 import { renderStatus, type StatusScreen } from "./status.ts";
-import { appShell, badge, el, navItem, redraw, spinner } from "./system/index.ts";
+import { appShell, badge, el, navItem, redraw, spinner, uiButton } from "./system/index.ts";
 import { describeEngine, engineBadge, navEntries, openDecisions, reviewCount, statusFailure } from "./view.ts";
 
 declare global {
@@ -36,11 +41,14 @@ function element<T extends HTMLElement>(id: string): T {
 
 const invoke: Invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 
-type View = "status" | "review" | "setup" | "welcome";
+type View = "status" | "review" | "setup" | "welcome" | "settings";
 let view: View = "status";
 
 const live = { status: element("review-live-status"), alert: element("review-live-alert") };
 const engineFooter = el("div");
+const cloudFooter = el("div");
+const settingsFooter = el("div");
+const footer = el("div", { class: "ui-sidebar__foot" }, cloudFooter, settingsFooter, engineFooter);
 const statusRoot = el("div", { class: "ui-view", attrs: { "data-screen": "status" } });
 // To review fills the main region with its list and detail panes.
 const reviewWaiting = el("div", { class: "ui-view" }, spinner("Waiting for OpenKOS to start…"));
@@ -51,9 +59,11 @@ const setupRoot = el("div", { class: "ui-view", attrs: { "data-screen": "setup" 
 setupRoot.hidden = true;
 const welcomeRoot = el("div", { class: "ui-view", attrs: { "data-screen": "welcome" } });
 welcomeRoot.hidden = true;
+const settingsRoot = el("div", { class: "ui-view", attrs: { "data-screen": "settings" } });
+settingsRoot.hidden = true;
 
-const shell = appShell({ nav: [], current: view, onNavigate: (id) => navigate(id), footer: engineFooter });
-shell.main.append(statusRoot, reviewView, setupRoot, welcomeRoot);
+const shell = appShell({ nav: [], current: view, onNavigate: (id) => navigate(id), footer });
+shell.main.append(statusRoot, reviewView, setupRoot, welcomeRoot, settingsRoot);
 element("app").replaceChildren(shell.root);
 
 // One launch: its client's model, and whether its status was read.
@@ -65,6 +75,13 @@ let setup: SetupModel | null = null;
 let welcome: WelcomeModel | null = null;
 // Setup opens on its own once per session, not again after each restart.
 let setupOffered = false;
+// One for the whole session: the shell's commands work with no engine running.
+const settings = new SettingsModel({ keys: createApiKeys(invoke), workspaces: createWorkspaces(invoke) });
+settings.subscribe((next) => {
+  renderSettings(settingsRoot, settings, next);
+  paintSettingsEntry();
+});
+renderSettings(settingsRoot, settings, settings.state);
 
 let statusOpen: number | undefined;
 let screen: StatusScreen = { engine: describeEngine({ state: "starting", attempt: 1 }), workspace: { kind: "waiting" } };
@@ -91,6 +108,21 @@ function paintNav(): void {
   );
 }
 
+/** The quiet Settings entry, and while a cloud AI model is on, a calm line saying so. */
+function paintSettingsEntry(): void {
+  const on = cloudOn(settings.state);
+  redraw(cloudFooter, "cloud", () =>
+    cloudFooter.replaceChildren(
+      ...(on ? [uiButton(SETTINGS_WORDS.cloudOn, () => show("settings"), { variant: "quiet", size: "sm", focusKey: "nav:cloud" })] : []),
+    ),
+  );
+  redraw(settingsFooter, "settings", () =>
+    settingsFooter.replaceChildren(
+      navItem({ id: "settings", label: SETTINGS_WORDS.navLabel }, view === "settings", () => show("settings")),
+    ),
+  );
+}
+
 function paintEngine(state: EngineState | null): void {
   const [tone, word] = engineBadge(state);
   engineFooter.replaceChildren(badge(tone, word));
@@ -106,15 +138,19 @@ function show(next: View): void {
   reviewView.hidden = next !== "review";
   setupRoot.hidden = next !== "setup";
   welcomeRoot.hidden = next !== "welcome";
+  settingsRoot.hidden = next !== "settings";
   // With no library there is nothing to navigate to yet.
   shell.nav.hidden = next === "welcome";
+  settingsFooter.hidden = next === "welcome";
   setup?.watch(next === "setup");
   paintNav();
+  paintSettingsEntry();
   if (next === "review") {
     // Everything is read again on each visit: To review is never stale.
     if (review !== null) void review.visit();
   } else {
-    const root = { status: statusRoot, setup: setupRoot, welcome: welcomeRoot }[next];
+    if (next === "settings") void settings.load();
+    const root = { status: statusRoot, setup: setupRoot, welcome: welcomeRoot, settings: settingsRoot }[next];
     root.querySelector<HTMLElement>('[data-view="heading"]')?.focus();
   }
 }
@@ -214,6 +250,7 @@ async function tick(): Promise<void> {
     if (launch !== null) {
       stopReview();
       stopSetup();
+      void settings.connect(null);
     }
     launch = null;
     statusRead = false;
@@ -225,6 +262,7 @@ async function tick(): Promise<void> {
     statusRead = false;
     startReview(state);
     startSetup(state);
+    void settings.connect(createClient(state));
   }
   if (statusRead) return;
   statusRead = true;
@@ -243,5 +281,6 @@ async function tick(): Promise<void> {
 paintEngine({ state: "starting", attempt: 1 });
 paintStatus(true);
 paintNav();
+paintSettingsEntry();
 void tick();
 setInterval(() => void tick(), POLL_MS);

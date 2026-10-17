@@ -19,12 +19,12 @@
 
 ## 4. Screen (PR 2)
 
-- [ ] 4.1 `desktop/ui/settings/wording.ts` and the "Settings" section of `docs/decision-wording.md`.
-- [ ] 4.2 `desktop/ui/settings/model.ts`: the view model over injected ports.
-- [ ] 4.3 `desktop/ui/settings/render.ts`: the screen on the design system.
-- [ ] 4.4 Wiring in `desktop/ui/main.ts`: the sidebar item and the cloud indicator.
+- [x] 4.1 `desktop/ui/settings/wording.ts` and the "Settings" section of `docs/decision-wording.md`.
+- [x] 4.2 `desktop/ui/settings/model.ts`: the view model over injected ports.
+- [x] 4.3 `desktop/ui/settings/render.ts`: the screen on the design system.
+- [x] 4.4 Wiring in `desktop/ui/main.ts`: the sidebar item and the cloud indicator.
 
 ## 5. Close (PR 2)
 
-- [ ] 5.1 Issue for setting a page's sensitivity from the app.
-- [ ] 5.2 Archive: merge the deltas, move the change, write the archive report.
+- [x] 5.1 Issues for setting a page's sensitivity from the app (#1517) and rebuilding search from it (#1518).
+- [x] 5.2 Archive: merge the deltas, move the change, write the archive report.

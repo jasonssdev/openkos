@@ -110,7 +110,8 @@ export function segmented(
 export interface TextFieldOptions {
   id: string;
   label: string;
-  type?: "text" | "search";
+  /** "password" masks a secret and keeps it out of autofill and spell checking. */
+  type?: "text" | "search" | "password";
   value?: string;
   placeholder?: string;
   hint?: string;
@@ -120,10 +121,14 @@ export interface TextFieldOptions {
   onInput?: (value: string) => void;
 }
 
-/** A labelled text or search input, with an optional hint and error. */
+/** A labelled text, search or password input, with an optional hint and error. */
 export function textField(options: TextFieldOptions): HTMLElement {
   const input = el("input", { class: "ui-input", attrs: { id: options.id, type: options.type ?? "text" } });
   input.value = options.value ?? "";
+  if (options.type === "password") {
+    input.autocomplete = "off";
+    input.spellcheck = false;
+  }
   if (options.placeholder) input.placeholder = options.placeholder;
   const described: string[] = [];
   const hint = options.hint ? el("p", { class: "ui-field__hint", attrs: { id: `${options.id}-hint` } }, options.hint) : null;

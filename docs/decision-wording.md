@@ -339,11 +339,59 @@ When the AI model is not Ollama on this Mac (another address in the library's se
 
 **Ready:** "You're ready. OpenKOS works offline from now on." with **Start using OpenKOS**, which opens the app.
 
+## Settings
+
+Where the AI model runs and which library is open, reached from **Settings** at the foot of the sidebar. A view shows what each holds in one line, with the rest behind **Show details** or **Change**. **(H)** for the whole section.
+
+### AI model
+
+The card says where the AI model runs in one line: "On this Mac." or "In the cloud, at {host}." For a cloud AI model it adds "API key: Key saved" or "API key: No key", never the key, with **Remove key** when one is saved ("Removing…", then "The key was removed."). The model names wait behind **Show details** ("AI model", "AI model for search"). **Change** opens the form:
+
+- **Where the AI model runs:** **On this Mac** — "OpenKOS uses Ollama on this Mac. Nothing you add leaves it." — or **A cloud AI model** — "A service on the internet runs the AI model. You'll see what is sent before you turn it on."
+- For a cloud AI model: **Address of the service** ("For example https://api.openai.com/v1"), **AI model** ("The name the service gives it."), **AI model for search** ("The service's model for finding pages.") and **API key** ("Kept in your Mac's keychain, never in your library."; "Key saved." in front when one is). The key field is always empty; leaving it empty keeps the saved key. On a Mac that cannot keep a key: "This Mac can't keep a key for OpenKOS, so a service that needs one won't work from here."
+- Coming back to this Mac uses the library's own AI models on this Mac; the form asks nothing more.
+- **Save** ("Saving…") and **Cancel**. Nothing changes until Save.
+
+**The warning.** Turning on a cloud AI model, or moving to a different service, asks first, in a dialog titled "Use a cloud AI model?" that starts on its safe answer. It states who receives the text, what is sent, what never is and the cost, using the words under "Who can see a page":
+
+1. "OpenKOS will send text from your library to {host} whenever the AI model needs it: when it reads a file you add, checks your pages or answers a question."
+2. "Pages marked Shareable or Private are sent. New pages start as Private, so most of your library is sent."
+3. "Pages marked Only on this Mac are never sent."
+4. "{host} may charge you for this. Check its prices before you continue."
+
+**Use the cloud AI model** applies the change; **Keep it on this Mac** closes the dialog and changes nothing. Going back to this Mac, or changing only the model names or the key of the same service, needs no warning.
+
+**After Save:** "Saved. OpenKOS now uses the AI model at {host}." or "Saved. OpenKOS now uses the AI model on this Mac." When the model for search changed, it adds "Search needs to be rebuilt for the new AI model. Until it is, answers may miss some pages." A key saved on its own: "The key was saved."
+
+**While a cloud AI model is on,** the foot of the sidebar shows a quiet **Cloud AI model on**, on every screen, which opens Settings.
+
+| Situation | Code or reason | Message |
+| --- | --- | --- |
+| The address is not a full web address | `invalid_base_url`, `invalid_embedding_base_url` | "That address doesn't look right. It should start with https:// and have no password in it." |
+| No address for a cloud AI model | `base_url_required` | "Enter the address of the service." |
+| A name the library cannot hold | `invalid_model` | "That AI model name can't be used. Names use letters, numbers, dots, dashes, colons and slashes." |
+| The same, for search | `invalid_embedding_model` | "That search model name can't be used. Names use letters, numbers, dots, dashes, colons and slashes." |
+| The settings changed meanwhile | `stale` | "Your settings changed while you were editing them. Here they are now." (and they are read again) |
+| OpenKOS is busy, after five seconds | `workspace_busy` | "OpenKOS is busy. Try again in a moment. Nothing was changed." |
+| The settings file has edits OpenKOS did not make | `write_refused` | "Your library's settings file has changes OpenKOS didn't make, so it can't change them here. Nothing was changed." |
+| OpenKOS does not answer | — | "OpenKOS isn't responding. Nothing was changed." |
+| Anything else | — | "Something went wrong. Nothing was changed." |
+| The key is refused | `invalid_key` | "That key can't be used. Check that you copied all of it." |
+| The keychain fails | `store_failed` | "Your Mac's keychain couldn't keep the key. Try again." |
+| The key fails in another way | — | "The key couldn't be saved. Try again." |
+| The settings were saved, the key was not | — | "Your AI model settings were saved, but the key wasn't." followed by the key's message |
+
+Nothing changed and no key typed simply closes the form.
+
+### Library
+
+"Your library is the folder where OpenKOS keeps everything.", then "Folder" and the folder. **Open another library…** ("Opening…") and **Create a new library…** ("Setting up…") open the system's folder window; once a folder is accepted, "Opening your library…" until the app runs on it. A refused folder uses the welcome's messages (above). When the library was chosen outside the app: "This copy of OpenKOS is set to use a library chosen outside the app, so it can't be changed here.", with no buttons.
+
 ## The sidebar and Status
 
 The words around the decisions, outside the decision screens.
 
-- **Sidebar.** **Ask**, **To review** and **Status**. Ask is listed before it exists, with "Coming soon" beside it, and choosing it does nothing. To review shows a count only when something waits.
+- **Sidebar.** **Ask**, **To review** and **Status**. Ask is listed before it exists, with "Coming soon" beside it, and choosing it does nothing. To review shows a count only when something waits. **Settings** sits at the foot of the sidebar, above the engine's badge, with **Cloud AI model on** above it while one is on.
 - **The engine's badge**, at the foot of the sidebar, a symbol and a word: "Engine starting", "Engine running", "Engine restarting", "Engine not running" (it could not be started), "Engine stopped", "No library open" (before a library is chosen; Status then says "No library is open yet."), "Engine state unknown".
 - **Check setup.** While the AI model is not ready, Status says "Some setup steps are left." under its title, with **Check setup**, which opens setup. Otherwise Status shows neither.
 - **Status disclosures.** What is rarely needed waits behind a disclosure named for what it holds: "Show details" for the engine's own report when it failed or restarted, "Show the folder" for where the files live.

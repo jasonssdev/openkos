@@ -27,8 +27,9 @@ beforeAll(async () => {
 afterAll(() => vi.useRealTimers());
 
 describe("the app", () => {
-  it("draws the shell with Ask not offered yet, and Status open", () => {
-    expect(navButtons().map((n) => n.textContent)).toEqual(["AskComing soon", "To review", "Status"]);
+  it("draws the shell with Ask not offered yet, Settings at the foot, and Status open", () => {
+    expect(navButtons().map((n) => n.textContent)).toEqual(["AskComing soon", "To review", "Status", "Settings"]);
+    expect(document.querySelector(".ui-sidebar__footer .ui-nav-item")?.textContent).toBe("Settings");
     expect(navButtons()[0]?.getAttribute("aria-disabled")).toBe("true");
     expect(navButtons()[2]?.getAttribute("aria-current")).toBe("page");
     expect(text("#engine-status")).toBe("The engine could not be started.");
