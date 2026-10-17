@@ -2,8 +2,8 @@
 // its state, draws the app shell (sidebar and main), the status page, the Ask
 // screen, the review screen, the welcome (no library yet), guided setup and
 // settings, and creates one client, one review model and one setup model per
-// engine launch (a restarted engine has a new port and token). Settings and the
-// Ask model outlive a launch: saving a key restarts the engine, and each launch
+// engine launch (a restarted engine has a new port and token). Settings, Ask and
+// Add files outlive a launch: saving a key restarts the engine, and each launch
 // is handed to them. Every value is written with textContent, never as HTML,
 // and nothing is logged.
 import {
@@ -14,6 +14,8 @@ import {
   type EngineState,
   type Invoke,
 } from "../client/index.ts";
+import { AddModel } from "./add/model.ts";
+import { renderAdd } from "./add/render.ts";
 import { AskModel } from "./ask/model.ts";
 import { renderAsk } from "./ask/render.ts";
 import { LabelModel } from "./label/model.ts";
@@ -48,7 +50,7 @@ function element<T extends HTMLElement>(id: string): T {
 
 const invoke: Invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 
-type View = "ask" | "status" | "review" | "setup" | "welcome" | "settings";
+type View = "ask" | "add" | "status" | "review" | "setup" | "welcome" | "settings";
 let view: View = "status";
 
 const live = { status: element("review-live-status"), alert: element("review-live-alert") };
@@ -59,6 +61,8 @@ const footer = el("div", { class: "ui-sidebar__foot" }, cloudFooter, settingsFoo
 const statusRoot = el("div", { class: "ui-view", attrs: { "data-screen": "status" } });
 const askRoot = el("div", { class: "ui-view", attrs: { "data-screen": "ask" } });
 askRoot.hidden = true;
+const addRoot = el("div", { class: "ui-view", attrs: { "data-screen": "add" } });
+addRoot.hidden = true;
 // To review fills the main region with its list and detail panes.
 const reviewWaiting = el("div", { class: "ui-view" }, spinner("Waiting for OpenKOS to start…"));
 const reviewRoot = el("div", { class: "ui-fill", attrs: { id: "review" } });
@@ -75,7 +79,7 @@ const settingsRoot = el("div", { attrs: { "data-screen": "settings" } }, setting
 settingsRoot.hidden = true;
 
 const shell = appShell({ nav: [], current: view, onNavigate: (id) => navigate(id), footer });
-shell.main.append(askRoot, statusRoot, reviewView, setupRoot, welcomeRoot, settingsRoot);
+shell.main.append(askRoot, addRoot, statusRoot, reviewView, setupRoot, welcomeRoot, settingsRoot);
 element("app").replaceChildren(shell.root);
 
 // One launch: its client's model, and whether its status was read.
@@ -172,6 +176,28 @@ function paintAsk(): void {
 }
 ask.subscribe(() => paintAsk());
 
+// Add files: one model for the session, so a run goes on while another screen is open.
+// The shell opens the system's file chooser; the page has no dialog permission.
+const workspaces = createWorkspaces(invoke);
+const add = new AddModel({ pick: () => workspaces.pickFiles() });
+function paintAdd(): void {
+  renderAdd(addRoot, add.state, {
+    choose: () => add.choose(),
+    agree: () => add.agree(),
+    decline: () => add.decline(),
+    stop: () => add.stop(),
+    close: () => add.close(),
+    resolveProblem: () => add.resolveProblem(),
+  });
+}
+add.subscribe(() => paintAdd());
+
+/** A refused file's "Add it": quote it on the Add files screen. */
+function addRefusedFile(decisionKey: string): void {
+  show("add");
+  void add.addRefused(decisionKey);
+}
+
 function paintSettingsSearch(): void {
   redraw(settingsSearch, "settings-search", () =>
     settingsSearch.replaceChildren(...[rebuildSection(search.state, searchActions)].filter((n) => n !== null)),
@@ -184,6 +210,7 @@ function paintReview(): void {
 }
 
 const reviewExtras = {
+  addFile: addRefusedFile,
   pageAction: (page: { conceptId: string; title: string; level: "public" | "private" | "confidential" }) =>
     labelChoice(page, labels, labels.state),
 };
@@ -226,13 +253,14 @@ function paintEngine(state: EngineState | null): void {
 }
 
 function navigate(id: string): void {
-  if (id === "ask" || id === "status" || id === "review") show(id);
+  if (id === "ask" || id === "add" || id === "status" || id === "review") show(id);
 }
 
 function show(next: View): void {
   view = next;
   statusRoot.hidden = next !== "status";
   askRoot.hidden = next !== "ask";
+  addRoot.hidden = next !== "add";
   reviewView.hidden = next !== "review";
   setupRoot.hidden = next !== "setup";
   welcomeRoot.hidden = next !== "welcome";
@@ -249,7 +277,7 @@ function show(next: View): void {
   } else {
     if (next === "settings") void settings.load();
     if (next === "settings" || next === "status") void search.load();
-    const root = { ask: askRoot, status: statusRoot, setup: setupRoot, welcome: welcomeRoot, settings: settingsRoot }[next];
+    const root = { ask: askRoot, add: addRoot, status: statusRoot, setup: setupRoot, welcome: welcomeRoot, settings: settingsRoot }[next];
     root.querySelector<HTMLElement>('[data-view="heading"]')?.focus();
   }
 }
@@ -308,6 +336,7 @@ function startReview(state: Extract<EngineState, { state: "ready" }>): void {
   unsubscribe?.();
   ask.setClient(createClient(state));
   labels.setClient(createClient(state));
+  add.setClient(createClient(state));
   void search.setClient(createClient(state));
   review = new ReviewModel(createClient(state));
   const model = review;
@@ -328,6 +357,7 @@ function stopReview(): void {
   review = null;
   ask.setClient(null);
   labels.setClient(null);
+  add.setClient(null);
   void search.setClient(null);
   reviewWaiting.hidden = false;
   reviewRoot.replaceChildren();
@@ -386,6 +416,7 @@ async function tick(): Promise<void> {
 paintEngine({ state: "starting", attempt: 1 });
 paintStatus(true);
 paintAsk();
+paintAdd();
 paintNav();
 paintSettingsEntry();
 void tick();

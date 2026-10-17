@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Schemas } from "../../client/index.ts";
 import { ReviewModel, type ReviewClient } from "./model.ts";
-import { renderReview } from "./render.ts";
+import { renderReview, type ReviewExtras } from "./render.ts";
 import { ENGINE_WORDS } from "./wording.ts";
 
 type Decision = Schemas["Decision"];
@@ -570,5 +570,38 @@ describe("who can see each page", () => {
     const cards = Array.from(detail(root).querySelectorAll(".ui-card"));
     expect(cards.every((card) => card.querySelector("aside") !== null)).toBe(true);
     expect(cards.map((card) => card.querySelector(".ui-card__meta")?.textContent)).toEqual(["A person", "A person"]);
+  });
+});
+
+describe("a file too large to add automatically", () => {
+  const OVER: Decision = { ...REFUSED_FILE, finding: { file_name: "minutes.pdf", reason: "exceeds_pass_budget" } };
+
+  async function open(extras?: ReviewExtras, decision: Decision = OVER) {
+    const mounted = await loaded([decision]);
+    if (extras) mounted.model.subscribe((state) => renderReview(mounted.root, mounted.live, mounted.model, state, extras));
+    mounted.model.open("w1");
+    return mounted;
+  }
+
+  it("offers Add it with what it does, and hands the decision on", async () => {
+    const addFile = vi.fn();
+    const { root } = await open({ addFile });
+    expect(detail(root).querySelector("h2")?.textContent).toBe("'minutes.pdf' wasn't added.");
+    expect(detail(root).querySelector(".ui-statement")?.textContent).toBe("It's too large to add automatically.");
+    expect(detail(root).textContent).toContain("We'll show you what adding it takes before anything is sent.");
+    expect(detail(root).querySelector(".ui-callout--info")).toBeNull();
+    await click(detail(root), "Add it");
+    expect(addFile).toHaveBeenCalledWith("w1");
+  });
+
+  it("offers no Add it for a changed file, only the rename guidance", async () => {
+    const { root } = await open({ addFile: vi.fn() }, REFUSED_FILE);
+    expect(buttonNamed(detail(root), "Add it")).toBeUndefined();
+    expect(detail(root).querySelector(".ui-callout--info")).not.toBeNull();
+  });
+
+  it("offers no Add it where no screen can take it", async () => {
+    const { root } = await open();
+    expect(buttonNamed(detail(root), "Add it")).toBeUndefined();
   });
 });

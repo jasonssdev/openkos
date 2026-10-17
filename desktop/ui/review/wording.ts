@@ -545,13 +545,28 @@ function revisionView(decision: Decision, pages: Pages): KindView {
 const REFUSED: Record<RefusedFileDetail["reason"], string> = {
   changed_after_import:
     "A file with this name is already in your library, with different contents. To add this one too, give it a new name in your folder.",
-  exceeds_pass_budget: "It's too large to add automatically. To add it, split it into smaller files in your folder.",
+  exceeds_pass_budget: "It's too large to add automatically.",
 };
 
+const ADD_IT = { label: "Add it", does: "We'll show you what adding it takes before anything is sent." };
+
 /**
- * A file that wasn't added: what happened and what to do in the folder, with no
- * action. Adding it runs the AI model, which needs the person's agreement first
- * (#1496); when that reaches the app, its option joins `options` here.
+ * The way to add a refused file from the app, or null. A file too large for the
+ * unattended pass (or one with no stated reason) is added by a person after a
+ * quote, on the Add files screen. A file whose contents changed after an add
+ * stays refused, and the remedy is a new name (ADR-0073).
+ */
+export function addRefusedOption(decision: Decision): { label: string; does: string } | null {
+  if (decision.kind !== "watch_refusal") return null;
+  const finding = refusedFileOf(decision);
+  return finding === null || finding.reason === "exceeds_pass_budget" ? ADD_IT : null;
+}
+
+/**
+ * A file that wasn't added: what happened and what to do about it. Adding it
+ * runs the AI model, which needs the person's agreement first, so the screen
+ * hands "Add it" (`addRefusedOption`) to the Add files screen rather than
+ * previewing it here.
  */
 function refusedFileView(decision: Decision, pages: Pages): KindView {
   const finding = refusedFileOf(decision);
@@ -665,6 +680,7 @@ export function describeDecision(decision: Decision, pages: Pages, now: Date = n
   // again first, and decided once it is current (#1475). A changed finding
   // cannot be checked again in the app, so it can only wait.
   // A finding with nothing to offer (no detail to word) is listed only, changed or not.
+  if (addRefusedOption(decision) !== null) return view;
   if (view.options.length === 0 && !checkable(decision)) return { ...view, options: [], next: null, cannotAct: CANNOT_ACT };
   if (decision.fresh === false && settle !== null) {
     const options = checkable(decision) ? [CHECK_AGAIN, DECIDE_LATER] : [DECIDE_LATER];

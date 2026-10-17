@@ -1,0 +1,14 @@
+/* The Add files screen's layout; everything else is the design system's (system.css). */
+.add-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.add-files__note {
+  display: block;
+  color: var(--text-secondary);
+}

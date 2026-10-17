@@ -59,10 +59,11 @@ export function engineBadge(state: EngineState | null): [BadgeTone, string] {
   }
 }
 
-/** The sidebar: Ask, To review with its count when one is known, and Status. */
+/** The sidebar: Ask, Add files, To review with its count when one is known, and Status. */
 export function navEntries(reviewCount: number | undefined): NavEntry[] {
   return [
     { id: "ask", label: "Ask" },
+    { id: "add", label: "Add files" },
     reviewCount === undefined ? { id: "review", label: "To review" } : { id: "review", label: "To review", count: reviewCount },
     { id: "status", label: "Status" },
   ];

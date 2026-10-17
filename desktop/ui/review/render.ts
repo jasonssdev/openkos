@@ -28,6 +28,7 @@ import {
   CANNOT_ACT,
   CLAIMS_HEADING,
   COMBINED_HEADING,
+  addRefusedOption,
   describeDecision,
   identityShape,
   listEntry,
@@ -143,6 +144,8 @@ function drawList(model: ReviewModel, state: ReviewState): HTMLElement {
 /** What a screen beyond the review adds to it: who can see each page, on its card. */
 export interface ReviewExtras {
   pageAction?: (page: NonNullable<PageView["ref"]>) => HTMLElement | null;
+  /** Add the refused file a decision names (the Add files screen takes it from here). */
+  addFile?: (decisionKey: string) => unknown;
 }
 
 function capitalized(text: string): string {
@@ -339,6 +342,17 @@ function drawDecision(model: ReviewModel, state: ReviewState, extras: ReviewExtr
   }
   if (view.cannotAct) {
     parts.push(callout("info", CANNOT_ACT));
+    return parts;
+  }
+  const add = addRefusedOption(open.decision);
+  if (add !== null) {
+    const { addFile } = extras;
+    if (addFile) {
+      parts.push(
+        el("p", { class: "ui-field__hint" }, add.does),
+        el("div", { class: "ui-actions" }, uiButton(add.label, () => addFile(open.decision.decision_key), { variant: "primary", focusKey: "add-file" })),
+      );
+    }
     return parts;
   }
   if (open.problem) parts.push(problemCallout(open.problem, () => model.resolveProblem(), "problem"));

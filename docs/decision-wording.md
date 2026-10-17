@@ -212,31 +212,31 @@ The action is `supersede` or `revise` when the later page is the first, and its 
 
 | `reason` | What the screen says | Action |
 | --- | --- | --- |
-| `changed_after_import` | "'{file_name}' wasn't added. A file with this name is already in your library, with different contents. To add this one too, give it a new name in your folder." | none: adding it would be refused the same way (raw files are never replaced). Followed by "This can't be settled in the app." |
+| `changed_after_import` | "'{file_name}' wasn't added. A file with this name is already in your library, with different contents. To add this one too, give it a new name in your folder." | none: adding it would be refused the same way (raw files are never replaced). Followed by "This can't be settled in the app yet." |
 | `exceeds_pass_budget` | "'{file_name}' wasn't added. It's too large to add automatically." | **Add it** — "We'll show you what adding it takes before anything is sent." It opens the consent screen of "Adding files" below for that one file (`quote_refused_file` with the decision's key). |
 | no detail | "A file was not added." | **Add it**, as above; the consent screen shows the refusal if adding it would be refused. |
 
-Adding the file clears the item. Once a file is renamed in the folder instead, OpenKOS adds it the next time it checks your folder, and the item leaves To review. A settled item answers `stale` and is dropped from view. **(H)** that the folder remedy is enough for a first-time reader.
+Adding the file clears the item. Once a file is renamed in the folder instead, OpenKOS adds it the next time it checks your folder, and the item leaves To review. A settled item answers `stale` and is dropped from view. **Add it** opens the Add files screen on that file's consent, so the person agrees there and watches the run there.
 
 ## Adding files
 
-Adding files runs the AI model too, so it follows the same quote → consent → run protocol (`quote_ingest`, `run_ingest`, [ADR-0073](adr/0073-adding-files-through-the-api-is-consented-against-a-worst-case-call-bound.md)); the quote is free and nothing is added before the person agrees. A file is named by its file name, never by its path or as a "source".
+**Add files** is its own screen, second in the sidebar. Adding files runs the AI model too, so it follows the same quote → consent → run protocol (`quote_ingest`, `run_ingest`, [ADR-0073](adr/0073-adding-files-through-the-api-is-consented-against-a-worst-case-call-bound.md)); the quote is free and nothing is added before the person agrees. A file is named by its file name, never by its path or as a "source".
 
-**Choosing.** **Add files** opens the system's file chooser, several files at once. Folders are not opened for the person: "This is a folder. Choose the files inside it." **(H)** that a chooser of files, not folders, is enough for a first library.
+**Choosing.** The screen says "Choose files from your Mac. OpenKOS keeps them and makes pages from what is in them." and offers one button, **Choose files…**, which opens the system's file chooser, several files at once (the shell opens it; the page has no dialog permission). Cancelling changes nothing. The chooser takes files, not folders; a folder that reaches the quote anyway is refused with the line under "Not added". "Looking at your files…" shows while the quote is read.
 
-**Consent screen,** one for everything chosen:
+**Consent screen,** one for everything chosen, in one card:
 
-- Heading: "Add {n} files?" ("Add {file}?" when one).
-- One line per file, by what adding it will do:
-  - It will be read: no line beyond its name.
+- Heading: "Add {n} files?" ("Add {file}?" when one; n counts the files that will be added, whether read or only kept). When none can be added the heading is "None of these can be added." with **OK**.
+- One line per file, its name, and under it a note only when the file needs one:
+  - It will be read: no note.
   - Already added and unchanged (`unchanged`): "Already in your library. Nothing to do."
   - Not a text file (`not_text`): "We'll keep this file, but the AI model can't read it, so no pages will be made from it."
   - Empty (`blank`): "This file is empty. We'll keep it, but there is nothing to make pages from."
-  - Kept from the AI model by the library's setting (`confidential_floor`): "Your library keeps new files Only on this Mac, so the AI model won't read this one. We'll keep the file without making pages." **(H)** whether to offer the consent here ("Let the AI model read it", `include_confidential`) or only in settings; when offered with a cloud model it carries the cloud warning below.
+  - Kept from the AI model by the library's setting (`confidential_floor`): "Your library keeps new files Only on this Mac, so the AI model won't read this one. We'll keep the file without making pages." The app does not offer to let the AI model read such a file (`include_confidential` is never sent), the same choice Ask makes.
   - Not added, with the reason, below.
-- What leaves the Mac, the same words as checking: "The AI model on this Mac will read {k} of them and make pages. Nothing leaves this Mac." When the backend is not local: "The text of these files will be sent to the provider of {model} to make pages. The provider may charge you."
-- With a cloud model only: "At most {calls} requests to {model}, usually fewer." The quote's number is an upper bound, never an estimate, so the copy says "at most". **(H)** that on this Mac the file count is enough and the number adds nothing.
-- Buttons: **Add {n}** · **Not now**. When nothing can be added: "None of these can be added." with **OK**.
+- What leaves the Mac, in the same words as checking, and only when the AI model reads at least one file: "The AI model on this Mac will read {it / both / all of them / {k} of them} and make pages. Nothing leaves this Mac." When the backend is not local: "The text of {this file / these files} will be sent to {host} to make pages with {model}. The provider may charge you."
+- With a cloud model only: "At most {calls} requests to {model}, usually fewer." The quote's number is an upper bound, never an estimate, so the copy says "at most". On this Mac the file count is enough and the number is left out.
+- Buttons: **Add {n} files** (primary) · **Not now**.
 
 **Not added** (`refusal`), shown on the consent screen and in the result, each with the one thing the person can do:
 
@@ -250,22 +250,27 @@ Adding files runs the AI model too, so it follows the same quote → consent →
 | `unreadable` | "{file} couldn't be opened. Check that you can open it, then add it again." |
 | `inconsistent_workspace`, `symlinked_destination`, `not_absolute` | "{file} can't be added from the app right now." |
 
-**While it runs:** "Adding {index} of {total}: {file}" with the step under it: reading "Opening it…", extracting "The AI model is reading it…", writing "Saving…", and once at the end, refreshing "Making it searchable…". **Stop**: "Stopping after this file. Files already added are kept." A file the AI model is reading cannot be interrupted, so the stop waits for it.
+**While it runs:** the card says "Adding {index} of {total}: {file}" with the step under it and a progress bar: reading "Opening it…", extracting "The AI model is reading it…", writing "Saving…", and once at the end, refreshing "Almost done" with "Making it searchable…". **Stop** takes effect between files: the button reads "Stopping…" and the card says "Stopping after this file. Files already added are kept." A file the AI model is reading cannot be interrupted, so the stop waits for it. Leaving the screen does not stop the run; the screen is there on return.
 
-**After** (`IngestRunOutcome`): "Added {n} files." and one line per file:
+**After** (`IngestRunOutcome`): a headline and one line per file, with **OK**. The headline is "Added {n} files." ("Nothing new was added." when none was), "Stopped. Added {n} files; the rest were left." after a stop, and "Your library was busy, so adding stopped." when the library was busy; the last two are warnings, not successes.
 
 - `added`: "{file}: {created} new pages" (and "and {revised} pages updated" when the file added to existing pages rather than repeating them).
 - `updated`: "{file}: finished adding."
 - `unchanged`: "{file}: already in your library."
 - `extraction_degraded`: "{file}: kept, but the AI model couldn't finish reading it. Add it again later to try again."
 - `refused`: the reason, above.
-- `interrupted`: "{file}: your library changed while it was being saved, so it wasn't added. Try again."
-- `busy`: "OpenKOS is finishing something else, so {file} and the files after it weren't added." with **Try again**.
-- `failed`: "{file}: saving stopped part way. Look at Status." **(H)**
-- `not_reached`: "{file}: not added, because you stopped."
-- When the search could not be updated (`indexes` is `stale`): "Search will catch up the next time OpenKOS tidies up." **(H)**
+- `interrupted`: "{file}: stopped before it was finished. Add it again later."
+- `busy`: "{file}: your library was busy. Add it again in a moment."
+- `failed`: "{file}: couldn't be added."
+- `not_reached`: "{file}: wasn't reached. Add it again later."
+- When the search could not be updated (`indexes` is `stale`), a warning under the list: "Your files are added, but search isn't up to date with them yet, so answers may miss them for now."
 
-**Changed since agreeing** (`quote_stale`): "Something changed since you agreed — a file or the AI model. Please look again." with the consent screen reloaded; nothing is added on an old agreement. **Already adding** (`ingest_active`): "Files are already being added." with **OK**.
+**Problems before or during a run** show an error with one action, and **Not now** where there is a choice:
+
+- Changed since agreeing (`quote_stale`): "A file or your AI model changed since we looked. Look again before adding." with **Look again**, which quotes the same files again; nothing is added on an old agreement.
+- Already adding (`ingest_active`): "OpenKOS is already adding files. Wait for it to finish, then try again." with **Try again**.
+- Busy library (`workspace_busy`): "Your library is busy right now. Try again in a moment." with **Try again**.
+- The engine restarted while it ran: "OpenKOS restarted. Check To review and Status to see what was added." with **OK**.
 
 ## The check: agreeing to spend
 
@@ -291,7 +296,7 @@ Every message says whether anything changed, and offers the one action that help
 | --- | --- | --- | --- |
 | The library is busy with another change | `workspace_busy` | "OpenKOS is finishing something else. Nothing was changed." | **Try again** (H: automatic retry for a few seconds first) |
 | A check is already running | `run_active` | "A check is already running." | **OK** (a check started elsewhere has no id the app can show) |
-| Files are already being added | `ingest_active` | "Files are already being added." | **OK** |
+| Files are already being added | `ingest_active` | "OpenKOS is already adding files. Wait for it to finish, then try again." | **Try again** |
 | The library can't be read to add files | `ingest_refused` | "Your library can't be read right now. Nothing was added." | **OK** |
 | The pages changed under the person | `stale`, `write_drift` | "These pages changed while you were looking. Here is the current version." | reload |
 | A page in the decision is gone | `member_missing` | "One of these pages no longer exists, so there's nothing to decide." | **OK** (removes it from view) |
