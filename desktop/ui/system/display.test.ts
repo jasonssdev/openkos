@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { badge, callout, emptyState, facts, listRow, skeleton, spinner } from "./display.ts";
+import { badge, callout, disclosure, emptyState, facts, listRow, skeleton, spinner } from "./display.ts";
 
 describe("badge", () => {
   it.each([
@@ -70,5 +70,26 @@ describe("facts", () => {
     ]);
     expect(Array.from(node.querySelectorAll("dt, dd"), (n) => n.textContent)).toEqual(["Pages", "128", "Folder", "~/Notes/good-life"]);
     expect(node.querySelectorAll("dd code")).toHaveLength(1);
+  });
+});
+
+describe("disclosure", () => {
+  it("keeps secondary content behind a native summary, closed by default", () => {
+    const node = disclosure({ summary: "Show details", focusKey: "more" }, "hidden facts");
+    expect(node.tagName).toBe("DETAILS");
+    expect(node.open).toBe(false);
+    const summary = node.querySelector("summary") as HTMLElement;
+    expect(summary.textContent).toBe("Show details");
+    expect(summary.dataset["focus"]).toBe("more");
+    expect(node.querySelector(".ui-disclosure__body")?.textContent).toBe("hidden facts");
+  });
+
+  it("opens as asked and reports each toggle", () => {
+    const onToggle = vi.fn();
+    const node = disclosure({ summary: "Show details", open: true, onToggle }, "x");
+    expect(node.open).toBe(true);
+    node.open = false;
+    node.dispatchEvent(new Event("toggle"));
+    expect(onToggle).toHaveBeenLastCalledWith(false);
   });
 });

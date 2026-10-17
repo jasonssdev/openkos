@@ -8,6 +8,7 @@ import {
   type EngineState,
   type Schemas,
 } from "../client/index.ts";
+import type { BadgeTone, NavEntry } from "./system/index.ts";
 
 export interface EngineWording {
   text: string;
@@ -34,8 +35,67 @@ export function describeEngine(state: EngineState): EngineWording {
   }
 }
 
+/** The sidebar's engine badge: a tone and a word, never color alone. */
+export function engineBadge(state: EngineState | null): [BadgeTone, string] {
+  switch (state?.state) {
+    case "starting":
+      return ["info", "Engine starting"];
+    case "ready":
+      return ["success", "Engine running"];
+    case "restarting":
+      return ["warning", "Engine restarting"];
+    case "failed":
+      return ["error", "Engine not running"];
+    case "stopped":
+      return ["error", "Engine stopped"];
+    case undefined:
+      return ["error", "Engine state unknown"];
+    default:
+      return ["neutral", "Engine state unknown"];
+  }
+}
+
+/** The sidebar: Ask is not built yet, so it is listed but not offered. */
+export function navEntries(reviewCount: number | undefined): NavEntry[] {
+  return [
+    { id: "ask", label: "Ask", disabled: true, hint: "Coming soon" },
+    reviewCount === undefined ? { id: "review", label: "To review" } : { id: "review", label: "To review", count: reviewCount },
+    { id: "status", label: "Status" },
+  ];
+}
+
+export function openDecisions(status: Schemas["WorkspaceStatus"]): number {
+  return Object.values(status.open_decisions_by_kind).reduce((sum, n) => sum + n, 0);
+}
+
+/**
+ * The count beside To review: what its list shows once read, else what the
+ * status counted, else unknown.
+ */
+export function reviewCount(
+  review: { loaded: boolean; decisions: readonly unknown[] } | null,
+  statusOpen: number | undefined,
+): number | undefined {
+  return review?.loaded ? review.decisions.length : statusOpen;
+}
+
+export interface WorkspaceSummary {
+  shown: [string, string][];
+  more: [string, string, "code"][];
+}
+
+/** The status facts, the counts first; where the folder is waits behind a disclosure. */
+export function workspaceSummary(status: Schemas["WorkspaceStatus"]): WorkspaceSummary {
+  const all = new Map(statusFacts(status));
+  const pick = (term: string): [string, string] => [term, all.get(term) ?? ""];
+  return {
+    shown: [pick("Decisions waiting for you"), pick("Concepts"), pick("Sources")],
+    more: [["Folder", status.root, "code"]],
+  };
+}
+
 export function statusFacts(status: Schemas["WorkspaceStatus"]): [string, string][] {
-  const open = Object.values(status.open_decisions_by_kind).reduce((sum, n) => sum + n, 0);
+  const open = openDecisions(status);
   return [
     ["Folder", status.root],
     ["Sources", String(status.sources)],
