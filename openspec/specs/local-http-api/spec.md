@@ -6,9 +6,10 @@ The loopback HTTP transport through which a local client, first the desktop
 shell, reaches the engine. It exposes exactly the operations of the stable
 Python API (`openkos.api`, ADR-0060) and nothing else: workspace status, the
 pending report, the open decisions with preview and apply, judging quote and
-run, and the model-free queue refresh. It is a thin adapter: it holds one
-workspace handle opened at launch, calls the v1 functions, and owns only
-transport, serialization, error mapping and the judging job registry. It adds
+run, the model-free queue refresh, and guided setup's readiness read and model
+pull. It is a thin adapter: it holds one workspace handle opened at launch,
+calls the v1 functions, and owns only transport, serialization, error mapping
+and the in-memory job registries (judging and the model pull). It adds
 no engine capability, no stored state and no new operation.
 
 The security shape follows ADR-0058: the server binds `127.0.0.1` on an
@@ -396,6 +397,10 @@ operations MUST be reachable as follows, and the server MUST call the matching
 | `POST /v1/judging/runs` | `run_judging`, as a job (see the job requirement) |
 | `GET /v1/judging/runs/{id}` | the job's state |
 | `POST /v1/judging/runs/{id}/stop` | the job's cooperative stop |
+| `GET /v1/setup/readiness` | `setup_readiness` |
+| `POST /v1/setup/pulls` | `pull_model`, as a job (see the pull job requirement) |
+| `GET /v1/setup/pulls/{id}` | the pull job's state |
+| `POST /v1/setup/pulls/{id}/stop` | the pull job's cooperative stop |
 
 The health route is authenticated like every other route. Every successful
 response MUST be JSON. A request body that is not valid for its operation (an
@@ -406,6 +411,8 @@ take the workspace lock or call a model, as the corresponding Python reads do
 not. A Concept ID contains `/`, so the unmerge, history, page, reopen and
 unrelate routes carry it in a query parameter or the body, never in a path
 segment.
+The setup readiness `GET` talks to the configured model runtime to read its
+version and installed models; that is not a model call, and it writes nothing.
 
 #### Scenario: Status maps to the status read
 
@@ -451,7 +458,7 @@ segment.
 
 - GIVEN the application's route table
 - WHEN every operation route is mapped to an `openkos.api` function
-- THEN each maps to one, and none exists for ingest, query, doctor or setup
+- THEN each maps to one, and none exists for ingest, query or doctor
 
 #### Scenario: Merge history maps to the history read
 
@@ -480,6 +487,13 @@ segment.
 - WHEN `GET /v1/kept-distinct` is requested
 - THEN the response is 200 with one group naming both members, and nothing is
   written
+
+#### Scenario: Readiness maps to the readiness read
+
+- GIVEN an initialised workspace and a valid token
+- WHEN `GET /v1/setup/readiness` is requested
+- THEN the response is 200 with the fields of the API's setup readiness and the
+  workspace is unchanged
 
 ### Requirement: Responses Are The Python API's Result Types, Populated And Round-Tripping
 
@@ -667,6 +681,9 @@ mapping MUST be evaluated subclass-first and MUST be:
 | `NotUndoable("unknown_type")` | 422 | `unknown_type` | false |
 | `RunRefused` outcome | 422 | `run_refused` | false |
 | A judging run already active | 409 | `run_active` | true |
+| A model pull already active | 409 | `pull_active` | true |
+| `PullRefused("not_configured")` | 422 | `model_not_configured` | false |
+| `PullRefused("backend_cannot_pull")` | 422 | `pull_not_supported` | false |
 | `DriftDetected` | 409 | `write_drift` | true |
 | `MergeGroupInterrupted` | 500 | `merge_group_interrupted` | false |
 | `UnmergeInterrupted` | 500 | `unmerge_interrupted` | false |
@@ -836,6 +853,12 @@ again.
 - WHEN each is posted
 - THEN they are 409 `not_kept_distinct`, 409 `not_related`, 409
   `tier_unchanged` and 422 `unknown_type`, and none is retryable
+
+#### Scenario: An unconfigured model is a 422
+
+- GIVEN a model tag the workspace does not configure
+- WHEN a pull is started for it
+- THEN the response is 422 with code `model_not_configured` and no job exists
 
 ### Requirement: Writes Wait At Most Five Seconds For The Workspace Lock
 
@@ -1261,3 +1284,57 @@ any other value MUST be 422 `invalid_request` before the operation runs.
 - GIVEN a tier preview request whose `tier` is `"sometimes"`
 - WHEN it is posted
 - THEN the response is 422 `invalid_request` and nothing ran
+
+### Requirement: A Model Pull Runs As A Single Pollable Job
+
+Starting a pull (`POST /v1/setup/pulls` with `{"model": <tag>}`) MUST NOT block
+for the download: it MUST return 202 with the job once the pull is admitted
+(the service's first stop check) or has already finished, and a `Location`
+header naming the job. At most one pull MAY be active in the server process: a
+start while one is active MUST return 409 `pull_active` and start nothing. A
+`PullRefused` result, or an exception raised before admission (an unreachable
+runtime), MUST answer the start request itself with its row of the error table
+and leave no job. The job resource MUST be `{pull_id, model, state, phase,
+completed_bytes, total_bytes, outcome, error}`, where `state` is `running`,
+`stopping`, `finished` or `failed`; `phase`, `completed_bytes` and
+`total_bytes` are the latest progress (null before the first event, bytes 0);
+`outcome` is the pull outcome when the pull returned (state `finished`); and
+`error` is an error body when the pull raised after admission (state `failed`,
+no outcome), with the fixed message of its row, never the exception's text.
+`GET /v1/setup/pulls/{id}` MUST return the job with 200 for any known pull.
+`POST /v1/setup/pulls/{id}/stop` MUST set the cooperative stop and return the
+job with `state` `stopping`; stopping a finished or failed pull MUST return it
+unchanged. An unknown id MUST return 404. Neither the start nor a poll takes the
+workspace lock. The registry is in memory; the newest 16 finished or failed
+pulls stay retrievable, and server shutdown sets every stop and waits at most
+the same grace as a judging run.
+
+#### Scenario: Start returns before the download finishes
+
+- GIVEN a configured, uninstalled model and a runtime that streams slowly
+- WHEN the pull is started
+- THEN the response is 202 with `state` `running` before the stream ends
+
+#### Scenario: Poll to completion
+
+- GIVEN a started pull
+- WHEN the runtime finishes the stream and the job is polled
+- THEN the job is `finished` with outcome status `completed`
+
+#### Scenario: Stop a pull
+
+- GIVEN a running pull
+- WHEN stop is posted and the job is polled after the next line
+- THEN the job is `finished` with outcome status `stopped`
+
+#### Scenario: A second pull is refused while one is active
+
+- GIVEN a running pull
+- WHEN another pull is started
+- THEN the response is 409 with code `pull_active` and `retryable` true
+
+#### Scenario: An unreachable runtime answers the start
+
+- GIVEN a runtime that refuses connections
+- WHEN a pull is started
+- THEN the response is 503 with code `backend_unavailable` and no job exists

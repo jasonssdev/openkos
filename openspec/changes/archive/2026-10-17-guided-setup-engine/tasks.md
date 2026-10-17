@@ -30,46 +30,46 @@ Authored changed lines are additions plus deletions; the generated
 
 ## 1. Plan (S1)
 
-- [ ] 1.1 Proposal, design, delta specs and tasks under
+- [x] 1.1 Proposal, design, delta specs and tasks under
   `openspec/changes/guided-setup-engine/`.
 
 ## 2. Readiness (S2) — L1, P1, P3, H1, C1
 
-- [ ] 2.1 RED then GREEN: `OllamaClient.version()` against a fake transport
+- [x] 2.1 RED then GREEN: `OllamaClient.version()` against a fake transport
   (success, refused connection, malformed body); `ModelRuntime` Protocol in
   `llm/base.py` (L1).
-- [ ] 2.2 Extract `doctor.configured_task_models(cfg)` and call it from check 5b;
+- [x] 2.2 Extract `doctor.configured_task_models(cfg)` and call it from check 5b;
   the existing doctor tests stay green unchanged (D1).
-- [ ] 2.3 RED then GREEN: `application/setup.py` `setup_readiness(root, ports)`:
+- [x] 2.3 RED then GREEN: `application/setup.py` `setup_readiness(root, ports)`:
   ready, unreachable, missing embedding, missing judge, memory below floor,
   `openai-compatible`, unreadable config (P1, D2-D4).
-- [ ] 2.4 `openkos.api.setup_readiness` and its types; snapshot regenerated;
+- [x] 2.4 `openkos.api.setup_readiness` and its types; snapshot regenerated;
   classifier additive (P1, P3).
-- [ ] 2.5 `GET /v1/setup/readiness`; OpenAPI snapshot regenerated (H1).
-- [ ] 2.6 Client `setupReadiness()` with a test; `pnpm --dir desktop generate`,
+- [x] 2.5 `GET /v1/setup/readiness`; OpenAPI snapshot regenerated (H1).
+- [x] 2.6 Client `setupReadiness()` with a test; `pnpm --dir desktop generate`,
   `check:schema`, `typecheck`, `test` (C1).
 
 ## 3. Pull (S3) — L2, P2, P3, H1-H3, C1
 
-- [ ] 3.1 RED then GREEN: `OllamaClient.pull()`: success stream, stop closes,
+- [x] 3.1 RED then GREEN: `OllamaClient.pull()`: success stream, stop closes,
   error line not-found, other error line, stream without success, malformed
   line, refused connection (L2, D7).
-- [ ] 3.2 RED then GREEN: `application/setup.py` `pull_model`: refused
+- [x] 3.2 RED then GREEN: `application/setup.py` `pull_model`: refused
   unconfigured (no request), refused backend, already installed, aggregated
   non-decreasing progress, phase mapping, stop (P2, D5-D7).
-- [ ] 3.3 `openkos.api.pull_model` and its types; snapshot; classifier (P2, P3).
-- [ ] 3.4 `localapi/_pulls.py` registry tested with no HTTP: admission, active
+- [x] 3.3 `openkos.api.pull_model` and its types; snapshot; classifier (P2, P3).
+- [x] 3.4 `localapi/_pulls.py` registry tested with no HTTP: admission, active
   refusal, refusal at start, failure after admission, stop, eviction, shutdown
   (H3, D8).
-- [ ] 3.5 Routes, error rows (`pull_active`, `model_not_configured`,
+- [x] 3.5 Routes, error rows (`pull_active`, `model_not_configured`,
   `pull_not_supported`), lifespan shutdown; OpenAPI snapshot (H1-H3).
-- [ ] 3.6 Client `startModelPull`, `modelPull`, `stopModelPull`, the three codes,
+- [x] 3.6 Client `startModelPull`, `modelPull`, `stopModelPull`, the three codes,
   tests; desktop checks (C1).
-- [ ] 3.7 Mutation-check the key guards: the not-configured refusal, the stop
+- [x] 3.7 Mutation-check the key guards: the not-configured refusal, the stop
   check, the progress aggregation.
 
 ## 4. Archive (S4)
 
-- [ ] 4.1 Merge every delta into `openspec/specs/` (each heading once), move the
+- [x] 4.1 Merge every delta into `openspec/specs/` (each heading once), move the
   change to `openspec/changes/archive/<date>-guided-setup-engine/`, write
   `archive-report.md`, add the CHANGELOG entry. ADR-0057 stays Proposed.
