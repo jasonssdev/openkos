@@ -25,12 +25,29 @@ function job(patch: Partial<Job> = {}): Job {
   return { ask_id: "a1", state: "running", phase: null, completed: null, total: null, answer: null, error: null, ...patch };
 }
 
-function fakeClient(start: Job | Error, polls: (Job | Error)[] = []) {
+const SETTINGS = {
+  backend: "ollama",
+  base_url: null,
+  embedding_base_url: null,
+  model: "qwen3:8b",
+  embedding_model: "bge-m3",
+  remote_hosts: [],
+  is_local: true,
+  takes_api_key: false,
+} satisfies Schemas["ModelSettings"];
+
+const WITHHELD: Answer = { ...ANSWER, outcome: "withheld", answer: null, citations: [], withheld: 2 };
+
+function fakeClient(start: Job | Error, polls: (Job | Error)[] = [], settings: Schemas["ModelSettings"] | Error = SETTINGS) {
   const queue = [...polls];
   const client = {
     ask: vi.fn(async () => {
       if (start instanceof Error) throw start;
       return start;
+    }),
+    modelSettings: vi.fn(async () => {
+      if (settings instanceof Error) throw settings;
+      return settings;
     }),
     askJob: vi.fn(async () => {
       const next = queue.shift();
@@ -190,5 +207,62 @@ describe("the ask model", () => {
     ask.setClient(null);
     expect(ask.state.ready).toBe(false);
     expect(seen.at(-1)?.ready).toBe(false);
+  });
+
+  describe("showing a private answer", () => {
+    const withheldClient = (settings: Schemas["ModelSettings"] | Error = SETTINGS) => {
+      const client = fakeClient(job({ state: "finished", answer: WITHHELD }), [], settings);
+      client.ask.mockResolvedValueOnce(job({ state: "finished", answer: WITHHELD }));
+      client.ask.mockResolvedValueOnce(job({ state: "finished", answer: ANSWER }));
+      return client;
+    };
+
+    it("never sends consent on an ordinary ask", async () => {
+      const client = withheldClient();
+      const { ask } = model(client);
+      await ask.ask("Who?");
+      expect(client.ask).toHaveBeenCalledWith({ question: "Who?" });
+    });
+
+    it("asks again with consent, in place of the withheld turn, when the AI model runs on this Mac", async () => {
+      const client = withheldClient();
+      const { ask } = model(client);
+      await ask.ask("Who?");
+      await ask.showPrivate();
+      expect(client.modelSettings).toHaveBeenCalledTimes(1);
+      expect(client.ask).toHaveBeenLastCalledWith({ question: "Who?", include_confidential: true });
+      expect(ask.state.turns).toHaveLength(1);
+      expect(ask.state.turns[0]).toMatchObject({ question: "Who?", result: { kind: "answer", answer: ANSWER } });
+    });
+
+    it("sends nothing when the AI model is not on this Mac", async () => {
+      const client = withheldClient({ ...SETTINGS, is_local: false, remote_hosts: ["api.example.com"] });
+      const { ask } = model(client);
+      await ask.ask("Who?");
+      await ask.showPrivate();
+      expect(client.ask).toHaveBeenCalledTimes(1);
+      expect(ask.state.turns[0]?.result).toEqual({
+        kind: "problem",
+        problem: { text: "Your AI model isn't on this Mac, so these pages stay private.", retry: false },
+      });
+    });
+
+    it("sends nothing when the settings cannot be read", async () => {
+      const client = withheldClient(new EngineUnreachable({ path: "/v1/settings/model" }));
+      const { ask } = model(client);
+      await ask.ask("Who?");
+      await ask.showPrivate();
+      expect(client.ask).toHaveBeenCalledTimes(1);
+      expect(ask.state.turns[0]?.result).toMatchObject({ kind: "problem", problem: { text: "OpenKOS isn't responding." } });
+    });
+
+    it("does nothing for an answer that was not withheld", async () => {
+      const client = fakeClient(job({ state: "finished", answer: ANSWER }));
+      const { ask } = model(client);
+      await ask.ask("Who?");
+      await ask.showPrivate();
+      expect(client.modelSettings).not.toHaveBeenCalled();
+      expect(client.ask).toHaveBeenCalledTimes(1);
+    });
   });
 });

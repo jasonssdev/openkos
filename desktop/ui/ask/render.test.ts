@@ -35,6 +35,7 @@ function actions() {
   return {
     ask: vi.fn((_question: string) => {}),
     retry: vi.fn(() => {}),
+    showPrivate: vi.fn(() => {}),
     show: vi.fn((_id: number) => {}),
     onToggle: vi.fn((_key: string, _open: boolean) => {}),
     expanded: new Set<string>(),
@@ -133,6 +134,18 @@ describe("the ask screen", () => {
     expect(card.querySelector(".ui-card__body > p")?.textContent).toMatch(/^It drew on 2 pages marked Only on this Mac/);
     expect(card.textContent).not.toContain("Maria");
     expect(card.querySelector(".ui-card__footer")).toBeNull();
+  });
+
+  it("offers to show a private answer, and only for one", () => {
+    const a = actions();
+    const answer: Answer = { ...ANSWER, outcome: "withheld", answer: null, citations: [], withheld: 2 };
+    const root = draw(state({ turns: [turn(1, { kind: "answer", answer })], shown: 1 }), a);
+    const button = root.querySelector(".ui-card button") as HTMLButtonElement;
+    expect(button.textContent).toBe("Show this answer");
+    button.click();
+    expect(a.showPrivate).toHaveBeenCalledTimes(1);
+    const plain = draw(state({ turns: [turn(1, { kind: "answer", answer: { ...ANSWER, withheld: 0 } })], shown: 1 }), a);
+    expect(plain.querySelector(".ui-card button")).toBeNull();
   });
 
   it("offers Try again on a problem that asking again can fix, and only then", () => {

@@ -1,7 +1,7 @@
 // What the Ask screen says (docs/decision-wording.md, "Ask"), kept apart from
 // the DOM so every sentence is tested. The answer is the API's own, already
 // gated (ADR-0068): a page marked Only on this Mac is only ever counted here,
-// never named. A failure is worded from its class and code only, never from an
+// never named, unless the person chooses to show it (ADR-0075). A failure is worded from its class and code only, never from an
 // unknown error's text.
 import { ApiError, EngineUnreachable, type Schemas } from "../../client/index.ts";
 
@@ -117,7 +117,7 @@ export function describeAnswer(answer: Answer): AnswerWording {
       return {
         kind: "empty",
         title: "This answer stays private",
-        text: `It drew on ${drewOn}, so it isn't shown here, and neither are their names. This can't be changed in the app yet.`,
+        text: `It drew on ${drewOn}, so it isn't shown here, and neither are their names. You can show it while your AI model runs on this Mac.`,
         notes: [],
       };
     }
@@ -149,6 +149,15 @@ const PROBLEMS: Record<string, AskProblem> = {
   invalid_request: { text: "This question couldn't be asked. Try writing it another way.", retry: false },
   request_too_large: { text: "This question is too long. Try a shorter one.", retry: false },
 };
+
+/** Showing a private answer was asked for, but the AI model is not on this Mac. */
+export const MODEL_NOT_HERE: AskProblem = {
+  text: "Your AI model isn't on this Mac, so these pages stay private.",
+  retry: false,
+};
+
+/** The button under an answer that stays private. */
+export const SHOW_PRIVATE = "Show this answer";
 
 const SOMETHING_WENT_WRONG: AskProblem = { text: "Something went wrong.", retry: true };
 
