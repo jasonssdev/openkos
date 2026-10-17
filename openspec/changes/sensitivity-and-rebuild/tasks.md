@@ -9,11 +9,11 @@
 
 ## 2. Search (PR 2)
 
-- [ ] 2.1 `state.vectorstore.read_stored_model_tag`, `ReindexPorts.commit_section`.
-- [ ] 2.2 `application/search_rebuild.py`: the read and the rebuild with consent, stop and progress.
-- [ ] 2.3 `api/_search.py` and the public names; regenerate `api_surface.json`.
-- [ ] 2.4 The rebuild registry and routes; regenerate `openapi.json`.
-- [ ] 2.5 `desktop/client`: `searchIndex`, `startSearchRebuild`, `searchRebuild`, `stopSearchRebuild`; regenerate `schema.d.ts`.
+- [x] 2.1 `state.vectorstore.read_stored_model_tag`, `ReindexPorts.commit_section`.
+- [x] 2.2 `application/search_rebuild.py`: the read and the rebuild with consent, stop and progress.
+- [x] 2.3 `api/_search.py` and the public names; regenerate `api_surface.json`.
+- [x] 2.4 The rebuild registry and routes; regenerate `openapi.json`.
+- [x] 2.5 `desktop/client`: `searchIndex`, `startSearchRebuild`, `searchRebuild`, `stopSearchRebuild`; regenerate `schema.d.ts`.
 
 ## 3. Screens (PR 3)
 
