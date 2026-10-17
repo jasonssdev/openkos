@@ -144,12 +144,12 @@ Delivery strategy: stacked-to-main.
 
 ## S6 Archive
 
-- [ ] S6.1 CHANGELOG, roadmap status line, `docs/decision-wording.md` for any
-  point the implementation settled.
-- [ ] S6.2 Merge the delta specs into `openspec/specs/` (new `desktop-review`;
+- [x] S6.1 CHANGELOG, roadmap status line, `docs/decision-wording.md` for the
+  points the implementation settled (see the archive report).
+- [x] S6.2 Merge the delta specs into `openspec/specs/` (new `desktop-review`;
   `stable-python-api` and `local-http-api` deltas); name-match every heading;
   check each requirement against the shipped code.
-- [ ] S6.3 ADR-0066 Accepted in all three places.
-- [ ] S6.4 Move the change to `openspec/changes/archive/<date>-review-screen/`
+- [x] S6.3 ADR-0066 Accepted in all three places.
+- [x] S6.4 Move the change to `openspec/changes/archive/2026-10-16-review-screen/`
   with `archive-report.md`; verify on `origin/main` that the original folder is
   gone.

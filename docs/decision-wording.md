@@ -83,16 +83,16 @@ A withheld combine is never shown as a disabled button with no reason. The line 
 
 **Options and what they do:**
 
-- **Combine them** — "We'll make one page with everything from both. The page keeps the name '{survivor title}'. {n} other pages that mention it will point to the combined page." Shown from the preview (`MergePlan`): the surviving title, the absorbed title and the number of files rewritten. When the plan reports that the pair came from different files, or a type concern, add one line: "These came from different files: check that they really are the same {person}." **(H)** that naming which title survives is enough, without explaining why.
+- **Combine them** — "We'll make one page with everything from both. The page keeps the name '{survivor title}'. {n} other pages that mention it will point to the combined page." Shown from the preview (`MergePlan`): the surviving title, the absorbed title and the number of files rewritten. With one such page the sentence reads "1 other page that mentions it will point to the combined page."; with none it is left out. Before the preview, the option shows only "We'll make one page with everything from both." When the plan reports that the pair came from different files, or a type concern, add one line: "These came from different files: check that they really are the same {person}." **(H)** that naming which title survives is enough, without explaining why.
 - **Keep separate** — "We won't suggest combining these again." Shown from `KeepDistinctPlan`.
 - **Decide later** — "Nothing changes. This stays in To review."
 - **Check these** (pending evaluation only) — opens the check consent below. "Checking doesn't change anything. You'll still decide."
 
 **Undo, and how it is shown:**
 
-- After combining: the confirmation says "Combined into '{title}'." with an **Undo** button. Later, the combined page shows "Combined from '{other title}' on {date}" with **Split again**; the lines come from `merge_history`, which keeps each other page's title as it was when combined. Splitting restores both pages exactly as they were (`preview_unmerge`, then `apply_unmerge`; `unmerge` on the CLI). Only the most recent combine on a page can be split directly; when there are later ones, the preview lists them first and the app explains: "To split this, the later combines on this page are split first: {list}. Continue?" and does them in order, all in one apply (`unmerge --to`). **(H)** that "split again" is understood as the undo of "combine".
+- After combining: the confirmation says "Combined into '{title}'." with an **Undo** button, which is **Split again** on that combine. Later, the combined page shows "Combined from '{other title}' on {date}" with **Split again**; the lines come from `merge_history`, which keeps each other page's title as it was when combined. Splitting restores both pages exactly as they were (`preview_unmerge`, then `apply_unmerge`; `unmerge` on the CLI). A single split asks "Split '{title}' out again? Both pages go back exactly as they were." and confirms "Split. '{title}' is back as it was." (several: "'{a}' and '{b}' are back as they were."). Until the app can list every combined page (#1467), these lines appear under "Combined just now" in To review, for the pages combined while the app has been open. Only the most recent combine on a page can be split directly; when there are later ones, the preview lists them first and the app explains: "To split this, the later combines on this page are split first: {list}. Continue?" and does them in order, all in one apply (`unmerge --to`). **(H)** that "split again" is understood as the undo of "combine".
 - After combining a group: the page shows one "Combined from '{other title}' on {date}" line per page that was combined into it, newest first, each with **Split again**. A whole group is undone by splitting its oldest combine: the preview lists every later one first, with the same "the later combines on this page are split first" wording.
-- After keeping separate: "Kept separate." with **Undo**. Later, under the library's settings, "Pages you kept separate" lists each pair with **Ask me again** (`duplicates --reopen`; the list is `duplicates --kept-distinct`).
+- After keeping separate: "Kept separate." with **Undo** once the API can reopen a pair (#1466); until then the confirmation offers no Undo, following rule 4. Later, under the library's settings, "Pages you kept separate" lists each pair with **Ask me again** (`duplicates --reopen`; the list is `duplicates --kept-distinct`).
 
 ### More than two pages — "Which of these are the same?"
 
@@ -114,7 +114,7 @@ The "different files" line and the cross-type warning are shown as for a pair.
 
 **Question:** "What is {title}?" with the pages side by side, each labelled by its kind in the type nouns above. **Options:** one per kind among the pages, worded as "It's a person", "It's an organization", and so on; **They're different things** (keep separate); **Decide later**.
 
-**What it does,** from the plan: "We'll keep one page, as a {person}, named '{survivor title}', and remember it was also described as {an organization}." When the plan says the other kind is not recorded because the page already notes one (`type_outcome: discarded`): "It was already noted as possibly {a place}, so we won't note {an organization}." When two pages share the chosen kind, the app first asks which of them keeps its name **(H)**. The "different files" line and the cross-type warning line are shown as for a pair: choosing what something is never happens without them. The app never chooses the kind for the person.
+**What it does,** from the plan: "We'll keep one page, as a {person}, named '{survivor title}', and remember it was also described as {an organization}." When the plan says the other kind is not recorded because the page already notes one (`type_outcome: discarded`): "It was already noted as possibly something else, so we won't note {an organization}." The plan does not name the kind already noted, so the sentence does not either. When two pages share the chosen kind, the app first asks which of them keeps its name **(H)**. The "different files" line and the cross-type warning line are shown as for a pair: choosing what something is never happens without them. The app never chooses the kind for the person.
 
 ## Connection — "Is this right?"
 
@@ -140,7 +140,7 @@ The "different files" line and the cross-type warning are shown as for a pair.
 
 **Bulk:** for `related_to` only, the list may offer "Accept all {n} 'related' suggestions", with the sentences listed before the agreement.
 
-**Undo:** the confirmation offers **Undo**; later the page lists its connections, each with **Remove** (`unrelate`).
+**Undo:** the confirmation offers **Undo**; later the page lists its connections, each with **Remove** (`unrelate`). Until the API can remove a connection (#1466), the confirmation is "We recorded that {sentence}." with no Undo.
 
 ## How quickly it goes out of date
 
@@ -154,23 +154,24 @@ The "different files" line and the cross-type warning are shown as for a pair.
 | `slow` | "Slowly — over months or years." | "We'll remind you to recheck them now and then." |
 | `volatile` | "Quickly — they can change within weeks." | "We'll remind you to recheck them often." |
 
-The screen shows the current setting and the suggestion, each by its plain line, and the model's reason. **Options:** **Use this** ("From now on, {kinds} are treated as changing {slowly}.") and **Decide later**. Bulk acceptance of all such suggestions is allowed. **Undo:** **Undo** on the confirmation; later, the same setting is changeable under the library's settings. The windows behind "now and then" and "often" are the engine's, named in its configuration, and are not repeated in copy.
+The screen shows the current setting and the suggestion, each by its plain line, and the model's reason. **Options:** **Use this** ("From now on, {kinds} are treated as changing {slowly}.") and **Decide later**. Bulk acceptance of all such suggestions is allowed. **Undo:** **Undo** on the confirmation; later, the same setting is changeable under the library's settings. Until the API can restore a setting (#1466), the confirmation offers no Undo. The windows behind "now and then" and "often" are the engine's, named in its configuration, and are not repeated in copy.
 
 ## Items the app lists but cannot act on
 
-Contradictions, revisions and refused files (`contradiction`, `revision`, `watch_refusal`) carry no actions. They are listed in To review with a plain sentence of what was found ("Two pages say different things about {subject}."; "A newer file may replace an older one."; "A file was not added: {plain reason}.") and no command. The app does not invent actions the engine does not offer.
+Contradictions, revisions and refused files (`contradiction`, `revision`, `watch_refusal`) carry no actions. They are listed in To review with a plain sentence of what was found ("Two pages say different things about {subject}."; "A newer file may replace an older one."; "A file was not added.") and no command, followed by "This can't be settled in the app yet." The subject is the first page's title. A refused file carries no plain reason in the decision, so none is shown. The app does not invent actions the engine does not offer.
 
 ## The check: agreeing to spend
 
 Judging runs the AI model, which costs time and, with a cloud model, money. It follows the quote → consent → run protocol of ADR-0059; the quote is free.
 
-**Consent screen,** one per batch, never per item:
+**Consent screen,** one per batch, never per item. It opens from **Check these** on an unchecked pair, and from **Check all** at the top of To review whenever any pair is unchecked:
 
 - Heading: "Check {n} pairs?" ("Check these two?" when one).
-- "The AI model on this Mac will compare them. Nothing leaves this Mac." When the backend is not local: "The text of these pages will be sent to {provider} to compare them. Pages marked 'Only on this Mac' are not sent. {provider} may charge you." — the same send rule as the cloud warning below.
+- "The AI model on this Mac will compare them. Nothing leaves this Mac." When the backend is not local: "The text of these pages will be sent to the provider of {model} to compare them. Pages marked 'Only on this Mac' are not sent. The provider may charge you." — the same send rule as the cloud warning below. The quote names the model, not its provider, so the provider is named through the model.
 - When some are already checked: "{k} are already checked and won't be checked again."
 - When the engine is busy in the background: "OpenKOS is also working in the background, so this may be slower."
 - "Checking never combines anything. You'll still decide each one."
+- When nothing is left to check: "These are already checked." with **OK**.
 - Buttons: **Check {n}** · **Not now**. **(H)** that a count, without a time estimate, is enough to consent; the quote gives an upper bound on calls, not a duration.
 
 **While it runs:** "Checking {done} of {n}…" and **Stop**. On stop: "Stopping after the current one. Everything already checked is kept." **After:** "Checked {n}. {m} are ready for you to decide." **Changed since agreeing** (`QuoteStale`): "Something changed since you agreed — the AI model or the pages. Please look again." with the consent screen reloaded; the check never runs on an old agreement.
@@ -182,17 +183,23 @@ Every message says whether anything changed, and offers the one action that help
 | Situation | Code | Message | Action |
 | --- | --- | --- | --- |
 | The library is busy with another change | `workspace_busy` | "OpenKOS is finishing something else. Nothing was changed." | **Try again** (H: automatic retry for a few seconds first) |
-| A check is already running | `run_active` | "A check is already running." | **Show it** |
+| A check is already running | `run_active` | "A check is already running." | **OK** (a check started elsewhere has no id the app can show) |
 | The pages changed under the person | `stale`, `write_drift` | "These pages changed while you were looking. Here is the current version." | reload |
 | A page in the decision is gone | `member_missing` | "One of these pages no longer exists, so there's nothing to decide." | **OK** (removes it from view) |
-| The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to check pages." | **Start it** (the guided-setup step) |
+| The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to check pages." | **Try again** (**Start it** arrives with guided setup) |
+| The AI model isn't installed | `backend_model_not_found` | "The AI model isn't installed. OpenKOS needs it to check pages." | **OK** |
 | Saving the choice failed | `record_failed` | "Your choice couldn't be saved. Nothing was changed." | **Try again** |
 | The marked pages don't fit the group | `invalid_selection` | "Something about your choice didn't match these pages. Please choose again." | reload **(H)** |
 | Only part of a group was combined | `merge_group_interrupted` | "Only some of these were combined. Nothing else changed, and each combine can be split again." | reload **(H)** |
-| The page to split was itself combined into another | `survivor_missing` | "This page was combined into another one. Split that first." | open the other page **(H)** |
+| The page to split was itself combined into another | `survivor_missing` | "This page was combined into another one. Split that first." | **OK** (opening the other page needs a page view) **(H)** |
 | The combine is no longer on this page | `not_merged` | "These pages are already separate." | reload **(H)** |
-| The page was changed after it was combined | `survivor_edited` | "This page was changed after it was combined, so it can't be split here." | **OK** (whether the app offers to split anyway is #1442) |
+| The page was changed after it was combined | `survivor_edited` | "This page was changed after it was combined, so it can't be split here." | **OK** only: the app does not offer to split anyway (#1442) |
 | Only some of the later combines were split | `unmerge_interrupted` | "Only some of these were split. Each page that was split is back as it was." | reload **(H)** |
+| The pages changed and the question is gone | `stale`, then not listed | "These pages changed, and this question no longer applies." | back to To review |
+| Any other failure, before a write | — | "Something went wrong. Nothing was changed." ("OpenKOS isn't responding. Nothing was changed." when the engine does not answer) | **Try again** |
+| Any other failure, after a write was sent | — | "Something went wrong. Look at To review to see what changed." ("OpenKOS stopped responding. …" when the engine does not answer) | reload |
+
+A busy write is retried for up to five seconds before the message is shown; a preview is never retried blindly. After a write was sent, a failure the table does not name never says "Nothing was changed".
 
 ## Who can see a page
 
@@ -210,5 +217,5 @@ The cloud model's warning, in settings only and never during setup, uses the sam
 
 ## Open questions
 
-- **Splitting an edited page.** A page changed after it was combined cannot be split without losing the change. The engine can do it when asked (`discard_survivor_edits`); whether and how the app offers it is #1442.
+- **Splitting an edited page** is decided (#1442): the app shows the refusal only and never offers to discard the edit; the terminal's `unmerge --discard-survivor-edits` remains the way to do it.
 - **Translation.** The Spanish copy follows this brief once the English wording is checked; the type nouns and the tier lines are the parts most likely to need more than a literal translation.
