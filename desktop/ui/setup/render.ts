@@ -155,7 +155,7 @@ function modelStatus(model: SetupModel, row: ModelRow, only: boolean, busy: bool
       const known = progress.state === "running" && progress.phase === "downloading" ? progress.total : null;
       return [
         progressBar(`Downloading ${row.tag}`, progress.completed, known),
-        el("p", { attrs: { role: "status" } }, pullProgress(progress)),
+        el("p", {}, pullProgress(progress)),
         el(
           "div",
           { class: "ui-actions" },
