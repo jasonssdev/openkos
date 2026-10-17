@@ -203,6 +203,18 @@ function fakeClient(decisions: Decision[], combined: Schemas["MergedConcept"][] 
     applyReopen: vi.fn(),
     previewUnrelate: vi.fn(),
     applyUnrelate: vi.fn(),
+    previewReopenContradiction: vi.fn(),
+    applyReopenContradiction: vi.fn(),
+    previewUnreconcile: vi.fn(async (body: Schemas["UnreconcilePreviewRequest"]) => ({
+      ...body,
+      holder_id: "people/a",
+      target_id: "people/b",
+      relation_type: "supersedes",
+      pages_changed: [],
+      withdraws_deprecation: true,
+      version: { ...body, content_digest: "ur" },
+    })),
+    applyUnreconcile: vi.fn(async () => ({ unreconciled: { first_id: "people/a", second_id: "people/b", commit_sha: null }, warnings: [] })),
     previewTierChange: vi.fn(),
     applyTierChange: vi.fn(),
   };
@@ -453,7 +465,7 @@ describe("a disagreement, a newer decision and a refused file", () => {
     ]);
   });
 
-  it("previews with the finding preview and confirms with no Undo", async () => {
+  it("previews with the finding preview and confirms with an Undo that puts the page back", async () => {
     const { root, model, client } = await loaded([CONTRADICTION]);
     model.open("c1");
     await click(detail(root), "'Marguerite Osei' is right");
@@ -464,7 +476,12 @@ describe("a disagreement, a newer decision and a refused file", () => {
     await click(detail(root), "Confirm");
     const done = detail(root).querySelector(".ui-callout--success") as HTMLElement;
     expect(done.querySelector(".ui-callout__text")?.textContent).toBe("Marked 'M. Osei' as out of date.");
-    expect(buttonNamed(done, "Undo")).toBeUndefined();
+    await click(done, "Undo");
+    expect(client.previewUnreconcile).toHaveBeenCalledWith({ first_id: "people/a", second_id: "people/b" });
+    expect(client.applyUnreconcile).toHaveBeenCalledTimes(1);
+    const undone = detail(root).querySelector(".ui-callout--success") as HTMLElement;
+    expect(undone.querySelector(".ui-callout__text")?.textContent).toMatch(/^Undone\./);
+    expect(buttonNamed(undone, "Undo")).toBeUndefined();
   });
 
   it("found inside a combined page, offers leave it and points to Split again", async () => {

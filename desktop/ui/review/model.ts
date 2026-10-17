@@ -20,6 +20,7 @@ import {
   problemFor,
   splitDone,
   splitQuestion,
+  titleOf,
   undoneLine,
   type Consent,
   type Option,
@@ -52,6 +53,10 @@ export type ReviewClient = Pick<
   | "applyUnrelate"
   | "previewTierChange"
   | "applyTierChange"
+  | "previewReopenContradiction"
+  | "applyReopenContradiction"
+  | "previewUnreconcile"
+  | "applyUnreconcile"
 >;
 
 type Tier = Schemas["TierChangePreviewRequest"]["tier"];
@@ -62,7 +67,10 @@ export type Undo =
   | { kind: "split"; survivor: string; absorbed: string }
   | { kind: "reopen"; members: string[] }
   | { kind: "unrelate"; source: string; relationType: string; target: string }
-  | { kind: "tier"; typeName: string; tier: Tier };
+  | { kind: "tier"; typeName: string; tier: Tier }
+  | { kind: "reopen_contradiction"; first: string; second: string; absorbed: string | null }
+  /** `outOfDate`: the title of the page the choice marked out of date, when it did. */
+  | { kind: "unreconcile"; first: string; second: string; revision: boolean; outOfDate: string | null };
 
 export interface ModelOptions {
   sleep?: (ms: number) => Promise<void>;
@@ -487,7 +495,7 @@ export class ReviewModel {
       const { applied } = await this.#retry(() =>
         this.#client.applyDecision(open.key, { action, version: preview.version }),
       );
-      const undo = undoFor(preview.plan, applied);
+      const undo = undoFor(open.decision, preview.plan, applied, this.#state.pages);
       this.#setOpen({
         step: { name: "done", lines: confirmation(open.decision, applied, this.#state.pages, preview.plan), undo },
         changed: null,
@@ -564,10 +572,12 @@ export class ReviewModel {
     this.#lastOp = { kind: "undo" };
     this.#setOpen({ step: { name: "undoing", lines: step.lines, undo }, problem: null });
     let sent = false;
+    let withdraws = false;
     try {
       const apply = await this.#previewUndo(undo);
       sent = true;
-      await this.#retry(apply);
+      withdraws = apply.withdraws;
+      await this.#retry(apply.run);
     } catch (error) {
       const when = !sent || isBusy(error) ? "before" : "after";
       const problem = problemFor(error, when);
@@ -575,18 +585,23 @@ export class ReviewModel {
       this.#setOpen({ step: { name: "done", lines: step.lines, undo: kept }, problem });
       return;
     }
-    this.#setOpen({ step: { name: "done", lines: [undoneLine(undo)], undo: null } });
+    this.#setOpen({ step: { name: "done", lines: [undoneLine(undo, withdraws)], undo: null } });
     if (undo.kind === "reopen") await this.#client.refreshQueue().catch(() => undefined);
     await this.load();
   }
 
-  /** Previews an undo; returns the apply of exactly that version. */
-  async #previewUndo(undo: Exclude<Undo, { kind: "split" }>): Promise<() => Promise<unknown>> {
+  /**
+   * Previews an undo; returns the apply of exactly that version, and whether
+   * it also took a page's out-of-date mark away.
+   */
+  async #previewUndo(
+    undo: Exclude<Undo, { kind: "split" }>,
+  ): Promise<{ run: () => Promise<unknown>; withdraws: boolean }> {
     const client = this.#client;
     switch (undo.kind) {
       case "reopen": {
         const { version } = await client.previewReopen({ member_ids: undo.members });
-        return () => client.applyReopen({ version });
+        return { run: () => client.applyReopen({ version }), withdraws: false };
       }
       case "unrelate": {
         const { version } = await client.previewUnrelate({
@@ -594,11 +609,26 @@ export class ReviewModel {
           relation_type: undo.relationType,
           target_id: undo.target,
         });
-        return () => client.applyUnrelate({ version });
+        return { run: () => client.applyUnrelate({ version }), withdraws: false };
       }
       case "tier": {
         const { version } = await client.previewTierChange({ type_name: undo.typeName, tier: undo.tier });
-        return () => client.applyTierChange({ version });
+        return { run: () => client.applyTierChange({ version }), withdraws: false };
+      }
+      case "reopen_contradiction": {
+        const { version } = await client.previewReopenContradiction({
+          first_id: undo.first,
+          second_id: undo.second,
+          merged_absorbed_id: undo.absorbed,
+        });
+        return { run: () => client.applyReopenContradiction({ version }), withdraws: false };
+      }
+      case "unreconcile": {
+        const { version, withdraws_deprecation } = await client.previewUnreconcile({
+          first_id: undo.first,
+          second_id: undo.second,
+        });
+        return { run: () => client.applyUnreconcile({ version }), withdraws: withdraws_deprecation };
       }
     }
   }
@@ -809,15 +839,24 @@ export class ReviewModel {
   }
 }
 
-/**
- * What a confirmation's Undo reverses, from the plan that was applied. A
- * finding's has none yet (#1497): its confirmation does not mention one.
- */
-function undoFor(plan: Preview["plan"], applied: Schemas["Applied"]): Undo | null {
+/** What a confirmation's Undo reverses, from the plan that was applied. */
+function undoFor(
+  decision: Decision,
+  plan: Preview["plan"],
+  applied: Schemas["Applied"],
+  pages: ReadonlyMap<string, Page>,
+): Undo | null {
   switch (plan.kind) {
-    case "reconcile":
     case "decline":
-      return null;
+      return { kind: "reopen_contradiction", first: plan.first_id, second: plan.second_id, absorbed: plan.merged_absorbed_id };
+    case "reconcile":
+      return {
+        kind: "unreconcile",
+        first: plan.first_id,
+        second: plan.second_id,
+        revision: decision.kind === "revision",
+        outOfDate: plan.deprecates_id === null ? null : titleOf(pages, plan.deprecates_id),
+      };
     case "merge": {
       const first = applied.merged?.[0];
       return first === undefined ? null : { kind: "split", survivor: first[0], absorbed: first[1] };
