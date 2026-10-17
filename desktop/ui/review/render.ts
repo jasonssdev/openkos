@@ -26,6 +26,7 @@ import {
 import { offersCheckAll, type Notice, type ReviewModel, type ReviewState } from "./model.ts";
 import {
   CANNOT_ACT,
+  CLAIMS_HEADING,
   COMBINED_HEADING,
   describeDecision,
   identityShape,
@@ -144,14 +145,33 @@ function capitalized(text: string): string {
 }
 
 function pageCard(page: PageView): HTMLElement {
-  const meta = [page.kind ? capitalized(page.kind) : null, page.whoCanSee?.label ?? null].filter(Boolean).join(" · ");
+  const meta = [page.kind ? capitalized(page.kind) : null, page.date ?? null, page.whoCanSee?.label ?? null]
+    .filter(Boolean)
+    .join(" · ");
+  // A newer decision's quote takes the excerpt's place: it is what is being compared.
+  const body = page.quote
+    ? el("blockquote", { class: "ui-quote" }, page.quote)
+    : page.excerpt
+      ? el("p", {}, page.excerpt)
+      : null;
   return uiCard(
     {
       title: page.title,
       ...(meta ? { meta } : {}),
       ...(page.sources.length > 0 ? { footer: el("ul", { class: "ui-plain-list" }, ...page.sources.map((line) => el("li", {}, line))) } : {}),
     },
-    page.excerpt ? el("p", {}, page.excerpt) : null,
+    body,
+  );
+}
+
+/** What the AI model saw as not matching, in its own words. */
+function drawClaims(claims: string[]): HTMLElement | null {
+  if (claims.length === 0) return null;
+  return el(
+    "section",
+    { class: "ui-stack", attrs: { "aria-label": CLAIMS_HEADING } },
+    el("h3", { class: "ui-subtitle" }, CLAIMS_HEADING),
+    el("ul", { class: "ui-plain-list" }, ...claims.map((claim) => el("li", {}, el("blockquote", { class: "ui-quote" }, claim)))),
   );
 }
 
@@ -221,12 +241,13 @@ function answersFor(model: ReviewModel, state: ReviewState, options: Option[]): 
   return answerList("Your answer", items);
 }
 
-function drawStep(model: ReviewModel, state: ReviewState, options: Option[]): HTMLElement[] {
+function drawStep(model: ReviewModel, state: ReviewState, options: Option[], after: string | null): HTMLElement[] {
   const open = state.open!;
   const step = open.step;
   switch (step.name) {
     case "choosing": {
       const parts = [...drawSelection(model, state), answersFor(model, state, options)];
+      if (after) parts.push(el("p", { class: "ui-lead" }, after));
       if (open.selection.same) {
         parts.push(el("div", { class: "ui-actions" }, uiButton("Back", () => model.askAgain(), { variant: "quiet", focusKey: "ask-again" })));
       }
@@ -304,6 +325,8 @@ function drawDecision(model: ReviewModel, state: ReviewState): HTMLElement[] {
   if (view.facts.length > 0) parts.push(facts(view.facts));
   const pages = drawPages(view.pages);
   if (pages) parts.push(pages);
+  const claims = drawClaims(view.claims);
+  if (claims) parts.push(claims);
   if (view.reason) {
     parts.push(disclosure({ summary: "Why the AI model thinks so", focusKey: "reason" }, el("blockquote", { class: "ui-quote" }, view.reason)));
   }
@@ -312,7 +335,7 @@ function drawDecision(model: ReviewModel, state: ReviewState): HTMLElement[] {
     return parts;
   }
   if (open.problem) parts.push(problemCallout(open.problem, () => model.resolveProblem(), "problem"));
-  parts.push(...drawStep(model, state, asked.options));
+  parts.push(...drawStep(model, state, asked.options, view.after));
   return parts;
 }
 

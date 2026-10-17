@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, EngineUnreachable, type Schemas } from "../../client/index.ts";
 import { ReviewModel, offersCheckAll, type ReviewClient } from "./model.ts";
-import { CHANGED, CHANGED_CHECK, DECIDE_LATER } from "./wording.ts";
+import { CHANGED, CHANGED_CHECK, CHANGED_FINDING, DECIDE_LATER } from "./wording.ts";
 
 type Decision = Schemas["Decision"];
 type Page = Schemas["Page"];
@@ -90,6 +90,60 @@ function preview(action: Schemas["Action"], version = VERSION): Schemas["Decisio
   return { decision_key: version.decision_key, action, plan: planFor(action), version };
 }
 
+function findingPlan(action: Schemas["Action"]): Schemas["FindingPlan"] {
+  const pair = { first_id: "people/a", second_id: "people/b" };
+  if (action === "decline") return { kind: "decline", ...pair, merged_absorbed_id: null };
+  const relation_type = action === "reconcile" ? "reconciled_with" : action.startsWith("supersede") ? "supersedes" : "revises";
+  const [holder, target] = action.endsWith("_reversed") ? ["people/b", "people/a"] : ["people/a", "people/b"];
+  return {
+    kind: "reconcile",
+    ...pair,
+    relation_type,
+    holder_id: action === "reconcile" ? null : holder,
+    target_id: action === "reconcile" ? null : target,
+    deprecates_id: relation_type === "supersedes" ? target : null,
+    pages_changed: ["people/a", "people/b"],
+  };
+}
+
+const FINDING_VERSION = { decision_key: "c1", content_digest: "f1", payload_digest: "q1" };
+
+function findingPreview(key: string, action: Schemas["Action"], version = FINDING_VERSION): Schemas["FindingPreview"] {
+  return { decision_key: key, action, plan: findingPlan(action), version };
+}
+
+const CONTRADICTION: Decision = {
+  decision_key: "c1",
+  kind: "contradiction",
+  targets: ["people/a", "people/b"],
+  fresh: true,
+  evaluation: "not_applicable",
+  actions: ["decline", "reconcile", "supersede", "supersede_reversed", "skip"],
+  withheld: [],
+  resolves_via: "openkos reconcile",
+  detail: null,
+  finding: {
+    first_id: "people/a",
+    second_id: "people/b",
+    merged_absorbed_id: null,
+    conflicting_claims: ["Lives in Accra.", "Lives in Kumasi."],
+    rationale: "Two homes.",
+  },
+};
+
+const REFUSED_FILE: Decision = {
+  decision_key: "w1",
+  kind: "watch_refusal",
+  targets: ["sources/notes"],
+  fresh: null,
+  evaluation: "not_applicable",
+  actions: [],
+  withheld: [],
+  resolves_via: "openkos ingest inbox/notes.md",
+  detail: null,
+  finding: { file_name: "notes.md", reason: "exceeds_pass_budget" },
+};
+
 const COMBINED: Schemas["MergedConcept"][] = [
   {
     concept_id: "people/a",
@@ -156,6 +210,7 @@ function fake(decisions: Decision[] = [PAIR]) {
       return found;
     }),
     previewDecision: vi.fn(async (_key: string, body: Schemas["PreviewRequest"]) => preview(body.action)),
+    previewFinding: vi.fn(async (key: string, body: Schemas["FindingPreviewRequest"]) => findingPreview(key, body.action)),
     applyDecision: vi.fn(
       async (_key: string, body: Schemas["ApplyRequest"]): Promise<Schemas["ApplyResponse"]> => ({
         applied: {
@@ -1108,5 +1163,120 @@ describe("undo", () => {
     await model.resolveProblem();
     expect(client.applyReopen).toHaveBeenCalledTimes(1);
     expect(model.state.open?.step).toMatchObject({ name: "done", undo: null });
+  });
+});
+
+describe("a disagreement or a newer decision", () => {
+  const choose = (choice: Schemas["Action"]) => ({ choice, label: "", does: "" });
+
+  it("reads the pages the finding names, and none for a refused file", async () => {
+    const { client, model } = fake([CONTRADICTION, REFUSED_FILE]);
+    await model.load();
+    expect(client.readPage.mock.calls.map(([id]) => id).sort()).toEqual(["people/a", "people/b"]);
+  });
+
+  it("previews with the finding preview, then applies that version unchanged", async () => {
+    const { model, client } = await opened([CONTRADICTION], "c1");
+    await model.choose(choose("supersede"));
+    expect(client.previewFinding).toHaveBeenCalledWith("c1", { action: "supersede" });
+    expect(client.previewDecision).not.toHaveBeenCalled();
+    expect(model.state.open?.step).toMatchObject({
+      name: "preview",
+      action: "supersede",
+      lines: ["We'll mark 'M. Osei' as out of date. It stays in your library, but answers won't use it."],
+    });
+    await model.confirm();
+    expect(client.applyDecision).toHaveBeenCalledWith("c1", { action: "supersede", version: FINDING_VERSION });
+    expect(model.state.open?.step).toEqual({ name: "done", lines: ["Marked 'M. Osei' as out of date."], undo: null });
+    expect(client.decisions).toHaveBeenCalledTimes(2);
+  });
+
+  it("confirms a decline and a reconcile with no Undo", async () => {
+    for (const [action, line] of [
+      ["decline", "Left as they are."],
+      ["reconcile", "Noted that both are right."],
+    ] as const) {
+      const { model } = await opened([CONTRADICTION], "c1");
+      await model.choose(choose(action));
+      await model.confirm();
+      expect(model.state.open?.step).toEqual({ name: "done", lines: [line], undo: null });
+    }
+  });
+
+  it("re-previews a stale finding with the finding preview, never applying it", async () => {
+    const fresh = { ...FINDING_VERSION, content_digest: "f2" };
+    const { model, client } = await opened([CONTRADICTION], "c1");
+    await model.choose(choose("reconcile"));
+    client.applyDecision.mockRejectedValueOnce(apiError("stale"));
+    client.previewFinding.mockResolvedValueOnce(findingPreview("c1", "reconcile", fresh));
+    await model.confirm();
+    expect(client.applyDecision).toHaveBeenCalledTimes(1);
+    expect(client.previewFinding).toHaveBeenCalledTimes(2);
+    expect(model.state.open?.changed).toBe(CHANGED);
+    expect(model.state.open?.step).toMatchObject({ name: "preview", preview: { version: fresh } });
+  });
+
+  it("shows a stale finding now listed as changed as one that can only wait", async () => {
+    const { model, client } = await opened([CONTRADICTION], "c1");
+    client.previewFinding.mockRejectedValueOnce(apiError("stale"));
+    client.decisions.mockResolvedValue({ decisions: [{ ...CONTRADICTION, fresh: false }] });
+    await model.choose(choose("decline"));
+    expect(client.previewFinding).toHaveBeenCalledTimes(1);
+    expect(model.state.open?.changed).toBe(CHANGED_FINDING);
+    expect(model.state.open?.step).toEqual({ name: "choosing" });
+  });
+
+  it("opens a changed finding with its own notice", async () => {
+    const { model } = await opened([{ ...CONTRADICTION, fresh: false }], "c1");
+    expect(model.state.open?.changed).toBe(CHANGED_FINDING);
+  });
+
+  it("never quotes a check for a changed finding", async () => {
+    const { model, client } = await opened([{ ...CONTRADICTION, fresh: false }], "c1");
+    await model.choose({ choice: "recheck", label: "", does: "" });
+    expect(client.quoteJudging).not.toHaveBeenCalled();
+    expect(model.state.check).toBeNull();
+    expect(model.state.open?.changed).toBe(CHANGED_FINDING);
+  });
+
+  it("words a pair already settled another way, and reloads", async () => {
+    const { model, client } = await opened([CONTRADICTION], "c1");
+    await model.choose(choose("reconcile"));
+    client.applyDecision.mockRejectedValueOnce(apiError("already_reconciled"));
+    await model.confirm();
+    expect(model.state.open?.problem).toEqual({
+      message: "You've already settled how these pages relate, in another way. Nothing was changed.",
+      action: "reload",
+    });
+    expect(client.applyDecision).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a busy apply, then offers Try again that repeats it", async () => {
+    const { model, client, advance } = await opened([CONTRADICTION], "c1");
+    await model.choose(choose("decline"));
+    client.applyDecision.mockImplementation(async () => {
+      advance(10_000);
+      throw apiError("workspace_busy", 503);
+    });
+    await model.confirm();
+    expect(model.state.open?.problem?.action).toBe("try_again");
+    client.applyDecision.mockImplementation(async (_key, body) => ({
+      applied: { action: body.action, commit_sha: "c", decision_key: "c1" },
+      warnings: [],
+    }));
+    await model.resolveProblem();
+    expect(client.applyDecision).toHaveBeenLastCalledWith("c1", { action: "decline", version: FINDING_VERSION });
+    expect(model.state.open?.step).toMatchObject({ name: "done", lines: ["Left as they are."] });
+  });
+
+  it("does not count a changed finding as waiting for a check: the check never makes one ready", async () => {
+    const changed = { ...CONTRADICTION, fresh: false };
+    const { model, client } = fake([UNJUDGED, changed]);
+    await model.load();
+    await model.startCheck();
+    // Something else (a terminal, the background) made the finding current meanwhile.
+    client.decisions.mockResolvedValue({ decisions: [{ ...UNJUDGED, evaluation: "judged_same" }, CONTRADICTION] });
+    await model.agreeCheck();
+    expect(model.state.check?.text).toBe("Checked 2. 1 is ready for you to decide.");
   });
 });
