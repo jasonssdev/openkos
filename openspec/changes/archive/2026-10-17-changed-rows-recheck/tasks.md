@@ -59,6 +59,6 @@ screen slice was folded in rather than queued behind another round.
 
 ## 3. Archive (S3)
 
-- [ ] 3.1 Merge every delta into its main spec, each heading exactly once.
-- [ ] 3.2 Move the change to `openspec/changes/archive/` and write
+- [x] 3.1 Merge every delta into its main spec, each heading exactly once.
+- [x] 3.2 Move the change to `openspec/changes/archive/` and write
       `archive-report.md`.
