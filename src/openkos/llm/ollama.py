@@ -697,6 +697,34 @@ class OllamaClient:
             raise OllamaError(f"Malformed response from Ollama: {exc}") from exc
         return models
 
+    def version(self) -> str:
+        """GET `{host}/api/version` and return its `version` string.
+
+        The setup probe ADR-0057 names: an answer means a runtime is listening.
+        A transport failure is `OllamaUnavailable`; any other reply shape is
+        `OllamaError`."""
+        url = f"{self._host}/api/version"
+        # Same trusted-host rationale as `list_models` (S310).
+        request = urllib.request.Request(url, method="GET")  # noqa: S310
+        try:
+            body = self._urlopen(request, timeout=self._timeout).read()
+        except urllib.error.HTTPError as exc:
+            raise _map_http_error(exc) from exc
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            http.client.IncompleteRead,
+        ) as exc:
+            raise self._unavailable(exc) from exc
+        try:
+            version = json.loads(body)["version"]
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise OllamaError(f"Malformed response from Ollama: {exc}") from exc
+        if not isinstance(version, str):
+            raise OllamaError("Malformed response from Ollama: version is not text")
+        return version
+
     def _unavailable(self, exc: BaseException) -> OllamaUnavailable:
         """Build the `OllamaUnavailable` for a transport failure, shared by
         both the connect-phase and read-phase except branches (D4).

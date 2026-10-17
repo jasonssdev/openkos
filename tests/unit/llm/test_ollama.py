@@ -1817,7 +1817,9 @@ def test_transport_failure_on_an_unparseable_host_displays_the_placeholder() -> 
 # --- Phase 8: layering guard --------------------------------------------------
 
 
-_REQUEST_ENDPOINTS = frozenset({"/api/chat", "/api/embed", "/api/tags"})
+_REQUEST_ENDPOINTS = frozenset(
+    {"/api/chat", "/api/embed", "/api/tags", "/api/version", "/api/pull"}
+)
 """The EXACT endpoint paths `OllamaClient` builds request URLs from -- the
 whole sanctioned vocabulary, enumerated rather than characterized
 (issue #359).

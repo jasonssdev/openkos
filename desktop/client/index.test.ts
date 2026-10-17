@@ -119,6 +119,7 @@ describe("the requests", () => {
     ["stopJudgingRun", (c) => c.stopJudgingRun("r1"), "POST", "/v1/judging/runs/r1/stop", null],
     ["ask", (c) => c.ask({ question: "q" }), "POST", "/v1/ask", { question: "q" }],
     ["askJob", (c) => c.askJob("a/1"), "GET", "/v1/ask/a%2F1", null],
+    ["setupReadiness", (c) => c.setupReadiness(), "GET", "/v1/setup/readiness", null],
     [
       "mergeHistory",
       (c) => c.mergeHistory("concepts/a b"),

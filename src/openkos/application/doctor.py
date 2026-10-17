@@ -296,6 +296,26 @@ def _api_key_destination_check(cfg: config.Config | None) -> CheckResult:
     )
 
 
+def configured_task_models(cfg: config.Config | None) -> dict[str, str]:
+    """The model tag every task resolves to, by task name.
+
+    With a configuration, every task in `config.TASK_MODEL_KEYS`, sorted, as
+    `config.resolve_task_model` resolves it; without one (outside a workspace
+    or on a read failure), the packaged per-task defaults that name a tag.
+    Check 5b and the setup readiness read both enumerate through this one
+    function, so the two can never list different models."""
+    if cfg is None:
+        return {
+            task: tag
+            for task, tag in config.DEFAULT_TASK_MODELS.items()
+            if isinstance(tag, str)
+        }
+    return {
+        task: config.resolve_task_model(cfg, task)
+        for task in sorted(config.TASK_MODEL_KEYS)
+    }
+
+
 def run_diagnostics(
     root: Path,
     *,
@@ -619,17 +639,7 @@ def run_diagnostics(
     # stage that named it (#515 decision 2), so `ingest`, `query`, and
     # `adjudicate` all still work. Exiting 1 on a workspace that is fine for
     # every other verb would be a false alarm rather than a diagnosis.
-    task_models = {
-        task: config.resolve_task_model(cfg, task)
-        for task in sorted(config.TASK_MODEL_KEYS)
-        if cfg is not None
-    }
-    if cfg is None:
-        task_models = {
-            task: tag
-            for task, tag in config.DEFAULT_TASK_MODELS.items()
-            if isinstance(tag, str)
-        }
+    task_models = configured_task_models(cfg)
     extra_models = {task: tag for task, tag in task_models.items() if tag != model}
     task_label = "Task models installed"
     # #650: the un-adopted measured upgrade(s) stay discoverable in every

@@ -370,6 +370,13 @@ def make_router() -> APIRouter:
             return TierChangeResponse(changed=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
+    @router.get("/setup/readiness")
+    def setup_readiness(
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.SetupReadiness:
+        # Reads the runtime's version and model list; never a model call.
+        return invoke(lambda: api.setup_readiness(workspace))
+
     @router.post("/judging/quote", responses=_errors_of(413, 424, 502, 503))
     def quote(
         body: QuoteRequest,

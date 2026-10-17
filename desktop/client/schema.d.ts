@@ -308,6 +308,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/setup/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Setup Readiness */
+        get: operations["setup_readiness_v1_setup_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/status": {
         parameters: {
             query?: never;
@@ -934,6 +951,19 @@ export interface components {
             unchanged: number;
         };
         /**
+         * MemoryReadiness
+         * @description The machine's physical memory against ADR-0047's floor. `total_bytes`
+         *     and `meets_floor` are `None` where the memory cannot be read.
+         */
+        MemoryReadiness: {
+            /** Floor Bytes */
+            floor_bytes: number;
+            /** Meets Floor */
+            meets_floor: boolean | null;
+            /** Total Bytes */
+            total_bytes: number | null;
+        };
+        /**
          * MergeHistory
          * @description What was merged into a concept, newest first, in an envelope that leaves
          *     room for additive fields.
@@ -1029,6 +1059,28 @@ export interface components {
         MergedConceptList: {
             /** Concepts */
             concepts: components["schemas"]["MergedConcept"][];
+        };
+        /**
+         * ModelReadiness
+         * @description One configured model tag.
+         *
+         *     `roles` names what the tag is for (`chat`, `embedding`, or task names).
+         *     `required` is true for the chat and embedding models, which ingest and ask
+         *     need; a task model fails only the stage that names it. `installed` is
+         *     `None` when the runtime's model list could not be read. `pullable` is true
+         *     where setup can pull it (the `ollama` backend).
+         */
+        ModelReadiness: {
+            /** Installed */
+            installed: boolean | null;
+            /** Pullable */
+            pullable: boolean;
+            /** Required */
+            required: boolean;
+            /** Roles */
+            roles: string[];
+            /** Tag */
+            tag: string;
         };
         /**
          * OmittedConcept
@@ -1371,6 +1423,45 @@ export interface components {
             state: "running" | "stopping" | "finished" | "failed";
             /** Total */
             total: number | null;
+        };
+        /**
+         * RuntimeReadiness
+         * @description The configured model runtime, as setup sees it.
+         *
+         *     `host` is the userinfo-redacted display host, the only form of it that may
+         *     be shown. `version` is the runtime's own version on `ollama` when it
+         *     answered, otherwise `None`. `download_url` is where to get Ollama, on the
+         *     `ollama` backend only.
+         */
+        RuntimeReadiness: {
+            /**
+             * Backend
+             * @enum {string}
+             */
+            backend: "ollama" | "openai-compatible";
+            /** Download Url */
+            download_url: string | null;
+            /** Host */
+            host: string;
+            /** Is Local */
+            is_local: boolean;
+            /** Reachable */
+            reachable: boolean;
+            /** Version */
+            version: string | null;
+        };
+        /**
+         * SetupReadiness
+         * @description Whether the workspace's models can run here. `ready` is true exactly
+         *     when the runtime answered and every required model is installed.
+         */
+        SetupReadiness: {
+            memory: components["schemas"]["MemoryReadiness"];
+            /** Models */
+            models: components["schemas"]["ModelReadiness"][];
+            /** Ready */
+            ready: boolean;
+            runtime: components["schemas"]["RuntimeReadiness"];
         };
         /**
          * TierChangeApplyRequest
@@ -3019,6 +3110,62 @@ export interface operations {
             };
             /** @description Content Too Large */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    setup_readiness_v1_setup_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupReadiness"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

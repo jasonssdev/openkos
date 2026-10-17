@@ -916,6 +916,28 @@
         }
       }
     },
+    "MemoryReadiness": {
+      "fields": [
+        {
+          "annotation": "int | None",
+          "default": false,
+          "name": "total_bytes"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "floor_bytes"
+        },
+        {
+          "annotation": "bool | None",
+          "default": false,
+          "name": "meets_floor"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "MergeGroupInterrupted": {
       "bases": [
         "WriteFailed"
@@ -1062,6 +1084,38 @@
         "dict"
       ],
       "kind": "class",
+      "members": {}
+    },
+    "ModelReadiness": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "tag"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "roles"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "required"
+        },
+        {
+          "annotation": "bool | None",
+          "default": false,
+          "name": "installed"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "pullable"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
       "members": {}
     },
     "NotApplied": {
@@ -1599,6 +1653,70 @@
     "RunResult": {
       "kind": "alias",
       "value": "JudgingOutcome | QuoteStale | RunRefused"
+    },
+    "RuntimeReadiness": {
+      "fields": [
+        {
+          "annotation": "Literal['ollama', 'openai-compatible']",
+          "default": false,
+          "name": "backend"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "host"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "is_local"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "reachable"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "version"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "download_url"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "SetupReadiness": {
+      "fields": [
+        {
+          "annotation": "RuntimeReadiness",
+          "default": false,
+          "name": "runtime"
+        },
+        {
+          "annotation": "tuple[ModelReadiness, ...]",
+          "default": false,
+          "name": "models"
+        },
+        {
+          "annotation": "MemoryReadiness",
+          "default": false,
+          "name": "memory"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "ready"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
     },
     "Stale": {
       "fields": [
@@ -2767,6 +2885,18 @@
         }
       ],
       "returns": "JudgingOutcome | QuoteStale | RunRefused"
+    },
+    "setup_readiness": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "SetupReadiness"
     },
     "status": {
       "kind": "function",

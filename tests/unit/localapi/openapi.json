@@ -1224,6 +1224,44 @@
         "title": "KindRefresh",
         "type": "object"
       },
+      "MemoryReadiness": {
+        "description": "The machine's physical memory against ADR-0047's floor. `total_bytes`\nand `meets_floor` are `None` where the memory cannot be read.",
+        "properties": {
+          "floor_bytes": {
+            "title": "Floor Bytes",
+            "type": "integer"
+          },
+          "meets_floor": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meets Floor"
+          },
+          "total_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Bytes"
+          }
+        },
+        "required": [
+          "total_bytes",
+          "floor_bytes",
+          "meets_floor"
+        ],
+        "title": "MemoryReadiness",
+        "type": "object"
+      },
       "MergeHistory": {
         "additionalProperties": false,
         "description": "What was merged into a concept, newest first, in an envelope that leaves\nroom for additive fields.",
@@ -1448,6 +1486,50 @@
           "concepts"
         ],
         "title": "MergedConceptList",
+        "type": "object"
+      },
+      "ModelReadiness": {
+        "description": "One configured model tag.\n\n`roles` names what the tag is for (`chat`, `embedding`, or task names).\n`required` is true for the chat and embedding models, which ingest and ask\nneed; a task model fails only the stage that names it. `installed` is\n`None` when the runtime's model list could not be read. `pullable` is true\nwhere setup can pull it (the `ollama` backend).",
+        "properties": {
+          "installed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installed"
+          },
+          "pullable": {
+            "title": "Pullable",
+            "type": "boolean"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag",
+          "roles",
+          "required",
+          "installed",
+          "pullable"
+        ],
+        "title": "ModelReadiness",
         "type": "object"
       },
       "OmittedConcept": {
@@ -2255,6 +2337,93 @@
           "error"
         ],
         "title": "RunStatus",
+        "type": "object"
+      },
+      "RuntimeReadiness": {
+        "description": "The configured model runtime, as setup sees it.\n\n`host` is the userinfo-redacted display host, the only form of it that may\nbe shown. `version` is the runtime's own version on `ollama` when it\nanswered, otherwise `None`. `download_url` is where to get Ollama, on the\n`ollama` backend only.",
+        "properties": {
+          "backend": {
+            "enum": [
+              "ollama",
+              "openai-compatible"
+            ],
+            "title": "Backend",
+            "type": "string"
+          },
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "reachable": {
+            "title": "Reachable",
+            "type": "boolean"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "backend",
+          "host",
+          "is_local",
+          "reachable",
+          "version",
+          "download_url"
+        ],
+        "title": "RuntimeReadiness",
+        "type": "object"
+      },
+      "SetupReadiness": {
+        "description": "Whether the workspace's models can run here. `ready` is true exactly\nwhen the runtime answered and every required model is installed.",
+        "properties": {
+          "memory": {
+            "$ref": "#/components/schemas/MemoryReadiness"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelReadiness"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeReadiness"
+          }
+        },
+        "required": [
+          "runtime",
+          "models",
+          "memory",
+          "ready"
+        ],
+        "title": "SetupReadiness",
         "type": "object"
       },
       "TierChangeApplyRequest": {
@@ -4702,6 +4871,69 @@
           }
         ],
         "summary": "Reopen Preview"
+      }
+    },
+    "/v1/setup/readiness": {
+      "get": {
+        "operationId": "setup_readiness_v1_setup_readiness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupReadiness"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Setup Readiness"
       }
     },
     "/v1/status": {

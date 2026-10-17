@@ -71,6 +71,7 @@ from openkos.api._reads import (
     status,
 )
 from openkos.api._refresh import KindRefresh, QueueRefresh, refresh_decision_queue
+from openkos.api._setup import setup_readiness
 from openkos.api._undo import (
     KeptDistinct,
     NotUndoable,
@@ -135,6 +136,12 @@ from openkos.application.judging import (
 from openkos.application.pending_queue_report import QueueUnavailableError
 from openkos.application.queue_refresh import QueueRefreshRefused
 from openkos.application.runtime import StopToken
+from openkos.application.setup import (
+    MemoryReadiness,
+    ModelReadiness,
+    RuntimeReadiness,
+    SetupReadiness,
+)
 from openkos.application.write_gate import (
     DriftDetected,
     MergeGroupInterrupted,
@@ -198,12 +205,14 @@ __all__ = [
     "KindCounts",
     "KindRefresh",
     "LLMBackend",
+    "MemoryReadiness",
     "MergeGroupInterrupted",
     "MergePlan",
     "MergeRecord",
     "MergeStep",
     "MergedConcept",
     "Message",
+    "ModelReadiness",
     "NotApplied",
     "NotUndoable",
     "NotUnmergeable",
@@ -228,6 +237,8 @@ __all__ = [
     "Reopened",
     "RunRefused",
     "RunResult",
+    "RuntimeReadiness",
+    "SetupReadiness",
     "Stale",
     "StopToken",
     "TierChangePreview",
@@ -276,5 +287,6 @@ __all__ = [
     "read_page",
     "refresh_decision_queue",
     "run_judging",
+    "setup_readiness",
     "status",
 ]

@@ -31,9 +31,10 @@ from openkos.application import (
     curate_decisions,
     judging,
     lock_wait,
+    setup,
     unmerge_service,
 )
-from openkos.llm.base import Embedder, LLMBackend
+from openkos.llm.base import BackendDiagnostics, Embedder, LLMBackend
 from openkos.llm.ollama import OllamaClient
 from openkos.llm.openai_compatible import OpenAICompatibleClient
 from openkos.vcs.autocommit import (
@@ -235,3 +236,17 @@ def judging_ports(
         chat_client=lambda cfg, task: override(cast(str, task)),
         commit_section=section,
     )
+
+
+def setup_client(cfg: config.Config, timeout: float) -> BackendDiagnostics:
+    """The runtime client setup probes, as `doctor` builds it: the shared
+    resolver with the chat endpoint and the chat model's tag. On `ollama` it is
+    an `OllamaClient`, which also answers the version probe."""
+    return backends.diagnostics_client(
+        cfg, model=cfg.model, timeout=timeout, factories=_backend_factories()
+    )
+
+
+def setup_ports() -> setup.SetupPorts:
+    """The effects setup reaches, bound to this module's client classes."""
+    return setup.SetupPorts(client=setup_client)
