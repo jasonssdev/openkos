@@ -44,6 +44,10 @@ export const ERROR_CODES = [
   "not_merged",
   "survivor_edited",
   "queue_refresh_refused",
+  "not_kept_distinct",
+  "not_related",
+  "tier_unchanged",
+  "unknown_type",
   // Judging.
   "quote_stale",
   "run_refused",

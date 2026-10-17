@@ -12,12 +12,12 @@ relying on it:
    discloses to anyone else must apply the local API's gate itself (ADR-0058).
 3. Judging is the only operation that sends content anywhere, and only to the
    backend the workspace configures. The only other process the surface runs is
-   the local git auto-commit of a decision or an unmerge it applies, which never
-   pushes.
+   the local git auto-commit of a decision, an unmerge or an undo it applies,
+   which never pushes.
 4. Cancellation is cooperative: a stop is observed between chunks, so it waits
    for the chunk in flight. A model call is never preempted.
-5. Applying a decision or an unmerge does not reconcile merged concept bodies
-   with a model and does not refresh the derived stores; `status` reports stale
+5. Applying a decision, an unmerge or an undo does not reconcile merged concept
+   bodies with a model and does not refresh the derived stores; `status` reports stale
    indexes and a maintenance pass or a reindex refreshes them.
 6. `API_VERSION`, not the package version, is the compatibility promise. Within
    one value changes are additive; a breaking change raises it. A committed
@@ -67,6 +67,17 @@ from openkos.api._reads import (
     status,
 )
 from openkos.api._refresh import KindRefresh, QueueRefresh, refresh_decision_queue
+from openkos.api._undo import (
+    KeptDistinct,
+    NotUndoable,
+    Reopened,
+    ReopenPreview,
+    ReopenVersion,
+    UndoStale,
+    apply_reopen,
+    kept_distinct,
+    preview_reopen,
+)
 from openkos.api._unmerge import (
     MergedConcept,
     MergeRecord,
@@ -163,6 +174,7 @@ __all__ = [
     "JudgingQuote",
     "JudgingRefused",
     "KeepDistinctPlan",
+    "KeptDistinct",
     "KindCounts",
     "KindRefresh",
     "LLMBackend",
@@ -173,6 +185,7 @@ __all__ = [
     "MergedConcept",
     "Message",
     "NotApplied",
+    "NotUndoable",
     "NotUnmergeable",
     "OpenKosError",
     "Page",
@@ -189,12 +202,16 @@ __all__ = [
     "Refused",
     "RelatePlan",
     "RelationDetail",
+    "ReopenPreview",
+    "ReopenVersion",
+    "Reopened",
     "RunRefused",
     "RunResult",
     "Stale",
     "StopToken",
     "TierDetail",
     "TierPlan",
+    "UndoStale",
     "UnmergeInterrupted",
     "UnmergePreview",
     "UnmergeStale",
@@ -212,12 +229,15 @@ __all__ = [
     "WriteFailed",
     "WriteRefused",
     "apply_decision",
+    "apply_reopen",
     "apply_unmerge",
+    "kept_distinct",
     "list_decisions",
     "merge_history",
     "merged_concepts",
     "pending_report",
     "preview_decision",
+    "preview_reopen",
     "preview_unmerge",
     "quote_judging",
     "read_page",

@@ -196,6 +196,40 @@ class MergedConceptList(BaseModel):
     concepts: list[api.MergedConcept]
 
 
+class KeptDistinctList(BaseModel):
+    """Every member set kept distinct, newest first, in an envelope that leaves
+    room for additive fields."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    groups: list[api.KeptDistinct]
+
+
+class ReopenPreviewRequest(BaseModel):
+    """The members of the kept-distinct ruling to reopen, in any order."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    member_ids: list[str]
+
+
+class ReopenApplyRequest(_EchoRequest):
+    """The version the reopen preview issued (echoed unchanged) and how long to
+    wait for the workspace lock; a client can shorten the wait only."""
+
+    version: api.ReopenVersion
+    wait_seconds: float = Field(default=WRITE_WAIT_SECONDS, ge=0, le=WRITE_WAIT_SECONDS)
+
+
+class ReopenResponse(BaseModel):
+    """What was reopened, and the warnings the apply raised along the way."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reopened: api.Reopened
+    warnings: list[str]
+
+
 class UnmergePreviewRequest(BaseModel):
     """Which merge to undo: the survivor and the absorbed concept, and whether
     the first step may discard an edit made to the survivor since its merge."""

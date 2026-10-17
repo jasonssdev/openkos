@@ -125,6 +125,21 @@ describe("the requests", () => {
       null,
     ],
     ["mergedConcepts", (c) => c.mergedConcepts(), "GET", "/v1/merged", null],
+    ["keptDistinct", (c) => c.keptDistinct(), "GET", "/v1/kept-distinct", null],
+    [
+      "previewReopen",
+      (c) => c.previewReopen({ member_ids: ["a", "b"] }),
+      "POST",
+      "/v1/reopen/preview",
+      { member_ids: ["a", "b"] },
+    ],
+    [
+      "applyReopen",
+      (c) => c.applyReopen({ version: { member_ids: ["a", "b"], content_digest: "d" } }),
+      "POST",
+      "/v1/reopen/apply",
+      { version: { member_ids: ["a", "b"], content_digest: "d" } },
+    ],
     [
       "readPage",
       (c) => c.readPage("people/m osei"),

@@ -138,6 +138,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/kept-distinct": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Kept Distinct */
+        get: operations["kept_distinct_v1_kept_distinct_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/merged": {
         parameters: {
             query?: never;
@@ -217,6 +234,40 @@ export interface paths {
         put?: never;
         /** Refresh */
         post: operations["refresh_v1_queue_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reopen/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen Apply */
+        post: operations["reopen_apply_v1_reopen_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reopen/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen Preview */
+        post: operations["reopen_preview_v1_reopen_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -606,6 +657,25 @@ export interface components {
             member_ids: string[];
         };
         /**
+         * KeptDistinct
+         * @description Pages a person said are different things, and when.
+         */
+        KeptDistinct: {
+            /** Decided At */
+            decided_at: string;
+            /** Member Ids */
+            member_ids: string[];
+        };
+        /**
+         * KeptDistinctList
+         * @description Every member set kept distinct, newest first, in an envelope that leaves
+         *     room for additive fields.
+         */
+        KeptDistinctList: {
+            /** Groups */
+            groups: components["schemas"]["KeptDistinct"][];
+        };
+        /**
          * KindCounts
          * @description Lifetime counters of one pending-work kind.
          */
@@ -980,6 +1050,69 @@ export interface components {
             suggested_type: string;
             /** Target Id */
             target_id: string;
+        };
+        /**
+         * ReopenApplyRequest
+         * @description The version the reopen preview issued (echoed unchanged) and how long to
+         *     wait for the workspace lock; a client can shorten the wait only.
+         */
+        ReopenApplyRequest: {
+            version: components["schemas"]["ReopenVersion"];
+            /**
+             * Wait Seconds
+             * @default 5
+             */
+            wait_seconds?: number;
+        };
+        /**
+         * ReopenPreview
+         * @description Reopening the ruling over `member_ids`: they may be offered as the same
+         *     thing again.
+         */
+        ReopenPreview: {
+            /** Member Ids */
+            member_ids: string[];
+            version: components["schemas"]["ReopenVersion"];
+        };
+        /**
+         * ReopenPreviewRequest
+         * @description The members of the kept-distinct ruling to reopen, in any order.
+         */
+        ReopenPreviewRequest: {
+            /** Member Ids */
+            member_ids: string[];
+        };
+        /**
+         * ReopenResponse
+         * @description What was reopened, and the warnings the apply raised along the way.
+         */
+        ReopenResponse: {
+            reopened: components["schemas"]["Reopened"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * ReopenVersion
+         * @description The version a stateless caller reopens a ruling against: echo it
+         *     unchanged. `content_digest` covers the members and the sidecar holding the
+         *     ruling.
+         */
+        ReopenVersion: {
+            /** Content Digest */
+            content_digest: string;
+            /** Member Ids */
+            member_ids: string[];
+        };
+        /**
+         * Reopened
+         * @description The ruling was reopened. `commit_sha` is `None` when its commit could not
+         *     be made (the write itself landed).
+         */
+        Reopened: {
+            /** Commit Sha */
+            commit_sha: string | null;
+            /** Member Ids */
+            member_ids: string[];
         };
         /**
          * RunRequest
@@ -1831,6 +1964,62 @@ export interface operations {
             };
         };
     };
+    kept_distinct_v1_kept_distinct_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeptDistinctList"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     merged_v1_merged_get: {
         parameters: {
             query?: never;
@@ -2149,6 +2338,173 @@ export interface operations {
                 headers: {
                     /** @description Seconds to wait before retrying a busy workspace. */
                     "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    reopen_apply_v1_reopen_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReopenApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReopenResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    /** @description Seconds to wait before retrying a busy workspace. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    reopen_preview_v1_reopen_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReopenPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReopenPreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
                     [name: string]: unknown;
                 };
                 content: {
