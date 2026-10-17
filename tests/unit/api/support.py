@@ -3,6 +3,7 @@ through the real queue API, and whole-tree byte snapshots."""
 
 import contextlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -53,23 +54,67 @@ def forbid_model_clients(monkeypatch: pytest.MonkeyPatch, what: str) -> None:
     monkeypatch.setattr(_wiring, "OpenAICompatibleClient", fail)
 
 
+# How git STORES history, not what history says: gc, `maintenance --auto` (a
+# commit may spawn it detached, so it lands at an arbitrary later moment),
+# `repack` and `pack-refs` rewrite these without changing a single object,
+# ref or file of the repository.
+_GIT_STORAGE = (
+    ".git/objects/",
+    ".git/refs/",
+    ".git/packed-refs",
+    ".git/info/refs",
+    ".git/gc.log",
+)
+
+
+def _git_content(root: Path) -> dict[str, bytes]:
+    """What the repository SAYS, independent of how git packs it: HEAD, every
+    ref with its target, and every object (id and type) in the object store."""
+    if not (root / ".git").exists():
+        return {}
+
+    def git(*args: str) -> bytes:
+        return subprocess.run(  # noqa: S603
+            ["git", "-C", str(root), *args],  # noqa: S607
+            check=True,
+            capture_output=True,
+        ).stdout
+
+    return {
+        "git:head": git("symbolic-ref", "-q", "HEAD"),
+        "git:refs": git("for-each-ref", "--format=%(refname) %(objectname)"),
+        "git:objects": git(
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check=%(objectname) %(objecttype)",
+        ),
+    }
+
+
 def snapshot(root: Path) -> dict[str, bytes]:
     """Every file under the workspace, derived stores and `.git` included.
 
     SQLite's `-wal` and `-shm` sidecars are housekeeping a read-only open of a
     WAL database may create; they hold no content, so a `-wal` file must be
-    empty and neither is part of the comparison."""
+    empty and neither is part of the comparison.
+
+    `.git` is compared by content, not by storage: the index, logs and the
+    other loose files are bytes, while objects and refs are read through git
+    (`_git_content`) so a background repack cannot show as a change."""
     files: dict[str, bytes] = {}
     for path in sorted(root.rglob("*")):
         if not path.is_file():
+            continue
+        rel = str(path.relative_to(root))
+        if rel.startswith(_GIT_STORAGE):
             continue
         if path.name.endswith(_SQLITE_SIDECARS):
             assert path.name.endswith("-shm") or path.stat().st_size == 0, (
                 f"a read left content in {path.name}"
             )
             continue
-        files[str(path.relative_to(root))] = path.read_bytes()
-    return files
+        files[rel] = path.read_bytes()
+    return files | _git_content(root)
 
 
 def enqueue(
