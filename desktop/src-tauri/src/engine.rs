@@ -59,6 +59,34 @@ impl fmt::Debug for Token {
     }
 }
 
+/// Extra environment variables for one engine process, such as the remote
+/// backend's API key. Kept apart from [`EngineCommand`] because its values may
+/// be secrets: its `Debug` names the variables, never their values.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct EngineEnv(Vec<(String, String)>);
+
+impl EngineEnv {
+    /// Set `name` to `value`, replacing an earlier value of the same name.
+    pub fn set(&mut self, name: &str, value: &str) {
+        self.0.retain(|(existing, _)| existing != name);
+        self.0.push((name.to_owned(), value.to_owned()));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn names(&self) -> Vec<&str> {
+        self.0.iter().map(|(name, _)| name.as_str()).collect()
+    }
+}
+
+impl fmt::Debug for EngineEnv {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "EngineEnv({:?} = <redacted>)", self.names())
+    }
+}
+
 /// What the engine's ready line announces.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ready {
@@ -290,6 +318,17 @@ pub fn start(
     ready_timeout: Duration,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<RunningEngine, StartError> {
+    start_with_env(command, &EngineEnv::default(), ready_timeout, cancelled)
+}
+
+/// [`start`], with `env` added to the environment the engine inherits. A
+/// variable already in the shell's environment is replaced, never duplicated.
+pub fn start_with_env(
+    command: &EngineCommand,
+    env: &EngineEnv,
+    ready_timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<RunningEngine, StartError> {
     let mut process = Command::new(&command.program);
     process
         .args(&command.args)
@@ -299,6 +338,7 @@ pub fn start(
     if let Some(cwd) = &command.cwd {
         process.current_dir(cwd);
     }
+    process.envs(env.0.iter().map(|(name, value)| (name, value)));
     // Its own process group, so a stop reaches every process the engine
     // started (`uv run` runs the Python engine as its child).
     #[cfg(unix)]
@@ -582,6 +622,39 @@ mod tests {
                 .all(|a| !a.to_string_lossy().contains(engine.token().as_str()))
         );
         assert_eq!(engine.stop(SECONDS_5), StopOutcome::Graceful);
+    }
+
+    #[test]
+    fn the_extra_environment_reaches_the_engine_and_never_its_argv() {
+        let dir = fake::scratch("env");
+        let script = format!(
+            "IFS= read -r t; printf '%s' \"${{OPENKOS_OPENAI_API_KEY-unset}}\" > \"$1/key\"; \
+             echo '{READY}'; cat > /dev/null"
+        );
+        let command = fake::engine(&script, &dir);
+        let mut env = EngineEnv::default();
+        env.set("OPENKOS_OPENAI_API_KEY", "sk-first");
+        env.set("OPENKOS_OPENAI_API_KEY", "sk-test-value");
+        let engine = start_with_env(&command, &env, SECONDS_5, NEVER).expect("ready");
+        let received = std::fs::read_to_string(dir.join("key")).expect("key file");
+        assert_eq!(received, "sk-test-value");
+        assert!(
+            command
+                .args
+                .iter()
+                .all(|a| !a.to_string_lossy().contains("sk-test-value"))
+        );
+        assert_eq!(engine.stop(SECONDS_5), StopOutcome::Graceful);
+    }
+
+    #[test]
+    fn an_engine_env_never_prints_its_values() {
+        let mut env = EngineEnv::default();
+        env.set("OPENKOS_OPENAI_API_KEY", "sk-secret");
+        let printed = format!("{env:?}");
+        assert!(printed.contains("OPENKOS_OPENAI_API_KEY"), "{printed}");
+        assert!(!printed.contains("sk-secret"), "{printed}");
+        assert_eq!(env.names(), ["OPENKOS_OPENAI_API_KEY"]);
     }
 
     #[test]

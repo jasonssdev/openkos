@@ -22,3 +22,9 @@ tauri = { version = "2", features = [] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# The remote backend's API key lives in the login keychain (ADR-0070). Only
+# macOS has a store; elsewhere the key commands answer "not supported".
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+keyring-core = "1"

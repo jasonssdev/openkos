@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::engine::{self, EngineCommand, RunningEngine, Token};
+use crate::engine::{self, EngineCommand, EngineEnv, RunningEngine, Token};
 
 /// How many crashes are restarted, and how fast.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,69 +124,179 @@ impl Default for SupervisorConfig {
 /// Locates the engine afresh before each start.
 pub type Locate = dyn Fn() -> Result<EngineCommand, String> + Send + Sync;
 
-/// The published state, and whether a stop was asked for, under one lock so a
-/// stop can never slip between a check and a wait.
+/// The extra environment of each start, read afresh before each one.
+pub type Environ = dyn Fn() -> EngineEnv + Send + Sync;
+
+/// What the supervision thread is told, and what it publishes, under one lock
+/// so a request can never slip between a check and a wait.
+struct Control {
+    state: EngineState,
+    /// A stop was asked for: the engine is stopped and never started again.
+    stop: bool,
+    /// A restart was asked for: the engine is replaced, outside the budget.
+    restart: bool,
+    /// The supervision thread is still deciding; false once it published a
+    /// final state and is returning.
+    running: bool,
+}
+
 struct Shared {
-    state: Mutex<(EngineState, bool)>,
+    control: Mutex<Control>,
     changed: Condvar,
 }
 
+/// Why a wait ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wake {
+    Elapsed,
+    Stop,
+    Restart,
+}
+
 impl Shared {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Control> {
+        self.control.lock().expect("control lock")
+    }
+
     fn publish(&self, state: EngineState) {
-        self.state.lock().expect("state lock").0 = state;
+        self.lock().state = state;
         self.changed.notify_all();
     }
 
     fn stopping(&self) -> bool {
-        self.state.lock().expect("state lock").1
+        self.lock().stop
     }
 
-    /// Sleep up to `delay`; `true` if a stop was asked for meanwhile.
-    fn sleep_unless_stopped(&self, delay: Duration) -> bool {
+    /// Whether the current start should be abandoned: a stop or a restart.
+    fn interrupted(&self) -> bool {
+        let control = self.lock();
+        control.stop || control.restart
+    }
+
+    /// Consume a pending restart request, if there is one.
+    fn take_restart(&self) -> bool {
+        std::mem::take(&mut self.lock().restart)
+    }
+
+    /// Sleep up to `delay`, or until a stop or a restart is asked for.
+    fn wait(&self, delay: Duration) -> Wake {
         let deadline = Instant::now() + delay;
-        let mut guard = self.state.lock().expect("state lock");
-        while !guard.1 {
+        let mut guard = self.lock();
+        loop {
+            if guard.stop {
+                return Wake::Stop;
+            }
+            if guard.restart {
+                return Wake::Restart;
+            }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return false;
+                return Wake::Elapsed;
             }
             guard = self
                 .changed
                 .wait_timeout(guard, left)
-                .expect("state lock")
+                .expect("control lock")
                 .0;
         }
+    }
+
+    /// Publish a final state and end supervision, unless a restart is pending
+    /// and no stop is: then `false`, and supervision goes on.
+    fn finish(&self, state: EngineState) -> bool {
+        let mut control = self.lock();
+        if control.restart && !control.stop {
+            return false;
+        }
+        control.state = state;
+        control.running = false;
+        self.changed.notify_all();
         true
     }
+}
+
+/// Everything a supervision thread needs, kept so a restart after a final
+/// failure can start a new one.
+struct Launch {
+    locate: Box<Locate>,
+    environ: Box<Environ>,
+    config: SupervisorConfig,
 }
 
 /// The running supervision thread and the state it publishes.
 pub struct Supervisor {
     shared: Arc<Shared>,
+    launch: Arc<Launch>,
     thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Supervisor {
     /// Start supervising: the engine is started at once on its own thread.
     pub fn start(locate: Box<Locate>, config: SupervisorConfig) -> Self {
+        Self::start_with_env(locate, Box::new(EngineEnv::default), config)
+    }
+
+    /// [`Supervisor::start`], with `environ` read before every start for the
+    /// extra environment of that engine process.
+    pub fn start_with_env(
+        locate: Box<Locate>,
+        environ: Box<Environ>,
+        config: SupervisorConfig,
+    ) -> Self {
         let shared = Arc::new(Shared {
-            state: Mutex::new((EngineState::Starting { attempt: 1 }, false)),
+            control: Mutex::new(Control {
+                state: EngineState::Starting { attempt: 1 },
+                stop: false,
+                restart: false,
+                running: true,
+            }),
             changed: Condvar::new(),
         });
-        let worker = Arc::clone(&shared);
-        let thread = std::thread::Builder::new()
-            .name("engine-supervisor".into())
-            .spawn(move || supervise(&worker, &*locate, config))
-            .expect("spawn the supervision thread");
+        let launch = Arc::new(Launch {
+            locate,
+            environ,
+            config,
+        });
+        let thread = spawn_supervision(&shared, &launch);
         Self {
             shared,
+            launch,
             thread: Mutex::new(Some(thread)),
         }
     }
 
+    /// Replace the engine with a fresh one, as the user asked, for example
+    /// because its environment changed. Unlike a crash this never spends the
+    /// restart budget: a running engine is stopped and started again, a
+    /// backoff is cut short, and after a final failure supervision starts
+    /// over. After a shutdown it does nothing.
+    pub fn restart(&self) {
+        let mut thread = self.thread.lock().expect("thread lock");
+        {
+            let mut control = self.shared.lock();
+            if control.stop {
+                return;
+            }
+            if control.running {
+                control.restart = true;
+                self.shared.changed.notify_all();
+                return;
+            }
+            control.running = true;
+            control.restart = false;
+            control.state = EngineState::Starting { attempt: 1 };
+            self.shared.changed.notify_all();
+        }
+        // The old thread published its final state and is returning.
+        if let Some(old) = thread.take() {
+            let _ = old.join();
+        }
+        *thread = Some(spawn_supervision(&self.shared, &self.launch));
+    }
+
     /// The current state.
     pub fn state(&self) -> EngineState {
-        self.shared.state.lock().expect("state lock").0.clone()
+        self.shared.lock().state.clone()
     }
 
     /// Wait until `accept` holds for the state, up to `timeout`.
@@ -196,10 +306,10 @@ impl Supervisor {
         accept: impl Fn(&EngineState) -> bool,
     ) -> Option<EngineState> {
         let deadline = Instant::now() + timeout;
-        let mut guard = self.shared.state.lock().expect("state lock");
+        let mut guard = self.shared.lock();
         loop {
-            if accept(&guard.0) {
-                return Some(guard.0.clone());
+            if accept(&guard.state) {
+                return Some(guard.state.clone());
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -209,7 +319,7 @@ impl Supervisor {
                 .shared
                 .changed
                 .wait_timeout(guard, left)
-                .expect("state lock")
+                .expect("control lock")
                 .0;
         }
     }
@@ -218,7 +328,7 @@ impl Supervisor {
     /// from any thread: a second caller waits until the first one's stop is
     /// complete, because the join happens under the thread lock.
     pub fn shutdown(&self) {
-        self.shared.state.lock().expect("state lock").1 = true;
+        self.shared.lock().stop = true;
         self.shared.changed.notify_all();
         let mut thread = self.thread.lock().expect("thread lock");
         if let Some(thread) = thread.take() {
@@ -227,42 +337,64 @@ impl Supervisor {
     }
 }
 
-/// The supervision loop: start, watch, restart within the budget, stop.
-fn supervise(shared: &Shared, locate: &Locate, config: SupervisorConfig) {
+fn spawn_supervision(shared: &Arc<Shared>, launch: &Arc<Launch>) -> JoinHandle<()> {
+    let shared = Arc::clone(shared);
+    let launch = Arc::clone(launch);
+    std::thread::Builder::new()
+        .name("engine-supervisor".into())
+        .spawn(move || supervise(&shared, &launch))
+        .expect("spawn the supervision thread")
+}
+
+/// The supervision loop: start, watch, restart within the budget, stop. A
+/// requested restart goes round the loop again without touching the budget.
+fn supervise(shared: &Shared, launch: &Launch) {
+    let config = launch.config;
     let mut budget = RestartBudget::new(config.policy);
     let mut attempt = 0u32;
     loop {
         if shared.stopping() {
-            shared.publish(EngineState::Stopped);
+            shared.finish(EngineState::Stopped);
             return;
         }
+        shared.take_restart();
         attempt += 1;
         shared.publish(EngineState::Starting { attempt });
-        let command = match locate() {
+        let command = match (launch.locate)() {
             Ok(command) => command,
             Err(detail) => {
-                shared.publish(EngineState::Failed {
+                let failed = EngineState::Failed {
                     reason: "engine_not_located".into(),
                     detail,
-                });
-                return;
-            }
-        };
-        let (reason, detail) =
-            match engine::start(&command, config.ready_timeout, &|| shared.stopping()) {
-                Ok(running) => match watch(shared, running, attempt, config) {
-                    Some(exit) => exit,
-                    None => {
-                        shared.publish(EngineState::Stopped);
-                        return;
-                    }
-                },
-                Err(engine::StartError::Cancelled) => {
-                    shared.publish(EngineState::Stopped);
+                };
+                if shared.finish(failed) {
                     return;
                 }
-                Err(error) => (error.reason().to_owned(), error.detail()),
-            };
+                continue;
+            }
+        };
+        let env = (launch.environ)();
+        let started = engine::start_with_env(&command, &env, config.ready_timeout, &|| {
+            shared.interrupted()
+        });
+        let (reason, detail) = match started {
+            Ok(running) => match watch(shared, running, attempt, config) {
+                Ended::Exited(reason, detail) => (reason, detail),
+                Ended::Stopped => {
+                    shared.finish(EngineState::Stopped);
+                    return;
+                }
+                Ended::Restart => continue,
+            },
+            Err(engine::StartError::Cancelled) => {
+                if shared.stopping() {
+                    shared.finish(EngineState::Stopped);
+                    return;
+                }
+                continue;
+            }
+            Err(error) => (error.reason().to_owned(), error.detail()),
+        };
         match budget.on_failure(Instant::now()) {
             Some(delay) => {
                 shared.publish(EngineState::Restarting {
@@ -271,27 +403,37 @@ fn supervise(shared: &Shared, locate: &Locate, config: SupervisorConfig) {
                     reason,
                     detail,
                 });
-                if shared.sleep_unless_stopped(delay) {
-                    shared.publish(EngineState::Stopped);
+                if shared.wait(delay) == Wake::Stop {
+                    shared.finish(EngineState::Stopped);
                     return;
                 }
             }
             None => {
-                shared.publish(EngineState::Failed { reason, detail });
-                return;
+                if shared.finish(EngineState::Failed { reason, detail }) {
+                    return;
+                }
             }
         }
     }
 }
 
-/// Publish a ready engine and watch it. `None` when it was stopped on request,
-/// otherwise why it exited.
+/// How a watched engine ended.
+enum Ended {
+    /// It exited on its own: why, for the budget.
+    Exited(String, String),
+    /// It was stopped because the shell is stopping.
+    Stopped,
+    /// It was stopped because a restart was asked for.
+    Restart,
+}
+
+/// Publish a ready engine and watch it until it exits or is stopped.
 fn watch(
     shared: &Shared,
     mut running: RunningEngine,
     attempt: u32,
     config: SupervisorConfig,
-) -> Option<(String, String)> {
+) -> Ended {
     shared.publish(EngineState::Ready {
         attempt,
         base_url: running.ready().base_url(),
@@ -302,11 +444,18 @@ fn watch(
         if let Some(status) = running.try_exited() {
             let detail = format!("the engine exited ({status}).\n{}", running.stderr_tail());
             running.stop(config.stop_grace);
-            return Some(("exited".into(), detail));
+            return Ended::Exited("exited".into(), detail);
         }
-        if shared.sleep_unless_stopped(config.poll_interval) {
-            running.stop(config.stop_grace);
-            return None;
+        match shared.wait(config.poll_interval) {
+            Wake::Elapsed => {}
+            Wake::Stop => {
+                running.stop(config.stop_grace);
+                return Ended::Stopped;
+            }
+            Wake::Restart => {
+                running.stop(config.stop_grace);
+                return Ended::Restart;
+            }
         }
     }
 }
@@ -558,6 +707,134 @@ mod tests {
         assert_eq!(sup.state(), EngineState::Stopped);
         assert!(!fake::alive(pid));
         sup.shutdown();
+    }
+
+    fn ready_attempt(n: u32) -> impl Fn(&EngineState) -> bool {
+        move |s| matches!(s, EngineState::Ready { attempt, .. } if *attempt == n)
+    }
+
+    #[test]
+    fn a_requested_restart_replaces_the_engine_without_spending_the_crash_budget() {
+        let dir = fake::scratch("sup-user-restart");
+        // A budget of one crash: after two requested restarts, a crash must
+        // still be restarted, which it is not if either request was counted.
+        let sup = Supervisor::start(fixed(counting(&dir)), fast(1));
+        let EngineState::Ready { pid, token, .. } = sup.wait_for(WAIT, is_ready).expect("ready")
+        else {
+            unreachable!()
+        };
+        sup.restart();
+        let EngineState::Ready {
+            pid: pid2,
+            token: token2,
+            ..
+        } = sup.wait_for(WAIT, ready_attempt(2)).expect("restarted")
+        else {
+            unreachable!()
+        };
+        assert_ne!(pid, pid2);
+        assert_ne!(token, token2);
+        assert!(fake::gone_within(pid, WAIT), "the old engine was stopped");
+        sup.restart();
+        let EngineState::Ready { pid: pid3, .. } = sup
+            .wait_for(WAIT, ready_attempt(3))
+            .expect("restarted again")
+        else {
+            unreachable!()
+        };
+        unsafe { libc::kill(pid3 as libc::pid_t, libc::SIGKILL) };
+        let after_crash = sup.wait_for(WAIT, |s| {
+            matches!(
+                s,
+                EngineState::Ready { attempt: 4, .. } | EngineState::Failed { .. }
+            )
+        });
+        assert!(
+            matches!(after_crash, Some(EngineState::Ready { attempt: 4, .. })),
+            "{after_crash:?}"
+        );
+        sup.shutdown();
+        assert_eq!(pids(&dir).len(), 4);
+    }
+
+    #[test]
+    fn each_start_reads_the_extra_environment_afresh() {
+        let dir = fake::scratch("sup-env");
+        let script = format!(
+            "IFS= read -r t; printf '%s\\n' \"${{OPENKOS_OPENAI_API_KEY-unset}}\" >> \"$1/keys\"; \
+             echo '{READY}'; cat > /dev/null"
+        );
+        let value = Arc::new(Mutex::new(None::<String>));
+        let source = Arc::clone(&value);
+        let environ: Box<Environ> = Box::new(move || {
+            let mut env = EngineEnv::default();
+            if let Some(key) = source.lock().expect("value").as_deref() {
+                env.set("OPENKOS_OPENAI_API_KEY", key);
+            }
+            env
+        });
+        let sup = Supervisor::start_with_env(fixed(fake::engine(&script, &dir)), environ, fast(0));
+        sup.wait_for(WAIT, ready_attempt(1)).expect("ready");
+        *value.lock().expect("value") = Some("sk-new".into());
+        sup.restart();
+        sup.wait_for(WAIT, ready_attempt(2)).expect("restarted");
+        *value.lock().expect("value") = None;
+        sup.restart();
+        sup.wait_for(WAIT, ready_attempt(3))
+            .expect("restarted again");
+        sup.shutdown();
+        let keys = std::fs::read_to_string(dir.join("keys")).expect("keys");
+        assert_eq!(
+            keys.lines().collect::<Vec<_>>(),
+            ["unset", "sk-new", "unset"]
+        );
+    }
+
+    #[test]
+    fn a_requested_restart_after_a_final_failure_supervises_again() {
+        let dir = fake::scratch("sup-revive");
+        let script =
+            format!("IFS= read -r t; [ -f \"$1/ok\" ] || exit 3; echo '{READY}'; cat > /dev/null");
+        let sup = Supervisor::start(fixed(fake::engine(&script, &dir)), fast(0));
+        sup.wait_for(WAIT, |s| matches!(s, EngineState::Failed { .. }))
+            .expect("failed");
+        std::fs::write(dir.join("ok"), b"1").expect("marker");
+        sup.restart();
+        sup.wait_for(WAIT, is_ready)
+            .expect("ready after the restart");
+        sup.shutdown();
+        assert_eq!(sup.state(), EngineState::Stopped);
+    }
+
+    #[test]
+    fn a_requested_restart_cuts_a_crash_backoff_short() {
+        let dir = fake::scratch("sup-cut-backoff");
+        let script =
+            format!("IFS= read -r t; [ -f \"$1/ok\" ] || exit 3; echo '{READY}'; cat > /dev/null");
+        let mut config = fast(3);
+        config.policy.initial_backoff = Duration::from_secs(30);
+        config.policy.max_backoff = Duration::from_secs(30);
+        let sup = Supervisor::start(fixed(fake::engine(&script, &dir)), config);
+        sup.wait_for(WAIT, |s| matches!(s, EngineState::Restarting { .. }))
+            .expect("restarting");
+        std::fs::write(dir.join("ok"), b"1").expect("marker");
+        let began = Instant::now();
+        sup.restart();
+        sup.wait_for(WAIT, is_ready).expect("ready");
+        assert!(began.elapsed() < Duration::from_secs(5));
+        sup.shutdown();
+    }
+
+    #[test]
+    fn a_restart_requested_after_shutdown_starts_nothing() {
+        let dir = fake::scratch("sup-restart-after-stop");
+        let sup = Supervisor::start(fixed(counting(&dir)), fast(3));
+        sup.wait_for(WAIT, is_ready).expect("ready");
+        sup.shutdown();
+        sup.restart();
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(sup.state(), EngineState::Stopped);
+        assert_eq!(pids(&dir).len(), 1);
     }
 
     /// Not a test on its own: the body of the force-quit probe below, run in a
