@@ -384,6 +384,14 @@ operations MUST be reachable as follows, and the server MUST call the matching
 | `GET /v1/pages?concept_id={id}` | `read_page` |
 | `POST /v1/unmerge/preview` | `preview_unmerge` |
 | `POST /v1/unmerge/apply` | `apply_unmerge` |
+| `GET /v1/merged` | `merged_concepts` |
+| `GET /v1/kept-distinct` | `kept_distinct` |
+| `POST /v1/reopen/preview` | `preview_reopen` |
+| `POST /v1/reopen/apply` | `apply_reopen` |
+| `POST /v1/unrelate/preview` | `preview_unrelate` |
+| `POST /v1/unrelate/apply` | `apply_unrelate` |
+| `POST /v1/tiers/preview` | `preview_tier_change` |
+| `POST /v1/tiers/apply` | `apply_tier_change` |
 | `POST /v1/judging/quote` | `quote_judging` |
 | `POST /v1/judging/runs` | `run_judging`, as a job (see the job requirement) |
 | `GET /v1/judging/runs/{id}` | the job's state |
@@ -395,8 +403,9 @@ unknown action, a kind outside the allowed values, a malformed echoed token,
 a wrong type) MUST be rejected with 422 and the standard error body, before any
 operation runs. The server MUST NOT add side effects: a `GET` MUST NOT write,
 take the workspace lock or call a model, as the corresponding Python reads do
-not. A Concept ID contains `/`, so the unmerge, history and page routes carry it in
-a query parameter or the body, never in a path segment.
+not. A Concept ID contains `/`, so the unmerge, history, page, reopen and
+unrelate routes carry it in a query parameter or the body, never in a path
+segment.
 
 #### Scenario: Status maps to the status read
 
@@ -457,6 +466,20 @@ a query parameter or the body, never in a path segment.
 - WHEN `GET /v1/pages?concept_id=<id>` is requested
 - THEN the response is 200 with the page's title, type, excerpt, sensitivity
   and source, and nothing is written
+
+#### Scenario: Combined pages map to the combined-pages read
+
+- GIVEN a page that absorbed another
+- WHEN `GET /v1/merged` is requested
+- THEN the response is 200 with one entry naming the page and its merge
+  record, and nothing is written
+
+#### Scenario: Kept-separate rulings map to their list
+
+- GIVEN a pair kept separate
+- WHEN `GET /v1/kept-distinct` is requested
+- THEN the response is 200 with one group naming both members, and nothing is
+  written
 
 ### Requirement: Responses Are The Python API's Result Types, Populated And Round-Tripping
 
@@ -637,6 +660,11 @@ mapping MUST be evaluated subclass-first and MUST be:
 | `NotUnmergeable("survivor_missing")` | 409 | `survivor_missing` | false |
 | `NotUnmergeable("not_merged")` | 409 | `not_merged` | false |
 | `NotUnmergeable("survivor_edited")` | 409 | `survivor_edited` | false |
+| `UndoStale` outcome | 409 | `stale` | false |
+| `NotUndoable("not_kept_distinct")` | 409 | `not_kept_distinct` | false |
+| `NotUndoable("not_related")` | 409 | `not_related` | false |
+| `NotUndoable("tier_unchanged")` | 409 | `tier_unchanged` | false |
+| `NotUndoable("unknown_type")` | 422 | `unknown_type` | false |
 | `RunRefused` outcome | 422 | `run_refused` | false |
 | A judging run already active | 409 | `run_active` | true |
 | `DriftDetected` | 409 | `write_drift` | true |
@@ -669,8 +697,6 @@ through this API and, if raised, MUST be reported as `internal_error`. The
 group's state by listing the decisions again; the `unmerge_interrupted` body
 carries no completed steps either: a client reads the survivor's merge history
 again.
-(Previously: the table had no unmerge rows: no `UnmergeStale`, `survivor_missing`,
-`not_merged`, `survivor_edited` or `unmerge_interrupted`.)
 
 #### Scenario: A stale decision is a 409
 
@@ -801,6 +827,15 @@ again.
 - WHEN the response is read
 - THEN the status is 500, the code is `unmerge_interrupted`, not `write_failed`,
   and `retryable` is false
+
+#### Scenario: An undo refusal is answered by its reason
+
+- GIVEN a reopen preview over a pair never kept separate, an unrelate preview
+  for an absent relation, a tier preview for the entry the type already has and
+  one for an unknown type
+- WHEN each is posted
+- THEN they are 409 `not_kept_distinct`, 409 `not_related`, 409
+  `tier_unchanged` and 422 `unknown_type`, and none is retryable
 
 ### Requirement: Writes Wait At Most Five Seconds For The Workspace Lock
 
@@ -1195,3 +1230,34 @@ fixed text of that code and MUST NOT contain the id. A request without
 - WHEN it is requested as `concept_id`
 - THEN the response is 404 with code `not_found` and no file outside the
   bundle is read
+
+### Requirement: The Undo Versions Travel Unchanged From Preview To Apply
+
+`POST /v1/reopen/apply`, `POST /v1/unrelate/apply` and `POST /v1/tiers/apply`
+MUST take the version their preview returned (`ReopenVersion`,
+`UnrelateVersion`, `TierChangeVersion`) echoed unchanged in `version`, and an
+optional `wait_seconds` capped as every write's is. A version whose digest no
+longer matches what its key plans MUST be answered 409 `stale` and write
+nothing; a key altered to one with nothing to undo is refused as its preview
+would be; an unknown top-level key MUST be 422 `invalid_request`. Each version MUST be one component of the
+published schema, the same in the preview's response and the apply's request.
+The tier preview's `tier` MUST be one of `static`, `slow`, `volatile` or `null`;
+any other value MUST be 422 `invalid_request` before the operation runs.
+
+#### Scenario: A reopen is applied with its echoed version
+
+- GIVEN a reopen preview over a kept-separate pair
+- WHEN its version is posted unchanged to `POST /v1/reopen/apply`
+- THEN the response is 200 with the reopened members and the warnings list
+
+#### Scenario: An altered unrelate version is stale
+
+- GIVEN an unrelate preview
+- WHEN its version is posted with a different `content_digest`
+- THEN the response is 409 `stale` and the page is unchanged
+
+#### Scenario: An unknown tier is rejected before the operation
+
+- GIVEN a tier preview request whose `tier` is `"sometimes"`
+- WHEN it is posted
+- THEN the response is 422 `invalid_request` and nothing ran

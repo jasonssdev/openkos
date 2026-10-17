@@ -75,7 +75,8 @@ decision queue (`POST /v1/queue/refresh`, a failure ignored) and reload To
 review. Undo on a connection MUST remove exactly the edge the plan wrote
 (`POST /v1/unrelate/preview`, then `/apply`). Undo on a how-quickly setting MUST
 restore the plan's `configured_tier`, removing the entry when it is `null`
-(`POST /v1/tiers/preview`, then `/apply`). Each undo previews and applies in one
+(`POST /v1/tiers/preview`, then `/apply`); when that setting is not one of the
+three tiers the confirmation offers no Undo. Each undo previews and applies in one
 step, echoing the version unchanged, retries a busy apply for up to five
 seconds, and on success replaces the confirmation with the brief's undone line
 and removes Undo. A stale or refused undo MUST be worded from the brief and MUST

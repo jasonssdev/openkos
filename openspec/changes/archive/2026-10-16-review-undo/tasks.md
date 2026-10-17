@@ -117,10 +117,10 @@ JSON and `schema.d.ts` are never hand-merged).
 
 - [x] S7.1 `docs/decision-wording.md`: the new copy, the #1466/#1467 gaps closed
   (landed with S6, beside the code that shows it).
-- [ ] S7.2 CHANGELOG entry.
-- [ ] S7.3 Merge the deltas into `openspec/specs/`, name-match every heading,
+- [x] S7.2 CHANGELOG entry.
+- [x] S7.3 Merge the deltas into `openspec/specs/`, name-match every heading,
   check each requirement against shipped code.
-- [ ] S7.4 ADR-0067 Accepted in all three places.
-- [ ] S7.5 Move the change to `openspec/changes/archive/2026-10-16-review-undo/`
+- [x] S7.4 ADR-0067 Accepted in all three places.
+- [x] S7.5 Move the change to `openspec/changes/archive/2026-10-16-review-undo/`
   with `archive-report.md`; verify on `origin/main` that the original folder is
   gone.
