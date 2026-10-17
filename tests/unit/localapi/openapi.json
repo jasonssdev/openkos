@@ -482,6 +482,194 @@
         "title": "ContradictionDetail",
         "type": "object"
       },
+      "ContradictionReopenApplyRequest": {
+        "description": "The version the contradiction reopen preview issued (echoed unchanged)\nand how long to wait for the workspace lock; a client can shorten the wait\nonly.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/ContradictionReopenVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "ContradictionReopenApplyRequest",
+        "type": "object"
+      },
+      "ContradictionReopenPreview": {
+        "description": "Reopening the declined contradiction over the pair: it may be pointed out\nagain.",
+        "properties": {
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ContradictionReopenVersion"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "merged_absorbed_id",
+          "version"
+        ],
+        "title": "ContradictionReopenPreview",
+        "type": "object"
+      },
+      "ContradictionReopenPreviewRequest": {
+        "additionalProperties": false,
+        "description": "The pair of the declined contradiction to reopen, in either order, and\nthe page combined into one of them when the contradiction was found inside a\ncombined page.",
+        "properties": {
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id"
+        ],
+        "title": "ContradictionReopenPreviewRequest",
+        "type": "object"
+      },
+      "ContradictionReopenResponse": {
+        "additionalProperties": false,
+        "description": "What was reopened, and the warnings the apply raised along the way.",
+        "properties": {
+          "reopened": {
+            "$ref": "#/components/schemas/ContradictionReopened"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "reopened",
+          "warnings"
+        ],
+        "title": "ContradictionReopenResponse",
+        "type": "object"
+      },
+      "ContradictionReopenVersion": {
+        "description": "The version a stateless caller reopens a declined contradiction against:\necho it unchanged. `content_digest` covers the pair, the discriminator and\nthe sidecar holding the decline.",
+        "properties": {
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "merged_absorbed_id",
+          "content_digest"
+        ],
+        "title": "ContradictionReopenVersion",
+        "type": "object"
+      },
+      "ContradictionReopened": {
+        "additionalProperties": false,
+        "description": "The decline was reopened. `commit_sha` is `None` when its commit could not\nbe made (the write itself landed).",
+        "properties": {
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "merged_absorbed_id",
+          "commit_sha"
+        ],
+        "title": "ContradictionReopened",
+        "type": "object"
+      },
       "Decision": {
         "additionalProperties": false,
         "description": "One open decision, as data a client can render.",
@@ -719,6 +907,61 @@
           "kind"
         ],
         "title": "DeclinePlan",
+        "type": "object"
+      },
+      "DeclinedContradiction": {
+        "additionalProperties": false,
+        "description": "A contradiction a person chose to leave as it is, and when.",
+        "properties": {
+          "decided_at": {
+            "title": "Decided At",
+            "type": "string"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "merged_absorbed_id",
+          "decided_at"
+        ],
+        "title": "DeclinedContradiction",
+        "type": "object"
+      },
+      "DeclinedContradictionList": {
+        "additionalProperties": false,
+        "description": "Every declined contradiction, newest first, in an envelope that leaves\nroom for additive fields.",
+        "properties": {
+          "contradictions": {
+            "items": {
+              "$ref": "#/components/schemas/DeclinedContradiction"
+            },
+            "title": "Contradictions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "contradictions"
+        ],
+        "title": "DeclinedContradictionList",
         "type": "object"
       },
       "ErrorBody": {
@@ -5260,6 +5503,210 @@
         "summary": "Ask Status"
       }
     },
+    "/v1/contradictions/reopen/apply": {
+      "post": {
+        "operationId": "contradiction_reopen_apply_v1_contradictions_reopen_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContradictionReopenApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContradictionReopenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Contradiction Reopen Apply"
+      }
+    },
+    "/v1/contradictions/reopen/preview": {
+      "post": {
+        "operationId": "contradiction_reopen_preview_v1_contradictions_reopen_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContradictionReopenPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContradictionReopenPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Contradiction Reopen Preview"
+      }
+    },
     "/v1/decisions": {
       "get": {
         "operationId": "decisions_v1_decisions_get",
@@ -5765,6 +6212,69 @@
           }
         ],
         "summary": "Preview Finding"
+      }
+    },
+    "/v1/declined-contradictions": {
+      "get": {
+        "operationId": "declined_contradictions_v1_declined_contradictions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeclinedContradictionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Declined Contradictions"
       }
     },
     "/v1/health": {

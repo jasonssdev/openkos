@@ -17,7 +17,11 @@ from pathlib import Path
 from typing import Literal
 
 from openkos import config, fsio
-from openkos.application import curate_decisions, duplicates_service
+from openkos.application import (
+    contradictions_service,
+    curate_decisions,
+    duplicates_service,
+)
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import pending as application_pending
 from openkos.application.write_gate import Refused, WriteFailed
@@ -25,7 +29,12 @@ from openkos.bundle import decisions as bundle_decisions
 from openkos.model import relations, types
 
 UndoReason = Literal[
-    "not_kept_distinct", "not_related", "tier_unchanged", "unknown_type"
+    "not_kept_distinct",
+    "not_related",
+    "tier_unchanged",
+    "unknown_type",
+    "not_declined",
+    "not_reconciled",
 ]
 
 
@@ -166,6 +175,163 @@ def apply_reopen(
             f"openkos: reopen identity {'/'.join(plan.member_ids)}",
         )
     return Reopened(member_ids=plan.member_ids, commit_sha=commit_sha)
+
+
+# -- a declined contradiction ------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class DeclinedContradictionRecord:
+    """A contradiction a person declined and has not reopened."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    decided_at: str
+
+
+def declined_contradictions(root: Path) -> tuple[DeclinedContradictionRecord, ...]:
+    """Every declined contradiction record, newest first, then by pair and
+    discriminator. Walks the decisions sidecars as `contradictions --declined`
+    does, without its findings join, so no database is opened."""
+    bundle_dir = config.WorkspaceLayout(root).bundle_dir
+    records: list[DeclinedContradictionRecord] = []
+    for path in bundle_decisions.iter_decisions(bundle_dir):
+        # Read the WALKED path, never one rebuilt from the sidecar's content.
+        for record in bundle_decisions.read_decisions_at(path):
+            if record.state == "declined":
+                records.append(
+                    DeclinedContradictionRecord(
+                        first_id=record.pair_ids[0],
+                        second_id=record.pair_ids[1],
+                        merged_absorbed_id=record.merged_absorbed_id,
+                        decided_at=record.decided_at,
+                    )
+                )
+    by_key = sorted(
+        records,
+        key=lambda r: (r.first_id, r.second_id, r.merged_absorbed_id or ""),
+    )
+    return tuple(
+        sorted(by_key, key=lambda r: _decided_time(r.decided_at), reverse=True)
+    )
+
+
+@dataclass(frozen=True)
+class ContradictionReopenPlan:
+    """Reopening the declined contradiction over the sorted pair and the
+    merged-body discriminator."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    content_digest: str
+
+
+def _finding_identity(
+    first_id: str, second_id: str, merged_absorbed_id: str | None
+) -> tuple[tuple[str, str], str | None] | None:
+    """The sorted, canonical pair and discriminator, or `None` when an id is not
+    a valid Concept ID."""
+    try:
+        first, second = sorted(
+            application_lifecycle.canonicalize_concept_id(concept_id)
+            for concept_id in (first_id, second_id)
+        )
+        merged = (
+            None
+            if merged_absorbed_id is None
+            else application_lifecycle.canonicalize_concept_id(merged_absorbed_id)
+        )
+    except ValueError:
+        return None
+    return (first, second), merged
+
+
+def preview_reopen_contradiction(
+    root: Path, first_id: str, second_id: str, merged_absorbed_id: str | None
+) -> ContradictionReopenPlan | UndoRefusal:
+    """Plan reopening the declined contradiction over exactly this pair (either
+    order) and discriminator.
+
+    The digest covers the pair, the discriminator and the bytes of the sidecar
+    holding the record. Writes nothing and takes no lock."""
+    layout = config.WorkspaceLayout(root)
+    identity = _finding_identity(first_id, second_id, merged_absorbed_id)
+    if identity is None:
+        return UndoRefusal("not_declined")
+    pair, merged = identity
+    if not application_pending.is_contradiction_declined(layout, pair, merged):
+        return UndoRefusal("not_declined")
+    sidecar = bundle_decisions.decisions_path_for(pair[0], layout.bundle_dir)
+    lines = [
+        f"pair\t{pair[0]}\t{pair[1]}",
+        f"merged\t{'-' if merged is None else merged}",
+        f"sidecar\t{_file_digest(sidecar)}",
+    ]
+    return ContradictionReopenPlan(
+        first_id=pair[0],
+        second_id=pair[1],
+        merged_absorbed_id=merged,
+        content_digest=_digest(lines),
+    )
+
+
+@dataclass(frozen=True)
+class ContradictionReopened:
+    """The decline was reopened. `commit_sha` is `None` when the commit could
+    not be made (the write itself landed)."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    commit_sha: str | None
+
+
+def apply_reopen_contradiction(
+    root: Path,
+    first_id: str,
+    second_id: str,
+    merged_absorbed_id: str | None,
+    content_digest: str,
+    *,
+    ports: curate_decisions.DecisionPorts,
+) -> ContradictionReopened | UndoRefusal | UndoStale:
+    """Reopen the decline previewed as `content_digest`, under one lock.
+
+    Plans again inside the commit section; a refusal or a moved digest writes
+    nothing. Otherwise the record is rewritten with state `open`, as
+    `contradictions --reopen` writes it, and its one sidecar is committed."""
+    layout = config.WorkspaceLayout(root)
+    with ports.commit_section():
+        plan = preview_reopen_contradiction(
+            root, first_id, second_id, merged_absorbed_id
+        )
+        if isinstance(plan, UndoRefusal):
+            return plan
+        if plan.content_digest != content_digest:
+            return UndoStale()
+        pair = (plan.first_id, plan.second_id)
+        try:
+            rel_path = contradictions_service.apply_contradiction_decision(
+                layout, pair, plan.merged_absorbed_id, target_state="open"
+            )
+        except (OSError, ValueError) as exc:
+            raise WriteFailed("reopen", pair, str(exc)) from exc
+        suffix = (
+            "" if plan.merged_absorbed_id is None else f" ({plan.merged_absorbed_id})"
+        )
+        commit_sha = ports.autocommit(
+            root,
+            [rel_path],
+            f"openkos: reopen contradiction {pair[0]} <-> {pair[1]}{suffix}",
+        )
+    return ContradictionReopened(
+        first_id=plan.first_id,
+        second_id=plan.second_id,
+        merged_absorbed_id=plan.merged_absorbed_id,
+        commit_sha=commit_sha,
+    )
 
 
 # -- a connection ---------------------------------------------------------- #

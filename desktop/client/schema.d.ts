@@ -36,6 +36,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/contradictions/reopen/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Contradiction Reopen Apply */
+        post: operations["contradiction_reopen_apply_v1_contradictions_reopen_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/contradictions/reopen/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Contradiction Reopen Preview */
+        post: operations["contradiction_reopen_preview_v1_contradictions_reopen_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/decisions": {
         parameters: {
             query?: never;
@@ -115,6 +149,23 @@ export interface paths {
         put?: never;
         /** Preview Finding */
         post: operations["preview_finding_v1_decisions__decision_key__preview_finding_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/declined-contradictions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Declined Contradictions */
+        get: operations["declined_contradictions_v1_declined_contradictions_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -948,6 +999,88 @@ export interface components {
             second_id: string;
         };
         /**
+         * ContradictionReopenApplyRequest
+         * @description The version the contradiction reopen preview issued (echoed unchanged)
+         *     and how long to wait for the workspace lock; a client can shorten the wait
+         *     only.
+         */
+        ContradictionReopenApplyRequest: {
+            version: components["schemas"]["ContradictionReopenVersion"];
+            /**
+             * Wait Seconds
+             * @default 5
+             */
+            wait_seconds?: number;
+        };
+        /**
+         * ContradictionReopenPreview
+         * @description Reopening the declined contradiction over the pair: it may be pointed out
+         *     again.
+         */
+        ContradictionReopenPreview: {
+            /** First Id */
+            first_id: string;
+            /** Merged Absorbed Id */
+            merged_absorbed_id: string | null;
+            /** Second Id */
+            second_id: string;
+            version: components["schemas"]["ContradictionReopenVersion"];
+        };
+        /**
+         * ContradictionReopenPreviewRequest
+         * @description The pair of the declined contradiction to reopen, in either order, and
+         *     the page combined into one of them when the contradiction was found inside a
+         *     combined page.
+         */
+        ContradictionReopenPreviewRequest: {
+            /** First Id */
+            first_id: string;
+            /** Merged Absorbed Id */
+            merged_absorbed_id?: string | null;
+            /** Second Id */
+            second_id: string;
+        };
+        /**
+         * ContradictionReopenResponse
+         * @description What was reopened, and the warnings the apply raised along the way.
+         */
+        ContradictionReopenResponse: {
+            reopened: components["schemas"]["ContradictionReopened"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * ContradictionReopenVersion
+         * @description The version a stateless caller reopens a declined contradiction against:
+         *     echo it unchanged. `content_digest` covers the pair, the discriminator and
+         *     the sidecar holding the decline.
+         */
+        ContradictionReopenVersion: {
+            /** Content Digest */
+            content_digest: string;
+            /** First Id */
+            first_id: string;
+            /** Merged Absorbed Id */
+            merged_absorbed_id: string | null;
+            /** Second Id */
+            second_id: string;
+        };
+        /**
+         * ContradictionReopened
+         * @description The decline was reopened. `commit_sha` is `None` when its commit could not
+         *     be made (the write itself landed).
+         */
+        ContradictionReopened: {
+            /** Commit Sha */
+            commit_sha: string | null;
+            /** First Id */
+            first_id: string;
+            /** Merged Absorbed Id */
+            merged_absorbed_id: string | null;
+            /** Second Id */
+            second_id: string;
+        };
+        /**
          * Decision
          * @description One open decision, as data a client can render.
          */
@@ -1036,6 +1169,29 @@ export interface components {
             merged_absorbed_id: string | null;
             /** Second Id */
             second_id: string;
+        };
+        /**
+         * DeclinedContradiction
+         * @description A contradiction a person chose to leave as it is, and when.
+         */
+        DeclinedContradiction: {
+            /** Decided At */
+            decided_at: string;
+            /** First Id */
+            first_id: string;
+            /** Merged Absorbed Id */
+            merged_absorbed_id: string | null;
+            /** Second Id */
+            second_id: string;
+        };
+        /**
+         * DeclinedContradictionList
+         * @description Every declined contradiction, newest first, in an envelope that leaves
+         *     room for additive fields.
+         */
+        DeclinedContradictionList: {
+            /** Contradictions */
+            contradictions: components["schemas"]["DeclinedContradiction"][];
         };
         /**
          * ErrorBody
@@ -3047,6 +3203,173 @@ export interface operations {
             };
         };
     };
+    contradiction_reopen_apply_v1_contradictions_reopen_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContradictionReopenApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContradictionReopenResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    /** @description Seconds to wait before retrying a busy workspace. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    contradiction_reopen_preview_v1_contradictions_reopen_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContradictionReopenPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContradictionReopenPreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     decisions_v1_decisions_get: {
         parameters: {
             query?: never;
@@ -3416,6 +3739,62 @@ export interface operations {
             };
             /** @description Content Too Large */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    declined_contradictions_v1_declined_contradictions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeclinedContradictionList"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

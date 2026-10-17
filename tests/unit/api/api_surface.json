@@ -320,6 +320,87 @@
       "kind": "dataclass",
       "members": {}
     },
+    "ContradictionReopenPreview": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "merged_absorbed_id"
+        },
+        {
+          "annotation": "ContradictionReopenVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ContradictionReopenVersion": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "merged_absorbed_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ContradictionReopened": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "merged_absorbed_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "commit_sha"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "Decision": {
       "fields": [
         {
@@ -462,6 +543,33 @@
           "annotation": "Literal['decline']",
           "default": true,
           "name": "kind"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "DeclinedContradiction": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "merged_absorbed_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "decided_at"
         }
       ],
       "frozen": true,
@@ -1718,7 +1826,7 @@
     "NotUndoable": {
       "fields": [
         {
-          "annotation": "Literal['not_kept_distinct', 'not_related', 'tier_unchanged', 'unknown_type']",
+          "annotation": "Literal['not_kept_distinct', 'not_related', 'tier_unchanged', 'unknown_type', 'not_declined', 'not_reconciled']",
           "default": false,
           "name": "reason"
         }
@@ -3577,6 +3685,36 @@
       ],
       "returns": "Reopened | NotUndoable | UndoStale"
     },
+    "apply_reopen_contradiction": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "ContradictionReopenVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "ContradictionReopened | NotUndoable | UndoStale"
+    },
     "apply_sensitivity": {
       "kind": "function",
       "parameters": [
@@ -3738,6 +3876,18 @@
         }
       ],
       "returns": "Answer"
+    },
+    "declined_contradictions": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "tuple[DeclinedContradiction, ...]"
     },
     "kept_distinct": {
       "kind": "function",
@@ -3906,6 +4056,36 @@
         }
       ],
       "returns": "ReopenPreview | NotUndoable"
+    },
+    "preview_reopen_contradiction": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "second_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "merged_absorbed_id"
+        }
+      ],
+      "returns": "ContradictionReopenPreview | NotUndoable"
     },
     "preview_sensitivity": {
       "kind": "function",

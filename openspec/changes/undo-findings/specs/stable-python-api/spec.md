@@ -17,8 +17,7 @@ version, *, wait_seconds=0.0, on_warning=None)`. The preview MUST return a
 `ContradictionReopenVersion`, whose `content_digest` covers the pair, the
 discriminator and the bytes of the sidecar holding the record, or
 `NotUndoable("not_declined")` when no declined record for exactly that pair and
-discriminator exists (an id that is not a valid Concept ID, or one page named
-twice, included). The pair MAY be given in either order. The preview MUST NOT
+discriminator exists (an id that is not a valid Concept ID included). The pair MAY be given in either order. The preview MUST NOT
 take the lock, build a client or write.
 
 The apply MUST take the workspace lock once, waiting at most `wait_seconds`

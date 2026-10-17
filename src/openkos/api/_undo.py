@@ -1,6 +1,6 @@
-"""Undoing a review choice (ADR-0067): a keep-separate ruling is reopened, a
-typed relation removed, and a type's tier set or restored; the rulings that can
-be reopened are listed.
+"""Undoing a review choice (ADR-0067, ADR-0074): a keep-separate ruling is
+reopened, a typed relation removed, a type's tier set or restored, and a
+declined contradiction reopened; what can be reopened is listed.
 
 An undo is keyed by what the choice wrote, never by a decision key: the queue
 row was resolved when the choice was applied, and the CLI writes the same files
@@ -25,10 +25,18 @@ class NotUndoable:
     `not_kept_distinct`: no declined ruling over exactly these members.
     `not_related`: the source page holds no such typed relation, or a page no
     longer exists. `tier_unchanged`: the type's setting already is the one
-    asked for. `unknown_type`: not a concept type the engine knows."""
+    asked for. `unknown_type`: not a concept type the engine knows.
+    `not_declined`: no declined contradiction over exactly this pair and
+    discriminator. `not_reconciled`: the pair holds no reconcile resolution, or
+    holds disagreeing ones, or a page no longer exists."""
 
     reason: Literal[
-        "not_kept_distinct", "not_related", "tier_unchanged", "unknown_type"
+        "not_kept_distinct",
+        "not_related",
+        "tier_unchanged",
+        "unknown_type",
+        "not_declined",
+        "not_reconciled",
     ]
 
 
@@ -142,6 +150,140 @@ def apply_reopen(
     if isinstance(result, undo_service.UndoStale):
         return UndoStale()
     return Reopened(member_ids=result.member_ids, commit_sha=result.commit_sha)
+
+
+# -- a declined contradiction --------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class DeclinedContradiction:
+    """A contradiction a person chose to leave as it is, and when."""
+
+    first_id: str
+    second_id: str
+    """The pair, sorted."""
+    merged_absorbed_id: str | None
+    """The page combined into `first_id` or `second_id` whose content the
+    contradiction was found in, or `None` for one between the two pages."""
+    decided_at: str
+    """When the decline was recorded (ISO 8601)."""
+
+
+@dataclass(frozen=True)
+class ContradictionReopenVersion:
+    """The version a stateless caller reopens a declined contradiction against:
+    echo it unchanged. `content_digest` covers the pair, the discriminator and
+    the sidecar holding the decline."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    content_digest: str
+
+
+@dataclass(frozen=True)
+class ContradictionReopenPreview:
+    """Reopening the declined contradiction over the pair: it may be pointed out
+    again."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    version: ContradictionReopenVersion
+
+
+@dataclass(frozen=True)
+class ContradictionReopened:
+    """The decline was reopened. `commit_sha` is `None` when its commit could not
+    be made (the write itself landed)."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    commit_sha: str | None
+
+
+def declined_contradictions(workspace: Workspace) -> tuple[DeclinedContradiction, ...]:
+    """Every contradiction a person declined and has not reopened, newest first.
+    Reads the decisions sidecars only: takes no lock, opens no database, builds
+    no client and writes nothing."""
+    return tuple(
+        DeclinedContradiction(
+            first_id=record.first_id,
+            second_id=record.second_id,
+            merged_absorbed_id=record.merged_absorbed_id,
+            decided_at=record.decided_at,
+        )
+        for record in undo_service.declined_contradictions(workspace.root)
+    )
+
+
+def preview_reopen_contradiction(
+    workspace: Workspace,
+    first_id: str,
+    second_id: str,
+    merged_absorbed_id: str | None = None,
+) -> ContradictionReopenPreview | NotUndoable:
+    """What reopening the declined contradiction over this pair (in either
+    order) and `merged_absorbed_id` would do, with the version to apply it
+    against. A decline over the pair with another discriminator is a different
+    one. Writes nothing, takes no lock, builds no client."""
+    plan = undo_service.preview_reopen_contradiction(
+        workspace.root, first_id, second_id, merged_absorbed_id
+    )
+    if isinstance(plan, undo_service.UndoRefusal):
+        return _refusal(plan)
+    return ContradictionReopenPreview(
+        first_id=plan.first_id,
+        second_id=plan.second_id,
+        merged_absorbed_id=plan.merged_absorbed_id,
+        version=ContradictionReopenVersion(
+            first_id=plan.first_id,
+            second_id=plan.second_id,
+            merged_absorbed_id=plan.merged_absorbed_id,
+            content_digest=plan.content_digest,
+        ),
+    )
+
+
+def apply_reopen_contradiction(
+    workspace: Workspace,
+    version: ContradictionReopenVersion,
+    *,
+    wait_seconds: float = 0.0,
+    on_warning: Callable[[str], None] | None = None,
+) -> ContradictionReopened | NotUndoable | UndoStale:
+    """Reopen the declined contradiction `version` was previewed for, as
+    `openkos contradictions --reopen` does.
+
+    The lock is taken once, as `apply_reopen` takes it, and held while the plan
+    is made again and written. A changed decline or version is the returned
+    `UndoStale`, a decline no longer in force the returned `NotUndoable`;
+    neither writes anything. The decline's sidecar is committed on its own; a
+    commit that cannot be made is reported once through `on_warning`. No
+    decision is put back in the queue: the contradiction is pointed out again
+    the next time contradictions are checked."""
+    wait = _wiring.validated_wait(wait_seconds)
+    result = undo_service.apply_reopen_contradiction(
+        workspace.root,
+        version.first_id,
+        version.second_id,
+        version.merged_absorbed_id,
+        version.content_digest,
+        ports=_wiring.decision_ports(
+            workspace, wait_seconds=wait, on_warning=on_warning, what="the undo"
+        ),
+    )
+    if isinstance(result, undo_service.UndoRefusal):
+        return _refusal(result)
+    if isinstance(result, undo_service.UndoStale):
+        return UndoStale()
+    return ContradictionReopened(
+        first_id=result.first_id,
+        second_id=result.second_id,
+        merged_absorbed_id=result.merged_absorbed_id,
+        commit_sha=result.commit_sha,
+    )
 
 
 # -- a connection ------------------------------------------------------------- #

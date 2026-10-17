@@ -89,7 +89,7 @@ record is a second truth to keep in sync, and the CLI's reconciles have none.
 ### D3. Refusals
 
 `NotUndoable` gains `not_declined` (no declined record for exactly this pair
-and discriminator, an invalid id or a pair of one page included) and
+and discriminator, an invalid id included) and
 `not_reconciled` (the pair holds no reconcile resolution, holds disagreeing
 ones, or a page no longer exists, or an id is invalid). Both are 409 over HTTP,
 as `not_kept_distinct` and `not_related` are. A disagreeing (`mixed`) pair is

@@ -239,6 +239,24 @@ describe("the requests", () => {
       "/v1/reopen/apply",
       { version: { member_ids: ["a", "b"], content_digest: "d" } },
     ],
+    ["declinedContradictions", (c) => c.declinedContradictions(), "GET", "/v1/declined-contradictions", null],
+    [
+      "previewReopenContradiction",
+      (c) => c.previewReopenContradiction({ first_id: "a", second_id: "b", merged_absorbed_id: null }),
+      "POST",
+      "/v1/contradictions/reopen/preview",
+      { first_id: "a", second_id: "b", merged_absorbed_id: null },
+    ],
+    [
+      "applyReopenContradiction",
+      (c) =>
+        c.applyReopenContradiction({
+          version: { first_id: "a", second_id: "b", merged_absorbed_id: null, content_digest: "d" },
+        }),
+      "POST",
+      "/v1/contradictions/reopen/apply",
+      { version: { first_id: "a", second_id: "b", merged_absorbed_id: null, content_digest: "d" } },
+    ],
     [
       "previewSensitivity",
       (c) => c.previewSensitivity({ concept_id: "concepts/a", level: "confidential" }),

@@ -63,6 +63,8 @@ NOT_KEPT_DISTINCT: Final = "not_kept_distinct"
 NOT_RELATED: Final = "not_related"
 TIER_UNCHANGED: Final = "tier_unchanged"
 UNKNOWN_TYPE: Final = "unknown_type"
+NOT_DECLINED: Final = "not_declined"
+NOT_RECONCILED: Final = "not_reconciled"
 
 # Judging rows.
 QUOTE_STALE: Final = "quote_stale"
@@ -352,6 +354,18 @@ _NOT_UNDOABLE: Final[Mapping[str, tuple[int, str, bool, str]]] = {
         UNKNOWN_TYPE,
         False,
         "that is not a concept type the engine knows",
+    ),
+    "not_declined": (
+        409,
+        NOT_DECLINED,
+        False,
+        "this contradiction is not recorded as declined",
+    ),
+    "not_reconciled": (
+        409,
+        NOT_RECONCILED,
+        False,
+        "these concepts hold no reconcile resolution, or a concept no longer exists",
     ),
 }
 

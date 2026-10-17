@@ -32,26 +32,32 @@ one is squash-merged; generated snapshots are regenerated, never hand-merged.
 
 ## S1 Plan
 
-- [ ] S1.1 `proposal.md`, `design.md`, `tasks.md` and the two delta specs.
-- [ ] S1.2 ADR-0074 (Proposed) and its README row; `test_adr_index.py` passes.
+- [x] S1.1 `proposal.md`, `design.md`, `tasks.md` and the two delta specs.
+- [x] S1.2 ADR-0074 (Proposed) and its README row; `test_adr_index.py` passes.
 
 ## S2 Reopen a decline (P1, P3, H1)
 
-- [ ] S2.1 RED: application tests for `declined_contradictions`,
+- [x] S2.1 RED: application tests for `declined_contradictions`,
   `preview_reopen_contradiction`, `apply_reopen_contradiction` over records
   written by `apply_contradiction_decision`: ordering, refusals (no record, an
-  open record, the other discriminator, invalid ids, one page twice), digest
+  open record, the other discriminator, invalid ids), digest
   stability, stale on a rewritten sidecar, busy lock, plan inside the section,
   one commit of the sidecar.
-- [ ] S2.2 GREEN: `undo_service` reopen-contradiction (D1, D3-D5).
-- [ ] S2.3 Facade: `DeclinedContradiction`, `ContradictionReopenPreview`,
+- [x] S2.2 GREEN: `undo_service` reopen-contradiction (D1, D3-D5).
+- [x] S2.3 Facade: `DeclinedContradiction`, `ContradictionReopenPreview`,
   `ContradictionReopenVersion`, `ContradictionReopened`, `not_declined`;
   exports; surface snapshot (classifier additive). Facade tests over a decline
   made through `preview_finding` / `apply_decision`.
-- [ ] S2.4 Routes, `not_declined` row, OpenAPI snapshot, `pnpm --dir desktop
+- [x] S2.4 Routes, `not_declined` row, OpenAPI snapshot, `pnpm --dir desktop
   generate`, client methods, `ERROR_CODES`, client tests.
-- [ ] S2.5 Mutation-check the declined-state test, the digest lines and the
-  stale comparison.
+- [x] S2.5 Mutation-check the declined-state test, the digest lines and the
+  stale comparison. Eight mutations: the declined filter, both digest lines,
+  the declined check, the stale comparison and both orderings were caught (the
+  tie-order survivor led to a fourth page in its test). A one-page-twice guard
+  survived as redundant with the record lookup and was removed: a decline
+  recorded over one page twice can be reopened like any other.
+- [x] S2.6 `docs/decision-wording.md`: Undo on "Left as they are." and the
+  `not_declined` row (landed with this slice, beside the code it words).
 
 ## S3 Undo a reconcile (P2, P3, H1)
 

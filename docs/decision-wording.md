@@ -178,9 +178,11 @@ The screen shows the current setting and the suggestion, each by its plain line,
 
 **Found inside a combined page.** When the detail has a `merged_absorbed_id`, the disagreement is between a page and one that was combined into it, and only `decline` and `skip` are offered (`reconcile` is withheld as `merged_content`). The question reads: "Part of '{first title}' disagrees with what was combined into it." Options: **Leave it as it is** ("Nothing changes on the page. We won't point this out again.") and **Decide later**, with one line under them: "If combining them was a mistake, you can split it again under 'Pages you combined'."
 
-**Confirmations:** "Marked '{title}' as out of date." · "Noted that both are right." · "Left as they are." ("Left as it is." for one found inside a combined page). The page named is the plan's `deprecates_id`. No Undo is offered yet (#1497); the confirmation does not mention one.
+**Confirmations:** "Marked '{title}' as out of date." · "Noted that both are right." · "Left as they are." ("Left as it is." for one found inside a combined page). The page named is the plan's `deprecates_id`.
 
 **In To review,** the item is named by both pages' titles, with the question under them; one found inside a combined page is named by that page alone.
+
+**Undo:** "Left as they are." offers **Undo** (`preview_reopen_contradiction` with the pair and the detail's `merged_absorbed_id`, then `apply_reopen_contradiction`; `contradictions --reopen` on the CLI). The undo confirms "Undone. We'll point this out again the next time your pages are checked." It does not come back to To review at once: the engine finds it again on its next check of the pages, without asking the AI model again when neither page changed. Later, under the library's settings, "Disagreements you left as they are" lists each with **Point this out again** (the same operation; the list is `declined_contradictions`, `contradictions --declined` on the CLI). The other two confirmations offer no Undo yet (#1497).
 
 ## A newer decision — "Does this replace the earlier one?"
 
@@ -310,6 +312,7 @@ Every message says whether anything changed, and offers the one action that help
 | An undo finds the pages no longer kept separate | `not_kept_distinct` | "These pages aren't kept separate any more." | **OK** |
 | An undo finds the connection already gone | `not_related` | "These pages aren't connected any more." | **OK** |
 | An undo finds the setting already put back | `tier_unchanged` | "This setting is already as it was." | **OK** |
+| An undo finds the disagreement no longer left as it is | `not_declined` | "This has already been undone." | **OK** |
 | The page was changed after it was combined | `survivor_edited` | "This page was changed after it was combined, so it can't be split here." | **OK** only: the app does not offer to split anyway (#1442) |
 | Only some of the later combines were split | `unmerge_interrupted` | "Only some of these were split. Each page that was split is back as it was." | reload **(H)** |
 | The pages changed and the question is gone | `stale`, then not listed | "These pages changed, and this question no longer applies." | back to To review |
