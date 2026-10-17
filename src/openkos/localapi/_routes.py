@@ -32,6 +32,9 @@ from openkos.localapi._models import (
     UnmergeApplyRequest,
     UnmergePreviewRequest,
     UnmergeResponse,
+    UnrelateApplyRequest,
+    UnrelatePreviewRequest,
+    UnrelateResponse,
 )
 from openkos.localapi._runs import RunRegistry
 
@@ -289,6 +292,40 @@ def make_router() -> APIRouter:
         )
         if isinstance(result, api.Reopened):
             return ReopenResponse(reopened=result, warnings=warnings)
+        raise _errors.outcome_problem(result)
+
+    @router.post("/unrelate/preview", responses=_errors_of(409, 413))
+    def unrelate_preview(
+        body: UnrelatePreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.UnrelatePreview:
+        result = invoke(
+            lambda: api.preview_unrelate(
+                workspace, body.source_id, body.relation_type, body.target_id
+            )
+        )
+        if isinstance(result, api.UnrelatePreview):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post(
+        "/unrelate/apply", responses=_errors_of(409, 413, 503, retry_after=True)
+    )
+    def unrelate_apply(
+        body: UnrelateApplyRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> UnrelateResponse:
+        warnings: list[str] = []
+        result = invoke(
+            lambda: api.apply_unrelate(
+                workspace,
+                body.version,
+                wait_seconds=_wait(body.wait_seconds),
+                on_warning=warnings.append,
+            )
+        )
+        if isinstance(result, api.Unrelated):
+            return UnrelateResponse(unrelated=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
     @router.post("/judging/quote", responses=_errors_of(413, 424, 502, 503))

@@ -13,6 +13,7 @@ from pydantic import TypeAdapter
 from openkos import api
 from openkos.localapi import _errors
 from openkos.localapi._app import ServerSettings, create_app
+from openkos.state import pending_queue as pq
 from tests.unit.api import support
 from tests.unit.localapi.conftest import AUTH, PORT
 from tests.unit.localapi.test_decisions_write import _Holder
@@ -209,3 +210,133 @@ def test_the_reopen_version_reaches_the_api_as_the_dataclass_and_the_wait_is_cap
     assert shorter.status_code == 200, shorter.text
     version = api.ReopenVersion((A, B), "d" * 64)
     assert seen == [(version, _errors.WRITE_WAIT_SECONDS), (version, 0.25)]
+
+
+# -- a connection ------------------------------------------------------------------ #
+
+
+@pytest.fixture
+def related(
+    settings: ServerSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> Path:
+    """`a` is a member of `b`, written through the decision routes."""
+    root = _seed(settings, tmp_path, monkeypatch, (A, B))
+    support.enqueue_relation(root, A, B, fresh=True)
+    key = pq.stored_decision_key("relation_type", pq.relation_type_key(A, B))
+    preview = _post(client, f"/v1/decisions/{key}/preview", {"action": "relate"})
+    assert preview.status_code == 200, preview.text
+    applied = _post(
+        client,
+        f"/v1/decisions/{key}/apply",
+        {"action": "relate", "version": preview.json()["version"]},
+    )
+    assert applied.status_code == 200, applied.text
+    return root
+
+
+_EDGE = {"source_id": A, "relation_type": "member_of", "target_id": B}
+
+
+def test_a_connection_is_removed_over_http(client: TestClient, related: Path) -> None:
+    before = support.snapshot(related)
+    preview = _post(client, "/v1/unrelate/preview", _EDGE)
+    assert preview.status_code == 200, preview.text
+    assert support.snapshot(related) == before
+    assert TypeAdapter(api.UnrelatePreview).validate_python(preview.json()) == (
+        api.preview_unrelate(api.Workspace.open(related), A, "member_of", B)
+    )
+
+    applied = _post(
+        client, "/v1/unrelate/apply", {"version": preview.json()["version"]}
+    )
+
+    assert applied.status_code == 200, applied.text
+    unrelated = TypeAdapter(api.Unrelated).validate_python(applied.json()["unrelated"])
+    assert (unrelated.source_id, unrelated.relation_type, unrelated.target_id) == (
+        A,
+        "member_of",
+        B,
+    )
+    assert unrelated.commit_sha is not None
+    assert applied.json()["warnings"] == []
+
+
+def test_an_absent_connection_is_409_not_related(
+    client: TestClient, related: Path
+) -> None:
+    response = _post(client, "/v1/unrelate/preview", {**_EDGE, "source_id": B})
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "not_related",
+        "retryable": False,
+        "message": (
+            "the source holds no such typed relation, or a concept no longer exists"
+        ),
+    }
+
+
+def test_an_altered_unrelate_version_is_409_stale(
+    client: TestClient, related: Path
+) -> None:
+    version = _post(client, "/v1/unrelate/preview", _EDGE).json()["version"]
+    before = support.snapshot(related)
+
+    response = _post(
+        client, "/v1/unrelate/apply", {"version": {**version, "content_digest": "0"}}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "stale"
+    assert support.snapshot(related) == before
+
+
+_UNRELATE_VERSION = {**_EDGE, "content_digest": "d" * 64}
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/v1/unrelate/preview", {"source_id": A, "target_id": B}),
+        ("/v1/unrelate/preview", {**_EDGE, "extra": 1}),
+        ("/v1/unrelate/apply", {"version": _UNRELATE_VERSION, "extra": 1}),
+        ("/v1/unrelate/apply", {"version": _EDGE}),
+        ("/v1/unrelate/apply", {"version": _UNRELATE_VERSION, "wait_seconds": -1}),
+    ],
+)
+def test_an_invalid_unrelate_body_is_422_and_the_api_is_never_called(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str, body: Any
+) -> None:
+    calls: list[str] = []
+    for name in ("preview_unrelate", "apply_unrelate"):
+        monkeypatch.setattr(api, name, lambda *a, _n=name, **k: calls.append(_n))
+
+    response = _post(client, path, body)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_request"
+    assert calls == []
+
+
+def test_the_unrelate_version_reaches_the_api_and_the_wait_is_capped(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[tuple[Any, float]] = []
+
+    def stub(
+        workspace: api.Workspace, version: api.UnrelateVersion, **kw: Any
+    ) -> api.Unrelated:
+        seen.append((version, kw["wait_seconds"]))
+        return api.Unrelated(A, "member_of", B, None)
+
+    monkeypatch.setattr(api, "apply_unrelate", stub)
+
+    response = _post(client, "/v1/unrelate/apply", {"version": _UNRELATE_VERSION})
+
+    assert response.status_code == 200, response.text
+    assert seen == [
+        (api.UnrelateVersion(A, "member_of", B, "d" * 64), _errors.WRITE_WAIT_SECONDS)
+    ]

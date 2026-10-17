@@ -17,21 +17,28 @@ from openkos.api import (
     KeepDistinctPlan,
     KeptDistinct,
     NotUndoable,
+    RelatePlan,
     Reopened,
     ReopenPreview,
     ReopenVersion,
     UndoStale,
+    Unrelated,
+    UnrelatePreview,
+    UnrelateVersion,
     Workspace,
     WorkspaceBusyError,
     apply_decision,
     apply_reopen,
+    apply_unrelate,
     kept_distinct,
     list_decisions,
     preview_decision,
     preview_reopen,
+    preview_unrelate,
     refresh_decision_queue,
 )
 from openkos.application import curate_decisions
+from openkos.state import pending_queue as pq
 from tests.unit.api import support
 from tests.unit.api.test_decisions_apply import _git, _head_files, _pin_identity
 from tests.unit.api.test_unmerge_api import A, B, C, _workspace
@@ -190,3 +197,113 @@ def test_a_group_member_set_is_reopened_alone(
     preview = _preview(root, (C, B, A))
     assert isinstance(apply_reopen(Workspace.open(root), preview.version), Reopened)
     assert kept_distinct(Workspace.open(root)) == ()
+
+
+# -- a connection --------------------------------------------------------------- #
+
+
+@pytest.fixture
+def related(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`a` is a member of `b`, written by applying a relation-type decision."""
+    root = _workspace(tmp_path, monkeypatch, (A, B))
+    support.enqueue_relation(root, A, B, fresh=True)
+    key = pq.stored_decision_key("relation_type", pq.relation_type_key(A, B))
+    preview = preview_decision(Workspace.open(root), key, Action.RELATE)
+    assert isinstance(preview, DecisionPreview), preview
+    assert preview.plan == RelatePlan(A, B, "member_of")
+    applied = apply_decision(Workspace.open(root), preview.version, Action.RELATE)
+    assert isinstance(applied, Applied), applied
+    return root
+
+
+def _unrelate_preview(root: Path) -> UnrelatePreview:
+    preview = preview_unrelate(Workspace.open(root), A, "member_of", B)
+    assert isinstance(preview, UnrelatePreview), preview
+    return preview
+
+
+def test_a_connection_is_previewed_without_the_lock(related: Path) -> None:
+    before = support.snapshot(related)
+
+    with lock.workspace_lock(related):
+        preview = _unrelate_preview(related)
+
+    assert (preview.source_id, preview.relation_type, preview.target_id) == (
+        A,
+        "member_of",
+        B,
+    )
+    assert preview.withdraws_deprecation is False
+    assert type(preview.version) is UnrelateVersion
+    assert (
+        preview.version.source_id,
+        preview.version.relation_type,
+        preview.version.target_id,
+    ) == (A, "member_of", B)
+    assert support.snapshot(related) == before
+
+
+def test_a_connection_made_through_a_decision_is_removed_in_one_commit(
+    related: Path,
+) -> None:
+    preview = _unrelate_preview(related)
+    head = _git(related, "rev-parse", "HEAD")
+
+    unrelated = apply_unrelate(Workspace.open(related), preview.version)
+
+    assert isinstance(unrelated, Unrelated)
+    assert (unrelated.source_id, unrelated.relation_type, unrelated.target_id) == (
+        A,
+        "member_of",
+        B,
+    )
+    assert unrelated.commit_sha is not None
+    assert unrelated.committed_confidential is False
+    assert _git(related, "rev-parse", "HEAD~1") == head
+    assert _head_files(related) == ["bundle/concepts/a.md", "bundle/log.md"]
+    assert preview_unrelate(Workspace.open(related), A, "member_of", B) == (
+        NotUndoable("not_related")
+    )
+
+
+def test_an_absent_connection_is_not_undoable(related: Path) -> None:
+    assert preview_unrelate(Workspace.open(related), B, "member_of", A) == (
+        NotUndoable("not_related")
+    )
+
+
+def test_an_edited_page_is_stale_and_writes_nothing(related: Path) -> None:
+    preview = _unrelate_preview(related)
+    page = related / "bundle" / f"{A}.md"
+    page.write_text(page.read_text(encoding="utf-8") + "\nEdited.\n", "utf-8")
+    before = support.snapshot(related)
+
+    assert apply_unrelate(Workspace.open(related), preview.version) == UndoStale()
+    assert support.snapshot(related) == before
+
+
+def test_a_confidential_page_reports_its_commit(related: Path) -> None:
+    page = related / "bundle" / f"{A}.md"
+    page.write_text(
+        page.read_text(encoding="utf-8").replace(
+            "---\n", "---\nsensitivity: confidential\n", 1
+        ),
+        "utf-8",
+    )
+    _git(related, "commit", "-qam", "mark confidential")
+    preview = _unrelate_preview(related)
+
+    unrelated = apply_unrelate(Workspace.open(related), preview.version)
+
+    assert isinstance(unrelated, Unrelated)
+    assert unrelated.committed_confidential is True
+
+
+def test_an_unrelate_on_a_held_lock_raises_busy(related: Path) -> None:
+    preview = _unrelate_preview(related)
+    before = support.snapshot(related)
+
+    with lock.workspace_lock(related), pytest.raises(WorkspaceBusyError):
+        apply_unrelate(Workspace.open(related), preview.version)
+
+    assert support.snapshot(related) == before

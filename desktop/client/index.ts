@@ -173,6 +173,8 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
     keptDistinct: () => call("get", "/v1/kept-distinct"),
     previewReopen: (body: Schemas["ReopenPreviewRequest"]) => call("post", "/v1/reopen/preview", { body }),
     applyReopen: (body: Schemas["ReopenApplyRequest"]) => call("post", "/v1/reopen/apply", { body }),
+    previewUnrelate: (body: Schemas["UnrelatePreviewRequest"]) => call("post", "/v1/unrelate/preview", { body }),
+    applyUnrelate: (body: Schemas["UnrelateApplyRequest"]) => call("post", "/v1/unrelate/apply", { body }),
   };
 }
 

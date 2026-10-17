@@ -2227,6 +2227,177 @@
         "title": "Unmerged",
         "type": "object"
       },
+      "UnrelateApplyRequest": {
+        "description": "The version the unrelate preview issued (echoed unchanged) and how long\nto wait for the workspace lock; a client can shorten the wait only.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/UnrelateVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "UnrelateApplyRequest",
+        "type": "object"
+      },
+      "UnrelatePreview": {
+        "description": "Removing the `relation_type` relation from `source_id` to `target_id`.\n`withdraws_deprecation`: the target stops being marked superseded, because\nnothing else supersedes it.",
+        "properties": {
+          "relation_type": {
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/UnrelateVersion"
+          },
+          "withdraws_deprecation": {
+            "title": "Withdraws Deprecation",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source_id",
+          "relation_type",
+          "target_id",
+          "withdraws_deprecation",
+          "version"
+        ],
+        "title": "UnrelatePreview",
+        "type": "object"
+      },
+      "UnrelatePreviewRequest": {
+        "additionalProperties": false,
+        "description": "The typed relation to remove: the source page, the type and the target.",
+        "properties": {
+          "relation_type": {
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "relation_type",
+          "target_id"
+        ],
+        "title": "UnrelatePreviewRequest",
+        "type": "object"
+      },
+      "UnrelateResponse": {
+        "additionalProperties": false,
+        "description": "What was removed, and the warnings the apply raised along the way.",
+        "properties": {
+          "unrelated": {
+            "$ref": "#/components/schemas/Unrelated"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "unrelated",
+          "warnings"
+        ],
+        "title": "UnrelateResponse",
+        "type": "object"
+      },
+      "UnrelateVersion": {
+        "description": "The version a stateless caller removes a relation against: echo it\nunchanged. `content_digest` covers the edge and the pages the removal\nrewrites.",
+        "properties": {
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "relation_type": {
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "relation_type",
+          "target_id",
+          "content_digest"
+        ],
+        "title": "UnrelateVersion",
+        "type": "object"
+      },
+      "Unrelated": {
+        "additionalProperties": false,
+        "description": "The relation was removed. `commit_sha` is `None` when its commit could\nnot be made (the write itself landed); `committed_confidential` is true when\nthe commit holds a concept explicitly marked confidential.",
+        "properties": {
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "committed_confidential": {
+            "default": false,
+            "title": "Committed Confidential",
+            "type": "boolean"
+          },
+          "relation_type": {
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "relation_type",
+          "target_id",
+          "commit_sha"
+        ],
+        "title": "Unrelated",
+        "type": "object"
+      },
       "WithheldAction": {
         "additionalProperties": false,
         "description": "An action the item's kind could offer but this item does not, and why.",
@@ -4096,6 +4267,210 @@
           }
         ],
         "summary": "Unmerge Preview"
+      }
+    },
+    "/v1/unrelate/apply": {
+      "post": {
+        "operationId": "unrelate_apply_v1_unrelate_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnrelateApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnrelateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Unrelate Apply"
+      }
+    },
+    "/v1/unrelate/preview": {
+      "post": {
+        "operationId": "unrelate_preview_v1_unrelate_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnrelatePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnrelatePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Unrelate Preview"
       }
     }
   }

@@ -230,6 +230,33 @@ class ReopenResponse(BaseModel):
     warnings: list[str]
 
 
+class UnrelatePreviewRequest(BaseModel):
+    """The typed relation to remove: the source page, the type and the target."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_id: str
+    relation_type: str
+    target_id: str
+
+
+class UnrelateApplyRequest(_EchoRequest):
+    """The version the unrelate preview issued (echoed unchanged) and how long
+    to wait for the workspace lock; a client can shorten the wait only."""
+
+    version: api.UnrelateVersion
+    wait_seconds: float = Field(default=WRITE_WAIT_SECONDS, ge=0, le=WRITE_WAIT_SECONDS)
+
+
+class UnrelateResponse(BaseModel):
+    """What was removed, and the warnings the apply raised along the way."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    unrelated: api.Unrelated
+    warnings: list[str]
+
+
 class UnmergePreviewRequest(BaseModel):
     """Which merge to undo: the survivor and the absorbed concept, and whether
     the first step may discard an edit made to the survivor since its merge."""

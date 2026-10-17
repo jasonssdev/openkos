@@ -134,6 +134,23 @@ describe("the requests", () => {
       { member_ids: ["a", "b"] },
     ],
     [
+      "previewUnrelate",
+      (c) => c.previewUnrelate({ source_id: "a", relation_type: "part_of", target_id: "b" }),
+      "POST",
+      "/v1/unrelate/preview",
+      { source_id: "a", relation_type: "part_of", target_id: "b" },
+    ],
+    [
+      "applyUnrelate",
+      (c) =>
+        c.applyUnrelate({
+          version: { source_id: "a", relation_type: "part_of", target_id: "b", content_digest: "d" },
+        }),
+      "POST",
+      "/v1/unrelate/apply",
+      { version: { source_id: "a", relation_type: "part_of", target_id: "b", content_digest: "d" } },
+    ],
+    [
       "applyReopen",
       (c) => c.applyReopen({ version: { member_ids: ["a", "b"], content_digest: "d" } }),
       "POST",

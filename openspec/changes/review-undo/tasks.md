@@ -80,12 +80,12 @@ JSON and `schema.d.ts` are never hand-merged).
 
 ## S4 Unrelate (P3, P5, H1-H3)
 
-- [ ] S4.1 RED: application tests over a relation written by a relation-type
+- [x] S4.1 RED: application tests over a relation written by a relation-type
   decision: removal, `not_related` refusals (absent edge, missing page, invalid
   id, same page, invalid type), stale on an edited source, commit paths.
-- [ ] S4.2 GREEN: `undo_service` unrelate (D4, D5).
-- [ ] S4.3 Facade, routes, `not_related` row, snapshots, client.
-- [ ] S4.4 Mutation-check the digest lines and the refusal mapping.
+- [x] S4.2 GREEN: `undo_service` unrelate (D4, D5).
+- [x] S4.3 Facade, routes, `not_related` row, snapshots, client.
+- [x] S4.4 Mutation-check the digest lines and the refusal mapping.
 
 ## S5 Tier change (P4, P5, H1-H3)
 

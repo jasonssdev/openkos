@@ -1729,6 +1729,97 @@
       "kind": "dataclass",
       "members": {}
     },
+    "UnrelatePreview": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "source_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "relation_type"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "target_id"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "withdraws_deprecation"
+        },
+        {
+          "annotation": "UnrelateVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "UnrelateVersion": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "source_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "relation_type"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "target_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "Unrelated": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "source_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "relation_type"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "target_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "commit_sha"
+        },
+        {
+          "annotation": "bool",
+          "default": true,
+          "name": "committed_confidential"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "WithheldAction": {
       "fields": [
         {
@@ -2022,6 +2113,36 @@
       ],
       "returns": "Unmerged | NotUnmergeable | UnmergeStale"
     },
+    "apply_unrelate": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "UnrelateVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "Unrelated | NotUndoable | UndoStale"
+    },
     "kept_distinct": {
       "kind": "function",
       "parameters": [
@@ -2165,6 +2286,36 @@
         }
       ],
       "returns": "UnmergePreview | NotUnmergeable"
+    },
+    "preview_unrelate": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "source_id"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "relation_type"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "target_id"
+        }
+      ],
+      "returns": "UnrelatePreview | NotUndoable"
     },
     "quote_judging": {
       "kind": "function",

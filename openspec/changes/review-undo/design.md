@@ -81,9 +81,10 @@ a/b`, `openkos: unrelate a -> b (type)`, `openkos: set-volatility T -> tier` or
 
 - **Reopen:** the sorted member set and the bytes of the decisions sidecar that
   holds the ruling.
-- **Unrelate:** the edge, the source page's bytes, the target page's bytes when
-  the plan withdraws its deprecated-status export, and whether it does. A
-  bystander change that alters whether the withdrawal happens moves the digest;
+- **Unrelate:** the edge, the source page's bytes, and the target page's bytes
+  when the plan withdraws its deprecated-status export (their presence says
+  whether it does). A bystander change that alters whether the withdrawal
+  happens moves the digest;
   any other bystander change does not matter, because the plan is made under the
   lock.
 - **Tier change:** the type, the requested tier (`-` for removal) and the bytes
