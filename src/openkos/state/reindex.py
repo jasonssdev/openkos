@@ -648,7 +648,24 @@ def reindex(
             db.write_model_tag(effective_model_tag)
             tag_written = True
 
-        if to_embed or to_prune or tag_written:
+        # #1529: the tag stays the old model's while a confidential page is
+        # withheld, so also record that the withheld pages were the ONLY thing
+        # left -- a reader (search_state) then stops offering a rebuild that
+        # could send nothing more. It never gates a re-embed: the stale tag
+        # still forces a full re-embed once a local embedder returns.
+        remote_complete_written = False
+        if (
+            model_changed
+            and skipped == 0
+            and embed_failed == 0
+            and withheld_confidential > 0
+            and dropped_stale == 0
+            and effective_model_tag is not None
+        ):
+            db.write_remote_complete_tag(effective_model_tag)
+            remote_complete_written = True
+
+        if to_embed or to_prune or tag_written or remote_complete_written:
             db.commit()
 
     if fts_db_path is not None:

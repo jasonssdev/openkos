@@ -1788,7 +1788,12 @@ refresh a derived store or reach a model.
 
 `openkos.api.search_index(workspace)` MUST return a `SearchIndex` with
 `model_changed` (the vector store holds vectors under an embedding tag other
-than the one the configured AI model for search and backend produce),
+than the one the configured AI model for search and backend produce, unless the
+last rebuild with that AI model embedded every page it may send and withheld
+only confidential pages from an AI model that is not on this machine: a
+rebuild could send nothing more, so search is not reported as behind; the
+withheld pages are found only by their words until an AI model on this machine
+rebuilds search),
 `stale_indexes` (the derived indexes whose contents predate the pages, as
 `status` names them), `needs_rebuild` (true exactly when either holds) and
 `sends_to` (the redacted host of the embedding endpoint when it is not on this
@@ -1800,6 +1805,14 @@ store or write. An unreadable `openkos.yaml` MUST raise `WorkspaceUnreadable`.
 - GIVEN vectors stored under the tag of `bge-m3`
 - WHEN `embedding_model` is changed and `search_index` is called
 - THEN `model_changed` and `needs_rebuild` are true and nothing is written
+
+#### Scenario: Only withheld confidential pages remain after a remote rebuild
+
+- GIVEN a library with a confidential page and a rebuild with consent against an
+  AI model for search that is not on this machine
+- WHEN that rebuild finishes with `withheld` of 1 and `search_index` is called
+- THEN `model_changed` and `needs_rebuild` are false, and a later change of the
+  AI model for search makes `model_changed` true again
 
 #### Scenario: A library with nothing embedded is not changed
 

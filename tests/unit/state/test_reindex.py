@@ -2122,6 +2122,56 @@ def test_reindex_withholds_the_model_tag_when_a_doc_was_withheld(
     assert report.model_reembedded is True
 
 
+def test_a_run_that_withheld_only_confidential_docs_records_it_is_remote_complete(
+    tmp_path: Path,
+) -> None:
+    """#1529: the tag stays the old model's (a withheld doc keeps its old
+    vector), but the run records that nothing else was left to embed, so a
+    reader can tell "a rebuild can do more" from "only withheld pages remain"."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", sensitivity="private")
+    _write_doc(bundle_dir / "concepts" / "s.md", title="S", sensitivity="confidential")
+    store = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(store) as db:
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="old", local_exemption=True
+        )
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="new", local_exemption=False
+        )
+        assert db.read_model_tag() == reindex.embedding_tag("old")
+        assert db.read_remote_complete_tag() == reindex.embedding_tag("new")
+
+
+def test_a_run_with_an_unembedded_shareable_doc_is_not_remote_complete(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="poison",
+        sensitivity="private",
+    )
+    _write_doc(bundle_dir / "concepts" / "s.md", title="S", sensitivity="confidential")
+    store = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(store) as db:
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="old", local_exemption=True
+        )
+        report = reindex.reindex(
+            bundle_dir,
+            db,
+            _FaultyEmbedder({"poison": OllamaError("EOF after retries")}),
+            model_tag="new",
+            local_exemption=False,
+        )
+        assert report.embed_failed == 1
+        assert db.read_remote_complete_tag() is None
+
+
 # --- Phase 11 (issue #1057): backend-aware embedding identity --------------
 
 

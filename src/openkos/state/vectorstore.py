@@ -113,6 +113,13 @@ for `manifest_hash`, just a different row, in this store's own `meta` table
 (the two derived stores each own a SEPARATE `meta` table -- no shared file,
 no cross-store key collision possible)."""
 
+REMOTE_COMPLETE_KEY = "embedding_model_remote_complete"
+"""The `meta.key` recording the tag of the last run that embedded every page it
+was allowed to send to a remote embedder and withheld only confidential ones
+(#1529). The stored `embedding_model` tag stays the previous model's -- a
+withheld page keeps its old vector -- so this is how a reader tells "a rebuild
+can do more" from "only withheld pages remain". It never gates a re-embed."""
+
 # Confirmed against the real sqlite-vec 0.1.9 extension by the spike tests in
 # `tests/unit/state/test_vectorstore.py` (Phase 1): DELETE-by-`concept_id`
 # (a metadata column, not the vec0 `embedding` column) works directly, no
@@ -293,6 +300,15 @@ class VectorStore(Protocol):
         contract)."""
         ...  # pragma: no cover -- Protocol stub body, never executed
 
+    def read_remote_complete_tag(self) -> str | None:
+        """The tag of the last run that withheld only confidential pages from
+        a remote embedder (#1529), or `None`."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def write_remote_complete_tag(self, tag: str) -> None:
+        """Record `tag` as remote-complete, WITHOUT committing."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
     def close(self) -> None:
         """Release the underlying resource."""
         ...  # pragma: no cover -- Protocol stub body, never executed
@@ -420,6 +436,24 @@ def vector_store_is_empty(path: Path) -> bool:
         if conn is not None:
             conn.close()
     return bool(row is None or row[0] == 0)
+
+
+def read_stored_remote_complete_tag(path: Path) -> str | None:
+    """The remote-complete tag of the vector store at `path` (#1529), read the
+    way `read_stored_model_tag` reads: read-only, never creating the store;
+    `None` when absent, empty, unset or unreadable."""
+    if vector_store_is_empty(path):
+        return None
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = open_read_only(path)
+        row = conn.execute(_SELECT_META_SQL, (REMOTE_COMPLETE_KEY,)).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+    return None if row is None else str(row[0])
 
 
 def read_stored_model_tag(path: Path) -> str | None:
@@ -794,6 +828,15 @@ class VectorStoreDB:
         one row survives). Does NOT commit -- callers commit once alongside
         their own writes (Slice 5 single-commit-per-run contract)."""
         self._conn.execute(_UPSERT_META_SQL, (EMBEDDING_MODEL_KEY, tag))
+
+    def read_remote_complete_tag(self) -> str | None:
+        """The remote-complete tag from the generic `meta` table, or `None`."""
+        row = self._conn.execute(_SELECT_META_SQL, (REMOTE_COMPLETE_KEY,)).fetchone()
+        return None if row is None else str(row[0])
+
+    def write_remote_complete_tag(self, tag: str) -> None:
+        """Upsert the remote-complete tag. Does NOT commit."""
+        self._conn.execute(_UPSERT_META_SQL, (REMOTE_COMPLETE_KEY, tag))
 
     def close(self) -> None:
         """Close the underlying connection.

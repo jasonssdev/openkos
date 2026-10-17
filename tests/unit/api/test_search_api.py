@@ -196,6 +196,38 @@ def test_with_consent_a_remote_rebuild_withholds_confidential_pages(
     assert not any("safe" in t for t in embedder.texts)
 
 
+def test_a_remote_rebuild_that_withheld_only_confidential_pages_is_not_behind(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1529: nothing more can be sent, so search no longer reads as needing a
+    rebuild; a later change of the AI model for search does, and a local model
+    still embeds the withheld pages."""
+    install(monkeypatch, Embedder())
+    assert isinstance(_rebuild(root), api.RebuildOutcome)
+    install(monkeypatch, Embedder(local=False))
+    _remote(root, monkeypatch)
+    _set(root, embedding_model="cloud-embedder")
+    assert api.search_index(api.Workspace.open(root)).needs_rebuild is True
+
+    outcome = _rebuild(root, allow_remote=True)
+
+    assert isinstance(outcome, api.RebuildOutcome), outcome
+    assert outcome.withheld == 1
+    after = api.search_index(api.Workspace.open(root))
+    assert (after.model_changed, after.needs_rebuild) == (False, False)
+
+    _set(root, embedding_model="another-cloud-embedder")
+    assert api.search_index(api.Workspace.open(root)).model_changed is True
+
+    # Back on this machine under a new model: the withheld page is embedded.
+    local = install(monkeypatch, Embedder())
+    _set(root, backend="ollama", embedding_model="local-embedder")
+    local_outcome = _rebuild(root)
+    assert isinstance(local_outcome, api.RebuildOutcome), local_outcome
+    assert local_outcome.complete is True
+    assert any("safe" in t for t in local.texts)
+
+
 def test_a_client_that_turns_out_remote_is_refused_without_consent(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

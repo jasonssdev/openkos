@@ -612,6 +612,25 @@ documentation; `reindex --force` is the remedy for that case.
   reaches `skipped == 0 AND embed_failed == 0`, at which point the tag is
   persisted
 
+#### Scenario: A run that withheld only confidential pages records it is remote-complete
+
+- GIVEN a model-change run against an embedder that is not on this machine,
+  where every page it may send was embedded and the only pages left are
+  confidential ones withheld from it (`withheld_confidential > 0`,
+  `skipped == 0`, `embed_failed == 0`)
+- WHEN `reindex()` completes this run
+- THEN the stored `embedding_model` tag is still the OLD value, so a later run
+  with a local embedder re-embeds every page, AND the run's tag is recorded in
+  the store's `meta` as the remote-complete tag, which gates no re-embed and
+  only lets a reader tell that a rebuild against this embedder could send
+  nothing more
+
+#### Scenario: A run with a page it could have sent but did not is not remote-complete
+
+- GIVEN the same run but one shareable page was `skipped` or `embed_failed`
+- WHEN `reindex()` completes this run
+- THEN no remote-complete tag is recorded
+
 #### Scenario: Partial embed failure during a model change leaves a transient mixed-model store
 
 - GIVEN a model-change run where some docs succeed on the new model and one
