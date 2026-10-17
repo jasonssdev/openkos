@@ -13,7 +13,9 @@ directed `revises` (`--revision`). This module owns the whole write:
   build, the at-most-one-resolution conflict gate, preview, confirmation,
   drift re-validation, Phase B additive writes, auto-commit), which the CLI's
   `--from-findings` walks (#567, #1014) call once per accepted finding so
-  every door shares ONE write path;
+  every door shares ONE write path. It is `prepare_pair` (Phase A, no write)
+  then `commit_pair` (the commit section), the two halves the curation
+  decision surface calls on its token path (settle-other-kinds);
 * the pure pair machinery (`resolve_pair_member`, the resolution-state
   classifier, the note and anchor builders).
 
@@ -513,8 +515,14 @@ def reconcile_concepts(
     )
 
 
+class ReconcileConflict(Refused):
+    """The pair already carries a different resolution, so `reconcile` will not
+    overwrite it; nothing was written. A `Refused`, so every adapter that
+    renders a refusal renders this one unchanged."""
+
+
 @dataclass(frozen=True)
-class _PreparedPair:
+class PreparedPair:
     """Phase A's complete result for one pair."""
 
     bytes_a: bytes
@@ -530,13 +538,15 @@ class _PreparedPair:
     changed: bool
 
 
-def _prepare_pair(
+def prepare_pair(
     layout: config.WorkspaceLayout,
     pair: PairRequest,
     ports: ReconcilePorts,
-) -> _PreparedPair:
+) -> PreparedPair:
     """Phase A: no writes. Builds every byte Phase B will write, in memory,
-    from one observation of each input."""
+    from one observation of each input. Raises `ReconcileConflict` when the pair
+    already carries a different resolution, and `Refused` when an input cannot
+    be read."""
     path_a, canonical_a = pair.path_a, pair.canonical_a
     path_b, canonical_b = pair.path_b, pair.canonical_b
     holder_canonical = pair.holder_canonical
@@ -592,11 +602,12 @@ def _prepare_pair(
             description = _reconciliation_state_description(
                 existing_mode, existing_holder
             )
-            raise ValueError(
+            raise ReconcileConflict(
+                "openkos reconcile: failed while preparing the reconcile -- "
                 f"concepts {canonical_a!r} and {canonical_b!r} are already "
                 f"reconciled as {description}; reconcile will not overwrite "
                 "an existing resolution. To change it, edit the concepts "
-                "manually or revert with git, then re-run"
+                "manually or revert with git, then re-run."
             )
 
         edge_added_a = False
@@ -710,7 +721,7 @@ def _prepare_pair(
             f"openkos reconcile: failed while preparing the reconcile -- {exc}."
         ) from exc
 
-    return _PreparedPair(
+    return PreparedPair(
         bytes_a=bytes_a,
         bytes_b=bytes_b,
         log_bytes=log_bytes,
@@ -763,14 +774,7 @@ def reconcile_pair(
     (#655): an edge added or a note appended on either side. `False` is the
     idempotent no-change re-run, which writes only the log entry."""
     obs = observer if observer is not None else ReconcileObserver()
-    layout = config.WorkspaceLayout(root)
-    log_path = layout.bundle_dir / "log.md"
-    canonical_a, canonical_b = pair.canonical_a, pair.canonical_b
-    holder_canonical = pair.holder_canonical
-    target_canonical = pair.target_canonical
-    edge_type = pair.edge_type
-
-    prepared = _prepare_pair(layout, pair, ports)
+    prepared = prepare_pair(config.WorkspaceLayout(root), pair, ports)
 
     if announce_preview:
         obs.proposed(prepared.preview)
@@ -778,7 +782,37 @@ def reconcile_pair(
     if not auto and cfg.review:
         require_confirmation(confirm, CONFIRM_PROMPT, NOT_A_TTY_REFUSAL)
 
+    return commit_pair(root, prepared, ports=ports, observer=obs)
+
+
+def commit_pair[T](
+    root: Path,
+    prepared: PreparedPair,
+    *,
+    ports: ReconcilePorts,
+    observer: ReconcileObserver | None = None,
+    guard: Callable[[], T | None] | None = None,
+) -> ReconcileOutcome | T:
+    """The commit phase of one prepared pair, inside ONE commit section: the
+    caller's `guard`, then the drift re-validation, the Phase B writes, the
+    queue resolution and the auto-commit.
+
+    `guard` runs first inside the section; a value it returns ends the phase
+    with nothing written and is returned as it is (the decision surface's
+    re-check that its queue row is still the open one). Raises `DriftDetected`
+    for post-Phase-A target drift and `Refused` for a write failure."""
+    obs = observer if observer is not None else ReconcileObserver()
+    pair = prepared.preview.pair
+    layout = config.WorkspaceLayout(root)
+    log_path = layout.bundle_dir / "log.md"
+    canonical_a, canonical_b = pair.canonical_a, pair.canonical_b
+    holder_canonical = pair.holder_canonical
+    target_canonical = pair.target_canonical
+    edge_type = pair.edge_type
+
     with ports.commit_section():
+        if guard is not None and (answer := guard()) is not None:
+            return answer
         # Issue #313: every byte below was computed from a pre-prompt read, so
         # re-validate each target now -- after the gate, before the first write --
         # and unconditionally, because `--auto` and `review: false` skip the
@@ -815,7 +849,12 @@ def reconcile_pair(
                 f"openkos reconcile: failed while writing the reconcile -- {exc}."
             ) from exc
 
-        queue_resolution.resolve_reconciled(root, pair_ids=(canonical_a, canonical_b))
+        queue_resolution.resolve_reconciled(
+            root,
+            pair_ids=(canonical_a, canonical_b),
+            holder=holder_canonical,
+            edge_type=edge_type if holder_canonical is not None else None,
+        )
         obs.written(ReconcileWritten(pair=pair, log_name=log_path.name))
 
         if holder_canonical is None:

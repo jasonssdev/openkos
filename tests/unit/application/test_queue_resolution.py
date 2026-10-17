@@ -451,6 +451,116 @@ def test_reconcile_leaves_a_merged_body_contradiction_row_open(
     assert _only(root).status == "pending"
 
 
+def _revision_row(
+    pair: tuple[str, str],
+    verdict: str = "reverses",
+    dates: tuple[str | None, str | None] = ("2026-01-01", "2026-03-01"),
+) -> pq.Proposal:
+    states = ["dated" if d is not None else "missing" for d in dates]
+    return pq.Proposal(
+        kind="revision",
+        key_body=pq.revision_key(pair),
+        producer="revisions/1",
+        payload=json.dumps(
+            {
+                "pair_ids": list(pair),
+                "verdict": verdict,
+                "dates": list(dates),
+                "date_states": states,
+            }
+        ),
+        targets=pair,
+    )
+
+
+def _reconcile_as(root: Path, holder: str | None, edge: str = "supersedes") -> None:
+    reconcile_service.reconcile_concepts(
+        root,
+        "concepts/a",
+        "concepts/b",
+        winner=holder if edge == "supersedes" else None,
+        revision=holder if edge == "revises" else None,
+        auto=True,
+        ports=reconcile_service.ReconcilePorts(autocommit=lambda *a: None),
+    )
+
+
+@pytest.mark.parametrize(
+    ("verdict", "dates", "holder", "edge", "resolution"),
+    [
+        # dated: B is later, so a reversal proposes B supersedes A
+        (
+            "reverses",
+            ("2026-01-01", "2026-03-01"),
+            "concepts/b",
+            "supersedes",
+            "as_proposed",
+        ),
+        (
+            "reverses",
+            ("2026-01-01", "2026-03-01"),
+            "concepts/a",
+            "supersedes",
+            "modified",
+        ),
+        ("reverses", ("2026-01-01", "2026-03-01"), "concepts/b", "revises", "modified"),
+        (
+            "refines",
+            ("2026-01-01", "2026-03-01"),
+            "concepts/b",
+            "revises",
+            "as_proposed",
+        ),
+        # undated: any directed write answers the change; a symmetric one does not
+        ("reverses", (None, None), "concepts/a", "revises", "as_proposed"),
+        ("reverses", (None, None), None, "supersedes", "modified"),
+        ("reverses", ("2026-01-01", "2026-03-01"), None, "supersedes", "modified"),
+    ],
+)
+def test_reconcile_applies_the_revision_row_over_its_pair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    verdict: str,
+    dates: tuple[str | None, str | None],
+    holder: str | None,
+    edge: str,
+    resolution: str,
+) -> None:
+    root = _init(tmp_path, monkeypatch)
+    _concept(root, "concepts/a")
+    _concept(root, "concepts/b")
+    pair = ("concepts/a", "concepts/b")
+    _seed(root, _revision_row(pair, verdict, dates))
+
+    _reconcile_as(root, holder, edge)
+
+    row = _only(root)
+    assert (row.status, row.resolution) == ("applied", resolution)
+
+
+def test_an_unreadable_revision_payload_is_applied_modified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _init(tmp_path, monkeypatch)
+    _concept(root, "concepts/a")
+    _concept(root, "concepts/b")
+    pair = ("concepts/a", "concepts/b")
+    _seed(
+        root,
+        pq.Proposal(
+            kind="revision",
+            key_body=pq.revision_key(pair),
+            producer="revisions/1",
+            payload=json.dumps({"pair_ids": list(pair)}),
+            targets=pair,
+        ),
+    )
+
+    _reconcile_as(root, "concepts/b")
+
+    assert (_only(root).status, _only(root).resolution) == ("applied", "modified")
+
+
 # -- decline / keep-distinct writers ----------------------------------------
 
 
