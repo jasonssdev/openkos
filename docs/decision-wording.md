@@ -327,6 +327,22 @@ Sensitivity is shown as **who can see it**, never as the word "sensitivity" or i
 
 The middle line is load-bearing: the engine sends everything except `confidential` to a remote backend, so "Private" must not read as "never leaves". Changing the label is one action from any page. When a combined page holds a page marked "Only on this Mac" (`committed_confidential`), the confirmation adds: "The combined page is marked Only on this Mac."
 
+**Changing it** (`preview_sensitivity`, `apply_sensitivity`) is one action, previewed and applied in one step, as an undo is:
+
+- **Where a page is shown in full** (its card in To review): "Who can see it" over the three labels as one choice, the page's own selected, and its one-line meaning under it. Choosing another changes it at once.
+- **Where a page is only named** (the pages an answer came from, in Ask): **Keep only on this Mac** beside each one. Once it is, a quiet "Only on this Mac" takes the button's place.
+- **After:** "“{title}” is now {label}." with **Undo**, which puts back the label the page had ("“{title}” is {label} again."). For a file's page, the pages made from it are raised with it, never lowered: "“{title}” is now Only on this Mac, and so is 1 page made from it. To change that page back, change it on its own." ("…so are {n} pages made from it. To change those pages back, change each one on its own."). Then there is no Undo, because putting the one page back would leave the others.
+- **Letting a page out while a cloud AI model is on.** Changing a page marked Only on this Mac to Private or Shareable asks first, in a dialog that starts on its safe answer: "Let “{title}” be sent to {host}?" — "While a cloud AI model is on, pages marked {label} are sent to {host} whenever the AI model needs them. “{title}” will be too." — **Mark it {label}** · **Keep it only on this Mac**. Making a page more private never asks.
+
+| Situation | Code | Message |
+| --- | --- | --- |
+| OpenKOS is busy, after five seconds | `workspace_busy` | "OpenKOS is finishing something else. Nothing was changed." |
+| The page changed meanwhile | `stale`, `write_drift` | "This page changed while you were looking. Nothing was changed. Try again." |
+| The page is gone | `page_not_found` | "This page no longer exists, so nothing was changed." |
+| It already has that label | `sensitivity_unchanged` | no message: the label is shown as it is |
+| OpenKOS does not answer | — | "OpenKOS isn't responding. Nothing was changed." ("OpenKOS stopped responding. Look at the page again to see whether it changed." once the change was sent) |
+| Anything else | — | "Something went wrong. Nothing was changed." ("Something went wrong. Look at the page again to see whether it changed." once the change was sent) |
+
 The cloud model's warning, in settings only and never during setup, uses the same words: what leaves the Mac (pages marked Shareable and Private), what never does (Only on this Mac), who receives it (the provider, by name) and that the provider may charge. While it is on, the app says so on every screen that asks the AI model.
 
 ## Setup
@@ -416,6 +432,8 @@ The card says where the AI model runs in one line: "On this Mac." or "In the clo
 
 **After Save:** "Saved. OpenKOS now uses the AI model at {host}." or "Saved. OpenKOS now uses the AI model on this Mac." When the model for search changed, it adds "Search needs to be rebuilt for the new AI model. Until it is, answers may miss some pages." A key saved on its own: "The key was saved."
 
+**Rebuilding search** follows the AI model card whenever search is behind, as under "Rebuilding search" below.
+
 **While a cloud AI model is on,** the foot of the sidebar shows a quiet **Cloud AI model on**, on every screen, which opens Settings.
 
 | Situation | Code or reason | Message |
@@ -447,6 +465,7 @@ The words around the decisions, outside the decision screens.
 - **Sidebar.** **Ask**, **To review** and **Status**. To review shows a count only when something waits. **Settings** sits at the foot of the sidebar, above the engine's badge, with **Cloud AI model on** above it while one is on.
 - **The engine's badge**, at the foot of the sidebar, a symbol and a word: "Engine starting", "Engine running", "Engine restarting", "Engine not running" (it could not be started), "Engine stopped", "No library open" (before a library is chosen; Status then says "No library is open yet."), "Engine state unknown".
 - **Check setup.** While the AI model is not ready, Status says "Some setup steps are left." under its title, with **Check setup**, which opens setup. Otherwise Status shows neither.
+- **Search on Status.** While search is behind, a rebuild runs, or one ended this session, Your library's card holds it, worded as under "Rebuilding search".
 - **Status disclosures.** What is rarely needed waits behind a disclosure named for what it holds: "Show details" for the engine's own report when it failed or restarted, "Show the folder" for where the files live.
 - **Status words.** The library's card is **Your library**; its counts are **To review**, **Pages** and **Files you added**, and a status that cannot be read says "Your library's status could not be read." The engine's words (workspace, concept, source) never appear.
 - **To review, as a list.** Each row names what it is about: an identity by its pages' titles ("Marguerite Osei · M. Osei"), with its question under it; a connection by its sentence; a how-quickly suggestion by its question; an item the app cannot act on by its plain sentence, with "This can't be settled in the app yet." under it. A badge says **Changed** only on a changed decision. With nothing open beside the list: "Nothing open. Choose something from the list to see its pages and decide."; with nothing to review: "Nothing to review right now. When OpenKOS finds pages that may be the same thing, or a connection to confirm, they wait here." The pages you combined are one row, "Pages you combined", with how many ("1 page", "{n} pages"). A confirmation closes with **Close**.
@@ -457,7 +476,7 @@ The words around the decisions, outside the decision screens.
 
 - **The screen.** Title "Ask"; under it "Ask about anything in your library. The answer comes from your pages and says which ones." The field is labelled "Your question", with "What would you like to know?" inside it. One button, **Ask**; while the engine starts it is unavailable, with "Waiting for OpenKOS to start…" beside it. A blank question gets "Type a question first." on the field.
 - **While it runs.** The button reads "Asking…", and the question shows with one line for the step the engine is on: "Looking through your pages…", "Gathering what's relevant…", "Checking your pages hold an answer…", "Writing the answer…". No counts and no time estimate.
-- **The answer** is shown as written, as text, with "From:" followed by the titles of the pages it drew on. When it points to no page: "This answer doesn't point to a particular page."
+- **The answer** is shown as written, as text, with "From:" followed by the titles of the pages it drew on, each with **Keep only on this Mac** beside it (under "Who can see a page"). When it points to no page: "This answer doesn't point to a particular page."
 
 What the screen says instead of an answer, by `outcome`:
 
@@ -472,7 +491,7 @@ A withheld answer is a count, never a title: the API names no such page, and the
 
 **Notes,** small and under the answer, only when they apply:
 
-- A search that may miss something (`stale_indexes`): "Some recent changes to your library may not be searched yet, so this answer could miss them." When part of the search could not run (`lexical_unavailable`, `dense_unavailable`) this one takes its place: "The search was limited this time, so this answer could miss some pages." The app cannot bring the search up to date, so neither note offers an action.
+- A search that may miss something (`stale_indexes`): "Some recent changes to your library may not be searched yet, so this answer could miss them." When part of the search could not run (`lexical_unavailable`, `dense_unavailable`) this one takes its place: "The search was limited this time, so this answer could miss some pages." Under either, the answer is followed by **Rebuild search** when search is behind (below).
 - Pages left out (`withheld` above zero on any other outcome): "{n} pages marked Only on this Mac were left out." ("1 page … was left out.")
 - An answer the engine could not check first (`sufficiency_degraded`): "This answer wasn't checked against your pages before it was written."
 
@@ -494,6 +513,31 @@ A withheld answer is a count, never a title: the API names no such page, and the
 | Anything else | — | "Something went wrong." | **Try again** |
 
 **Earlier questions.** The session's last few questions wait behind "Earlier questions", each with one word for how it went: "Answered", "No answer", "Kept private", "Didn't finish". They are kept in memory only and are gone when the app closes.
+
+## Rebuilding search
+
+`openkos.api.search_index` and the rebuild job (`rebuild_search`). Search falls behind when the AI model for search changes, and when pages change after it was last brought up to date. **(H)** for the whole section.
+
+- **Where.** Under the AI model card in Settings, under an Ask answer whose search may have missed something, and in Your library's card on Status: only while search is behind, a rebuild runs, or one ended this session.
+- **Why, before.** "Search needs to be rebuilt for the new AI model. Until it is, answers may miss some pages." or, when only pages changed, "Search is behind your latest changes, so answers may miss them. Rebuilding brings it up to date." Then what it costs: "The AI model on this Mac reads your pages again. Nothing leaves this Mac.", or, with a cloud AI model for search, "You'll see what is sent to {host} before it starts." One button, **Rebuild search** ("Starting…").
+- **With a cloud AI model for search,** it asks first, in a dialog that starts on its safe answer, with the cloud warning's send rule: "Rebuild search with {host}?" — "OpenKOS will send the text of your pages to {host} so search can find them by what they mean." — "Pages marked Shareable or Private are sent." "Pages marked Only on this Mac are never sent." "{host} may charge you for this." — **Rebuild search** · **Not now**.
+- **While it runs:** "Getting ready…", then "Reading {done} of {n} pages…" with a progress bar, then "Finishing…", with **Stop** ("Stopping…"). Nothing is written until the end, so **Stop** loses no page: "Stopped. Search wasn't changed."
+- **After:** "Search is up to date." When it could not cover every page: "Search was rebuilt." followed by what was left: "{n} pages marked Only on this Mac weren't sent, so search finds them only by their words." (a cloud AI model for search), "The AI model couldn't read {n} pages. Rebuilding again tries them again.", "{n} pages couldn't be opened." After such a rebuild with a new AI model for search, search still reads as behind, because those pages are not on the new AI model yet.
+
+| Situation | Code | Message |
+| --- | --- | --- |
+| A rebuild is already running | `rebuild_active` | "Search is already being rebuilt." |
+| The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to rebuild search. Search wasn't changed." |
+| The AI model for search isn't installed | `backend_model_not_found` | "The AI model for search isn't installed. Search wasn't changed." |
+| The AI model failed | `backend_error` | "The AI model ran into a problem. Search wasn't changed." |
+| OpenKOS is busy when it writes | `workspace_busy` | "OpenKOS is busy. Try again in a moment. Search wasn't changed." |
+| A search store can't be used | `search_unavailable` | "Search couldn't be rebuilt. Search wasn't changed." |
+| The library can't be read | `workspace_unreadable` | "Your library couldn't be read. Search wasn't changed." |
+| The engine restarted mid-rebuild | `not_found` (on the poll) | "OpenKOS restarted while it was rebuilding search. Search wasn't changed." |
+| OpenKOS does not answer | — | "OpenKOS isn't responding." |
+| Anything else | — | "Something went wrong. Search wasn't changed." |
+
+Each failure offers **Rebuild search** again while search is still behind.
 
 ## Open questions
 

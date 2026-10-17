@@ -98,15 +98,17 @@ unusable store or a failed graph write is the new `SearchUnavailable`.
 
 ### D6. The screens
 
-- **The label.** A page panel (title, "From:", the label as a three-way choice:
-  Shareable, Private, Only on this Mac) opens from an Ask citation and from a
-  page card in To review. Choosing a label previews and applies in one step,
-  like an undo, then confirms with Undo, which puts back the level it replaced.
-  Ask citations also carry the one action "Keep only on this Mac" directly.
-  Lowering from "Only on this Mac" while a cloud AI model is on opens a dialog
-  first, starting on its safe answer. When other pages were raised with it, the
-  confirmation says so and Undo is not offered, because putting this page back
-  would leave the others raised.
+- **The label.** No page view exists, and a panel of its own would add a
+  screen for one control, so the label goes where a page already is. Each page
+  card in To review ends with "Who can see it", the three labels as one
+  `segmented` choice; each page an Ask answer came from carries the one action
+  "Keep only on this Mac". Choosing previews and applies in one step, like an
+  undo, then confirms with Undo, which puts back the level the engine read
+  (`preview.current`), not the one the screen guessed: an Ask citation knows
+  only that it is not confidential. Lowering from "Only on this Mac" while a
+  cloud AI model is on opens a dialog first, starting on its safe answer. When
+  other pages were raised with it, the confirmation says so and Undo is not
+  offered, because putting this page back would leave the others raised.
 - **Rebuild.** One component, used in Settings (after a change of the AI model
   for search, and whenever `needs_rebuild`), from Ask's stale-search note, and
   on Status while `needs_rebuild`. With a cloud AI model for search it asks

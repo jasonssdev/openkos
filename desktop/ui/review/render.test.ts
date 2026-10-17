@@ -546,3 +546,29 @@ describe("the screen", () => {
     }
   });
 });
+
+describe("who can see each page", () => {
+  it("puts the screen's label action on each page card in place of the label in its meta line", async () => {
+    const client = fakeClient([PAIR]);
+    const model = new ReviewModel(client as unknown as ReviewClient, { sleep: async () => {}, today: () => new Date("2026-10-16T12:00:00Z") });
+    const root = document.createElement("div");
+    const live = { status: document.createElement("p"), alert: document.createElement("p") };
+    document.body.replaceChildren(root, live.status, live.alert);
+    const seen: string[] = [];
+    const extras = {
+      pageAction: (page: { conceptId: string; title: string; level: string }) => {
+        seen.push(`${page.conceptId}:${page.level}`);
+        return document.createElement("aside");
+      },
+    };
+    model.subscribe((state) => renderReview(root, live, model, state, extras));
+    await model.load();
+    rows(root)[0]?.click();
+    await settle();
+    expect(seen).toContain("people/a:private");
+    expect(seen).toContain("people/b:private");
+    const cards = Array.from(detail(root).querySelectorAll(".ui-card"));
+    expect(cards.every((card) => card.querySelector("aside") !== null)).toBe(true);
+    expect(cards.map((card) => card.querySelector(".ui-card__meta")?.textContent)).toEqual(["A person", "A person"]);
+  });
+});

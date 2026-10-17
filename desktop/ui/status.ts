@@ -24,6 +24,8 @@ export interface StatusOptions {
   onToggle: (key: string, open: boolean) => void;
   /** Opens guided setup. */
   onCheckSetup?: () => void;
+  /** Rebuilding search, while search is behind or a rebuild ran this session. */
+  search?: HTMLElement | null;
 }
 
 function more(key: string, summary: string, options: StatusOptions, ...children: HTMLElement[]): HTMLDetailsElement {
@@ -53,6 +55,7 @@ function workspaceCard(workspace: WorkspaceView, options: StatusOptions): HTMLEl
       return uiCard(
         { title: "Your library", headingLevel: 2, meta: "Read from the engine just now." },
         facts(summary.shown),
+        options.search ?? null,
         more("workspace-folder", "Show the folder", options, facts(summary.more)),
       );
     }

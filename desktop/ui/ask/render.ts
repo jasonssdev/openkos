@@ -5,6 +5,7 @@
 // survive every redraw while an answer is on its way.
 import "./ask.css";
 import { callout, disclosure, el, listRow, pageHeader, redraw, spinner, textField, uiButton, uiCard, uiList } from "../system/index.ts";
+import type { Schemas } from "../../client/index.ts";
 import type { AskState, Turn } from "./model.ts";
 import { describeAnswer, phaseLine, turnMeta } from "./wording.ts";
 
@@ -15,6 +16,10 @@ export interface AskActions {
   /** The disclosures the person opened; they stay open across redraws. */
   expanded: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
+  /** Beside each page an answer came from: what the person can do with it. */
+  citationAction?: (citation: Schemas["AnswerCitation"]) => HTMLElement | null;
+  /** Under a finished answer: what the screen adds, such as rebuilding search. */
+  afterAnswer?: (answer: Schemas["Answer"]) => HTMLElement | null;
 }
 
 const FIELD_ID = "ask-question";
@@ -102,9 +107,25 @@ function turnCard(turn: Turn, actions: AskActions): HTMLElement {
         .map((text) => text.trim())
         .filter((text) => text !== "")
         .map((text) => el("p", { class: "ask-answer" }, text));
-      return uiCard(told.from.length > 0 ? { ...title, footer: `From: ${told.from.join(" · ")}` } : title, ...paragraphs, ...notes);
+      return uiCard(told.from.length > 0 ? { ...title, footer: fromFooter(told.from, result.answer, actions) } : title, ...paragraphs, ...notes);
     }
   }
+}
+
+/** "From:" and the pages, each with the screen's action beside it when it has one. */
+function fromFooter(titles: string[], answer: Schemas["Answer"], actions: AskActions): string | HTMLElement {
+  const act = actions.citationAction;
+  if (act === undefined) return `From: ${titles.join(" · ")}`;
+  return el(
+    "div",
+    { class: "ask-from" },
+    el("p", {}, "From:"),
+    el(
+      "ul",
+      { class: "ui-plain-list" },
+      ...answer.citations.map((citation) => el("li", { class: "ask-from__page" }, el("span", {}, citation.title), act(citation))),
+    ),
+  );
 }
 
 function earlierQuestions(state: AskState, actions: AskActions): HTMLElement | null {
@@ -132,7 +153,10 @@ export function renderAsk(root: HTMLElement, state: AskState, actions: AskAction
   markBlank(parts, state.blank);
   redraw(parts.actions, "ask-actions", () => parts.actions.replaceChildren(...askButton(parts, state, actions)));
   const shown = state.turns.find((turn) => turn.id === state.shown);
-  redraw(parts.result, "ask-result", () => parts.result.replaceChildren(...(shown ? [turnCard(shown, actions)] : [])));
+  const after = shown?.result.kind === "answer" && actions.afterAnswer ? actions.afterAnswer(shown.result.answer) : null;
+  redraw(parts.result, "ask-result", () =>
+    parts.result.replaceChildren(...(shown ? [turnCard(shown, actions)] : []), ...(after ? [after] : [])),
+  );
   redraw(parts.earlier, "ask-earlier", () => parts.earlier.replaceChildren(...[earlierQuestions(state, actions)].filter((n) => n !== null)));
   root.dataset["view"] = "ask";
 }

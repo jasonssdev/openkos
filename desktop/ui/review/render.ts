@@ -140,14 +140,20 @@ function drawList(model: ReviewModel, state: ReviewState): HTMLElement {
 
 // -- one decision ------------------------------------------------------------------ //
 
+/** What a screen beyond the review adds to it: who can see each page, on its card. */
+export interface ReviewExtras {
+  pageAction?: (page: NonNullable<PageView["ref"]>) => HTMLElement | null;
+}
+
 function capitalized(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-function pageCard(page: PageView): HTMLElement {
-  const meta = [page.kind ? capitalized(page.kind) : null, page.date ?? null, page.whoCanSee?.label ?? null]
-    .filter(Boolean)
-    .join(" · ");
+function pageCard(page: PageView, extras: ReviewExtras): HTMLElement {
+  // With the label choice on the card, its label is not repeated in the meta line.
+  const action = page.ref !== null && extras.pageAction ? extras.pageAction(page.ref) : null;
+  const label = action === null ? (page.whoCanSee?.label ?? null) : null;
+  const meta = [page.kind ? capitalized(page.kind) : null, page.date ?? null, label].filter(Boolean).join(" · ");
   // A newer decision's quote takes the excerpt's place: it is what is being compared.
   const body = page.quote
     ? el("blockquote", { class: "ui-quote" }, page.quote)
@@ -161,6 +167,7 @@ function pageCard(page: PageView): HTMLElement {
       ...(page.sources.length > 0 ? { footer: el("ul", { class: "ui-plain-list" }, ...page.sources.map((line) => el("li", {}, line))) } : {}),
     },
     body,
+    action,
   );
 }
 
@@ -175,9 +182,9 @@ function drawClaims(claims: string[]): HTMLElement | null {
   );
 }
 
-function drawPages(pages: PageView[]): HTMLElement | null {
+function drawPages(pages: PageView[], extras: ReviewExtras): HTMLElement | null {
   if (pages.length === 0) return null;
-  const cards = pages.map(pageCard);
+  const cards = pages.map((page) => pageCard(page, extras));
   if (cards.length === 2) return compare(pages.map((p) => p.title).join(" and "), cards[0]!, cards[1]!);
   return el("div", { class: "ui-compare", attrs: { role: "group", "aria-label": "The pages" } }, ...cards);
 }
@@ -306,7 +313,7 @@ function drawStep(model: ReviewModel, state: ReviewState, options: Option[], aft
   }
 }
 
-function drawDecision(model: ReviewModel, state: ReviewState): HTMLElement[] {
+function drawDecision(model: ReviewModel, state: ReviewState, extras: ReviewExtras): HTMLElement[] {
   const open = state.open!;
   const view = describeDecision(open.decision, state.pages);
   // After "Same thing", the second question takes the first one's place.
@@ -323,7 +330,7 @@ function drawDecision(model: ReviewModel, state: ReviewState): HTMLElement[] {
   );
   if (view.statement) parts.push(el("p", { class: "ui-statement" }, view.statement));
   if (view.facts.length > 0) parts.push(facts(view.facts));
-  const pages = drawPages(view.pages);
+  const pages = drawPages(view.pages, extras);
   if (pages) parts.push(pages);
   const claims = drawClaims(view.claims);
   if (claims) parts.push(claims);
@@ -469,13 +476,13 @@ function drawNothingOpen(state: ReviewState): HTMLElement[] {
   return parts;
 }
 
-function drawDetail(model: ReviewModel, state: ReviewState): HTMLElement {
+function drawDetail(model: ReviewModel, state: ReviewState, extras: ReviewExtras): HTMLElement {
   const parts = state.split
     ? drawSplit(model, state)
     : state.check
       ? drawCheck(model, state)
       : state.open
-        ? drawDecision(model, state)
+        ? drawDecision(model, state, extras)
         : state.combinedOpen
           ? drawCombined(model, state)
           : drawNothingOpen(state);
@@ -504,9 +511,15 @@ function viewKey(state: ReviewState): string {
 }
 
 /** Redraws the review screen into `root`, keeping focus, and updates the live regions. */
-export function renderReview(root: HTMLElement, live: LiveRegions, model: ReviewModel, state: ReviewState): void {
+export function renderReview(
+  root: HTMLElement,
+  live: LiveRegions,
+  model: ReviewModel,
+  state: ReviewState,
+  extras: ReviewExtras = {},
+): void {
   redraw(root, viewKey(state), () =>
-    root.replaceChildren(splitView(drawList(model, state), drawDetail(model, state), { list: "To review", detail: "Decision" })),
+    root.replaceChildren(splitView(drawList(model, state), drawDetail(model, state, extras), { list: "To review", detail: "Decision" })),
   );
   const said = announcement(state);
   const politeText = said && said.tone !== "error" ? said.text : "";
