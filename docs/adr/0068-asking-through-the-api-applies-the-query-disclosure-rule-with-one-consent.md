@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0068: Asking through the API applies the query disclosure rule, with one consent"
 description: openkos.api.ask gates its own answer with the rule the MCP query tool and query --json share, reused from application.query_report; include_confidential is the one consent for both the model and the answer; the local API serves it as a pollable job.
-status: Proposed
+status: Accepted
 date: 2026-10-16
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0068: Asking through the API applies the query disclosure rule, with one consent
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-16
 
 ## Context

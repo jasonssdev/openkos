@@ -6,10 +6,11 @@ The loopback HTTP transport through which a local client, first the desktop
 shell, reaches the engine. It exposes exactly the operations of the stable
 Python API (`openkos.api`, ADR-0060) and nothing else: workspace status, the
 pending report, the open decisions with preview and apply, judging quote and
-run, the model-free queue refresh, and guided setup's readiness read and model
-pull. It is a thin adapter: it holds one workspace handle opened at launch,
-calls the v1 functions, and owns only transport, serialization, error mapping
-and the in-memory job registries (judging and the model pull). It adds
+run, the model-free queue refresh, guided setup's readiness read and model
+pull, and asking a question. It is a thin adapter: it holds one workspace
+handle opened at launch, calls the v1 functions, and owns only transport,
+serialization, error mapping and the in-memory job registries (judging, the
+model pull and the ask). It adds
 no engine capability, no stored state and no new operation.
 
 The security shape follows ADR-0058: the server binds `127.0.0.1` on an
@@ -17,10 +18,10 @@ ephemeral port, requires a per-launch bearer token delivered over stdin, and
 checks Host and Origin on every route. The transport is the FastAPI and uvicorn
 adapter recorded in ADR-0061.
 
-Responses are owner-local in this stage: they return stored content, including
+Responses are owner-local: they return stored content, including
 confidential-derived text, to the token holder, as the CLI and `openkos.api`
-do. The sensitivity disclosure gate is not applied here and is deferred to the
-first ask/query endpoint. This is a recorded decision, not an omission.
+do. The one exception is an ask job's answer, which `openkos.api.ask` gates
+with the query disclosure rule before it reaches the adapter (ADR-0068).
 
 Route paths in this specification are relative to the `/v1` prefix unless they
 start with `/`.
@@ -401,6 +402,8 @@ operations MUST be reachable as follows, and the server MUST call the matching
 | `POST /v1/setup/pulls` | `pull_model`, as a job (see the pull job requirement) |
 | `GET /v1/setup/pulls/{id}` | the pull job's state |
 | `POST /v1/setup/pulls/{id}/stop` | the pull job's cooperative stop |
+| `POST /v1/ask` | `ask`, as a job (see the ask job requirement) |
+| `GET /v1/ask/{id}` | the ask job's state |
 
 The health route is authenticated like every other route. Every successful
 response MUST be JSON. A request body that is not valid for its operation (an
@@ -458,7 +461,7 @@ version and installed models; that is not a model call, and it writes nothing.
 
 - GIVEN the application's route table
 - WHEN every operation route is mapped to an `openkos.api` function
-- THEN each maps to one, and none exists for ingest, query or doctor
+- THEN each maps to one, and none exists for ingest or doctor
 
 #### Scenario: Merge history maps to the history read
 
@@ -1024,20 +1027,20 @@ older run is evicted and unknown (404).
 - WHEN `POST /v1/judging/quote` is requested
 - THEN the response is 200 with a quote and its token
 
-### Requirement: Responses Are Owner-Local And Apply No Disclosure Gate
+### Requirement: Responses Are Owner-Local And An Answer Is Gated Before It Leaves
 
-Every response of this stage MUST return the full content the corresponding
-`openkos.api` operation returns, including text derived from confidential
-sources (for example decision rationales, pending-row subjects, recent
-activity and the message of a write refusal), to the holder of the launch
+Every response other than an ask job MUST return the full content the
+corresponding `openkos.api` operation returns, including text derived from
+confidential sources (for example decision rationales, pending-row subjects,
+recent activity and the message of a write refusal), to the holder of the launch
 token. This follows the CLI and `openkos.api`: the caller is the workspace
 owner, and confidentiality is protected at the transport (loopback bind, the
 per-launch token, the Host and Origin checks), not by withholding content. The
-sensitivity disclosure gate is not applied in this stage and is deferred to the
-first endpoint that answers questions (ask/query), where it MUST be applied
-before that endpoint ships. The adapter MUST NOT import `openkos.mcp.gate`. The
-package documentation and `docs/` description of the local API MUST state this
-scope.
+answer of an ask job MUST be the `Answer` `openkos.api.ask` returned, which
+applies the query disclosure rule before the answer reaches the adapter
+(ADR-0058, ADR-0068); the adapter MUST NOT add to it, and MUST NOT pass
+`include_confidential` unless the request body asks for it. The adapter MUST
+NOT import `openkos.mcp.gate`. The package documentation MUST state this scope.
 
 #### Scenario: Confidential-derived text is returned to the token holder
 
@@ -1057,12 +1060,19 @@ scope.
 - WHEN it inspects `openkos.localapi`
 - THEN no module imports `openkos.mcp.gate`
 
+#### Scenario: An ask answer is the gated one
+
+- GIVEN a question whose prompt held a confidential concept
+- WHEN the ask job is started without `include_confidential` and polled to the
+  end
+- THEN its answer has `outcome` `withheld` and names no confidential concept
+
 #### Scenario: The scope is stated
 
 - GIVEN the `openkos.localapi` package documentation
 - WHEN it is read
-- THEN it states that responses are owner-local and that the disclosure gate is
-  deferred to the first ask/query endpoint
+- THEN it states that responses are owner-local and that an ask answer is
+  gated by `openkos.api.ask`
 
 ### Requirement: The Framework Is Confined To The Adapter Package And The Adapter Imports Only The API
 
@@ -1338,3 +1348,60 @@ the same grace as a judging run.
 - GIVEN a runtime that refuses connections
 - WHEN a pull is started
 - THEN the response is 503 with code `backend_unavailable` and no job exists
+
+### Requirement: A Question Is Asked As A Single Pollable Job
+
+`POST /v1/ask` with `{question, limit, include_deprecated,
+include_confidential}` (only `question` required; an unknown key, a `limit`
+below 1 or a wrong type is 422 `invalid_request`) MUST NOT block for the
+answer: it MUST return 202 with the job and a `Location` header naming the job,
+and the ask MUST proceed on its own thread. An omitted `limit` MUST mean the
+API's default. At most one ask MAY be active in the server process: a start
+while one is active MUST return 409 with code `ask_active`, `retryable` true,
+and start nothing. An ask MAY run while a judging run is active. The job
+resource MUST be `{ask_id, state, phase, completed, total, answer, error}`,
+where `state` is `running`, `finished` or `failed`; `phase`, `completed` and
+`total` are the latest progress event (null before the first); `answer` is the
+`Answer` when `finished`; and `error` is the error body of the error table when
+the ask raised, in which case the state is `failed` and there is no answer.
+`GET /v1/ask/{id}` MUST return the job with 200 for any known id, and 404
+`not_found` for an unknown one. The newest 16 finished or failed asks MUST stay
+retrievable; an older one is evicted and unknown. An ask has no stop. The
+registry is in memory: after a restart an ask id is unknown.
+
+#### Scenario: An ask start returns at once
+
+- GIVEN a model call that blocks until the test releases it
+- WHEN an ask is started
+- THEN the response is 202 with an ask id before the model call completes
+
+#### Scenario: Poll to an answer
+
+- GIVEN a started ask
+- WHEN the job is polled until its state is not `running`
+- THEN the state is `finished` and the answer is present
+
+#### Scenario: A second ask while one runs is refused
+
+- GIVEN an active ask
+- WHEN another is started
+- THEN the response is 409 with code `ask_active` and the first is unaffected
+
+#### Scenario: An ask that raises ends failed
+
+- GIVEN a chat backend that cannot be reached
+- WHEN the ask is polled to the end
+- THEN the poll is 200 with `state` `failed`, an `error` body with code
+  `backend_unavailable` and the fixed message, and no answer
+
+#### Scenario: An unknown ask id
+
+- GIVEN no ask with the id
+- WHEN it is polled
+- THEN the response is 404 with code `not_found`
+
+#### Scenario: An invalid limit is rejected before anything starts
+
+- GIVEN a body with `limit` 0
+- WHEN it is posted
+- THEN the response is 422 `invalid_request` and no job exists

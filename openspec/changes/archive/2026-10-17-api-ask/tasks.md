@@ -21,31 +21,31 @@ Authored changed lines (additions plus deletions); the generated
 
 ## S1 Plan
 
-- [ ] 1.1 Proposal, design, delta specs, tasks.
-- [ ] 1.2 ADR-0068 (Proposed) and its README row.
+- [x] 1.1 Proposal, design, delta specs, tasks.
+- [x] 1.2 ADR-0068 (Proposed) and its README row.
 
 ## S2 `openkos.api.ask`
 
-- [ ] 2.1 RED: API tests for every scenario of "A Question Is Asked Under The
+- [x] 2.1 RED: API tests for every scenario of "A Question Is Asked Under The
       Query Disclosure Rule" with fake clients patched at `_wiring`.
-- [ ] 2.2 `api/_ask.py`: `ask`, `Answer`, `AnswerCitation`, `OmittedConcept`,
+- [x] 2.2 `api/_ask.py`: `ask`, `Answer`, `AnswerCitation`, `OmittedConcept`,
       `AskProgress`; `_wiring.default_embedder`; export
       `BackendEmbeddingDimensionMismatch`.
-- [ ] 2.3 Package docstring: the one gated result; spec scenario test updated.
-- [ ] 2.4 Regenerate the surface snapshot; classifier output additive only.
-- [ ] 2.5 Mutation-check the withheld-answer and the consent guards.
+- [x] 2.3 Package docstring: the one gated result; spec scenario test updated.
+- [x] 2.4 Regenerate the surface snapshot; classifier output additive only.
+- [x] 2.5 Mutation-check the withheld-answer and the consent guards.
 
 ## S3 Local API and client
 
-- [ ] 3.1 RED: registry and route tests for "A Question Is Asked As A Single
+- [x] 3.1 RED: registry and route tests for "A Question Is Asked As A Single
       Pollable Job" and the gated-answer scenario.
-- [ ] 3.2 `localapi/_asks.py` registry, `AskRequest`/`AskJob` models, the two
+- [x] 3.2 `localapi/_asks.py` registry, `AskRequest`/`AskJob` models, the two
       routes, the `ask_active` row; the package docstring scope.
-- [ ] 3.3 Regenerate the OpenAPI snapshot and `schema.d.ts`; `ask`/`askJob`
+- [x] 3.3 Regenerate the OpenAPI snapshot and `schema.d.ts`; `ask`/`askJob`
       client methods and tests.
 
 ## S4 Archive
 
-- [ ] 4.1 CHANGELOG; `docs/architecture.md` shape line.
-- [ ] 4.2 Merge the deltas; each heading exactly once; ADR-0068 Accepted in all
+- [x] 4.1 CHANGELOG; `docs/architecture.md` shape line.
+- [x] 4.2 Merge the deltas; each heading exactly once; ADR-0068 Accepted in all
       three places; `archive-report.md`; move to `archive/`.
