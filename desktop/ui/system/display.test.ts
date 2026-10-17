@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { badge, callout, disclosure, emptyState, facts, listRow, skeleton, spinner } from "./display.ts";
+import { badge, callout, disclosure, emptyState, facts, listRow, progressBar, skeleton, spinner } from "./display.ts";
 
 describe("badge", () => {
   it.each([
@@ -91,5 +91,21 @@ describe("disclosure", () => {
     node.open = false;
     node.dispatchEvent(new Event("toggle"));
     expect(onToggle).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe("progressBar", () => {
+  it("is a native progress element, labelled, with its value and maximum", () => {
+    const bar = progressBar("Downloading bge-m3", 25, 100);
+    expect(bar.tagName).toBe("PROGRESS");
+    expect(bar.className).toBe("ui-progress");
+    expect(bar.getAttribute("aria-label")).toBe("Downloading bge-m3");
+    expect(bar.value).toBe(25);
+    expect(bar.max).toBe(100);
+  });
+
+  it("is indeterminate while the size is not known", () => {
+    const bar = progressBar("Downloading bge-m3", 0, null);
+    expect(bar.hasAttribute("value")).toBe(false);
   });
 });

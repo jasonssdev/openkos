@@ -17,6 +17,7 @@ import {
   navItem,
   openDialog,
   pageHeader,
+  progressBar,
   segmented,
   skeleton,
   spinner,
@@ -427,6 +428,7 @@ function states(): HTMLElement {
     specimens(
       wide("loading: first load", skeleton(4, "Loading decisions…")),
       wide("loading: a known wait", spinner("Checking 3 pages…")),
+      wide("progress: a download", el("div", {}, progressBar("Downloading bge-m3", 1_300_000_000, 5_200_000_000), el("p", {}, "1.3 GB of 5.2 GB (25%)"))),
       wide("busy", el("div", { class: "ui-actions" }, uiButton("Combine pages", noop, { variant: "primary", loading: true, loadingLabel: "Combining…" }), uiButton("Different things", noop, { disabled: true }))),
       wide("empty", emptyState({ title: "Nothing to review", text: "When OpenKOS finds pages that may be one, or sources that disagree, they wait here.", action: uiButton("Add a source", noop) })),
       wide("error", callout("error", "OpenKOS couldn't load the decisions. Nothing was changed.", { title: "Couldn't load", actions: [uiButton("Try again", noop, { size: "sm" })] })),

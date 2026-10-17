@@ -19,6 +19,7 @@ export const WORKSPACE_ERROR_REASONS = [
   "folder_not_empty",
   "engine_not_located",
   "init_failed",
+  "init_timed_out",
   "store_failed",
 ] as const;
 

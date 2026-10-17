@@ -95,7 +95,7 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0054](0054-python-314-is-the-only-supported-interpreter.md) | Python 3.14 is the only supported interpreter | Accepted | 2026-10-14 |
 | [0055](0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar.md) | The desktop shell is Tauri 2, with the engine as a supervised sidecar | Amended by ADR-0056 | 2026-10-14 |
 | [0056](0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md) | The engine ships frozen with PyInstaller one-directory under Contents/Resources, deep ad-hoc signed | Accepted | 2026-10-14 |
-| [0057](0057-the-first-model-runtime-is-a-user-installed-ollama-behind-a-guided-setup.md) | The first model runtime is a user-installed Ollama behind a guided setup | Proposed | 2026-10-14 |
+| [0057](0057-the-first-model-runtime-is-a-user-installed-ollama-behind-a-guided-setup.md) | The first model runtime is a user-installed Ollama behind a guided setup | Accepted | 2026-10-14 |
 | [0058](0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md) | The local API is loopback HTTP with a per-launch bearer token and Host/Origin checks | Accepted | 2026-10-14 |
 | [0059](0059-judging-is-a-quote-bound-application-surface-that-persists-per-chunk-and-never-merges.md) | Judging is a quote-bound application surface that persists per chunk and never merges | Accepted | 2026-10-15 |
 | [0060](0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md) | The stable Python API is a versioned facade package with one error root | Accepted | 2026-10-15 |

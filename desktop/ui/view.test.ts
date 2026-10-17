@@ -28,6 +28,7 @@ describe("describeEngine", () => {
     ],
     [{ state: "failed", reason: "r", detail: "trace" }, "The engine could not be started.", "trace"],
     [{ state: "stopped" }, "The engine has stopped.", undefined],
+    [{ state: "no_workspace" }, "No library is open yet.", undefined],
   ] as const)("words %o", (state, text, detail) => {
     expect(describeEngine(state)).toEqual(detail === undefined ? { text } : { text, detail });
   });
@@ -107,6 +108,7 @@ describe("engineBadge", () => {
     [{ state: "restarting", attempt: 1, delay_ms: 500, reason: "exited", detail: "boom" }, ["warning", "Engine restarting"]],
     [{ state: "failed", reason: "r", detail: "trace" }, ["error", "Engine not running"]],
     [{ state: "stopped" }, ["error", "Engine stopped"]],
+    [{ state: "no_workspace" }, ["neutral", "No library open"]],
   ] as const)("gives %o a tone and a word", (state, expected) => {
     expect(engineBadge(state)).toEqual(expected);
   });

@@ -648,6 +648,29 @@
 }
 
 /* -- Spinner and skeleton -------------------------------------------------- */
+.ui-progress {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.ui-progress::-webkit-progress-bar {
+  background: var(--surface-2);
+}
+
+.ui-progress::-webkit-progress-value {
+  background: var(--accent);
+}
+
+.ui-progress::-moz-progress-bar {
+  background: var(--accent);
+}
+
 @keyframes ui-spin {
   to {
     transform: rotate(1turn);
