@@ -13,8 +13,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use std::sync::Arc;
+
+use openkos_desktop::engine;
 use openkos_desktop::locator::{self, DEV_CHECKOUT, EngineSource, WORKSPACE_ENV};
 use openkos_desktop::supervisor::{EngineState, Supervisor, SupervisorConfig};
+use openkos_desktop::workspace::{Choice, WORKSPACE_MARKER, WorkspaceCommandError, Workspaces};
 
 /// The web view's origin on macOS, one of the engine's allowed origins.
 const WEB_VIEW_ORIGIN: &str = "tauri://localhost";
@@ -78,7 +82,7 @@ fn live_the_web_views_request_reads_the_workspace_status() {
             let source = EngineSource::Development {
                 checkout: PathBuf::from(DEV_CHECKOUT),
             };
-            locator::locate(&lookup, Path::new("/"), &source).map_err(|error| error.to_string())
+            locator::locate(&lookup, Path::new("/"), None, &source).map_err(Into::into)
         }),
         SupervisorConfig::default(),
     );
@@ -139,4 +143,71 @@ fn live_the_web_views_request_reads_the_workspace_status() {
         .expect("kill -0");
     assert!(!probe.success(), "the engine {pid} outlived the shutdown");
     let _ = std::fs::remove_dir_all(&workspace);
+}
+
+/// A first-run user: nothing chosen, so no engine runs; creating a workspace
+/// in a new folder runs the real `init` with no terminal, which writes the
+/// recommended models without prompting, and the engine then serves it.
+#[test]
+#[ignore = "needs uv and the checkout's Python environment"]
+fn live_a_created_workspace_is_initialised_without_prompting_and_served() {
+    let base = std::env::temp_dir().canonicalize().expect("temp dir");
+    let root = base.join(format!(
+        "openkos-desktop-live-create-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("root");
+    let folder = root.join("my-knowledge");
+    let source = EngineSource::Development {
+        checkout: PathBuf::from(DEV_CHECKOUT),
+    };
+    let no_env = |_: &str| -> Option<OsString> { None };
+
+    let workspaces = Arc::new(Workspaces::new(Choice::new(&root.join("config"))));
+    let chosen = Arc::clone(&workspaces);
+    let serve_source = source.clone();
+    let supervisor = Supervisor::start(
+        Box::new(move || {
+            locator::locate(
+                &no_env,
+                Path::new("/"),
+                chosen.remembered().as_deref(),
+                &serve_source,
+            )
+            .map_err(Into::into)
+        }),
+        SupervisorConfig::default(),
+    );
+    supervisor
+        .wait_for(Duration::from_secs(30), |s| {
+            matches!(s, EngineState::NoWorkspace)
+        })
+        .expect("no workspace yet");
+
+    let init = |dir: &Path| -> Result<(), WorkspaceCommandError> {
+        let command = locator::init_command(&no_env, &source, dir)
+            .map_err(|e| WorkspaceCommandError::new("engine_not_located", e.to_string()))?;
+        engine::run_once(&command, Duration::from_secs(180))
+            .map_err(|e| WorkspaceCommandError::new("init_failed", e.detail()))
+    };
+    let status = workspaces
+        .create(None, folder.to_str().expect("utf-8"), &init, &|| {
+            supervisor.restart()
+        })
+        .expect("created");
+    assert!(status.valid, "{status:?}");
+    let config = std::fs::read_to_string(folder.join(WORKSPACE_MARKER)).expect("openkos.yaml");
+    assert!(config.contains("qwen3:8b"), "{config}");
+    assert!(config.contains("bge-m3"), "{config}");
+    assert!(!folder.join("config").exists());
+
+    let state = supervisor
+        .wait_for(Duration::from_secs(120), |s| {
+            matches!(s, EngineState::Ready { .. } | EngineState::Failed { .. })
+        })
+        .expect("the engine settled");
+    assert!(matches!(state, EngineState::Ready { .. }), "{state:?}");
+    supervisor.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
 }

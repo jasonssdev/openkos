@@ -5,18 +5,21 @@
 //! ships under `Contents/Resources/engine` (ADR-0056); otherwise the
 //! development engine of the source checkout this shell was built from, run as
 //! `uv run --project <checkout> openkos serve --workspace <dir>`. Nothing
-//! outside this module knows which one runs.
+//! outside this module knows which one runs. The same engine creates a
+//! workspace, run as `init` in the chosen folder.
 
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::engine::EngineCommand;
+use crate::supervisor::Unlocated;
+use crate::workspace;
 
 /// An executable that accepts `serve --workspace <dir>`, overriding the default.
 pub const ENGINE_ENV: &str = "OPENKOS_ENGINE";
 
-/// The workspace to serve; the shell's working directory when unset.
+/// The workspace to serve. When unset, the workspace the shell remembers.
 pub const WORKSPACE_ENV: &str = "OPENKOS_WORKSPACE";
 
 /// The source checkout this shell was built from: its development engine.
@@ -67,6 +70,9 @@ pub fn bundled_engine(resources: &Path) -> PathBuf {
 /// Why no engine command could be formed. Not retried: nothing changes on its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LocateError {
+    /// No workspace is chosen yet: the variable is unset and nothing usable is
+    /// remembered. Not a failure; the user has a choice to make.
+    NoWorkspace,
     WorkspaceMissing(PathBuf),
     BundledEngineMissing(PathBuf),
 }
@@ -74,6 +80,7 @@ pub enum LocateError {
 impl fmt::Display for LocateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NoWorkspace => write!(f, "no workspace is chosen yet"),
             Self::WorkspaceMissing(path) => write!(
                 f,
                 "the workspace {} is not a directory; set {WORKSPACE_ENV} to an OpenKOS workspace",
@@ -88,29 +95,27 @@ impl fmt::Display for LocateError {
     }
 }
 
-/// Form the engine command from the environment.
-///
-/// `env` reads one variable, `cwd` is the shell's working directory and
-/// `source` where the default engine comes from.
-pub fn locate(
-    env: &dyn Fn(&str) -> Option<OsString>,
-    cwd: &Path,
-    source: &EngineSource,
-) -> Result<EngineCommand, LocateError> {
-    let workspace = match env(WORKSPACE_ENV) {
-        Some(path) => cwd.join(path),
-        None => cwd.to_path_buf(),
-    };
-    if !workspace.is_dir() {
-        return Err(LocateError::WorkspaceMissing(workspace));
+impl From<LocateError> for Unlocated {
+    fn from(error: LocateError) -> Self {
+        match error {
+            LocateError::NoWorkspace => Self::NoWorkspace,
+            other => Self::Failed(other.to_string()),
+        }
     }
-    let serve = [
-        OsString::from("serve"),
-        OsString::from("--workspace"),
-        workspace.clone().into_os_string(),
-    ];
-    let (program, args) = match (env(ENGINE_ENV), source) {
-        (Some(engine), _) => (engine, serve.to_vec()),
+}
+
+/// The workspace `OPENKOS_WORKSPACE` names, resolved against `cwd`, if set.
+pub fn workspace_from_env(env: &dyn Fn(&str) -> Option<OsString>, cwd: &Path) -> Option<PathBuf> {
+    env(WORKSPACE_ENV).map(|path| cwd.join(path))
+}
+
+/// The engine's program and the arguments that come before its subcommand.
+fn engine_program(
+    env: &dyn Fn(&str) -> Option<OsString>,
+    source: &EngineSource,
+) -> Result<(OsString, Vec<OsString>), LocateError> {
+    match (env(ENGINE_ENV), source) {
+        (Some(engine), _) => Ok((engine, Vec::new())),
         (None, EngineSource::Bundled { resources }) => {
             // Never a fallback to `uv`: an installed app without its engine is
             // a broken build, and a checkout's engine would hide it.
@@ -118,19 +123,51 @@ pub fn locate(
             if !engine.is_file() {
                 return Err(LocateError::BundledEngineMissing(engine));
             }
-            (engine.into_os_string(), serve.to_vec())
+            Ok((engine.into_os_string(), Vec::new()))
         }
-        (None, EngineSource::Development { checkout }) => {
-            let mut args = vec![
+        (None, EngineSource::Development { checkout }) => Ok((
+            OsString::from("uv"),
+            vec![
                 OsString::from("run"),
                 OsString::from("--project"),
                 checkout.as_os_str().to_owned(),
                 OsString::from("openkos"),
-            ];
-            args.extend(serve);
-            (OsString::from("uv"), args)
+            ],
+        )),
+    }
+}
+
+/// Form the engine command from the environment.
+///
+/// `env` reads one variable, `cwd` is the shell's working directory,
+/// `remembered` the workspace the shell remembers choosing, and `source` where
+/// the default engine comes from. The variable wins; a remembered folder is
+/// used only while it is still a workspace; otherwise there is no workspace
+/// yet, and nothing is started.
+pub fn locate(
+    env: &dyn Fn(&str) -> Option<OsString>,
+    cwd: &Path,
+    remembered: Option<&Path>,
+    source: &EngineSource,
+) -> Result<EngineCommand, LocateError> {
+    let workspace = match workspace_from_env(env, cwd) {
+        Some(workspace) => {
+            if !workspace.is_dir() {
+                return Err(LocateError::WorkspaceMissing(workspace));
+            }
+            workspace
         }
+        None => match remembered {
+            Some(path) if workspace::is_workspace(path) => path.to_path_buf(),
+            _ => return Err(LocateError::NoWorkspace),
+        },
     };
+    let (program, mut args) = engine_program(env, source)?;
+    args.extend([
+        OsString::from("serve"),
+        OsString::from("--workspace"),
+        workspace.clone().into_os_string(),
+    ]);
     Ok(EngineCommand {
         program,
         args,
@@ -138,15 +175,49 @@ pub fn locate(
     })
 }
 
-/// [`locate`] against the real process environment and executable.
-pub fn locate_from_process() -> Result<EngineCommand, LocateError> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+/// The command that creates a workspace in `folder`: the same engine, run as
+/// `init` with `folder` as its working directory.
+pub fn init_command(
+    env: &dyn Fn(&str) -> Option<OsString>,
+    source: &EngineSource,
+    folder: &Path,
+) -> Result<EngineCommand, LocateError> {
+    let (program, mut args) = engine_program(env, source)?;
+    args.push(OsString::from("init"));
+    Ok(EngineCommand {
+        program,
+        args,
+        cwd: Some(folder.to_path_buf()),
+    })
+}
+
+fn process_cwd() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn process_source() -> EngineSource {
     let shell_exe = std::env::current_exe().unwrap_or_default();
+    engine_source(&shell_exe, Path::new(DEV_CHECKOUT))
+}
+
+/// [`locate`] against the real process environment and executable.
+pub fn locate_from_process(remembered: Option<&Path>) -> Result<EngineCommand, LocateError> {
     locate(
         &|name| std::env::var_os(name),
-        &cwd,
-        &engine_source(&shell_exe, Path::new(DEV_CHECKOUT)),
+        &process_cwd(),
+        remembered,
+        &process_source(),
     )
+}
+
+/// [`init_command`] against the real process environment and executable.
+pub fn init_from_process(folder: &Path) -> Result<EngineCommand, LocateError> {
+    init_command(&|name| std::env::var_os(name), &process_source(), folder)
+}
+
+/// [`workspace_from_env`] against the real process environment.
+pub fn workspace_from_process() -> Option<PathBuf> {
+    workspace_from_env(&|name| std::env::var_os(name), &process_cwd())
 }
 
 #[cfg(test)]
@@ -192,7 +263,13 @@ mod tests {
     #[test]
     fn the_default_is_the_dev_checkout_engine_under_uv() {
         let workspace = std::env::temp_dir();
-        let command = locate(&env_of(&[]), &workspace, &development()).expect("located");
+        let command = locate(
+            &env_of(&[(WORKSPACE_ENV, &workspace)]),
+            Path::new("/"),
+            None,
+            &development(),
+        )
+        .expect("located");
         assert_eq!(command.program, OsString::from("uv"));
         assert_eq!(
             args(&command),
@@ -212,8 +289,13 @@ mod tests {
     fn the_engine_variable_overrides_the_program() {
         let workspace = std::env::temp_dir();
         let engine = Path::new("/opt/openkos/bin/openkos");
-        let command =
-            locate(&env_of(&[(ENGINE_ENV, engine)]), &workspace, &development()).expect("located");
+        let command = locate(
+            &env_of(&[(ENGINE_ENV, engine), (WORKSPACE_ENV, &workspace)]),
+            Path::new("/"),
+            None,
+            &development(),
+        )
+        .expect("located");
         assert_eq!(command.program, engine.as_os_str());
         assert_eq!(
             args(&command),
@@ -226,8 +308,9 @@ mod tests {
         let resources = bundle("frozen", true);
         let workspace = std::env::temp_dir();
         let command = locate(
-            &env_of(&[]),
-            &workspace,
+            &env_of(&[(WORKSPACE_ENV, &workspace)]),
+            Path::new("/"),
+            None,
             &EngineSource::Bundled {
                 resources: resources.clone(),
             },
@@ -248,8 +331,9 @@ mod tests {
     fn a_bundle_without_its_engine_is_refused_and_never_falls_back() {
         let resources = bundle("missing", false);
         let err = locate(
-            &env_of(&[]),
-            &std::env::temp_dir(),
+            &env_of(&[(WORKSPACE_ENV, &std::env::temp_dir())]),
+            Path::new("/"),
+            None,
             &EngineSource::Bundled {
                 resources: resources.clone(),
             },
@@ -265,8 +349,9 @@ mod tests {
         let resources = bundle("directory", false);
         std::fs::create_dir_all(bundled_engine(&resources)).expect("directory");
         let err = locate(
-            &env_of(&[]),
-            &std::env::temp_dir(),
+            &env_of(&[(WORKSPACE_ENV, &std::env::temp_dir())]),
+            Path::new("/"),
+            None,
             &EngineSource::Bundled {
                 resources: resources.clone(),
             },
@@ -283,8 +368,9 @@ mod tests {
         let resources = bundle("override", false);
         let engine = Path::new("/opt/openkos/bin/openkos");
         let command = locate(
-            &env_of(&[(ENGINE_ENV, engine)]),
-            &std::env::temp_dir(),
+            &env_of(&[(ENGINE_ENV, engine), (WORKSPACE_ENV, &std::env::temp_dir())]),
+            Path::new("/"),
+            None,
             &EngineSource::Bundled { resources },
         )
         .expect("located");
@@ -329,6 +415,7 @@ mod tests {
         let command = locate(
             &env_of(&[(WORKSPACE_ENV, &workspace)]),
             Path::new("/"),
+            None,
             &development(),
         )
         .expect("located");
@@ -345,6 +432,7 @@ mod tests {
         let command = locate(
             &env_of(&[(WORKSPACE_ENV, Path::new("."))]),
             &cwd,
+            None,
             &development(),
         )
         .expect("located");
@@ -358,6 +446,7 @@ mod tests {
         let err = locate(
             &env_of(&[(WORKSPACE_ENV, missing)]),
             Path::new("/"),
+            None,
             &development(),
         )
         .expect_err("refused");
@@ -399,6 +488,124 @@ mod tests {
                 .count(),
             2,
             "the recipe names its executable and its directory {BUNDLED_ENGINE_NAME}"
+        );
+    }
+
+    /// A scratch directory; with `workspace`, it holds the workspace marker.
+    fn scratch_dir(name: &str, workspace: bool) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("openkos-locator-ws-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        if workspace {
+            std::fs::write(
+                dir.join(crate::workspace::WORKSPACE_MARKER),
+                b"backend: ollama\n",
+            )
+            .expect("marker");
+        }
+        dir
+    }
+
+    #[test]
+    fn with_no_variable_and_nothing_remembered_there_is_no_workspace_yet() {
+        let err = locate(&env_of(&[]), &std::env::temp_dir(), None, &development())
+            .expect_err("no workspace");
+        assert_eq!(err, LocateError::NoWorkspace);
+    }
+
+    #[test]
+    fn the_remembered_workspace_is_served_when_the_variable_is_unset() {
+        let workspace = scratch_dir("remembered", true);
+        let command = locate(
+            &env_of(&[]),
+            Path::new("/"),
+            Some(&workspace),
+            &development(),
+        )
+        .expect("located");
+        assert_eq!(
+            args(&command).last().map(String::as_str),
+            Some(&*workspace.to_string_lossy())
+        );
+        assert_eq!(command.cwd.as_deref(), Some(workspace.as_path()));
+    }
+
+    #[test]
+    fn a_remembered_folder_that_is_no_longer_a_workspace_is_no_workspace_yet() {
+        let gone = scratch_dir("gone", false);
+        let err = locate(&env_of(&[]), Path::new("/"), Some(&gone), &development())
+            .expect_err("no workspace");
+        assert_eq!(err, LocateError::NoWorkspace);
+    }
+
+    #[test]
+    fn the_variable_wins_over_the_remembered_workspace() {
+        let remembered = scratch_dir("loser", true);
+        let workspace = std::env::temp_dir();
+        let command = locate(
+            &env_of(&[(WORKSPACE_ENV, &workspace)]),
+            Path::new("/"),
+            Some(&remembered),
+            &development(),
+        )
+        .expect("located");
+        assert_eq!(command.cwd.as_deref(), Some(workspace.as_path()));
+    }
+
+    #[test]
+    fn init_runs_the_same_engine_in_the_chosen_folder() {
+        let folder = scratch_dir("init", false);
+        let dev = init_command(&env_of(&[]), &development(), &folder).expect("dev");
+        assert_eq!(dev.program, OsString::from("uv"));
+        assert_eq!(
+            args(&dev),
+            ["run", "--project", "/src/openkos", "openkos", "init"]
+        );
+        assert_eq!(dev.cwd.as_deref(), Some(folder.as_path()));
+
+        let engine = Path::new("/opt/openkos/bin/openkos");
+        let explicit =
+            init_command(&env_of(&[(ENGINE_ENV, engine)]), &development(), &folder).expect("env");
+        assert_eq!(explicit.program, engine.as_os_str());
+        assert_eq!(args(&explicit), ["init"]);
+
+        let resources = bundle("init", true);
+        let frozen = init_command(
+            &env_of(&[]),
+            &EngineSource::Bundled {
+                resources: resources.clone(),
+            },
+            &folder,
+        )
+        .expect("bundled");
+        assert_eq!(frozen.program, bundled_engine(&resources).into_os_string());
+        assert_eq!(args(&frozen), ["init"]);
+    }
+
+    #[test]
+    fn init_with_a_bundle_missing_its_engine_is_refused() {
+        let resources = bundle("init-missing", false);
+        let err = init_command(
+            &env_of(&[]),
+            &EngineSource::Bundled {
+                resources: resources.clone(),
+            },
+            &std::env::temp_dir(),
+        )
+        .expect_err("refused");
+        assert_eq!(
+            err,
+            LocateError::BundledEngineMissing(bundled_engine(&resources))
+        );
+    }
+
+    #[test]
+    fn the_workspace_variable_is_resolved_against_the_working_directory() {
+        assert_eq!(workspace_from_env(&env_of(&[]), Path::new("/x")), None);
+        assert_eq!(
+            workspace_from_env(&env_of(&[(WORKSPACE_ENV, Path::new("w"))]), Path::new("/x")),
+            Some(PathBuf::from("/x/w"))
         );
     }
 }

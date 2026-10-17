@@ -421,6 +421,79 @@ pub fn start_with_env(
     }
 }
 
+/// Why a one-shot engine command did not succeed.
+#[derive(Debug)]
+pub enum RunError {
+    Spawn(std::io::Error),
+    Exited { status: ExitStatus, stderr: String },
+    TimedOut { waited: Duration, stderr: String },
+}
+
+impl RunError {
+    /// The human detail: the error and whatever the command wrote to stderr.
+    pub fn detail(&self) -> String {
+        match self {
+            Self::Spawn(e) => format!("the engine could not be started: {e}"),
+            Self::Exited { status, stderr } => format!("the engine exited ({status}).\n{stderr}"),
+            Self::TimedOut { waited, stderr } => format!(
+                "the engine did not finish within {} s and was stopped.\n{stderr}",
+                waited.as_secs()
+            ),
+        }
+    }
+}
+
+/// Run a one-shot engine command, such as `init`, to completion within
+/// `timeout`. Its stdin is empty and not a terminal, so it never prompts; a
+/// command still running at the deadline is killed with its process group.
+pub fn run_once(command: &EngineCommand, timeout: Duration) -> Result<(), RunError> {
+    let mut process = Command::new(&command.program);
+    process
+        .args(&command.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    if let Some(cwd) = &command.cwd {
+        process.current_dir(cwd);
+    }
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut process, 0);
+    let mut child = process.spawn().map_err(RunError::Spawn)?;
+    let stderr = Arc::new(Mutex::new(StderrTail::default()));
+    if let Some(pipe) = child.stderr.take() {
+        let sink = Arc::clone(&stderr);
+        thread::spawn(move || {
+            for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                sink.lock().expect("stderr lock").push(line);
+            }
+        });
+    }
+    let tail = |stderr: &Arc<Mutex<StderrTail>>| stderr.lock().expect("stderr lock").text();
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    return Ok(());
+                }
+                wait_for_stderr(&stderr);
+                return Err(RunError::Exited {
+                    status,
+                    stderr: tail(&stderr),
+                });
+            }
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            _ => {
+                kill_group(&mut child);
+                return Err(RunError::TimedOut {
+                    waited: timeout,
+                    stderr: tail(&stderr),
+                });
+            }
+        }
+    }
+}
+
 /// Give the stderr reader a moment to reach EOF after the engine exited, so the
 /// engine's last words reach the report. The reader holds the other reference
 /// to the tail until its pipe closes.
@@ -536,6 +609,43 @@ pub(crate) mod fake {
 mod tests {
     use super::fake::{self, READY};
     use super::*;
+
+    #[test]
+    fn a_one_shot_command_runs_to_completion_with_no_terminal() {
+        let dir = fake::scratch("once-ok");
+        // A terminal or any readable input on stdin would make `init` prompt.
+        let command = fake::engine(
+            "[ -t 0 ] && exit 9; IFS= read -r x && exit 8; echo done > \"$1/ran\"",
+            &dir,
+        );
+        run_once(&command, Duration::from_secs(5)).expect("succeeded");
+        assert!(dir.join("ran").is_file());
+    }
+
+    #[test]
+    fn a_failed_one_shot_command_reports_its_stderr() {
+        let dir = fake::scratch("once-fail");
+        let command = fake::engine("echo 'refusing to initialize' >&2; exit 1", &dir);
+        let err = run_once(&command, Duration::from_secs(5)).expect_err("failed");
+        assert!(matches!(err, RunError::Exited { .. }), "{err:?}");
+        assert!(
+            err.detail().contains("refusing to initialize"),
+            "{}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn a_one_shot_command_past_its_deadline_is_killed() {
+        let dir = fake::scratch("once-slow");
+        let command = fake::engine("echo $$ > \"$1/pid\"; exec sleep 30", &dir);
+        let started = Instant::now();
+        let err = run_once(&command, Duration::from_millis(300)).expect_err("timed out");
+        assert!(matches!(err, RunError::TimedOut { .. }), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let pid = fake::read_pid(&dir.join("pid"), Duration::from_secs(5));
+        assert!(fake::gone_within(pid, Duration::from_secs(5)));
+    }
 
     const NEVER: &dyn Fn() -> bool = &|| false;
     const SECONDS_5: Duration = Duration::from_secs(5);

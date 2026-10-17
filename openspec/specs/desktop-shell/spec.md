@@ -14,7 +14,12 @@ the page calls the local API itself.
 Which engine runs is decided by the engine locator alone: an executable named
 by an environment variable; inside an app bundle, the frozen engine the bundle
 ships (ADR-0056, the `desktop-packaging` domain); otherwise the development
-engine of the source checkout.
+engine of the source checkout. Which workspace it serves is the one named by an
+environment variable, or else the one the user chose in the app, which the shell
+remembers in its own configuration directory; a workspace is created by running
+the engine's own `init` (#1487). The shell keeps the remote backend's API key in
+the operating system's keychain and hands it to the engine as its environment
+(ADR-0070).
 
 ## Requirements
 
@@ -22,8 +27,11 @@ engine of the source checkout.
 
 The shell MUST decide which engine to run in one place, the engine locator.
 The workspace MUST be the directory named by `OPENKOS_WORKSPACE`, resolved
-against the shell's working directory when relative, or the working directory
-when the variable is unset. When `OPENKOS_ENGINE` is set, the engine MUST be that
+against the shell's working directory when relative; when the variable is unset,
+it MUST be the workspace the shell remembers the user choosing, as long as that
+folder still holds `openkos.yaml`. When neither gives a workspace, the shell
+MUST NOT spawn anything and the state MUST be `no_workspace`; that is not a
+failure, and a requested restart locates again. When `OPENKOS_ENGINE` is set, the engine MUST be that
 executable run as `serve --workspace <workspace>`. Otherwise, when the shell's
 own executable is inside a macOS app bundle (its directory is `MacOS` inside
 `Contents`), the engine MUST be the frozen engine shipped in that bundle,
@@ -38,10 +46,25 @@ spawn anything and MUST report the failure as final.
 
 #### Scenario: The development engine is the default
 
-- GIVEN neither `OPENKOS_ENGINE` nor `OPENKOS_WORKSPACE` is set
+- GIVEN `OPENKOS_ENGINE` is not set and `OPENKOS_WORKSPACE` names a workspace
 - AND the shell's executable is not inside an app bundle
 - WHEN the shell locates the engine
-- THEN the command is `uv run --project <checkout> openkos serve --workspace <cwd>`
+- THEN the command is `uv run --project <checkout> openkos serve --workspace <workspace>`
+
+#### Scenario: No workspace is chosen yet
+
+- GIVEN `OPENKOS_WORKSPACE` is not set
+- AND no workspace is remembered, or the remembered folder has no `openkos.yaml`
+- WHEN the shell starts
+- THEN no process is spawned
+- AND the state is `no_workspace`
+
+#### Scenario: The remembered workspace is served
+
+- GIVEN `OPENKOS_WORKSPACE` is not set
+- AND the shell remembers a folder that holds `openkos.yaml`
+- WHEN the shell locates the engine
+- THEN the engine serves that folder, with it as its working directory
 
 #### Scenario: A bundled shell runs its frozen engine
 
@@ -129,12 +152,25 @@ and the engine's stderr tail, and the shell MUST NOT restart the engine on its
 own. A restarted engine MUST receive a new token. A locator failure MUST be final
 without any restart.
 
+A restart the user asks for (a changed API key, a workspace opened or created)
+MUST NOT spend the crash budget: a running engine MUST be stopped and started
+again, a pending backoff MUST be cut short, and after a final state (`failed` or
+`no_workspace`) supervision MUST start again. After the shell's shutdown it MUST
+do nothing.
+
 #### Scenario: A crash is restarted with a fresh token
 
 - GIVEN a ready engine
 - WHEN its process is killed
 - THEN the shell starts a new engine process
 - AND the new engine's token differs from the old one
+
+#### Scenario: A requested restart starts the chosen workspace
+
+- GIVEN the state is `no_workspace`
+- WHEN a workspace is chosen and a restart is requested
+- THEN the shell locates again and starts the engine on it
+- AND the crash budget is untouched
 
 #### Scenario: Repeated failures stop being restarted
 
@@ -179,7 +215,7 @@ The shell MUST expose the engine's state to the web view through one command,
 `engine_state`, as a JSON object tagged by `state`: `starting` (with `attempt`),
 `ready` (with `attempt`, `base_url`, `token` and `pid`), `restarting` (with
 `attempt`, `delay_ms`, `reason` and `detail`), `failed` (with `reason` and
-`detail`) or `stopped`. The page MUST show the engine's state in English and,
+`detail`), `no_workspace` or `stopped`. The page MUST show the engine's state in English and,
 once per ready engine, MUST read the workspace status through the desktop
 client created from that ready state (`GET <base_url>/status` with
 `Authorization: Bearer <token>`) and show the workspace's folder, source count,
@@ -204,3 +240,79 @@ content security policy MUST restrict connections to the shell's IPC and
 - WHEN the page shows the failure
 - THEN it shows an English sentence saying the status could not be read
 - AND the sentence does not contain the token
+
+### Requirement: The User Chooses The Workspace In The App
+
+The shell MUST remember the chosen workspace as its absolute, symlink-free path
+in one file in its own application configuration directory, never inside the
+workspace, written so that a crash never leaves half a choice. A missing,
+unreadable or malformed file, or a relative path in it, MUST count as no choice.
+The shell MUST expose four commands to the web view:
+
+- `workspace_choice_status` MUST answer `source` (`environment`, `remembered`
+  or `none`), `path` (or null) and `valid`, whether that folder holds
+  `openkos.yaml`.
+- `open_workspace(path)` MUST refuse unless `path` is absolute and is a folder
+  holding `openkos.yaml`; otherwise it MUST remember it and request a restart.
+- `create_workspace(path)` MUST create the folder when it is missing and its
+  parent exists, and MUST refuse a folder that is already a workspace or holds
+  anything but Finder's `.DS_Store`. It MUST then run the located engine's
+  `init` with that folder as its working directory and an empty, non-terminal
+  stdin, so `init` writes its recommended models without prompting, killing it
+  after a bounded time. Only when `init` succeeds and `openkos.yaml` exists MUST
+  it remember the folder and request a restart.
+- `pick_workspace_folder` MUST show the system's folder picker from the shell
+  and answer the chosen path, or null when cancelled. The web view MUST NOT be
+  granted the dialog plugin's own permissions.
+
+When `OPENKOS_WORKSPACE` is set, `open_workspace` and `create_workspace` MUST
+refuse with `set_by_environment` before writing anything. A refusal MUST answer
+a `reason` (`set_by_environment`, `invalid_path`, `not_a_folder`,
+`not_a_workspace`, `already_a_workspace`, `folder_not_empty`,
+`engine_not_located`, `init_failed` or `store_failed`) and an English `detail`;
+a refused command MUST NOT change the remembered choice or restart the engine.
+
+#### Scenario: A first-run user creates a workspace
+
+- GIVEN no workspace is chosen and the state is `no_workspace`
+- WHEN `create_workspace` is called with a new folder
+- THEN the engine's `init` runs there without prompting and writes `qwen3:8b` and `bge-m3`
+- AND the folder is remembered and the engine becomes ready serving it
+
+#### Scenario: A folder with the user's files in it is refused
+
+- GIVEN a folder holding a file of the user's
+- WHEN `create_workspace` is called with it
+- THEN the answer is `folder_not_empty`
+- AND `init` does not run and the file is untouched
+
+#### Scenario: Opening a folder that is not a workspace is refused
+
+- GIVEN a folder with no `openkos.yaml`
+- WHEN `open_workspace` is called with it
+- THEN the answer is `not_a_workspace`
+- AND nothing is remembered and the engine is not restarted
+
+#### Scenario: The variable wins
+
+- GIVEN `OPENKOS_WORKSPACE` is set
+- WHEN `workspace_choice_status` is called
+- THEN `source` is `environment`
+- AND `open_workspace` and `create_workspace` answer `set_by_environment`
+
+### Requirement: The Remote Backend's Key Is Kept By The Shell
+
+The shell MUST keep the remote backend's API key in the operating system's
+keychain and MUST hand it to the engine only as the `OPENKOS_OPENAI_API_KEY`
+environment variable of the engine process (ADR-0070). It MUST expose
+`set_api_key`, `clear_api_key` and `api_key_status`; none of them MUST return
+the key, and setting or clearing it MUST request a restart that does not spend
+the crash budget. Where the shell has no keychain store the three commands MUST
+answer `not_supported`.
+
+#### Scenario: A changed key restarts the engine with it
+
+- GIVEN a ready engine
+- WHEN `set_api_key` is called with a valid key
+- THEN the engine is restarted with `OPENKOS_OPENAI_API_KEY` set to it
+- AND the crash budget is untouched

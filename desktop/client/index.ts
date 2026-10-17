@@ -14,6 +14,7 @@ import type { components, paths } from "./schema";
 export type { EngineState, ReadyEngine } from "./engine.ts";
 export * from "./errors.ts";
 export * from "./shell.ts";
+export * from "./workspace.ts";
 export type { components, paths } from "./schema";
 
 /** The schema's named shapes: `Schemas["WorkspaceStatus"]`, `Schemas["DecisionPreview"]`, ... */

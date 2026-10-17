@@ -120,7 +120,7 @@ The principles that shape it:
 
 ## Repository structure (the desktop shell)
 
-The desktop app's shell lives beside the engine, not inside it: `desktop/` holds a Rust crate for the Tauri 2 shell ([ADR-0055](adr/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar.md)) and the TypeScript package of the page it shows ([ADR-0065](adr/0065-the-desktop-web-view-is-typescript-built-with-vite-over-a-client-generated-from-the-openapi-snapshot.md)), outside `src/` so the Python package, its wheel and its gates never see it. The shell holds no product behaviour; it starts the engine as a sidecar running `openkos serve` and keeps it running. The one thing it keeps of its own is the remote backend's API key, in the operating system's keychain, which it hands to the engine as `OPENKOS_OPENAI_API_KEY` and never to the web view or the local API ([ADR-0070](adr/0070-the-desktop-shell-keeps-the-remote-backends-api-key-in-the-os-keychain-and-hands-it-to-the-engine-as-its-environment.md)).
+The desktop app's shell lives beside the engine, not inside it: `desktop/` holds a Rust crate for the Tauri 2 shell ([ADR-0055](adr/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar.md)) and the TypeScript package of the page it shows ([ADR-0065](adr/0065-the-desktop-web-view-is-typescript-built-with-vite-over-a-client-generated-from-the-openapi-snapshot.md)), outside `src/` so the Python package, its wheel and its gates never see it. The shell holds no product behaviour; it starts the engine as a sidecar running `openkos serve` and keeps it running. It keeps two things of its own. One is the remote backend's API key, in the operating system's keychain, which it hands to the engine as `OPENKOS_OPENAI_API_KEY` and never to the web view or the local API ([ADR-0070](adr/0070-the-desktop-shell-keeps-the-remote-backends-api-key-in-the-os-keychain-and-hands-it-to-the-engine-as-its-environment.md)). The other is the workspace the user chose, one path in the shell's application config directory, never in the workspace; a new workspace is made by running the engine's own `init` in an empty folder the user picked ([ADR-0071](adr/0071-the-desktop-shell-remembers-the-chosen-workspace-in-its-own-config-directory-and-creates-one-with-the-engines-init.md)).
 
 ```
 desktop/
@@ -136,7 +136,9 @@ desktop/
 │   │   ├── main.rs  lib.rs       # the Tauri app: start the supervisor, expose its state, stop it on exit
 │   │   ├── engine.rs             # one engine process: token over stdin, the ready line, stop
 │   │   ├── supervisor.rs         # start, watch, bounded restarts, stop; the state the UI reads
-│   │   └── locator.rs            # which engine to run: the bundle's frozen engine, or a checkout's
+│   │   ├── locator.rs            # which engine to run: the bundle's frozen engine, or a checkout's
+│   │   ├── apikey.rs             # the remote backend's key in the keychain, handed to the engine
+│   │   └── workspace.rs          # the chosen workspace: remembered, opened, or created with `init`
 │   └── tests/live_engine.rs      # the shell against the real engine of the checkout
 └── dist/                         # the built page, Tauri's frontendDist (ignored)
 ```
