@@ -165,7 +165,8 @@ def rematch_records(
 
 def load_gold(paths: Sequence[Path]) -> list[GoldRow]:
     """Rows of the adjudicated CSV(s). Only the five columns used are read;
-    nothing else is kept. An unknown `final_status` is an error, not a blank."""
+    nothing else is kept. An unknown `final_status` is an error, not a blank.
+    A blank `meeting_id` is derived from the `decision_id` prefix."""
     import csv
 
     rows: list[GoldRow] = []
@@ -184,15 +185,29 @@ def load_gold(paths: Sequence[Path]) -> list[GoldRow]:
                     for part in evidence.split(" | ")
                     if (tokens := act_tokens(part))
                 )
+                decision_id = (record.get("decision_id") or "").strip()
+                # A split child (`TS3009c.d07-1`) may leave `meeting_id` blank.
+                # An id names its meeting, so derive it; a blank that cannot be
+                # derived stays blank and the allowlist refuses it (fail closed).
+                meeting_id = (
+                    record.get("meeting_id") or ""
+                ).strip() or meeting_from_decision_id(decision_id)
                 rows.append(
                     GoldRow(
-                        decision_id=(record.get("decision_id") or "").strip(),
-                        meeting_id=(record.get("meeting_id") or "").strip(),
+                        decision_id=decision_id,
+                        meeting_id=meeting_id,
                         status=status,
                         acts=acts,
                     )
                 )
     return rows
+
+
+def meeting_from_decision_id(decision_id: str) -> str:
+    """The meeting a decision id names: `TS3009c.d07-1` -> `TS3009c`. Empty
+    when the id carries no `<meeting>.` prefix."""
+    head, dot, _ = decision_id.partition(".")
+    return head if dot else ""
 
 
 def blank_rows(rows: Sequence[GoldRow]) -> list[str]:

@@ -20,7 +20,8 @@ uv run python -u evals/transcript_decisions/run_transcript_decisions.py \
 ## The data stays outside this repository
 
 The gold CSV (columns used: `decision_id`, `meeting_id`, `evidence_text`,
-`final_status`) and the rendered transcripts (`<meeting>.md`, speaker-turn
+`final_status`; a blank `meeting_id`, as on split-child rows, is derived from the
+`decision_id` prefix) and the rendered transcripts (`<meeting>.md`, speaker-turn
 markdown) live in the maintainer's thesis checkout and are passed by flag. This
 harness reads them and copies none of them: stored results hold the evidence
 lines the pass produced, the produced titles, and the `decision_id`s they

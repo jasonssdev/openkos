@@ -761,6 +761,48 @@ def _self_test() -> int:
         except SystemExit as exc:
             check("unknown status is named", "descartada" in str(exc), True)
 
+        blank_csv = root / "blank_meeting.csv"
+        blank_csv.write_text(
+            "decision_id,meeting_id,source_sentence_id,sentence_text,evidence_text,final_status\n"
+            'TS3009c.d07,TS3009c,s1,x,"A: we will use the kinetic battery for power .",compuesta\n'
+            "TS3009c.d07-1,,s1,x,,decision\n"
+            "TS3009c.d07-2,,s1,x,,decision\n"
+            'orphan,,s2,x,"B: some words here for it today .",decision\n',
+            encoding="utf-8",
+        )
+        blank_rows_loaded = scoring.load_gold([blank_csv])
+        check(
+            "a blank meeting_id is derived from the decision id",
+            [r.meeting_id for r in blank_rows_loaded],
+            ["TS3009c", "TS3009c", "TS3009c", ""],
+        )
+        try:
+            prepare([blank_csv], allow_partial=True)
+            failures.append("an underivable blank meeting_id was accepted")
+        except SystemExit as exc:
+            check("an underivable meeting is refused", "REFUSED" in str(exc), True)
+        derived = scoring.series_run_metrics(
+            [
+                {
+                    "arm": "pass",
+                    "run": 1,
+                    "meeting": "TS3009c",
+                    "series": "TS3009",
+                    "windows": 1,
+                    "calls": 1,
+                    "failure": None,
+                    "wall_s": 0.0,
+                    "items": [],
+                }
+            ],
+            blank_rows_loaded[:3],
+        )["TS3009"]
+        check(
+            "derived children count in the recall denominator, unrecallable",
+            (derived["decision_rows"], derived["unrecallable_rows"]),
+            (2, 2),
+        )
+
         def split_record(item_matches: Sequence[Sequence[str]]) -> dict[str, Any]:
             return {
                 "arm": "pass",
