@@ -2045,6 +2045,65 @@ def estimate_extraction_calls(
     )
 
 
+def _max_calls_for(
+    source_text: str,
+    *,
+    meeting_shaped: bool,
+    union_judge: bool,
+    transcript_decisions: bool,
+) -> int:
+    """The most chat calls one extraction can make under one reading of the
+    source's shape: every mechanism that may spend a call, at its maximum."""
+    chunked = len(source_text) > _chunk_threshold_for(meeting_shaped=meeting_shaped)
+    windows = len(_chunk_lines(source_text)) if chunked else 0
+    # A window's call is retried once on a backend error (#1053); below the
+    # threshold the union path runs the identical prompt twice and the legacy
+    # path retries an empty reply once (#524). Either way, two per unit.
+    passes = 2 * windows if chunked else 2
+    reask = 1
+    if not union_judge:
+        return passes + reask
+    participant = 1 if meeting_shaped else 0
+    # The decision pass asks each window once more after an unusable reply.
+    decisions = (
+        2 * (windows if chunked else 1)
+        if transcript_decisions and meeting_shaped
+        else 0
+    )
+    return passes + reask + participant + decisions + judge_mod.JUDGE_ATTEMPTS
+
+
+def max_extraction_calls(
+    source_text: str,
+    *,
+    union_judge: bool,
+    transcript_decisions: bool,
+) -> int:
+    """An upper bound on the chat calls extracting `source_text` can make
+    (#1496), whatever the model replies and whatever title the Source takes.
+
+    `estimate_extraction_calls` is the ordinary path a cost gate announces; this
+    is the ceiling a consented run is held to. It counts every mechanism at its
+    most: each window's one retry, the two identical passes below the threshold
+    (or the legacy path's retry of an empty reply), the re-ask, the participant
+    pass, the decision pass with its one retry per window, and every judge
+    attempt. The title can change whether the source reads as a meeting, which
+    moves both the chunking threshold and the meeting-only passes, so the bound
+    takes the larger of the two readings. Blank text is never extracted, so it
+    costs nothing. Pure, like `fans_out`."""
+    if not source_text.strip():
+        return 0
+    return max(
+        _max_calls_for(
+            source_text,
+            meeting_shaped=meeting_shaped,
+            union_judge=union_judge,
+            transcript_decisions=transcript_decisions,
+        )
+        for meeting_shaped in (False, True)
+    )
+
+
 ProgressHook = Callable[[str], None]
 """A phase reporter: called with one human-readable label per phase the
 extraction is about to enter (issue #701).

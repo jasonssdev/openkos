@@ -13,16 +13,19 @@ relying on it:
    carry stored content, including from confidential concepts. An adapter
    that discloses anything else to anyone else must apply the local API's
    gate itself (ADR-0058).
-3. Judging and asking are the only operations that send content anywhere, and
-   only to the backends the workspace configures. Setup readiness and the
-   model pull talk to the configured runtime too, but send no content: they
-   read its version and model list and ask it to fetch a model the workspace
-   configures. Reading and changing the model settings reach nothing: they
-   read and rewrite `openkos.yaml` only, and never write a key. The only other
-   process the surface runs is the local git auto-commit of a decision, an
-   unmerge, an undo or a settings change it applies, which never pushes.
-4. Cancellation is cooperative: a stop is observed between chunks, so it waits
-   for the chunk in flight. A model call is never preempted.
+3. Judging, asking and adding files are the only operations that send content
+   anywhere, and only to the backends the workspace configures (adding files
+   sends their text to the extraction model, then refreshes the derived stores
+   with the embedding model). Setup readiness and the model pull talk to the
+   configured runtime too, but send no content: they read its version and
+   model list and ask it to fetch a model the workspace configures. Reading
+   and changing the model settings reach nothing: they read and rewrite
+   `openkos.yaml` only, and never write a key. The only other process the
+   surface runs is the local git auto-commit of a decision, an unmerge, an
+   undo, a settings change or an added file, which never pushes.
+4. Cancellation is cooperative: a stop is observed between chunks (between
+   files when adding files), so it waits for the chunk or file in flight. A
+   model call is never preempted.
 5. Applying a decision, an unmerge or an undo does not reconcile merged concept
    bodies with a model and does not refresh the derived stores; `status` reports stale
    indexes and a maintenance pass or a reindex refreshes them.
@@ -62,6 +65,7 @@ from openkos.api._decisions import (
     preview_decision,
     preview_finding,
 )
+from openkos.api._ingest import quote_ingest, quote_refused_file, run_ingest
 from openkos.api._judging import (
     ChatClient,
     ChatClientFactory,
@@ -133,6 +137,19 @@ from openkos.application.curate_decisions import (
     NotApplied,
     Stale,
     WithheldAction,
+)
+from openkos.application.ingest_consent import (
+    IngestBinding,
+    IngestFileQuote,
+    IngestFileResult,
+    IngestProgress,
+    IngestQuote,
+    IngestQuoteStale,
+    IngestQuoteToken,
+    IngestRefused,
+    IngestRunOutcome,
+    IngestRunResult,
+    IngestTokenFile,
 )
 from openkos.application.judging import (
     ChangedField,
@@ -228,6 +245,17 @@ __all__ = [
     "GroupSelection",
     "HealthCounts",
     "IdentityDetail",
+    "IngestBinding",
+    "IngestFileQuote",
+    "IngestFileResult",
+    "IngestProgress",
+    "IngestQuote",
+    "IngestQuoteStale",
+    "IngestQuoteToken",
+    "IngestRefused",
+    "IngestRunOutcome",
+    "IngestRunResult",
+    "IngestTokenFile",
     "JobSummary",
     "JudgingKind",
     "JudgingObserver",
@@ -340,9 +368,12 @@ __all__ = [
     "preview_unmerge",
     "preview_unrelate",
     "pull_model",
+    "quote_ingest",
     "quote_judging",
+    "quote_refused_file",
     "read_page",
     "refresh_decision_queue",
+    "run_ingest",
     "run_judging",
     "setup_readiness",
     "status",

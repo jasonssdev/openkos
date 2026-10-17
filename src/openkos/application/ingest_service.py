@@ -707,12 +707,25 @@ def is_unchanged(
     before starting it (the unattended watch's admission) cannot disagree with the
     run. Any failure answers `False`: the run itself raises the refusal."""
     try:
-        return isinstance(
-            _prepare(root, src, policy, ports, IngestObserver(), probe_only=True),
-            IngestUnchanged,
-        )
+        return probe_source(root, src, policy, ports=ports)
     except Exception:  # noqa: BLE001 -- a probe never decides a refusal; the run raises it
         return False
+
+
+def probe_source(
+    root: Path, src: Path, policy: IngestPolicy, *, ports: IngestPorts
+) -> bool:
+    """Run Phase A up to the convergence decision, writing nothing and
+    contacting no model: `True` when the ingest would take #773's
+    short-circuit, `False` when it would go on to extract and write.
+
+    Unlike `is_unchanged`, a refusal Phase A would raise is raised here, so a
+    caller that prices a run before a person consents to it (the API's ingest
+    quote) can say which files would be refused, and why, before any call."""
+    return isinstance(
+        _prepare(root, src, policy, ports, IngestObserver(), probe_only=True),
+        IngestUnchanged,
+    )
 
 
 def _prepare(
