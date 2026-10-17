@@ -110,6 +110,8 @@ pnpm --dir desktop test
 pnpm --dir desktop check:schema        # the client against the snapshot
 ```
 
+The screens are built from the components of the desktop design system, described in [`desktop/DESIGN.md`](desktop/DESIGN.md). `pnpm --dir desktop dev` serves its component gallery at `http://localhost:5173/gallery.html`, in any browser, with no engine or Rust needed; the app's build does not include it.
+
 `OPENKOS_ENGINE` names a different `openkos` executable to run instead. The shell's gates:
 
 ```bash

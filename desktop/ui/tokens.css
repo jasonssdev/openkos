@@ -39,6 +39,87 @@
   --radius-md: 6px;
   --radius-lg: 12px;
 
+  /* -- The design system (desktop/DESIGN.md). Role tokens; the legacy roles
+     above stay for the screens not yet moved onto them. Every derived color
+     is a mix of two brand colors, named in its comment. -- */
+
+  /* Surfaces: Ink lifted toward Paper by the stated share. */
+  --surface-0: var(--color-ink); /* the canvas */
+  --surface-1: #1a1d31; /* Ink + 3% Paper: sidebar, cards */
+  --surface-2: #232639; /* Ink + 7% Paper: hover, inset, selected row */
+  --surface-3: #2e3143; /* Ink + 12% Paper: dialogs, pressed */
+  --scrim: rgb(8 9 18 / 0.64); /* behind a dialog */
+
+  /* Text: Paper lowered toward Ink by the stated share. */
+  --text-primary: var(--color-paper);
+  --text-secondary: #b6b8c2; /* Paper 75% over Ink */
+  --text-tertiary: #9a9ca8; /* Paper 62% over Ink: meta, hints */
+
+  /* Borders */
+  --border-subtle: #303345; /* Paper 13% over Ink: hairlines, decorative */
+  --border-strong: #6a6d7c; /* Paper 40% over Ink: control edges, 3:1 */
+
+  /* Accent */
+  --accent-hover: #5b5ed5; /* Indigo + 10% Ink */
+  --accent-text: #8c8eec; /* Indigo + 30% Paper: links, selection, on dark */
+  --on-accent: #ffffff; /* text on an Indigo fill */
+  --focus-ring: var(--accent-text);
+
+  /* Tones: a foreground and a tinted background; always with symbol + word. */
+  --tone-neutral-fg: var(--text-secondary);
+  --tone-neutral-bg: var(--surface-2);
+  --tone-info-fg: var(--accent-text);
+  --tone-info-bg: #232647; /* Indigo 12% over surface-1 */
+  --tone-warning-fg: var(--color-amber);
+  --tone-warning-bg: #322d31; /* Amber 12% over surface-1 */
+  --tone-success-fg: var(--state-success);
+  --tone-success-bg: #212e36; /* Green 12% over surface-1 */
+  --tone-error-fg: var(--state-error);
+  --tone-error-bg: #342737; /* Red 12% over surface-1 */
+
+  /* Type scale: size / line height pairs. Body is md. */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", sans-serif;
+  --font-size-xs: 0.75rem; /* 12px: badges, counts */
+  --line-height-xs: 1rem;
+  --font-size-sm: 0.8125rem; /* 13px: meta, sidebar, buttons */
+  --line-height-sm: 1.25rem;
+  --font-size-md: 0.875rem; /* 14px: body */
+  --line-height-md: 1.375rem;
+  --font-size-lg: 1rem; /* 16px: card titles, reading text */
+  --line-height-lg: 1.5rem;
+  --font-size-xl: 1.25rem; /* 20px: page titles */
+  --line-height-xl: 1.75rem;
+  --font-size-2xl: 1.5rem; /* 24px: the question being asked */
+  --line-height-2xl: 2rem;
+  --measure: 68ch; /* longest comfortable line of prose */
+
+  /* Spacing: a 4px grid (1-4, 6, 8 above). */
+  --space-5: 1.25rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* Density: control heights. */
+  --control-sm: 1.75rem; /* 28px */
+  --control-md: 2.25rem; /* 36px */
+  --sidebar-width: 15rem;
+  --list-width: 22rem;
+
+  /* Radii (sm 4, md 6, lg 12 above). */
+  --radius-xl: 16px;
+  --radius-full: 999px;
+  --hairline: 1px;
+
+  /* Elevation: borders first; a shadow only where something floats. */
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.24);
+  --shadow-overlay: 0 12px 32px rgb(0 0 0 / 0.48);
+
+  /* Motion: short and only on color, opacity and the spinner. */
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-spin: 800ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
   color-scheme: dark;
 }
 
@@ -48,6 +129,35 @@
     --text: var(--color-ink);
     --text-muted: #4a4e6b;
     --border: var(--color-slate);
+    --surface-0: var(--color-paper);
+    --surface-1: #f7f8fb; /* Paper + 60% white */
+    --surface-2: #e3e4ed; /* Paper + 4% Ink */
+    --surface-3: #ffffff;
+    --scrim: rgb(20 23 43 / 0.32);
+    --text-primary: var(--color-ink);
+    --text-secondary: #3f4253; /* Ink 80% over Paper */
+    --text-tertiary: #555768; /* Ink 70% over Paper */
+    --border-subtle: #d6d8e1; /* Ink 10% over Paper */
+    --border-strong: #808290; /* Ink 50% over Paper */
+    --accent-hover: #575acc; /* Indigo + 15% Ink */
+    --accent-text: #4f52b9; /* Indigo + 25% Ink */
+    --tone-info-bg: #e5e6f9; /* Indigo 12% over surface-1 */
+    --tone-warning-fg: #7a5d2c; /* Amber + 50% Ink */
+    --tone-warning-bg: #f4eee2; /* Amber 12% over surface-1 */
+    --tone-success-fg: #3c7047; /* Green + 40% Ink */
+    --tone-success-bg: #e4efe8; /* Green 12% over surface-1 */
+    --tone-error-fg: #9a4c4f; /* Red + 40% Ink */
+    --tone-error-bg: #f7e8e9; /* Red 12% over surface-1 */
+    --shadow-raised: 0 1px 2px rgb(20 23 43 / 0.08);
+    --shadow-overlay: 0 12px 32px rgb(20 23 43 / 0.18);
     color-scheme: light;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-spin: 2400ms;
   }
 }

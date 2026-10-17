@@ -2,7 +2,7 @@
 // return elements, styled by class on the custom properties of tokens.css.
 // Every value is written as text, never as markup. No decision lives here.
 
-type Child = Node | string | null | undefined | false;
+export type Child = Node | string | null | undefined | false;
 
 /** An element with classes, attributes and text or element children. */
 export function el<K extends keyof HTMLElementTagNameMap>(
