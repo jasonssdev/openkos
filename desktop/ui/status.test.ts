@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import type { Schemas } from "../client/index.ts";
+import { ENGINE_WORDS } from "./review/wording.ts";
 import { renderStatus, type StatusScreen } from "./status.ts";
 
 const STATUS = {
@@ -63,18 +64,25 @@ describe("the status screen", () => {
   it("shows the counts and keeps the folder behind a disclosure", () => {
     const root = draw({ engine: { text: "The engine is running." }, workspace: { kind: "read", status: STATUS } });
     const [shown, more] = Array.from(root.querySelectorAll("dl"));
-    expect(terms(shown as Element)).toEqual(["Decisions waiting for you", "Concepts", "Sources"]);
+    expect(terms(shown as Element)).toEqual(["To review", "Pages", "Files you added"]);
     expect(more?.closest("details")?.querySelector("summary")?.textContent).toBe("Show the folder");
     expect(more?.querySelector("dd code")?.textContent).toBe("/Users/me/knowledge");
     expect(root.querySelector(".ui-card__meta")?.textContent).toBe("Read from the engine just now.");
   });
 
   it("says why the status could not be read, in an error notice", () => {
-    const message = "The workspace status could not be read.";
+    const message = "Your library's status could not be read.";
     const root = draw({ engine: { text: "The engine is running." }, workspace: { kind: "failed", message } });
     const notice = root.querySelector(".ui-callout--error") as HTMLElement;
     expect(notice.querySelector(".ui-callout__text")?.textContent).toBe(message);
     expect(root.querySelector("dl")).toBeNull();
+  });
+
+  it("names the library and its counts in plain words, never the engine's", () => {
+    const root = draw({ engine: { text: "The engine is running." }, workspace: { kind: "read", status: STATUS } });
+    expect(Array.from(root.querySelectorAll("h2"), (n) => n.textContent)).toEqual(["Engine", "Your library"]);
+    const words = (root.textContent ?? "").replace(STATUS.root, "").toLowerCase();
+    for (const word of ENGINE_WORDS) expect(words, word).not.toContain(word);
   });
 
   it("keeps focus on a disclosure across a redraw", () => {

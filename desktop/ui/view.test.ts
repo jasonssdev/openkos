@@ -53,15 +53,15 @@ describe("statusFacts", () => {
     } as unknown as Schemas["WorkspaceStatus"];
     expect(statusFacts(status)).toEqual([
       ["Folder", "/Users/me/knowledge"],
-      ["Sources", "4"],
-      ["Concepts", "21"],
-      ["Decisions waiting for you", "5"],
+      ["Files you added", "4"],
+      ["Pages", "21"],
+      ["To review", "5"],
     ]);
   });
 
   it("counts no open decisions as zero", () => {
     const status = { root: "/w", sources: 0, concepts: 0, open_decisions_by_kind: {} } as unknown as Schemas["WorkspaceStatus"];
-    expect(statusFacts(status).at(-1)).toEqual(["Decisions waiting for you", "0"]);
+    expect(statusFacts(status).at(-1)).toEqual(["To review", "0"]);
   });
 });
 
@@ -74,23 +74,23 @@ describe("statusFailure", () => {
       message: "the workspace is unreadable",
       retryAfterSeconds: null,
     });
-    expect(statusFailure(error)).toBe("The workspace status could not be read: the workspace is unreadable.");
+    expect(statusFailure(error)).toBe("Your library's status could not be read: the workspace is unreadable.");
   });
 
   it("words an answer the app cannot read", () => {
     expect(statusFailure(new ProtocolError({ status: 502, path: "/v1/status" }))).toBe(
-      "The workspace status could not be read: the engine answered in a form this app cannot read.",
+      "Your library's status could not be read: the engine answered in a form this app cannot read.",
     );
   });
 
   it("words an unreachable engine", () => {
     expect(statusFailure(new EngineUnreachable({ path: "/v1/status" }))).toBe(
-      "The workspace status could not be read: the engine could not be reached.",
+      "Your library's status could not be read: the engine could not be reached.",
     );
   });
 
   it("shows nothing of an error it does not know", () => {
-    expect(statusFailure(new Error(`token ${TOKEN}`))).toBe("The workspace status could not be read.");
+    expect(statusFailure(new Error(`token ${TOKEN}`))).toBe("Your library's status could not be read.");
   });
 });
 
@@ -158,9 +158,9 @@ describe("workspaceSummary", () => {
   it("shows the counts and keeps the folder for the details", () => {
     expect(workspaceSummary(STATUS)).toEqual({
       shown: [
-        ["Decisions waiting for you", "5"],
-        ["Concepts", "21"],
-        ["Sources", "4"],
+        ["To review", "5"],
+        ["Pages", "21"],
+        ["Files you added", "4"],
       ],
       more: [["Folder", "/Users/me/knowledge", "code"]],
     });

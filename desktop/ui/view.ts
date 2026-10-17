@@ -88,12 +88,12 @@ export interface WorkspaceSummary {
   more: [string, string, "code"][];
 }
 
-/** The status facts, the counts first; where the folder is waits behind a disclosure. */
+/** The status facts in the brief's words (your library, pages, files), the counts first; where the folder is waits behind a disclosure. */
 export function workspaceSummary(status: Schemas["WorkspaceStatus"]): WorkspaceSummary {
   const all = new Map(statusFacts(status));
   const pick = (term: string): [string, string] => [term, all.get(term) ?? ""];
   return {
-    shown: [pick("Decisions waiting for you"), pick("Concepts"), pick("Sources")],
+    shown: [pick("To review"), pick("Pages"), pick("Files you added")],
     more: [["Folder", status.root, "code"]],
   };
 }
@@ -102,13 +102,13 @@ export function statusFacts(status: Schemas["WorkspaceStatus"]): [string, string
   const open = openDecisions(status);
   return [
     ["Folder", status.root],
-    ["Sources", String(status.sources)],
-    ["Concepts", String(status.concepts)],
-    ["Decisions waiting for you", String(open)],
+    ["Files you added", String(status.sources)],
+    ["Pages", String(status.concepts)],
+    ["To review", String(open)],
   ];
 }
 
-const UNREADABLE = "The workspace status could not be read";
+const UNREADABLE = "Your library's status could not be read";
 
 export function statusFailure(error: unknown): string {
   if (error instanceof ApiError) return `${UNREADABLE}: ${error.message}.`;

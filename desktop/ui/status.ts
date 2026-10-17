@@ -1,5 +1,5 @@
 // Draws the status screen from its state with the design system's components
-// (ADR-0066): the engine first, then the workspace's counts, with anything
+// (ADR-0066): the engine first, then the library's counts, with anything
 // secondary behind a disclosure. It decides nothing: every word comes from
 // view.ts or is fixed here, and every value is written as text.
 import type { Schemas } from "../client/index.ts";
@@ -46,13 +46,13 @@ function engineCard(engine: EngineWording, options: StatusOptions): HTMLElement 
 function workspaceCard(workspace: WorkspaceView, options: StatusOptions): HTMLElement {
   switch (workspace.kind) {
     case "waiting":
-      return uiCard({ title: "Workspace", headingLevel: 2 }, skeleton(3, "Waiting for the engine."));
+      return uiCard({ title: "Your library", headingLevel: 2 }, skeleton(3, "Waiting for the engine."));
     case "failed":
-      return uiCard({ title: "Workspace", headingLevel: 2 }, callout("error", workspace.message));
+      return uiCard({ title: "Your library", headingLevel: 2 }, callout("error", workspace.message));
     case "read": {
       const summary = workspaceSummary(workspace.status);
       return uiCard(
-        { title: "Workspace", headingLevel: 2, meta: "Read from the engine just now." },
+        { title: "Your library", headingLevel: 2, meta: "Read from the engine just now." },
         facts(summary.shown),
         more("workspace-folder", "Show the folder", options, facts(summary.more)),
       );
