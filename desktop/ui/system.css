@@ -1,6 +1,5 @@
 /* The design system's components (desktop/DESIGN.md). Uses only the custom
-   properties of tokens.css; every class is prefixed ui- so it never meets the
-   legacy classes of style.css. */
+   properties of tokens.css; every class is prefixed ui-. */
 
 /* -- Base for a page built on the system -------------------------------- */
 .ui-page {
@@ -14,9 +13,7 @@
   -webkit-font-smoothing: antialiased;
 }
 
-/* The resets stop at .ui-legacy: a screen not yet on the system (To review)
-   keeps the default margins its style.css rules were written against. */
-.ui-page :where(h1, h2, h3, p):where(:not(.ui-legacy *)) {
+.ui-page :where(h1, h2, h3, p, blockquote, fieldset) {
   margin: 0;
 }
 
@@ -218,6 +215,178 @@
 
 .ui-split__detail {
   overflow: auto;
+}
+
+/* A view that fills the main region, e.g. a list and detail. */
+.ui-fill {
+  height: 100%;
+  min-height: 0;
+}
+
+/* A list pane: its title and actions, a hint, then its lists. */
+.ui-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.ui-pane__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+}
+
+.ui-pane__title {
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-lg);
+  font-weight: var(--weight-medium);
+}
+
+.ui-pane__hint {
+  margin-top: calc(-1 * var(--space-2));
+  padding: 0 var(--space-3);
+  color: var(--text-tertiary);
+}
+
+.ui-pane > .ui-callout,
+.ui-pane > .ui-skeleton {
+  margin: 0 var(--space-3);
+}
+
+/* A detail pane: one thing at a time, with room around it. */
+.ui-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  max-width: 52rem;
+  padding: var(--space-10) var(--space-10) var(--space-16);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-md);
+}
+
+.ui-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* -- A question and its answers ------------------------------------------- */
+.ui-question-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ui-lead {
+  color: var(--text-secondary);
+}
+
+.ui-question {
+  max-width: var(--measure);
+  font-size: var(--font-size-2xl);
+  line-height: var(--line-height-2xl);
+  font-weight: var(--weight-medium);
+}
+
+.ui-statement {
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-lg);
+}
+
+.ui-subtitle {
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-lg);
+  font-weight: var(--weight-medium);
+}
+
+.ui-quote {
+  max-width: var(--measure);
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.ui-answers {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: var(--space-5) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-answer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.ui-answer__does {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.ui-answer__reason {
+  color: var(--tone-warning-fg);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+/* -- Choices: native checkboxes or radios ---------------------------------- */
+.ui-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ui-choices__legend {
+  margin-bottom: var(--space-2);
+  padding: 0;
+  font-weight: var(--weight-medium);
+}
+
+.ui-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-choice:hover {
+  background: var(--surface-1);
+}
+
+.ui-choice__input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* -- Plain lists and lines with an action ---------------------------------- */
+.ui-plain-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
 }
 
 /* -- Page header ------------------------------------------------------------ */
@@ -434,7 +603,6 @@
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-5);
-  border: var(--hairline) solid var(--border-subtle);
   border-radius: var(--radius-lg);
   background: var(--surface-1);
   min-width: 0;
@@ -474,8 +642,7 @@
 }
 
 .ui-card__footer {
-  padding-top: var(--space-3);
-  border-top: var(--hairline) solid var(--border-subtle);
+  padding-top: var(--space-1);
   color: var(--text-tertiary);
   font-size: var(--font-size-sm);
   line-height: var(--line-height-sm);
@@ -630,8 +797,6 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-12) var(--space-6);
-  border: var(--hairline) dashed var(--border-subtle);
-  border-radius: var(--radius-lg);
   text-align: center;
 }
 

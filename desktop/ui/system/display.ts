@@ -1,6 +1,6 @@
 // Display components of the design system (desktop/DESIGN.md). Color never
 // stands alone: every tone carries a symbol and a word.
-import { type Child, el } from "../components.ts";
+import { type Child, el } from "./dom.ts";
 
 export type BadgeTone = "neutral" | "info" | "warning" | "success" | "error";
 

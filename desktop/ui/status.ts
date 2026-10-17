@@ -3,8 +3,7 @@
 // secondary behind a disclosure. It decides nothing: every word comes from
 // view.ts or is fixed here, and every value is written as text.
 import type { Schemas } from "../client/index.ts";
-import { el, redraw } from "./components.ts";
-import { callout, disclosure, facts, pageHeader, skeleton, uiButton, uiCard } from "./system/index.ts";
+import { callout, disclosure, el, facts, pageHeader, redraw, skeleton, uiButton, uiCard } from "./system/index.ts";
 import { type EngineWording, workspaceSummary } from "./view.ts";
 
 export type WorkspaceView =

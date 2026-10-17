@@ -1,6 +1,6 @@
 // The app shell of the design system (desktop/DESIGN.md): a sidebar with the
 // lockup and the navigation, and one main region that can split into list/detail.
-import { type Child, el } from "../components.ts";
+import { type Child, el } from "./dom.ts";
 
 const SVG = "http://www.w3.org/2000/svg";
 

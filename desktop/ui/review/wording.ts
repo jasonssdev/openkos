@@ -152,9 +152,6 @@ const CHECK_AGAIN: Option = {
   does: "We'll look at these pages as they are now. Checking doesn't change anything. You'll still decide.",
 };
 
-/** The kinds whose decisions carry actions, and so can be checked again. */
-const ACTIONABLE: readonly Decision["kind"][] = ["identity", "relation_type", "volatility"];
-
 export const CANNOT_ACT = "This can't be settled in the app yet.";
 
 export interface PageView {
@@ -390,6 +387,25 @@ function reasonOf(decision: Decision): string | null {
   return detail && "rationale" in detail ? modelReason(detail.rationale) : null;
 }
 
+type KindView = Partial<Pick<DecisionView, "question" | "lead" | "statement" | "facts" | "options">>;
+
+/**
+ * What each kind asks and offers. A kind maps to null while the brief words no
+ * action for it: it is listed with its plain sentence and "This can't be settled
+ * in the app yet.", whatever the engine lists. Settling one in the app is one
+ * entry here (its question and one option per action, offered only when the
+ * engine lists the action), its plan in `previewLines` and its result in
+ * `confirmation`; the screen draws whatever options it is given.
+ */
+const KINDS: Record<Decision["kind"], ((decision: Decision, pages: Pages) => KindView) | null> = {
+  identity: identityView,
+  relation_type: connectionView,
+  volatility: tierView,
+  contradiction: null,
+  revision: null,
+  watch_refusal: null,
+};
+
 /** Everything one decision's screen says, before any preview. */
 export function describeDecision(decision: Decision, pages: Pages, now: Date = new Date()): DecisionView {
   const base: DecisionView = {
@@ -403,33 +419,34 @@ export function describeDecision(decision: Decision, pages: Pages, now: Date = n
     changed: decision.fresh === false ? CHANGED_CHECK : null,
     cannotAct: null,
   };
-  let view: DecisionView;
-  if (decision.kind === "identity") view = { ...base, ...identityView(decision, pages) };
-  else if (decision.kind === "relation_type") view = { ...base, ...connectionView(decision, pages) };
-  else if (decision.kind === "volatility") view = { ...base, ...tierView(decision) };
-  else view = { ...base, question: listedOnly(decision, pages) };
+  const settle = KINDS[decision.kind] ?? null;
+  const view: DecisionView = settle === null ? { ...base, question: listedOnly(decision, pages) } : { ...base, ...settle(decision, pages) };
   // A changed decision's own actions would be refused as stale: it is checked
   // again first, and decided once it is current (#1475).
-  if (decision.fresh === false && ACTIONABLE.includes(decision.kind)) return { ...view, options: [CHECK_AGAIN, DECIDE_LATER] };
+  if (decision.fresh === false && settle !== null) return { ...view, options: [CHECK_AGAIN, DECIDE_LATER] };
   if (view.options.length === 0) return { ...view, options: [], cannotAct: CANNOT_ACT };
   return { ...view, options: [...view.options, DECIDE_LATER] };
 }
 
 export interface ListEntry {
-  question: string;
-  pages: string;
+  /** What the row is about: the pages for an identity, else its sentence or question. */
+  title: string;
+  /** The question for an identity, why it cannot be settled, or nothing. */
+  meta: string | null;
   changed: boolean;
   canAct: boolean;
 }
 
-/** One line of To review. */
+/** One row of To review. */
 export function listEntry(decision: Decision, pages: Pages): ListEntry {
   const view = describeDecision(decision, pages);
+  const canAct = view.cannotAct === null;
+  const identity = decision.kind === "identity";
   return {
-    question: view.statement ?? view.question,
-    pages: view.pages.map((p) => p.title).join(" · "),
+    title: identity ? view.pages.map((p) => p.title).join(" · ") : (view.statement ?? view.question),
+    meta: !canAct ? CANNOT_ACT : identity ? view.question : null,
     changed: decision.fresh === false,
-    canAct: view.cannotAct === null,
+    canAct,
   };
 }
 

@@ -1,15 +1,20 @@
 // @vitest-environment jsdom
 // The gallery is a development page with no other check: it must render every
-// section, both compositions included, without throwing.
+// section, both screens included, without throwing.
 import { describe, expect, it } from "vitest";
 
+async function settle(): Promise<void> {
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe("the gallery", () => {
-  it("renders both compositions and every component section", async () => {
+  it("renders both screens and every component section", async () => {
     document.body.append(Object.assign(document.createElement("div"), { id: "gallery" }));
     await import("./gallery.ts");
+    await settle();
     const titles = Array.from(document.querySelectorAll(".gallery-section__title"), (n) => n.textContent);
     expect(titles).toEqual([
-      "To review: list and detail",
+      "To review",
       "Status",
       "Surfaces and borders",
       "Text",
@@ -22,24 +27,22 @@ describe("the gallery", () => {
       "Cards",
       "Two-up compare",
       "Segmented choice",
+      "Answers",
+      "Choices",
       "Text input",
       "Dialog",
       "States",
     ]);
     const review = document.querySelector(".gallery-frame") as HTMLElement;
-    expect(review.querySelector('[aria-current="page"]')?.textContent).toBe("To review3");
-    const answers = Array.from(review.querySelectorAll(".mock-decision button"), (n) => n.textContent);
-    expect(answers).toEqual(["Same thing", "Different things", "Decide later"]);
-    expect(review.querySelectorAll(".ui-compare .ui-card")).toHaveLength(2);
+    expect(review.querySelector('[aria-current="page"]')?.textContent).toBe("To review4");
+    expect(review.querySelectorAll(".ui-split__list .ui-row")).toHaveLength(4);
   });
 
-  it("opens the selected decision when its row is clicked", () => {
+  it("opens a decision of the real screen when its row is clicked", async () => {
     const review = document.querySelector(".gallery-frame") as HTMLElement;
-    (document.querySelectorAll<HTMLButtonElement>(".gallery-frame .ui-row")[1] as HTMLButtonElement).click();
-    const again = document.querySelector(".gallery-frame") as HTMLElement;
-    expect(again).not.toBe(review);
-    expect(again.querySelector(".mock-decision__eyebrow")?.textContent).toBe("Decision 2 of 3");
-    expect(again.querySelector('.ui-row[aria-current="true"] .ui-row__meta')?.textContent).toBe("Lisbon trip · Team offsite");
-    expect(document.activeElement).toBe(again.querySelector('.ui-row[aria-current="true"]'));
+    (review.querySelectorAll<HTMLButtonElement>(".ui-row")[0] as HTMLButtonElement).click();
+    await settle();
+    expect(review.querySelector(".ui-split__detail h2")?.textContent).toBe("Are these the same person?");
+    expect(review.querySelectorAll(".ui-split__detail .ui-compare .ui-card")).toHaveLength(2);
   });
 });

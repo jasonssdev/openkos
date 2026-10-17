@@ -317,6 +317,26 @@ describe("loading To review", () => {
   });
 });
 
+describe("what the detail shows", () => {
+  it("shows the combined pages in place of a decision, and a decision in place of them", async () => {
+    const { model, client } = await opened([PAIR], "pair");
+    model.showCombined();
+    expect(model.state.combinedOpen).toBe(true);
+    expect(model.state.open).toBeNull();
+    model.open("pair");
+    expect(model.state.combinedOpen).toBe(false);
+    expect(model.state.open?.key).toBe("pair");
+    expect(client.previewDecision).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing when a decision is closed", async () => {
+    const { model } = await opened([PAIR], "pair");
+    model.close();
+    expect(model.state.open).toBeNull();
+    expect(model.state.combinedOpen).toBe(false);
+  });
+});
+
 describe("one decision", () => {
   it("decides later without sending anything", async () => {
     const { model, client } = await opened([PAIR], "pair");

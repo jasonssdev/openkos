@@ -1,16 +1,21 @@
 // The component gallery (desktop/DESIGN.md): every component of the design
-// system in every state, and two mock compositions, on made-up OpenKOS data.
+// system in every state, and the real To review and Status screens, on made-up
+// OpenKOS data.
 // A development page only: nothing here reaches the engine.
 import type { Schemas } from "../client/index.ts";
-import { el } from "./components.ts";
+import { ReviewModel, type ReviewClient } from "./review/model.ts";
+import { renderReview } from "./review/render.ts";
 import { renderStatus } from "./status.ts";
 import {
+  answerList,
   appShell,
   badge,
+  choiceList,
   callout,
   compare,
   dialogPanel,
   disclosure,
+  el,
   emptyState,
   facts,
   listRow,
@@ -21,12 +26,10 @@ import {
   segmented,
   skeleton,
   spinner,
-  splitView,
   textField,
   uiButton,
   uiCard,
   uiList,
-  type BadgeTone,
   type NavEntry,
 } from "./system/index.ts";
 
@@ -68,140 +71,138 @@ function frame(child: HTMLElement): HTMLElement {
 
 interface MockPage {
   title: string;
-  id: string;
-  type: string;
+  kind: string;
   excerpt: string;
-  sources: string;
-}
-
-interface MockDecision {
-  key: string;
-  question: string;
-  pages: [MockPage, MockPage];
-  lead: string;
-  status: [BadgeTone, string] | null;
-  noticed: string;
+  sources: string[];
 }
 
 const OSEI: MockPage = {
   title: "Marguerite Osei",
-  id: "people/marguerite-osei",
-  type: "Person",
+  kind: "A person · Private",
   excerpt: "Product lead at Fieldnote. Ran the March planning workshop and owns the onboarding redesign.",
-  sources: "From 3 sources: meeting-2026-03-12.md, onboarding-brief.md, team.md",
+  sources: ["From: meeting-2026-03-12.md, added 12 March", "From: team.md, added 2 March"],
 };
 
 const M_OSEI: MockPage = {
   title: "M. Osei",
-  id: "people/m-osei",
-  type: "Person",
+  kind: "A person · Private",
   excerpt: "Named as the reviewer of the onboarding redesign proposal, due before the April release.",
-  sources: "From 1 source: onboarding-proposal.md",
+  sources: ["From: onboarding-proposal.md, added 3 April"],
 };
-
-const DECISIONS: MockDecision[] = [
-  {
-    key: "osei",
-    question: "Are these the same?",
-    pages: [OSEI, M_OSEI],
-    lead: "Two pages may describe one person. If they do, OpenKOS combines them into one page. You can split them again later.",
-    status: ["info", "Checked"],
-    noticed: "The AI model thinks these are the same person: both own the onboarding redesign at Fieldnote.",
-  },
-  {
-    key: "lisbon",
-    question: "Are these the same?",
-    pages: [
-      { title: "Lisbon trip", id: "events/lisbon-trip", type: "Event", excerpt: "Five days in Lisbon in October with the design team.", sources: "From 2 sources: travel.md, offsite-plan.md" },
-      { title: "Team offsite", id: "events/team-offsite", type: "Event", excerpt: "The autumn offsite. Venue still to be confirmed.", sources: "From 1 source: offsite-plan.md" },
-    ],
-    lead: "Two pages may describe one event.",
-    status: ["warning", "Changed"],
-    noticed: "A source of one page changed after the check. Look again before you decide.",
-  },
-  {
-    key: "offsite-date",
-    question: "Is this a contradiction?",
-    pages: [
-      { title: "Team offsite", id: "events/team-offsite", type: "Event", excerpt: "Starts on 14 October.", sources: "From offsite-plan.md" },
-      { title: "Team offsite", id: "events/team-offsite", type: "Event", excerpt: "Starts on 21 October.", sources: "From travel.md" },
-    ],
-    lead: "Two sources say different things about one page.",
-    status: ["neutral", "Not checked"],
-    noticed: "Not checked by the AI model yet.",
-  },
-];
-
-// -- composition: review list + detail ---------------------------------------- //
-
-const NAV: NavEntry[] = [
-  { id: "ask", label: "Ask", disabled: true, hint: "Coming soon" },
-  { id: "review", label: "To review", count: DECISIONS.length },
-  { id: "status", label: "Status" },
-];
 
 function pageCard(page: MockPage): HTMLElement {
   return uiCard(
-    { title: page.title, meta: `${page.type} · ${page.id}`, footer: page.sources, aside: badge("neutral", page.type) },
+    { title: page.title, meta: page.kind, footer: el("ul", { class: "ui-plain-list" }, ...page.sources.map((line) => el("li", {}, line))) },
     el("p", {}, page.excerpt),
   );
 }
 
-function decisionDetail(decision: MockDecision, index: number): HTMLElement {
-  const [left, right] = decision.pages;
-  return el(
-    "div",
-    { class: "mock-decision" },
-    el("p", { class: "mock-decision__eyebrow" }, `Decision ${index + 1} of ${DECISIONS.length}`),
-    el("h2", { class: "mock-decision__question", attrs: { tabindex: "-1" } }, decision.question),
-    el("p", { class: "mock-decision__lead" }, decision.lead),
-    compare(`${left.title} and ${right.title}`, pageCard(left), pageCard(right)),
-    callout(decision.status?.[0] === "warning" ? "warning" : "info", decision.noticed, { title: "What the model noticed" }),
-    el(
-      "div",
-      { class: "ui-actions" },
-      uiButton("Same thing", noop),
-      uiButton("Different things", noop),
-      uiButton("Decide later", noop, { variant: "quiet" }),
-    ),
-  );
+// -- composition: To review ------------------------------------------------------ //
+
+const NAV: NavEntry[] = [
+  { id: "ask", label: "Ask", disabled: true, hint: "Coming soon" },
+  { id: "review", label: "To review", count: 4 },
+  { id: "status", label: "Status" },
+];
+
+function mockPage(id: string, title: string, okf_type: string, excerpt: string, file: string): Schemas["Page"] {
+  return { concept_id: id, title, okf_type, excerpt, sensitivity: "private", sources: [{ source_id: file, file_name: file, added_at: "2026-03-12T09:00:00Z" }] };
 }
 
-function reviewComposition(): HTMLElement {
-  const host = el("div", {});
-  let selected = 0;
-  const draw = () => {
-    const shell = appShell({ nav: NAV, current: "review", onNavigate: noop, footer: badge("success", "Engine running") });
-    const rows = DECISIONS.map((decision, index) =>
-      listRow({
-        title: decision.question,
-        meta: `${decision.pages[0].title} · ${decision.pages[1].title}`,
-        ...(decision.status ? { trailing: badge(...decision.status) } : {}),
-        selected: index === selected,
-        focusKey: `row:${decision.key}`,
-        onSelect: () => {
-          selected = index;
-          draw();
-          host.querySelector<HTMLElement>(`[data-focus="row:${decision.key}"]`)?.focus();
-        },
-      }),
-    );
-    const list = el(
-      "div",
-      {},
-      el(
-        "div",
-        { class: "mock-list-header" },
-        el("h1", { class: "mock-list-header__title" }, "To review"),
-        el("p", { class: "mock-list-header__meta" }, `${DECISIONS.length} decisions waiting`),
-      ),
-      uiList("Decisions", rows),
-    );
-    shell.main.append(splitView(list, decisionDetail(DECISIONS[selected] as MockDecision, selected), { list: "Decisions", detail: "Decision" }));
-    host.replaceChildren(frame(shell.root));
+const MOCK_PAGES = new Map(
+  [
+    mockPage("people/osei", "Marguerite Osei", "Person", OSEI.excerpt, "meeting-2026-03-12.md"),
+    mockPage("people/m-osei", "M. Osei", "Person", M_OSEI.excerpt, "onboarding-proposal.md"),
+    mockPage("events/lisbon", "Lisbon trip", "Event", "Five days in Lisbon in October with the design team.", "travel.md"),
+    mockPage("events/offsite", "Team offsite", "Event", "The autumn offsite. Venue still to be confirmed.", "offsite-plan.md"),
+    mockPage("concepts/adk", "ADK", "Concept", "An agent development kit, as used in the course notes.", "notes.md"),
+    mockPage("projects/adk-course", "ADK course", "Project", "The six-week course on building agents.", "course.md"),
+  ].map((page) => [page.concept_id, page]),
+);
+
+function mockIdentity(key: string, members: string[], over: Partial<Schemas["Decision"]> = {}): Schemas["Decision"] {
+  return {
+    decision_key: key,
+    kind: "identity",
+    targets: members,
+    fresh: true,
+    evaluation: "judged_same",
+    actions: ["merge", "keep_distinct", "skip"],
+    withheld: [],
+    resolves_via: "",
+    detail: { member_ids: members, okf_type: "Person", tier: "exact", verdict: "same", rationale: "Both own the onboarding redesign at Fieldnote." },
+    ...over,
   };
-  draw();
-  return host;
+}
+
+const MOCK_DECISIONS: Schemas["Decision"][] = [
+  mockIdentity("osei", ["people/osei", "people/m-osei"]),
+  mockIdentity("lisbon", ["events/lisbon", "events/offsite"], { fresh: false }),
+  mockIdentity("adk", ["concepts/adk", "projects/adk-course"], {
+    actions: ["merge_group", "keep_distinct", "skip"],
+    withheld: [{ action: "merge", reason: "cross_type" }],
+  }),
+  { ...mockIdentity("offsite-date", ["events/offsite"]), kind: "contradiction", actions: [], detail: null, evaluation: "not_applicable" },
+];
+
+const never = () => new Promise<never>(() => {});
+
+// A client over the made-up data: it reads, previews and says it applied, and
+// never writes. Only what the screen calls when you click around is answered.
+const MOCK_CLIENT = {
+  decisions: async () => ({ decisions: MOCK_DECISIONS }),
+  readPage: async (id: string) => MOCK_PAGES.get(id) ?? never(),
+  mergedConcepts: async () => ({ concepts: [] }),
+  refreshQueue: async () => ({}),
+  previewDecision: async (key: string, body: Schemas["PreviewRequest"]) => ({
+    decision_key: key,
+    action: body.action,
+    version: { decision_key: key, content_digest: "", payload_digest: "" },
+    plan:
+      body.action === "keep_distinct"
+        ? { kind: "keep_distinct", member_ids: [] }
+        : {
+            kind: "merge",
+            survivor_id: body.selection?.survivor_id ?? "people/osei",
+            absorbed_id: "people/m-osei",
+            survivor_criterion: "chosen",
+            survivor_type: "Person",
+            cross_source_same_pair: true,
+            cross_type_concern: null,
+            files_rewritten: 2,
+            kept_distinct_ids: [],
+            steps: [],
+          },
+  }),
+  applyDecision: async (key: string, body: Schemas["ApplyRequest"]) => ({
+    applied: { action: body.action, commit_sha: "", decision_key: key, merged: [["people/osei", "people/m-osei"]] },
+    warnings: [],
+  }),
+  quoteJudging: async () => ({
+    kind: "identity",
+    total: 1,
+    served: 0,
+    uncertain: 0,
+    to_judge: 1,
+    calls: 1,
+    binding: { backend: "ollama", model: "m", is_local: true, kind: "identity", effective_confidential: false, rubric_digest: null },
+    notices: [],
+    token: {},
+  }),
+} as unknown as ReviewClient;
+
+// The real To review screen (review/render.ts) on made-up data, so the gallery shows what ships.
+function reviewComposition(): HTMLElement {
+  const shell = appShell({ nav: NAV, current: "review", onNavigate: noop, footer: badge("success", "Engine running") });
+  const view = el("div", { class: "ui-fill" });
+  // Already "list", so drawing it does not move the gallery's focus to its title.
+  view.dataset["view"] = "list";
+  const live = { status: el("p", { class: "ui-visually-hidden" }), alert: el("p", { class: "ui-visually-hidden" }) };
+  const model = new ReviewModel(MOCK_CLIENT);
+  model.subscribe((state) => renderReview(view, live, model, state));
+  void model.load();
+  shell.main.append(view, live.status, live.alert);
+  return frame(shell.root);
 }
 
 // -- composition: status --------------------------------------------------------- //
@@ -337,17 +338,17 @@ function rowsAndCards(): HTMLElement[] {
         wide(
           "default, selected, with and without badges",
           uiList("Decisions", [
-            listRow({ title: "Are these the same?", meta: "Marguerite Osei · M. Osei", trailing: badge("info", "Checked"), selected: true, onSelect: noop }),
-            listRow({ title: "Are these the same?", meta: "Lisbon trip · Team offsite", trailing: badge("warning", "Changed"), onSelect: noop }),
-            listRow({ title: "What is it?", meta: "Okonkwo & Partners", onSelect: noop }),
+            listRow({ title: "Marguerite Osei · M. Osei", meta: "Are these the same person?", selected: true, onSelect: noop }),
+            listRow({ title: "Lisbon trip · Team offsite", meta: "Are these the same event?", trailing: badge("warning", "Changed"), onSelect: noop }),
+            listRow({ title: "Okonkwo & Partners · Okonkwo", meta: "Are these the same thing?", onSelect: noop }),
           ]),
         ),
       ),
     ),
     section(
       "Cards",
-      "A quiet raised surface with a hairline edge; a footer for provenance.",
-      specimens(wide("page card", pageCard(OSEI)), wide("title only", uiCard({ title: "Workspace" }, el("p", {}, "128 pages from 46 sources.")))),
+      "A quiet raised surface, one step up from the canvas; a footer for where a page came from.",
+      specimens(wide("page card", pageCard(OSEI)), wide("title only", uiCard({ title: "Your library" }, el("p", {}, "128 pages from 46 files.")))),
     ),
     section(
       "Two-up compare",
@@ -377,6 +378,48 @@ function inputs(): HTMLElement[] {
             { value: "people", label: "People" },
             { value: "events", label: "Events" },
           ], "people", noop),
+        ),
+      ),
+    ),
+    section(
+      "Answers",
+      "The answers to a question, each with what it does under it. Answers share one weight; Decide later is quiet.",
+      answerList("Your answer", [
+        { label: "Same thing", does: "Next, you'll choose what it is.", onChoose: noop },
+        { label: "Different things", does: "We won't suggest combining these again.", onChoose: noop },
+        { label: "Decide later", does: "Nothing changes. This stays in To review.", onChoose: noop, variant: "quiet" },
+      ]),
+    ),
+    section(
+      "Choices",
+      "Native checkboxes or radios in a labelled group, e.g. which pages are the same.",
+      specimens(
+        wide(
+          "checkboxes",
+          choiceList({
+            legend: "Mark the pages that are the same",
+            type: "checkbox",
+            name: "g-marked",
+            items: [
+              { value: "a", label: "Marguerite Osei", checked: true },
+              { value: "b", label: "M. Osei", checked: true },
+              { value: "c", label: "Maggie Osei", checked: false },
+            ],
+            onChange: noop,
+          }),
+        ),
+        wide(
+          "radios",
+          choiceList({
+            legend: "Which one should the combined page keep its name from?",
+            type: "radio",
+            name: "g-name",
+            items: [
+              { value: "a", label: "Marguerite Osei", checked: true },
+              { value: "b", label: "M. Osei", checked: false },
+            ],
+            onChange: noop,
+          }),
         ),
       ),
     ),
@@ -451,8 +494,8 @@ if (root) {
           "Every component of the desktop app in every state, on made-up data. Dark follows the system appearance; switch it to see light. Nothing here talks to the engine.",
       }),
     ),
-    section("To review: list and detail", "The sidebar, the list of decisions, and the selected decision. Click a row.", reviewComposition()),
-    section("Status", "The engine and the workspace.", statusComposition()),
+    section("To review", "The real screen on made-up data: the list of what waits, and the one you open. Click a row; nothing is written.", reviewComposition()),
+    section("Status", "The engine and your library.", statusComposition()),
     ...foundations(),
     buttons(),
     ...badgesAndNav(),
