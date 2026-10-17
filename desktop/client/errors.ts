@@ -50,6 +50,8 @@ export const ERROR_CODES = [
   "not_related",
   "tier_unchanged",
   "unknown_type",
+  "not_declined",
+  "not_reconciled",
   // Judging.
   "quote_stale",
   "run_refused",

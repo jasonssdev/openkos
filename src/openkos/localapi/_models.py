@@ -342,6 +342,80 @@ class UnrelateResponse(BaseModel):
     warnings: list[str]
 
 
+class DeclinedContradictionList(BaseModel):
+    """Every declined contradiction, newest first, in an envelope that leaves
+    room for additive fields."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    contradictions: list[api.DeclinedContradiction]
+
+
+class ContradictionReopenPreviewRequest(BaseModel):
+    """The pair of the declined contradiction to reopen, in either order, and
+    the page combined into one of them when the contradiction was found inside a
+    combined page."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None = None
+
+
+class ContradictionReopenApplyRequest(_EchoRequest):
+    """The version the contradiction reopen preview issued (echoed unchanged)
+    and how long to wait for the workspace lock; a client can shorten the wait
+    only."""
+
+    version: api.ContradictionReopenVersion
+    wait_seconds: float = Field(default=WRITE_WAIT_SECONDS, ge=0, le=WRITE_WAIT_SECONDS)
+
+
+class ContradictionReopenResponse(BaseModel):
+    """What was reopened, and the warnings the apply raised along the way."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reopened: api.ContradictionReopened
+    warnings: list[str]
+
+
+class ReconciledPairList(BaseModel):
+    """Every pair a reconcile settled, by pair, in an envelope that leaves room
+    for additive fields."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pairs: list[api.ReconciledPair]
+
+
+class UnreconcilePreviewRequest(BaseModel):
+    """The two pages whose reconcile to undo, in either order."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    first_id: str
+    second_id: str
+
+
+class UnreconcileApplyRequest(_EchoRequest):
+    """The version the unreconcile preview issued (echoed unchanged) and how long
+    to wait for the workspace lock; a client can shorten the wait only."""
+
+    version: api.UnreconcileVersion
+    wait_seconds: float = Field(default=WRITE_WAIT_SECONDS, ge=0, le=WRITE_WAIT_SECONDS)
+
+
+class UnreconcileResponse(BaseModel):
+    """What was undone, and the warnings the apply raised along the way."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    unreconciled: api.Unreconciled
+    warnings: list[str]
+
+
 class TierChangePreviewRequest(BaseModel):
     """The type whose tier to set, and the tier, or `null` to remove its
     setting so the engine's default applies."""

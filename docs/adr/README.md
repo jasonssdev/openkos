@@ -112,4 +112,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0071](0071-the-desktop-shell-remembers-the-chosen-workspace-in-its-own-config-directory-and-creates-one-with-the-engines-init.md) | The desktop shell remembers the chosen workspace in its own config directory and creates one with the engine's init | Accepted | 2026-10-17 |
 | [0072](0072-contradictions-and-revisions-are-previewed-as-findings-and-applied-as-decisions.md) | Contradictions and revisions are previewed as findings and applied as decisions | Accepted | 2026-10-17 |
 | [0073](0073-adding-files-through-the-api-is-consented-against-a-worst-case-call-bound.md) | Adding files through the API is consented against a worst-case call bound | Accepted | 2026-10-17 |
-| [0074](0074-undoing-a-reconcile-removes-what-reconcile-wrote-keyed-by-the-pair.md) | Undoing a reconcile removes what reconcile wrote, keyed by the pair | Proposed | 2026-10-17 |
+| [0074](0074-undoing-a-reconcile-removes-what-reconcile-wrote-keyed-by-the-pair.md) | Undoing a reconcile removes what reconcile wrote, keyed by the pair | Accepted | 2026-10-17 |

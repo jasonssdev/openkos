@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0074: Undoing a reconcile removes what reconcile wrote, keyed by the pair"
 description: openkos.api undoes a reconcile with a preview and an apply keyed by the sorted pair, removing the resolution edges as unrelate removes an edge, withdrawing a supersede's out-of-date mark as unrelate withdraws it, and removing the reconciliation notes reconcile appended when they keep the shape it wrote; a declined contradiction is reopened the same way, keyed by the pair and the merged-body discriminator.
-status: Proposed
+status: Accepted
 date: 2026-10-17
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0074: Undoing a reconcile removes what reconcile wrote, keyed by the pair
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-17
 
 ## Context
@@ -64,9 +64,10 @@ supersedes it.
 
 - The app can offer Undo on every contradiction and revision confirmation, and
   the "edit the pages or revert with git" advice has an app equivalent.
-- After an undo with nothing in between, both pages return to their earlier
-  bytes, so a persisted contradiction verdict is fresh again and the finding
-  comes back on the next check without a model call. Like every ADR-0067 undo,
+- After an undo with nothing in between, pages in the engine's form return to
+  their earlier bytes, so a persisted contradiction verdict is fresh again and
+  the finding comes back on the next check without a model call. A hand-written
+  page keeps its values but is re-serialised, as every engine write does. Like every ADR-0067 undo,
   it does not come back at once: no queue row is proposed.
 - The engine gains a write the CLI does not have. `reconcile`'s refusal text is
   unchanged; a CLI verb can reuse the same service later.

@@ -59,7 +59,8 @@ proposed (ADR-0067 D7).
 1. **The edges.** Every edge of the pair's resolution type between the two
    pages is removed, through `lifecycle.prepare_unrelate` per edge, so the
    relations list is edited exactly as `unrelate` edits it (the key dropped when
-   it empties).
+   it empties). The two pages are resolved by `reconcile_service.resolve_pair`,
+   as `reconcile` resolves them (two distinct existing files).
 2. **The out-of-date mark.** For `supersedes`, `prepare_unrelate`'s own
    withdrawal decides it: withdrawn when nothing else supersedes the page after
    the removal and the projection allows it; a human-authored status stays.
@@ -75,10 +76,15 @@ proposed (ADR-0067 D7).
 5. **The commit.** One commit of the pages whose bytes change and `log.md`:
    `openkos: unreconcile <first> <-> <second>`.
 
-In the common case (a reconcile, then its undo, nothing else in between) both
-pages return to their bytes before the reconcile, so a persisted contradiction
+`reconcile` writes a `relations` key on both pages, even on the page that gets
+no edge, so an emptied list is dropped on a page the undo rewrites, as
+`unrelate` drops it. The withdrawn mark is `unrelate`'s projection, which writes
+`status: stable`, the value the engine's own pages carry. So for pages in the
+engine's form (a reconcile, then its undo, nothing else in between) both pages
+return to their bytes before the reconcile, and a persisted contradiction
 verdict over them is fresh again and served without a model call on the next
-check.
+check. A hand-written page comes back with the same frontmatter values and
+body, re-serialised, and gains `status: stable` after a supersede.
 
 Rejected: offering `unrelate` for a supersede. It leaves both notes, and a
 symmetric reconcile has two edges, so the app would need two unrelates and
@@ -89,7 +95,7 @@ record is a second truth to keep in sync, and the CLI's reconciles have none.
 ### D3. Refusals
 
 `NotUndoable` gains `not_declined` (no declined record for exactly this pair
-and discriminator, an invalid id or a pair of one page included) and
+and discriminator, an invalid id included) and
 `not_reconciled` (the pair holds no reconcile resolution, holds disagreeing
 ones, or a page no longer exists, or an id is invalid). Both are 409 over HTTP,
 as `not_kept_distinct` and `not_related` are. A disagreeing (`mixed`) pair is
@@ -100,11 +106,12 @@ pick which resolution to remove.
 
 - **Reopen a decline:** the sorted pair, the discriminator (`-` for none) and
   the bytes of the sidecar holding the record.
-- **Undo a reconcile:** the sorted pair, the resolution type and holder, the
-  bytes of both pages and whether the out-of-date mark is withdrawn. The
-  withdrawal line is needed because both pages are always digested, so a
-  bystander page that starts or stops superseding the target would otherwise not
-  move the digest; under the lock the re-plan sees it and the digests differ.
+- **Undo a reconcile:** each page's Concept ID and bytes, and whether the
+  out-of-date mark is withdrawn. The resolution is read from those bytes, so it
+  needs no line of its own. The withdrawal line is needed because both pages
+  are always digested, so a bystander page that starts or stops superseding the
+  target would otherwise not move the digest; under the lock the re-plan sees it
+  and the digests differ.
 
 `log.md` is not digested, as for unrelate.
 

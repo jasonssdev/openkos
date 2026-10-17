@@ -17,15 +17,26 @@ from pathlib import Path
 from typing import Literal
 
 from openkos import config, fsio
-from openkos.application import curate_decisions, duplicates_service
+from openkos.application import (
+    contradictions_service,
+    curate_decisions,
+    duplicates_service,
+    reconcile_service,
+)
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import pending as application_pending
 from openkos.application.write_gate import Refused, WriteFailed
 from openkos.bundle import decisions as bundle_decisions
-from openkos.model import relations, types
+from openkos.bundle import log as bundle_log
+from openkos.model import okf, relations, types
 
 UndoReason = Literal[
-    "not_kept_distinct", "not_related", "tier_unchanged", "unknown_type"
+    "not_kept_distinct",
+    "not_related",
+    "tier_unchanged",
+    "unknown_type",
+    "not_declined",
+    "not_reconciled",
 ]
 
 
@@ -166,6 +177,163 @@ def apply_reopen(
             f"openkos: reopen identity {'/'.join(plan.member_ids)}",
         )
     return Reopened(member_ids=plan.member_ids, commit_sha=commit_sha)
+
+
+# -- a declined contradiction ------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class DeclinedContradictionRecord:
+    """A contradiction a person declined and has not reopened."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    decided_at: str
+
+
+def declined_contradictions(root: Path) -> tuple[DeclinedContradictionRecord, ...]:
+    """Every declined contradiction record, newest first, then by pair and
+    discriminator. Walks the decisions sidecars as `contradictions --declined`
+    does, without its findings join, so no database is opened."""
+    bundle_dir = config.WorkspaceLayout(root).bundle_dir
+    records: list[DeclinedContradictionRecord] = []
+    for path in bundle_decisions.iter_decisions(bundle_dir):
+        # Read the WALKED path, never one rebuilt from the sidecar's content.
+        for record in bundle_decisions.read_decisions_at(path):
+            if record.state == "declined":
+                records.append(
+                    DeclinedContradictionRecord(
+                        first_id=record.pair_ids[0],
+                        second_id=record.pair_ids[1],
+                        merged_absorbed_id=record.merged_absorbed_id,
+                        decided_at=record.decided_at,
+                    )
+                )
+    by_key = sorted(
+        records,
+        key=lambda r: (r.first_id, r.second_id, r.merged_absorbed_id or ""),
+    )
+    return tuple(
+        sorted(by_key, key=lambda r: _decided_time(r.decided_at), reverse=True)
+    )
+
+
+@dataclass(frozen=True)
+class ContradictionReopenPlan:
+    """Reopening the declined contradiction over the sorted pair and the
+    merged-body discriminator."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    content_digest: str
+
+
+def _finding_identity(
+    first_id: str, second_id: str, merged_absorbed_id: str | None
+) -> tuple[tuple[str, str], str | None] | None:
+    """The sorted, canonical pair and discriminator, or `None` when an id is not
+    a valid Concept ID."""
+    try:
+        first, second = sorted(
+            application_lifecycle.canonicalize_concept_id(concept_id)
+            for concept_id in (first_id, second_id)
+        )
+        merged = (
+            None
+            if merged_absorbed_id is None
+            else application_lifecycle.canonicalize_concept_id(merged_absorbed_id)
+        )
+    except ValueError:
+        return None
+    return (first, second), merged
+
+
+def preview_reopen_contradiction(
+    root: Path, first_id: str, second_id: str, merged_absorbed_id: str | None
+) -> ContradictionReopenPlan | UndoRefusal:
+    """Plan reopening the declined contradiction over exactly this pair (either
+    order) and discriminator.
+
+    The digest covers the pair, the discriminator and the bytes of the sidecar
+    holding the record. Writes nothing and takes no lock."""
+    layout = config.WorkspaceLayout(root)
+    identity = _finding_identity(first_id, second_id, merged_absorbed_id)
+    if identity is None:
+        return UndoRefusal("not_declined")
+    pair, merged = identity
+    if not application_pending.is_contradiction_declined(layout, pair, merged):
+        return UndoRefusal("not_declined")
+    sidecar = bundle_decisions.decisions_path_for(pair[0], layout.bundle_dir)
+    lines = [
+        f"pair\t{pair[0]}\t{pair[1]}",
+        f"merged\t{'-' if merged is None else merged}",
+        f"sidecar\t{_file_digest(sidecar)}",
+    ]
+    return ContradictionReopenPlan(
+        first_id=pair[0],
+        second_id=pair[1],
+        merged_absorbed_id=merged,
+        content_digest=_digest(lines),
+    )
+
+
+@dataclass(frozen=True)
+class ContradictionReopened:
+    """The decline was reopened. `commit_sha` is `None` when the commit could
+    not be made (the write itself landed)."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    commit_sha: str | None
+
+
+def apply_reopen_contradiction(
+    root: Path,
+    first_id: str,
+    second_id: str,
+    merged_absorbed_id: str | None,
+    content_digest: str,
+    *,
+    ports: curate_decisions.DecisionPorts,
+) -> ContradictionReopened | UndoRefusal | UndoStale:
+    """Reopen the decline previewed as `content_digest`, under one lock.
+
+    Plans again inside the commit section; a refusal or a moved digest writes
+    nothing. Otherwise the record is rewritten with state `open`, as
+    `contradictions --reopen` writes it, and its one sidecar is committed."""
+    layout = config.WorkspaceLayout(root)
+    with ports.commit_section():
+        plan = preview_reopen_contradiction(
+            root, first_id, second_id, merged_absorbed_id
+        )
+        if isinstance(plan, UndoRefusal):
+            return plan
+        if plan.content_digest != content_digest:
+            return UndoStale()
+        pair = (plan.first_id, plan.second_id)
+        try:
+            rel_path = contradictions_service.apply_contradiction_decision(
+                layout, pair, plan.merged_absorbed_id, target_state="open"
+            )
+        except (OSError, ValueError) as exc:
+            raise WriteFailed("reopen", pair, str(exc)) from exc
+        suffix = (
+            "" if plan.merged_absorbed_id is None else f" ({plan.merged_absorbed_id})"
+        )
+        commit_sha = ports.autocommit(
+            root,
+            [rel_path],
+            f"openkos: reopen contradiction {pair[0]} <-> {pair[1]}{suffix}",
+        )
+    return ContradictionReopened(
+        first_id=plan.first_id,
+        second_id=plan.second_id,
+        merged_absorbed_id=plan.merged_absorbed_id,
+        commit_sha=commit_sha,
+    )
 
 
 # -- a connection ---------------------------------------------------------- #
@@ -311,6 +479,276 @@ def apply_unrelate(
         source_id=plan.source_id,
         relation_type=plan.relation_type,
         target_id=plan.target_id,
+        commit_sha=commit_sha,
+    )
+
+
+# -- a reconcile ----------------------------------------------------------------- #
+
+_RESOLUTION_TYPE: dict[str, Literal["reconciled_with", "supersedes", "revises"]] = {
+    "symmetric": "reconciled_with",
+    "directional": "supersedes",
+    "revision": "revises",
+}
+"""The relation type of each single resolution `reconcile` records."""
+
+
+@dataclass(frozen=True)
+class ReconciledPairRecord:
+    """A pair holding one reconcile resolution. `holder_id` and `target_id` are
+    `None` for `reconciled_with`, which has no direction."""
+
+    first_id: str
+    second_id: str
+    relation_type: Literal["reconciled_with", "supersedes", "revises"]
+    holder_id: str | None
+    target_id: str | None
+
+
+def _relations_by_page(bundle_dir: Path) -> dict[str, list[okf.Relation]]:
+    """Every page's typed relations, keyed by Concept ID. A page whose
+    frontmatter or relations cannot be read holds none."""
+    pages: dict[str, list[okf.Relation]] = {}
+    for path in okf.iter_bundle_markdown(bundle_dir):
+        concept_id = okf.concept_id_for(path, bundle_dir)
+        try:
+            metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+            pages[concept_id] = okf.decode_relations(metadata)
+        except OSError, ValueError:
+            pages[concept_id] = []
+    return pages
+
+
+def _resolution(
+    first: str,
+    second: str,
+    relations_first: list[okf.Relation],
+    relations_second: list[okf.Relation],
+) -> ReconciledPairRecord | None:
+    """The pair's one resolution, classified as `reconcile` classifies it, or
+    `None` when it holds none or disagreeing ones."""
+    mode, holder = reconcile_service.existing_reconciliation_state(
+        relations_a=relations_first,
+        relations_b=relations_second,
+        canonical_a=first,
+        canonical_b=second,
+    )
+    if mode == "none" or mode == "mixed":
+        return None
+    target = None if holder is None else (second if holder == first else first)
+    return ReconciledPairRecord(
+        first_id=first,
+        second_id=second,
+        relation_type=_RESOLUTION_TYPE[mode],
+        holder_id=holder,
+        target_id=target,
+    )
+
+
+def reconciled_pairs(root: Path) -> tuple[ReconciledPairRecord, ...]:
+    """Every pair of existing pages holding one reconcile resolution, by pair.
+    Reads the pages only."""
+    pages = _relations_by_page(config.WorkspaceLayout(root).bundle_dir)
+    pairs: set[tuple[str, str]] = set()
+    for concept_id, page_relations in pages.items():
+        for relation in page_relations:
+            if (
+                relation.type in reconcile_service.MODE_BY_RESOLUTION_TYPE
+                and relation.target in pages
+                and relation.target != concept_id
+            ):
+                first, second = sorted((concept_id, relation.target))
+                pairs.add((first, second))
+    found = (
+        _resolution(first, second, pages[first], pages[second])
+        for first, second in sorted(pairs)
+    )
+    return tuple(record for record in found if record is not None)
+
+
+@dataclass(frozen=True)
+class UnreconcilePlan:
+    """Undoing the reconcile between `first_id` and `second_id` (sorted): its
+    edges, its notes and, for `supersedes`, the out-of-date mark when
+    `withdraws_deprecation`. `pages_changed` are the pages whose files change."""
+
+    first_id: str
+    second_id: str
+    relation_type: Literal["reconciled_with", "supersedes", "revises"]
+    holder_id: str | None
+    target_id: str | None
+    withdraws_deprecation: bool
+    pages_changed: tuple[str, ...]
+    content_digest: str
+
+
+@dataclass(frozen=True)
+class _Unreconciling:
+    plan: UnreconcilePlan
+    paths: dict[str, Path]
+    new_texts: dict[str, str]
+    new_log_text: str
+
+
+def _resolve_pair(
+    layout: config.WorkspaceLayout, first_id: str, second_id: str
+) -> dict[str, Path] | None:
+    """The two pages by canonical Concept ID, resolved as `reconcile` resolves
+    them (two distinct existing files), or `None`."""
+    try:
+        pair = reconcile_service.resolve_pair(layout, first_id, second_id)
+    except Refused:
+        return None
+    return {pair.canonical_a: pair.path_a, pair.canonical_b: pair.path_b}
+
+
+def _plan_unreconcile(
+    root: Path, first_id: str, second_id: str
+) -> _Unreconciling | UndoRefusal:
+    """The inverse of the pair's reconcile, from the bytes on disk now."""
+    layout = config.WorkspaceLayout(root)
+    paths = _resolve_pair(layout, first_id, second_id)
+    if paths is None:
+        return UndoRefusal("not_reconciled")
+    first, second = sorted(paths)
+    log_path = layout.bundle_dir / "log.md"
+    now = datetime.now(UTC)
+    try:
+        snapshots = {cid: fsio.snapshot_read(paths[cid]) for cid in (first, second)}
+        texts = {cid: text for cid, (_, text) in snapshots.items()}
+        page_relations = {
+            cid: okf.decode_relations(okf.load_frontmatter(text)[0])
+            for cid, text in texts.items()
+        }
+        resolution = _resolution(
+            first, second, page_relations[first], page_relations[second]
+        )
+        if resolution is None:
+            return UndoRefusal("not_reconciled")
+        rel_type = resolution.relation_type
+        new_texts = dict(texts)
+        withdraws = False
+        for page, other in ((first, second), (second, first)):
+            if not any(
+                r.target == other and r.type == rel_type for r in page_relations[page]
+            ):
+                continue
+            prepared = application_lifecycle.prepare_unrelate(
+                paths[page],
+                log_path,
+                page,
+                other,
+                rel_type,
+                root,
+                now=now,
+                target_path=paths[other],
+            )
+            new_texts[page] = prepared.new_source_text
+            if prepared.new_target_text is not None:
+                new_texts[other] = prepared.new_target_text
+                withdraws = True
+        for page, other in ((first, second), (second, first)):
+            metadata, body = okf.load_frontmatter(new_texts[page])
+            body, removed = reconcile_service.remove_reconciliation_note(body, other)
+            if removed:
+                # `reconcile` writes the key on both pages, even with no edge;
+                # an emptied list is dropped, as `unrelate` drops it.
+                if metadata.get(okf.RELATIONS_KEY) == []:
+                    del metadata[okf.RELATIONS_KEY]
+                new_texts[page] = okf.dump_frontmatter(metadata, body)
+        _, log_text = fsio.snapshot_read(log_path)
+    except (OSError, ValueError) as exc:
+        raise WriteFailed("unreconcile", (first, second), str(exc)) from exc
+    log_line = (
+        f"**Unreconcile**: Removed the {rel_type!r} resolution between "
+        f"[{first}](/{first}.md) and [{second}](/{second}.md)."
+    )
+    new_log_text = bundle_log.insert_log_entry(
+        log_text, now.astimezone().date(), log_line
+    )
+    # The resolution is read from the pages, so their bytes cover it.
+    lines = [
+        *(
+            f"page\t{cid}\t{hashlib.sha256(raw).hexdigest()}"
+            for cid, (raw, _) in snapshots.items()
+        ),
+        f"withdraws\t{withdraws}",
+    ]
+    plan = UnreconcilePlan(
+        first_id=first,
+        second_id=second,
+        relation_type=rel_type,
+        holder_id=resolution.holder_id,
+        target_id=resolution.target_id,
+        withdraws_deprecation=withdraws,
+        pages_changed=tuple(
+            cid for cid in (first, second) if new_texts[cid] != texts[cid]
+        ),
+        content_digest=_digest(lines),
+    )
+    return _Unreconciling(plan, paths, new_texts, new_log_text)
+
+
+def preview_unreconcile(
+    root: Path, first_id: str, second_id: str
+) -> UnreconcilePlan | UndoRefusal:
+    """Plan undoing the reconcile between two pages, given in either order.
+
+    The digest covers the pair, the resolution, both pages' bytes and whether
+    the out-of-date mark is withdrawn. Writes nothing and takes no lock."""
+    planned = _plan_unreconcile(root, first_id, second_id)
+    return planned if isinstance(planned, UndoRefusal) else planned.plan
+
+
+@dataclass(frozen=True)
+class Unreconciled:
+    """The reconcile was undone. `commit_sha` is `None` when the commit could not
+    be made (the writes themselves landed)."""
+
+    first_id: str
+    second_id: str
+    relation_type: Literal["reconciled_with", "supersedes", "revises"]
+    commit_sha: str | None
+
+
+def apply_unreconcile(
+    root: Path,
+    first_id: str,
+    second_id: str,
+    content_digest: str,
+    *,
+    ports: curate_decisions.DecisionPorts,
+) -> Unreconciled | UndoRefusal | UndoStale:
+    """Undo the reconcile previewed as `content_digest`, under one lock.
+
+    Plans again inside the commit section, so the plan and the write see the
+    same bytes; a refusal or a moved digest writes nothing. Otherwise the pages
+    that change and a `log.md` line are written and committed together."""
+    with ports.commit_section():
+        planned = _plan_unreconcile(root, first_id, second_id)
+        if isinstance(planned, UndoRefusal):
+            return planned
+        plan = planned.plan
+        if plan.content_digest != content_digest:
+            return UndoStale()
+        log_path = config.WorkspaceLayout(root).bundle_dir / "log.md"
+        try:
+            for cid in plan.pages_changed:
+                fsio.write_atomic(planned.paths[cid], planned.new_texts[cid])
+            fsio.write_atomic(log_path, planned.new_log_text)
+        except OSError as exc:
+            raise WriteFailed(
+                "unreconcile", (plan.first_id, plan.second_id), str(exc)
+            ) from exc
+        commit_sha = ports.autocommit(
+            root,
+            [*(f"bundle/{cid}.md" for cid in plan.pages_changed), "bundle/log.md"],
+            f"openkos: unreconcile {plan.first_id} <-> {plan.second_id}",
+        )
+    return Unreconciled(
+        first_id=plan.first_id,
+        second_id=plan.second_id,
+        relation_type=plan.relation_type,
         commit_sha=commit_sha,
     )
 

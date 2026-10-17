@@ -164,6 +164,12 @@ _ROUTE_ERRORS: dict[tuple[str, str], set[str]] = {
     ("get", "/v1/settings/model"): set(),
     ("post", "/v1/settings/model/preview"): {"409", "413"},
     ("post", "/v1/settings/model/apply"): {"409", "413", "503"},
+    ("get", "/v1/declined-contradictions"): set(),
+    ("post", "/v1/contradictions/reopen/preview"): {"409", "413"},
+    ("post", "/v1/contradictions/reopen/apply"): {"409", "413", "503"},
+    ("get", "/v1/reconciled"): set(),
+    ("post", "/v1/unreconcile/preview"): {"409", "413"},
+    ("post", "/v1/unreconcile/apply"): {"409", "413", "503"},
     ("post", "/v1/judging/quote"): {"413", "424", "502", "503"},
     ("post", "/v1/judging/runs"): {"409", "413"},
     ("get", "/v1/judging/runs/{run_id}"): {"404"},
@@ -189,6 +195,8 @@ _RETRY_AFTER = {
     ("post", "/v1/tiers/apply"),
     ("post", "/v1/settings/model/apply"),
     ("post", "/v1/pages/sensitivity/apply"),
+    ("post", "/v1/contradictions/reopen/apply"),
+    ("post", "/v1/unreconcile/apply"),
 }
 
 

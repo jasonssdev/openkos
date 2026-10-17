@@ -17,8 +17,7 @@ version, *, wait_seconds=0.0, on_warning=None)`. The preview MUST return a
 `ContradictionReopenVersion`, whose `content_digest` covers the pair, the
 discriminator and the bytes of the sidecar holding the record, or
 `NotUndoable("not_declined")` when no declined record for exactly that pair and
-discriminator exists (an id that is not a valid Concept ID, or one page named
-twice, included). The pair MAY be given in either order. The preview MUST NOT
+discriminator exists (an id that is not a valid Concept ID included). The pair MAY be given in either order. The preview MUST NOT
 take the lock, build a client or write.
 
 The apply MUST take the workspace lock once, waiting at most `wait_seconds`
@@ -88,6 +87,8 @@ write the inverse of the reconcile:
 - on each page, the `## Reconciliation` note anchored on the other page removed
   when it has the shape `reconcile` writes (heading, anchor, one sentence); a
   note edited around its anchor MUST be left unchanged;
+- on a page rewritten for the undo, a `relations` list left empty dropped, as
+  `unrelate` drops it;
 - one `log.md` line;
 
 then commit only the pages it changed and `log.md` in one commit, and return
@@ -97,7 +98,8 @@ NOT refresh a derived index.
 
 #### Scenario: A supersede made through the app is undone
 
-- GIVEN a contradiction settled with `supersede` through `apply_decision`
+- GIVEN two pages in the form the engine writes them (`status: stable`), and
+  a contradiction between them settled with `supersede` through `apply_decision`
 - WHEN `preview_unreconcile` then `apply_unreconcile` are called with its pair
 - THEN neither page holds a `supersedes` edge or a reconciliation note, the
   superseded page is no longer marked deprecated, both pages' bytes are the ones
@@ -123,7 +125,7 @@ NOT refresh a derived index.
 - WHEN `preview_unreconcile` is called with them
 - THEN it returns `NotUndoable("not_reconciled")` and nothing is written
 
-#### Scenario: A page edited after the preview is stale
+#### Scenario: A page edited after the unreconcile preview is stale
 
 - GIVEN an unreconcile preview, and one of the pages edited afterwards
 - WHEN `apply_unreconcile` is called with the preview's version
@@ -140,7 +142,7 @@ The names this change adds (`declined_contradictions`, `DeclinedContradiction`,
 `not_reconciled` on `NotUndoable` MUST be classified as additive by the surface
 snapshot's classifier, and `API_VERSION` MUST stay 1.
 
-#### Scenario: The surface diff is additive
+#### Scenario: The findings-undo surface diff is additive
 
 - GIVEN the regenerated surface snapshot
 - WHEN the classifier compares it with the previous one

@@ -347,6 +347,8 @@ _UNDO_ROWS = {
     "not_related": (409, "not_related"),
     "tier_unchanged": (409, "tier_unchanged"),
     "unknown_type": (422, "unknown_type"),
+    "not_declined": (409, "not_declined"),
+    "not_reconciled": (409, "not_reconciled"),
 }
 
 
@@ -417,6 +419,8 @@ SPEC_CODES = {
     "not_related",
     "tier_unchanged",
     "unknown_type",
+    "not_declined",
+    "not_reconciled",
     "workspace_busy",
     "workspace_lock_unavailable",
     "queue_unavailable",

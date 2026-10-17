@@ -482,6 +482,194 @@
         "title": "ContradictionDetail",
         "type": "object"
       },
+      "ContradictionReopenApplyRequest": {
+        "description": "The version the contradiction reopen preview issued (echoed unchanged)\nand how long to wait for the workspace lock; a client can shorten the wait\nonly.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/ContradictionReopenVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "ContradictionReopenApplyRequest",
+        "type": "object"
+      },
+      "ContradictionReopenPreview": {
+        "description": "Reopening the declined contradiction over the pair: it may be pointed out\nagain.",
+        "properties": {
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ContradictionReopenVersion"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "merged_absorbed_id",
+          "version"
+        ],
+        "title": "ContradictionReopenPreview",
+        "type": "object"
+      },
+      "ContradictionReopenPreviewRequest": {
+        "additionalProperties": false,
+        "description": "The pair of the declined contradiction to reopen, in either order, and\nthe page combined into one of them when the contradiction was found inside a\ncombined page.",
+        "properties": {
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id"
+        ],
+        "title": "ContradictionReopenPreviewRequest",
+        "type": "object"
+      },
+      "ContradictionReopenResponse": {
+        "additionalProperties": false,
+        "description": "What was reopened, and the warnings the apply raised along the way.",
+        "properties": {
+          "reopened": {
+            "$ref": "#/components/schemas/ContradictionReopened"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "reopened",
+          "warnings"
+        ],
+        "title": "ContradictionReopenResponse",
+        "type": "object"
+      },
+      "ContradictionReopenVersion": {
+        "description": "The version a stateless caller reopens a declined contradiction against:\necho it unchanged. `content_digest` covers the pair, the discriminator and\nthe sidecar holding the decline.",
+        "properties": {
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "merged_absorbed_id",
+          "content_digest"
+        ],
+        "title": "ContradictionReopenVersion",
+        "type": "object"
+      },
+      "ContradictionReopened": {
+        "additionalProperties": false,
+        "description": "The decline was reopened. `commit_sha` is `None` when its commit could not\nbe made (the write itself landed).",
+        "properties": {
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "merged_absorbed_id",
+          "commit_sha"
+        ],
+        "title": "ContradictionReopened",
+        "type": "object"
+      },
       "Decision": {
         "additionalProperties": false,
         "description": "One open decision, as data a client can render.",
@@ -719,6 +907,61 @@
           "kind"
         ],
         "title": "DeclinePlan",
+        "type": "object"
+      },
+      "DeclinedContradiction": {
+        "additionalProperties": false,
+        "description": "A contradiction a person chose to leave as it is, and when.",
+        "properties": {
+          "decided_at": {
+            "title": "Decided At",
+            "type": "string"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "merged_absorbed_id",
+          "decided_at"
+        ],
+        "title": "DeclinedContradiction",
+        "type": "object"
+      },
+      "DeclinedContradictionList": {
+        "additionalProperties": false,
+        "description": "Every declined contradiction, newest first, in an envelope that leaves\nroom for additive fields.",
+        "properties": {
+          "contradictions": {
+            "items": {
+              "$ref": "#/components/schemas/DeclinedContradiction"
+            },
+            "title": "Contradictions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "contradictions"
+        ],
+        "title": "DeclinedContradictionList",
         "type": "object"
       },
       "ErrorBody": {
@@ -3376,6 +3619,78 @@
         "title": "ReconcilePlan",
         "type": "object"
       },
+      "ReconciledPair": {
+        "additionalProperties": false,
+        "description": "Two pages a reconcile settled, and how. `holder_id` replaces or updates\n`target_id`; both are `None` for `reconciled_with`.",
+        "properties": {
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "holder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holder Id"
+          },
+          "relation_type": {
+            "enum": [
+              "reconciled_with",
+              "supersedes",
+              "revises"
+            ],
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "relation_type",
+          "holder_id",
+          "target_id"
+        ],
+        "title": "ReconciledPair",
+        "type": "object"
+      },
+      "ReconciledPairList": {
+        "additionalProperties": false,
+        "description": "Every pair a reconcile settled, by pair, in an envelope that leaves room\nfor additive fields.",
+        "properties": {
+          "pairs": {
+            "items": {
+              "$ref": "#/components/schemas/ReconciledPair"
+            },
+            "title": "Pairs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pairs"
+        ],
+        "title": "ReconciledPairList",
+        "type": "object"
+      },
       "RefreshRequest": {
         "additionalProperties": false,
         "description": "How long a queue refresh waits for the workspace lock.",
@@ -4702,6 +5017,209 @@
         "title": "Unmerged",
         "type": "object"
       },
+      "UnreconcileApplyRequest": {
+        "description": "The version the unreconcile preview issued (echoed unchanged) and how long\nto wait for the workspace lock; a client can shorten the wait only.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/UnreconcileVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "UnreconcileApplyRequest",
+        "type": "object"
+      },
+      "UnreconcilePreview": {
+        "description": "Undoing how a reconcile recorded `first_id` and `second_id`: its edges\nand the notes it added go. `withdraws_deprecation`: the replaced page stops\nbeing marked out of date, because nothing else replaces it.\n`pages_changed`: the pages whose files change.",
+        "properties": {
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "holder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holder Id"
+          },
+          "pages_changed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pages Changed",
+            "type": "array"
+          },
+          "relation_type": {
+            "enum": [
+              "reconciled_with",
+              "supersedes",
+              "revises"
+            ],
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "version": {
+            "$ref": "#/components/schemas/UnreconcileVersion"
+          },
+          "withdraws_deprecation": {
+            "title": "Withdraws Deprecation",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "relation_type",
+          "holder_id",
+          "target_id",
+          "withdraws_deprecation",
+          "pages_changed",
+          "version"
+        ],
+        "title": "UnreconcilePreview",
+        "type": "object"
+      },
+      "UnreconcilePreviewRequest": {
+        "additionalProperties": false,
+        "description": "The two pages whose reconcile to undo, in either order.",
+        "properties": {
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id"
+        ],
+        "title": "UnreconcilePreviewRequest",
+        "type": "object"
+      },
+      "UnreconcileResponse": {
+        "additionalProperties": false,
+        "description": "What was undone, and the warnings the apply raised along the way.",
+        "properties": {
+          "unreconciled": {
+            "$ref": "#/components/schemas/Unreconciled"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "unreconciled",
+          "warnings"
+        ],
+        "title": "UnreconcileResponse",
+        "type": "object"
+      },
+      "UnreconcileVersion": {
+        "description": "The version a stateless caller undoes a reconcile against: echo it\nunchanged. `content_digest` covers the pair, the resolution, both pages and\nwhether the out-of-date mark is withdrawn.",
+        "properties": {
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "content_digest"
+        ],
+        "title": "UnreconcileVersion",
+        "type": "object"
+      },
+      "Unreconciled": {
+        "additionalProperties": false,
+        "description": "The reconcile was undone. `commit_sha` is `None` when its commit could not\nbe made (the writes themselves landed); `committed_confidential` is true when\nthe commit holds a concept explicitly marked confidential.",
+        "properties": {
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "committed_confidential": {
+            "default": false,
+            "title": "Committed Confidential",
+            "type": "boolean"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "relation_type": {
+            "enum": [
+              "reconciled_with",
+              "supersedes",
+              "revises"
+            ],
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "relation_type",
+          "commit_sha"
+        ],
+        "title": "Unreconciled",
+        "type": "object"
+      },
       "UnrelateApplyRequest": {
         "description": "The version the unrelate preview issued (echoed unchanged) and how long\nto wait for the workspace lock; a client can shorten the wait only.",
         "properties": {
@@ -5260,6 +5778,210 @@
         "summary": "Ask Status"
       }
     },
+    "/v1/contradictions/reopen/apply": {
+      "post": {
+        "operationId": "contradiction_reopen_apply_v1_contradictions_reopen_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContradictionReopenApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContradictionReopenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Contradiction Reopen Apply"
+      }
+    },
+    "/v1/contradictions/reopen/preview": {
+      "post": {
+        "operationId": "contradiction_reopen_preview_v1_contradictions_reopen_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContradictionReopenPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContradictionReopenPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Contradiction Reopen Preview"
+      }
+    },
     "/v1/decisions": {
       "get": {
         "operationId": "decisions_v1_decisions_get",
@@ -5765,6 +6487,69 @@
           }
         ],
         "summary": "Preview Finding"
+      }
+    },
+    "/v1/declined-contradictions": {
+      "get": {
+        "operationId": "declined_contradictions_v1_declined_contradictions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeclinedContradictionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Declined Contradictions"
       }
     },
     "/v1/health": {
@@ -7255,6 +8040,69 @@
           }
         ],
         "summary": "Refresh"
+      }
+    },
+    "/v1/reconciled": {
+      "get": {
+        "operationId": "reconciled_pairs_v1_reconciled_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciledPairList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Reconciled Pairs"
       }
     },
     "/v1/reopen/apply": {
@@ -8875,6 +9723,210 @@
           }
         ],
         "summary": "Unmerge Preview"
+      }
+    },
+    "/v1/unreconcile/apply": {
+      "post": {
+        "operationId": "unreconcile_apply_v1_unreconcile_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnreconcileApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreconcileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Unreconcile Apply"
+      }
+    },
+    "/v1/unreconcile/preview": {
+      "post": {
+        "operationId": "unreconcile_preview_v1_unreconcile_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnreconcilePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreconcilePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Unreconcile Preview"
       }
     },
     "/v1/unrelate/apply": {

@@ -210,6 +210,15 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
       call("post", "/v1/settings/model/preview", { body }),
     applyModelSettings: (body: Schemas["ModelSettingsApplyRequest"]) =>
       call("post", "/v1/settings/model/apply", { body }),
+    declinedContradictions: () => call("get", "/v1/declined-contradictions"),
+    previewReopenContradiction: (body: Schemas["ContradictionReopenPreviewRequest"]) =>
+      call("post", "/v1/contradictions/reopen/preview", { body }),
+    applyReopenContradiction: (body: Schemas["ContradictionReopenApplyRequest"]) =>
+      call("post", "/v1/contradictions/reopen/apply", { body }),
+    reconciledPairs: () => call("get", "/v1/reconciled"),
+    previewUnreconcile: (body: Schemas["UnreconcilePreviewRequest"]) =>
+      call("post", "/v1/unreconcile/preview", { body }),
+    applyUnreconcile: (body: Schemas["UnreconcileApplyRequest"]) => call("post", "/v1/unreconcile/apply", { body }),
   };
 }
 

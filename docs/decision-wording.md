@@ -178,9 +178,14 @@ The screen shows the current setting and the suggestion, each by its plain line,
 
 **Found inside a combined page.** When the detail has a `merged_absorbed_id`, the disagreement is between a page and one that was combined into it, and only `decline` and `skip` are offered (`reconcile` is withheld as `merged_content`). The question reads: "Part of '{first title}' disagrees with what was combined into it." Options: **Leave it as it is** ("Nothing changes on the page. We won't point this out again.") and **Decide later**, with one line under them: "If combining them was a mistake, you can split it again under 'Pages you combined'."
 
-**Confirmations:** "Marked '{title}' as out of date." · "Noted that both are right." · "Left as they are." ("Left as it is." for one found inside a combined page). The page named is the plan's `deprecates_id`. No Undo is offered yet (#1497); the confirmation does not mention one.
+**Confirmations:** "Marked '{title}' as out of date." · "Noted that both are right." · "Left as they are." ("Left as it is." for one found inside a combined page). The page named is the plan's `deprecates_id`.
 
 **In To review,** the item is named by both pages' titles, with the question under them; one found inside a combined page is named by that page alone.
+
+**Undo:** every confirmation offers **Undo**, and every undo confirms "Undone. We'll point this out again the next time your pages are checked." It does not come back to To review at once: the engine finds it again on its next check of the pages, without asking the AI model again when neither page changed.
+
+- After "Left as they are.": `preview_reopen_contradiction` with the pair and the detail's `merged_absorbed_id`, then `apply_reopen_contradiction` (`contradictions --reopen` on the CLI). Later, under the library's settings, "Disagreements you left as they are" lists each with **Point this out again** (the same operation; the list is `declined_contradictions`, `contradictions --declined` on the CLI).
+- After "Marked '{title}' as out of date." and "Noted that both are right.": `preview_unreconcile` with the pair, then `apply_unreconcile`. It removes what the choice added to both pages: the link between them and the short note on each. When the preview's `withdraws_deprecation` is true, the confirmation starts "Undone. '{title}' is no longer marked out of date."; when it is false after marking a page out of date, another page still replaces it, and the confirmation adds "'{title}' stays out of date, because another page replaces it." A note the person reworded around its heading is left as they wrote it. Later, under the library's settings, "Pages you settled" lists each pair with **Undo** (the list is `reconciled_pairs`). The CLI has no undo for this; it is the app's.
 
 ## A newer decision — "Does this replace the earlier one?"
 
@@ -204,7 +209,7 @@ The action is `supersede` or `revise` when the later page is the first, and its 
 - **Both still stand** (`reconcile`) — "Both pages stay current, and each gets a short note that you checked them against each other. We won't ask about these two again." This is how a revision is answered "no"; there is no other.
 - **Decide later** — "Nothing changes. This stays in To review."
 
-**Confirmations:** "Marked '{earlier}' as out of date." · "Noted that '{later}' updates '{earlier}'." · "Noted that both still stand." No Undo yet (#1497).
+**Confirmations:** "Marked '{earlier}' as out of date." · "Noted that '{later}' updates '{earlier}'." · "Noted that both still stand." Each offers **Undo**, as for a disagreement settled with a write (`preview_unreconcile`, then `apply_unreconcile`), confirmed "Undone. We'll ask about these again the next time your pages are checked.", with the same out-of-date lines when the earlier page was marked.
 
 ## A file that wasn't added
 
@@ -310,6 +315,8 @@ Every message says whether anything changed, and offers the one action that help
 | An undo finds the pages no longer kept separate | `not_kept_distinct` | "These pages aren't kept separate any more." | **OK** |
 | An undo finds the connection already gone | `not_related` | "These pages aren't connected any more." | **OK** |
 | An undo finds the setting already put back | `tier_unchanged` | "This setting is already as it was." | **OK** |
+| An undo finds the disagreement no longer left as it is | `not_declined` | "This has already been undone." | **OK** |
+| An undo finds the pages no longer settled that way | `not_reconciled` | "These pages aren't settled that way any more." | **OK** |
 | The page was changed after it was combined | `survivor_edited` | "This page was changed after it was combined, so it can't be split here." | **OK** only: the app does not offer to split anyway (#1442) |
 | Only some of the later combines were split | `unmerge_interrupted` | "Only some of these were split. Each page that was split is back as it was." | reload **(H)** |
 | The pages changed and the question is gone | `stale`, then not listed | "These pages changed, and this question no longer applies." | back to To review |

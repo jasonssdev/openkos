@@ -25,59 +25,74 @@ Authored changed lines are additions plus deletions; the generated
 | S1 | Plan: proposal, design, delta specs, tasks, ADR-0074 Proposed | ~500 (docs) | none |
 | S2 | Reopen a decline: list, preview, apply, routes, client | ~700 | S1 |
 | S3 | Undo a reconcile: note inverse, list, preview, apply, routes, client, wording | ~900 | S2 |
-| S4 | CHANGELOG, spec merge, ADR-0074 Accepted, archive | docs | S3 |
+| S4 | CHANGELOG, spec merge, ADR-0074 Accepted, archive | docs | S3 (S2, S3 and S4 shipped together in #1524) |
 
 Delivery: stacked to `main`, each slice branched from `main` after the previous
 one is squash-merged; generated snapshots are regenerated, never hand-merged.
 
 ## S1 Plan
 
-- [ ] S1.1 `proposal.md`, `design.md`, `tasks.md` and the two delta specs.
-- [ ] S1.2 ADR-0074 (Proposed) and its README row; `test_adr_index.py` passes.
+- [x] S1.1 `proposal.md`, `design.md`, `tasks.md` and the two delta specs.
+- [x] S1.2 ADR-0074 (Proposed) and its README row; `test_adr_index.py` passes.
 
 ## S2 Reopen a decline (P1, P3, H1)
 
-- [ ] S2.1 RED: application tests for `declined_contradictions`,
+- [x] S2.1 RED: application tests for `declined_contradictions`,
   `preview_reopen_contradiction`, `apply_reopen_contradiction` over records
   written by `apply_contradiction_decision`: ordering, refusals (no record, an
-  open record, the other discriminator, invalid ids, one page twice), digest
+  open record, the other discriminator, invalid ids), digest
   stability, stale on a rewritten sidecar, busy lock, plan inside the section,
   one commit of the sidecar.
-- [ ] S2.2 GREEN: `undo_service` reopen-contradiction (D1, D3-D5).
-- [ ] S2.3 Facade: `DeclinedContradiction`, `ContradictionReopenPreview`,
+- [x] S2.2 GREEN: `undo_service` reopen-contradiction (D1, D3-D5).
+- [x] S2.3 Facade: `DeclinedContradiction`, `ContradictionReopenPreview`,
   `ContradictionReopenVersion`, `ContradictionReopened`, `not_declined`;
   exports; surface snapshot (classifier additive). Facade tests over a decline
   made through `preview_finding` / `apply_decision`.
-- [ ] S2.4 Routes, `not_declined` row, OpenAPI snapshot, `pnpm --dir desktop
+- [x] S2.4 Routes, `not_declined` row, OpenAPI snapshot, `pnpm --dir desktop
   generate`, client methods, `ERROR_CODES`, client tests.
-- [ ] S2.5 Mutation-check the declined-state test, the digest lines and the
-  stale comparison.
+- [x] S2.5 Mutation-check the declined-state test, the digest lines and the
+  stale comparison. Eight mutations: the declined filter, both digest lines,
+  the declined check, the stale comparison and both orderings were caught (the
+  tie-order survivor led to a fourth page in its test). A one-page-twice guard
+  survived as redundant with the record lookup and was removed: a decline
+  recorded over one page twice can be reopened like any other.
+- [x] S2.6 `docs/decision-wording.md`: Undo on "Left as they are." and the
+  `not_declined` row (landed with this slice, beside the code it words).
 
 ## S3 Undo a reconcile (P2, P3, H1)
 
-- [ ] S3.1 RED: `reconcile_service.remove_reconciliation_note` (last note,
+- [x] S3.1 RED: `reconcile_service.remove_reconciliation_note` (last note,
   middle note, another counterpart's note kept, an edited note left, absent).
-- [ ] S3.2 RED: application tests over pages written by `reconcile_service`:
+- [x] S3.2 RED: application tests over pages written by `reconcile_service`:
   each mode and direction, byte restoration, a bystander still superseding, a
   human-authored status, an edited note, `mixed`, refusals, stale on an edited
   page and on a bystander flipping the withdrawal, lock, commit paths, the list.
-- [ ] S3.3 GREEN: `remove_reconciliation_note`, the public classifier name,
+- [x] S3.3 GREEN: `remove_reconciliation_note`, the public classifier name,
   `undo_service` unreconcile (D2, D4, D5), `WriteFailed` operation
   `unreconcile`.
-- [ ] S3.4 Facade, routes, `not_reconciled` row, snapshots, client, tests.
+- [x] S3.4 Facade, routes, `not_reconciled` row, snapshots, client, tests.
   Facade tests over choices made through `preview_finding` / `apply_decision`.
-- [ ] S3.5 `docs/decision-wording.md`: Undo on the contradiction and revision
+- [x] S3.5 `docs/decision-wording.md`: Undo on the contradiction and revision
   confirmations, the two refusals.
-- [ ] S3.6 Mutation-check the note shape, the edge filter, the withdrawal line
-  and the digest.
+- [x] S3.6 Mutation-check the note shape, the edge filter, the withdrawal line
+  and the digest. Twenty-one mutations; survivors led to three tests (a heading
+  mid-line, a counterpart's edge to a third page, a page with another page's
+  bytes) and to two removals: the resolution and pair digest lines (covered by
+  the pages' ids and bytes) and a local pair check (replaced by
+  `reconcile_service.resolve_pair`).
+- [x] S3.7 Smoke on a scratch copy of a real workspace: a CLI `reconcile
+  --winner` and a `reconcile --revision`, each undone through the API, left
+  both pages byte-identical to before the reconcile (`git diff --stat` empty);
+  a merged-body decline (pair named twice, as the engine records it) was
+  reopened, and a replayed version answered `not_declined`.
 
 ## S4 Archive
 
-- [ ] S4.1 CHANGELOG entry.
-- [ ] S4.2 Merge the deltas into `openspec/specs/`, name-match every heading,
+- [x] S4.1 CHANGELOG entry.
+- [x] S4.2 Merge the deltas into `openspec/specs/`, name-match every heading,
   check each requirement against shipped code.
-- [ ] S4.3 ADR-0074 Accepted in all three places.
-- [ ] S4.4 Move the change to `openspec/changes/archive/<date>-undo-findings/`
+- [x] S4.3 ADR-0074 Accepted in all three places.
+- [x] S4.4 Move the change to `openspec/changes/archive/<date>-undo-findings/`
   with `archive-report.md`; verify the original folder is gone.
 - [ ] S4.5 Comment on #1497 with what shipped; close it if no engine work
   remains (the screen adopts the operations in its own change).
