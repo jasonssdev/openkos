@@ -884,6 +884,23 @@
       "kind": "dataclass",
       "members": {}
     },
+    "MergedConcept": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "tuple[MergeRecord, ...]",
+          "default": false,
+          "name": "merges"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "Message": {
       "bases": [
         "dict"
@@ -1912,6 +1929,18 @@
         }
       ],
       "returns": "tuple[MergeRecord, ...]"
+    },
+    "merged_concepts": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "tuple[MergedConcept, ...]"
     },
     "pending_report": {
       "kind": "function",

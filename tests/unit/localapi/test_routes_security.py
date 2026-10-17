@@ -25,6 +25,7 @@ EXPECTED_ROUTES = {
     ("POST", "/v1/decisions/{decision_key}/apply"),
     ("POST", "/v1/queue/refresh"),
     ("GET", "/v1/merges"),
+    ("GET", "/v1/merged"),
     ("GET", "/v1/pages"),
     ("POST", "/v1/unmerge/preview"),
     ("POST", "/v1/unmerge/apply"),

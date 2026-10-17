@@ -1084,6 +1084,47 @@
         "title": "MergeStep",
         "type": "object"
       },
+      "MergedConcept": {
+        "additionalProperties": false,
+        "description": "A page that has absorbed others, with what was merged into it.",
+        "properties": {
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "merges": {
+            "items": {
+              "$ref": "#/components/schemas/MergeRecord"
+            },
+            "title": "Merges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "concept_id",
+          "merges"
+        ],
+        "title": "MergedConcept",
+        "type": "object"
+      },
+      "MergedConceptList": {
+        "additionalProperties": false,
+        "description": "Every combined page, newest combine first, in an envelope that leaves\nroom for additive fields.",
+        "properties": {
+          "concepts": {
+            "items": {
+              "$ref": "#/components/schemas/MergedConcept"
+            },
+            "title": "Concepts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "concepts"
+        ],
+        "title": "MergedConceptList",
+        "type": "object"
+      },
       "Page": {
         "description": "One page as the desktop app shows it.",
         "properties": {
@@ -2945,6 +2986,69 @@
           }
         ],
         "summary": "Stop Run"
+      }
+    },
+    "/v1/merged": {
+      "get": {
+        "operationId": "merged_v1_merged_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergedConceptList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Merged"
       }
     },
     "/v1/merges": {

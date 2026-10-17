@@ -138,6 +138,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/merged": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Merged */
+        get: operations["merged_v1_merged_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/merges": {
         parameters: {
             query?: never;
@@ -715,6 +732,25 @@ export interface components {
              * @enum {string}
              */
             type_outcome: "same_type" | "recorded" | "discarded" | "unknown";
+        };
+        /**
+         * MergedConcept
+         * @description A page that has absorbed others, with what was merged into it.
+         */
+        MergedConcept: {
+            /** Concept Id */
+            concept_id: string;
+            /** Merges */
+            merges: components["schemas"]["MergeRecord"][];
+        };
+        /**
+         * MergedConceptList
+         * @description Every combined page, newest combine first, in an envelope that leaves
+         *     room for additive fields.
+         */
+        MergedConceptList: {
+            /** Concepts */
+            concepts: components["schemas"]["MergedConcept"][];
         };
         /**
          * Page
@@ -1768,6 +1804,62 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    merged_v1_merged_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergedConceptList"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -130,6 +130,40 @@ def merge_history(workspace: Workspace, concept_id: str) -> tuple[MergeRecord, .
     )
 
 
+@dataclass(frozen=True)
+class MergedConcept:
+    """A page that has absorbed others, with what was merged into it."""
+
+    concept_id: str
+    merges: tuple[MergeRecord, ...]
+    """What `merge_history` returns for the page: newest first, never empty."""
+
+
+def merged_concepts(workspace: Workspace) -> tuple[MergedConcept, ...]:
+    """Every existing page whose merge ledger records a merge, newest combine
+    first, each with its merge history.
+
+    Reads the merge ledgers only: takes no lock, builds no client and writes
+    nothing. A page that was itself merged into another is not listed (its
+    merges are undone after that one), and a ledger that cannot be read is
+    skipped."""
+    return tuple(
+        MergedConcept(
+            concept_id=page.concept_id,
+            merges=tuple(
+                MergeRecord(
+                    survivor_id=entry.survivor_id,
+                    absorbed_id=entry.absorbed_id,
+                    absorbed_title=entry.absorbed_title,
+                    merged_at=entry.merged_at,
+                )
+                for entry in page.merges
+            ),
+        )
+        for page in unmerge_service.merged_concepts(workspace.root)
+    )
+
+
 def preview_unmerge(
     workspace: Workspace,
     survivor_id: str,

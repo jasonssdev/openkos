@@ -374,3 +374,29 @@ def test_the_ceiling_caps_the_wait_a_client_did_not_shorten(
     _apply(client, {"version": _VERSION})
 
     assert waits == [1.5]
+
+
+# -- every combined page (`review-undo` change, #1467) ------------------------- #
+
+
+def test_every_combined_page_is_listed_and_nothing_is_written(
+    pair: Path, client: TestClient
+) -> None:
+    before = support.snapshot(pair)
+
+    response = client.get("/v1/merged", headers=AUTH)
+
+    assert response.status_code == 200, response.text
+    (page,) = response.json()["concepts"]
+    assert page["concept_id"] == A
+    assert [record["absorbed_id"] for record in page["merges"]] == [B]
+    assert page["merges"][0]["absorbed_title"] == f"Title {B}"
+    assert list(response.json()) == ["concepts"]
+    assert support.snapshot(pair) == before
+
+
+def test_no_combined_page_is_an_empty_list(client: TestClient) -> None:
+    response = client.get("/v1/merged", headers=AUTH)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"concepts": []}

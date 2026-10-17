@@ -17,6 +17,7 @@ from openkos.localapi._models import (
     DecisionList,
     DecisionPreview,
     HealthBody,
+    MergedConceptList,
     MergeHistory,
     PreviewPlan,
     PreviewRequest,
@@ -185,6 +186,14 @@ def make_router() -> APIRouter:
         # A Concept ID contains `/`, so it travels as a query parameter.
         return MergeHistory(
             merges=list(invoke(lambda: api.merge_history(workspace, concept_id)))
+        )
+
+    @router.get("/merged")
+    def merged(
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> MergedConceptList:
+        return MergedConceptList(
+            concepts=list(invoke(lambda: api.merged_concepts(workspace)))
         )
 
     @router.get("/pages", responses=_errors_of(404))
