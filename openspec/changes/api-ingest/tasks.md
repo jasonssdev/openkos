@@ -24,7 +24,7 @@ Authored changed lines (additions plus deletions); the generated
 - [x] 1.2 RED: the bound's adversarial tests; then `max_extraction_calls`.
 - [x] 1.3 RED: `application/ingest_consent.py` tests (quote statuses and
       refusals, the token's staleness, the ceiling, stop, busy, progress,
-      refresh, the `watch_refusal` row); then the service and
+      refresh, the `watch_refusal` row, `quote_refused_file`); then the service and
       `ingest_service.probe_source`.
 - [x] 1.4 RED: `openkos.api` tests; then `api/_ingest.py`,
       `_wiring.ingest_ports`, the exports and the package docstring.

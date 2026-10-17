@@ -262,3 +262,37 @@ def test_a_commit_that_cannot_be_made_is_a_warning(
         "the ingest was applied but not committed: "
         "git user.name and user.email are not set"
     ]
+
+
+def test_a_refused_file_is_quoted_by_its_decision_key(
+    root: Path, chosen: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.application import queue_producers
+    from tests.unit.application.test_ingest_consent import (
+        _enqueue_refusal,
+        _refusal_rows,
+    )
+
+    install(monkeypatch)
+    config_path = root / "openkos.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + f"\nunattended:\n  inbox: {chosen}\n",
+        encoding="utf-8",
+    )
+    path = _write(chosen, "big.md")
+    _enqueue_refusal(root, path, queue_producers.REASON_EXCEEDS_BUDGET)
+    (row,) = _refusal_rows(root)
+    workspace = api.Workspace.open(root)
+    (decision,) = [
+        d for d in api.list_decisions(workspace) if d.kind == "watch_refusal"
+    ]
+
+    quote = api.quote_refused_file(workspace, decision.decision_key)
+
+    assert decision.decision_key == row.decision_key
+    assert isinstance(quote, api.IngestQuote)
+    assert [f.path for f in quote.files] == [str(path)]
+    api.run_ingest(workspace, quote.token)
+    assert api.quote_refused_file(workspace, decision.decision_key) == api.Stale(
+        decision.decision_key, "row_resolved"
+    )

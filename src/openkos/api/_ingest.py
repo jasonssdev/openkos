@@ -21,6 +21,7 @@ from collections.abc import Callable, Sequence
 from openkos.api import _wiring
 from openkos.api._workspace import Workspace
 from openkos.application import ingest_consent
+from openkos.application.curate_decisions import Stale
 from openkos.application.ingest_consent import (
     IngestProgress,
     IngestQuote,
@@ -60,6 +61,30 @@ def quote_ingest(
     return ingest_consent.quote_ingest(
         workspace.root,
         _paths(paths),
+        include_confidential=include_confidential,
+        ports=_wiring.ingest_ports(workspace, wait_seconds=0, on_warning=None),
+    )
+
+
+def quote_refused_file(
+    workspace: Workspace,
+    decision_key: str,
+    *,
+    include_confidential: bool = False,
+) -> IngestQuote | Stale:
+    """Price adding the file an open refused-file decision (`watch_refusal`)
+    names, as `quote_ingest` prices it: the row gives the file's name in the
+    configured inbox. Running the quote's token resolves the decision when the
+    refused bytes land. A file that changed after a file of that name was added
+    is quoted refused (`changed_after_import`); adding it would be refused, so
+    the decision stays open until the file is renamed.
+
+    A settled decision returns `Stale("row_resolved")` and an unknown key
+    `Stale("unknown_key")`. Raises `ValueError` for a key that is not a refused
+    file's and `IngestRefused` when the workspace cannot be read."""
+    return ingest_consent.quote_refused_file(
+        workspace.root,
+        decision_key,
         include_confidential=include_confidential,
         ports=_wiring.ingest_ports(workspace, wait_seconds=0, on_warning=None),
     )

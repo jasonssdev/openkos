@@ -65,7 +65,7 @@ from openkos.api._decisions import (
     preview_decision,
     preview_finding,
 )
-from openkos.api._ingest import quote_ingest, run_ingest
+from openkos.api._ingest import quote_ingest, quote_refused_file, run_ingest
 from openkos.api._judging import (
     ChatClient,
     ChatClientFactory,
@@ -370,6 +370,7 @@ __all__ = [
     "pull_model",
     "quote_ingest",
     "quote_judging",
+    "quote_refused_file",
     "read_page",
     "refresh_decision_queue",
     "run_ingest",

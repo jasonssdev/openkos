@@ -42,6 +42,7 @@ operations MUST be reachable as follows, and the server MUST call the matching
 | `POST /v1/ask` | `ask`, as a job (see the ask job requirement) |
 | `GET /v1/ask/{id}` | the ask job's state |
 | `POST /v1/ingest/quote` | `quote_ingest` |
+| `POST /v1/decisions/{key}/ingest-quote` | `quote_refused_file` |
 | `POST /v1/ingest/runs` | `run_ingest`, as a job (see the ingest job requirement) |
 | `GET /v1/ingest/runs/{id}` | the ingest job's state |
 | `POST /v1/ingest/runs/{id}/stop` | the ingest job's cooperative stop |
@@ -208,9 +209,12 @@ name of the judging job's scenario too.)
 `POST /v1/ingest/quote` with `{paths, include_confidential}` (`paths` a list of
 1 to 500 strings of at most 4096 characters; an unknown key, an empty list or a
 wrong type is 422 `invalid_request` before the operation runs) MUST return 200
-with the `IngestQuote` `openkos.api.quote_ingest` returned, token included. The
-adapter MUST NOT read, stat or resolve a path itself: every path check is the
-API's, reported per file in the quote.
+with the `IngestQuote` `openkos.api.quote_ingest` returned, token included.
+`POST /v1/decisions/{key}/ingest-quote` with `{include_confidential}` MUST
+return 200 with the quote `openkos.api.quote_refused_file` returned for that
+refused-file decision, and 409 `stale` for a `Stale` result; a key of another
+kind is 422 `invalid_request`. The adapter MUST NOT read, stat or resolve a path
+itself: every path check is the API's, reported per file in the quote.
 
 Starting a run (`POST /v1/ingest/runs` with the echoed token) MUST NOT block for
 the run: it MUST return 202 with the job and a `Location` header naming it once
@@ -270,6 +274,13 @@ grace as a judging run.
 - GIVEN a quote request naming a path inside the workspace's `.openkos/`
 - WHEN it is posted
 - THEN the response is 200 and the file is `refused` with `inside_workspace`
+
+#### Scenario: A refused file is quoted through its decision
+
+- GIVEN an open `watch_refusal` decision whose file is in the inbox
+- WHEN `POST /v1/decisions/{key}/ingest-quote` is posted
+- THEN the response is 200 with a quote naming that file, and once its token
+  has run the same request is 409 `stale`
 
 #### Scenario: An empty path list is rejected before the operation
 

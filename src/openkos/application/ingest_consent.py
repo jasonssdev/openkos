@@ -58,7 +58,8 @@ from typing import Any, Final, Literal, cast
 
 from openkos import config, fsio, lock, sensitivity
 from openkos.application import backends as application_backends
-from openkos.application import ingest_service, reindex_service
+from openkos.application import curate_queue, ingest_service, reindex_service
+from openkos.application.curate_decisions import Stale
 from openkos.application.judging import RunRefused
 from openkos.application.lock_wait import CommitSection
 from openkos.application.runtime import StopToken
@@ -90,12 +91,15 @@ __all__ = [
     "IngestRunResult",
     "IngestTokenFile",
     "RunRefused",
+    "Stale",
     "quote_ingest",
+    "quote_refused_file",
     "refresh_derived_stores",
     "run_ingest",
 ]
 
 _TASK: Final = "extraction"
+_REFUSAL_KIND: Final = "watch_refusal"
 
 IngestFileStatus = Literal["extracts", "source_only", "unchanged", "refused"]
 """What adding one file would do: extract with the model, add the Source with
@@ -466,6 +470,20 @@ def quote_ingest(
     readable workspace."""
     if not paths:
         raise ValueError("an ingest quote needs at least one path")
+    return _quote(
+        root, paths, include_confidential=include_confidential, ports=ports, forced={}
+    )
+
+
+def _quote(
+    root: Path,
+    paths: Sequence[str],
+    *,
+    include_confidential: bool,
+    ports: IngestConsentPorts,
+    forced: dict[str, IngestRefusal],
+) -> IngestQuote:
+    """`quote_ingest`'s body; `forced` refuses the named paths without a look."""
     layout, cfg = _open(root)
     client = ports.chat_client(cfg)
     binding = _binding(cfg, client, include_confidential=include_confidential)
@@ -475,7 +493,7 @@ def quote_ingest(
     seen: set[str] = set()
     checked: list[tuple[str, IngestRefusal | None]] = []
     for raw in paths:
-        refusal = _check_path(raw, layout)
+        refusal = forced.get(raw) or _check_path(raw, layout)
         key = str(Path(raw).resolve()) if refusal is None else raw
         if key in seen:
             continue
@@ -535,6 +553,52 @@ def quote_ingest(
         host=host,
         include_confidential=include_confidential,
         token=IngestQuoteToken(binding=binding, files=tuple(token_files), calls=total),
+    )
+
+
+def quote_refused_file(
+    root: Path,
+    decision_key: str,
+    *,
+    include_confidential: bool = False,
+    ports: IngestConsentPorts,
+) -> IngestQuote | Stale:
+    """Quote adding the file an open `watch_refusal` decision refused.
+
+    The row names the file by its path inside the configured inbox; the quote
+    is `quote_ingest` over that path, so a run of its token resolves the row
+    when the refused bytes land. A key whose row was settled is
+    `Stale("row_resolved")` and one no row ever carried `Stale("unknown_key")`.
+    With no inbox configured the file cannot be found and is quoted refused as
+    `not_found`. Raises `ValueError` for a key that is not a refused file's and
+    `IngestRefused` when `root` is not a readable workspace."""
+    if decision_key.partition(":")[0] != _REFUSAL_KIND:
+        raise ValueError(f"{decision_key!r} is not a refused file's decision")
+    layout, cfg = _open(root)
+    row = curate_queue.open_row_by_key(layout, decision_key)
+    if row is None:
+        reason: Literal["row_resolved", "unknown_key"] = (
+            "row_resolved"
+            if curate_queue.key_was_queued(layout, decision_key)
+            else "unknown_key"
+        )
+        return Stale(decision_key, reason)
+    name = str(row.payload.get("inbox_path", ""))
+    inbox = cfg.unattended.inbox
+    if inbox is None or not name:
+        return _quote(
+            root,
+            [name],
+            include_confidential=include_confidential,
+            ports=ports,
+            forced={name: "not_found"},
+        )
+    return _quote(
+        root,
+        [str(inbox / name)],
+        include_confidential=include_confidential,
+        ports=ports,
+        forced={},
     )
 
 

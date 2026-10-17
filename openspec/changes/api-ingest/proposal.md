@@ -50,14 +50,17 @@ so the desktop app cannot add a file, and a `watch_refusal` row in To review
 - **A `watch_refusal` row resolves the CLI's way**: when a raw copy with the
   refused bytes lands, the service moves the row to applied. An over-budget
   refusal is resolved by adding its file; a changed-file refusal stays open.
+  `openkos.api.quote_refused_file(workspace, decision_key)` quotes the row's
+  file by joining its name to the configured inbox, which the app cannot know.
 - **Paths are validated before they are read**: absolute, existing, a regular
   file, and not inside the workspace's `bundle/` or `.openkos/`.
-- **The local HTTP API**: `POST /v1/ingest/quote`; `POST /v1/ingest/runs`
+- **The local HTTP API**: `POST /v1/ingest/quote`;
+  `POST /v1/decisions/{key}/ingest-quote`; `POST /v1/ingest/runs`
   starts one pollable job (202), at most one active (409 `ingest_active`,
   retryable); `GET /v1/ingest/runs/{id}` and `POST /v1/ingest/runs/{id}/stop`.
   The regenerated OpenAPI snapshot.
 - **The TypeScript client**: regenerated types and `quoteIngest`,
-  `startIngest`, `ingestRun`, `stopIngest`, with tests.
+  `quoteRefusedFile`, `startIngest`, `ingestRun`, `stopIngest`, with tests.
 - **Wording** for the future screen in `docs/decision-wording.md`.
 - **A spec cleanup**: the model pull's "Poll to completion" scenario shares
   its name with the judging job's in `local-http-api`; renamed.

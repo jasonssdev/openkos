@@ -3754,6 +3754,30 @@
       ],
       "returns": "JudgingQuote"
     },
+    "quote_refused_file": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "decision_key"
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "kind": "KEYWORD_ONLY",
+          "name": "include_confidential"
+        }
+      ],
+      "returns": "IngestQuote | Stale"
+    },
     "read_page": {
       "kind": "function",
       "parameters": [

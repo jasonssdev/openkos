@@ -95,6 +95,15 @@ NOT fail the run. `progress`, when given, MUST hear each file's `reading`,
 `extracting` and `writing` phases and one final `refreshing`; an exception from
 it MUST be recorded on the outcome and MUST NOT end the run.
 
+`quote_refused_file(workspace, decision_key, *, include_confidential=False)`
+MUST quote, as `quote_ingest` does, the file an open `watch_refusal` decision
+names: the row's file inside the configured inbox (refused `not_found` when no
+inbox is configured). A settled decision MUST return `Stale("row_resolved")`
+and an unknown key `Stale("unknown_key")`; a key of another kind MUST raise
+`ValueError`. Running the quote's token resolves the decision when the refused
+bytes land; a file that changed after it was added is quoted refused, and the
+decision stays open.
+
 An unreadable workspace MUST raise `IngestRefused`, an `OpenKosError`. An empty
 `paths`, or one path passed in place of a sequence, MUST raise `ValueError`, and
 so MUST a `wait_seconds` outside `[0, ceiling]`.
@@ -145,6 +154,14 @@ so MUST a `wait_seconds` outside `[0, ceiling]`.
 - WHEN that file is quoted and run
 - THEN the row is applied
 
+#### Scenario: A refused file is quoted by its decision
+
+- GIVEN an inbox and an open `watch_refusal` decision for a file in it
+- WHEN `quote_refused_file` is called with the decision's key and the token is
+  run
+- THEN the quote names the file's path in the inbox, the run adds it, and the
+  same key then returns `Stale("row_resolved")`
+
 #### Scenario: A busy workspace ends the run
 
 - GIVEN the workspace lock held elsewhere
@@ -161,7 +178,7 @@ so MUST a `wait_seconds` outside `[0, ceiling]`.
 
 ### Requirement: Ingest Extends v1 Additively
 
-`quote_ingest`, `run_ingest`, `IngestQuote`, `IngestFileQuote`,
+`quote_ingest`, `quote_refused_file`, `run_ingest`, `IngestQuote`, `IngestFileQuote`,
 `IngestQuoteToken`, `IngestTokenFile`, `IngestBinding`, `IngestQuoteStale`,
 `IngestRunOutcome`, `IngestFileResult`, `IngestProgress`, `IngestRunResult` and
 `IngestRefused` MUST be exported, and the committed surface snapshot MUST be

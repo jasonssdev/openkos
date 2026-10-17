@@ -5,6 +5,8 @@
 ### Requirement: The Client Quotes And Runs Adding Files
 
 The client MUST offer `quoteIngest(body)` (`POST /v1/ingest/quote`),
+`quoteRefusedFile(decisionKey, body)` (`POST /v1/decisions/{key}/ingest-quote`,
+the key path-encoded),
 `startIngest(body)` (`POST /v1/ingest/runs`), `ingestRun(runId)`
 (`GET /v1/ingest/runs/{run_id}`, the id path-encoded) and `stopIngest(runId)`
 (`POST /v1/ingest/runs/{run_id}/stop`), typed from the generated schema, each

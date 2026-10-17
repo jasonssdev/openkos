@@ -141,7 +141,20 @@ committed: ...", `locked_commit_section`, and the refresh through
 reaches a caller and is not exported. The package docstring's statements on
 what sends content and on stopping name adding files.
 
-### D9. The local API job
+### D9. A refused file is quoted by its decision
+
+A `watch_refusal` row names its file relative to the inbox (`inbox_path`), and
+the app does not know where the inbox is. `quote_refused_file(workspace,
+decision_key)` reads the open row (`curate_queue.open_row_by_key`), joins its
+file to the configured `unattended.inbox` and quotes that path exactly as
+`quote_ingest` does, so the run resolves the row through the service's own
+resolution when the refused bytes land. No inbox configured is a quote whose
+one file is refused `not_found`; a settled key is `Stale("row_resolved")`, an
+unknown one `Stale("unknown_key")`, and a key of another kind a `ValueError`.
+It reuses #1476's typed detail for nothing: the row is read here, so the action
+works whether or not that detail has shipped.
+
+### D10. The local API job
 
 `localapi/_ingests.py` copies the judging run registry: a daemon thread per
 run, admission at the service's first stop check (after the stale and refusal
@@ -149,7 +162,8 @@ checks), so a stale token or a missing one answers `POST /v1/ingest/runs`
 itself (409 `quote_stale`, 422 `run_refused`) and leaves no job; one active run
 (409 `ingest_active`, retryable); the newest 16 finished kept; a stop route;
 shutdown sets every stop. The job is `{run_id, state, index, total, phase,
-calls, outcome, error}`. `POST /v1/ingest/quote` takes `{paths,
+calls, outcome, error}`. `POST /v1/decisions/{key}/ingest-quote` takes `{include_confidential}` and
+answers `Stale` as 409 `stale`. `POST /v1/ingest/quote` takes `{paths,
 include_confidential}` with `paths` a list of 1 to 500 strings of at most 4096
 characters each. `IngestRefused` maps to 503 `ingest_refused`. A busy
 workspace is the outcome's `status` `busy`, never a failed poll. The adapter
@@ -175,5 +189,5 @@ client                localapi              api                 ingest_consent  
 
 D1 and D2 decide what a consented ingest promises and how it is held to it,
 and D3/D5 decide that a person's changed file stays refused through the app as
-on the CLI; a client ships against all of it: ADR-0073. D4 and D6-D9 follow
+on the CLI; a client ships against all of it: ADR-0073. D4 and D6-D10 follow
 existing patterns and are recorded here.

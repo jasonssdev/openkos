@@ -593,3 +593,64 @@ def test_a_changed_file_keeps_its_row_open(env: _Env) -> None:
     assert isinstance(result, consent.IngestRunOutcome)
     assert result.files == ()
     assert [r.status for r in _refusal_rows(env.root)] == ["pending"]
+
+
+# --- quoting a refused file by its decision ---------------------------------------
+
+
+def _set_inbox(env: _Env, inbox: Path) -> None:
+    path = config.WorkspaceLayout(env.root).config_path
+    path.write_text(
+        path.read_text(encoding="utf-8") + f"\nunattended:\n  inbox: {inbox}\n",
+        encoding="utf-8",
+    )
+
+
+def _refusal_key(env: _Env) -> str:
+    (row,) = _refusal_rows(env.root)
+    return row.decision_key
+
+
+def test_a_refused_file_is_quoted_from_its_decision(env: _Env) -> None:
+    _set_inbox(env, env.files)
+    path = env.write("big.md")
+    _enqueue_refusal(env.root, path, queue_producers.REASON_EXCEEDS_BUDGET)
+
+    quote = consent.quote_refused_file(env.root, _refusal_key(env), ports=env.ports())
+
+    assert isinstance(quote, consent.IngestQuote)
+    (file,) = quote.files
+    assert (file.path, file.status) == (str(path), "extracts")
+    assert env.model.calls == 0
+    env.run(quote.token)
+    assert [r.status for r in _refusal_rows(env.root)] == ["applied"]
+
+
+def test_a_settled_refusal_is_stale(env: _Env) -> None:
+    _set_inbox(env, env.files)
+    path = env.write("big.md")
+    _enqueue_refusal(env.root, path, queue_producers.REASON_EXCEEDS_BUDGET)
+    key = _refusal_key(env)
+    env.run(env.quote(path).token)
+
+    assert consent.quote_refused_file(env.root, key, ports=env.ports()) == (
+        consent.Stale(key, "row_resolved")
+    )
+    assert consent.quote_refused_file(
+        env.root, "watch_refusal:nope", ports=env.ports()
+    ) == consent.Stale("watch_refusal:nope", "unknown_key")
+
+
+def test_a_refusal_without_an_inbox_is_quoted_as_not_found(env: _Env) -> None:
+    path = env.write("big.md")
+    _enqueue_refusal(env.root, path, queue_producers.REASON_EXCEEDS_BUDGET)
+
+    quote = consent.quote_refused_file(env.root, _refusal_key(env), ports=env.ports())
+
+    assert isinstance(quote, consent.IngestQuote)
+    assert [(f.name, f.refusal) for f in quote.files] == [("big.md", "not_found")]
+
+
+def test_a_decision_that_is_not_a_refused_file_is_a_usage_error(env: _Env) -> None:
+    with pytest.raises(ValueError, match="refused file"):
+        consent.quote_refused_file(env.root, "identity:abc", ports=env.ports())
