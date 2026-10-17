@@ -378,6 +378,64 @@ def test_a_truncated_identity_report_retires_nothing_and_says_so(root: Path) -> 
     assert len(_open_by_kind(layout)["identity"]) == 1
 
 
+def _enqueue_contradiction(layout: config.WorkspaceLayout, *pair: str) -> None:
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        pq.ensure_schema(conn)
+        pq.upsert_proposal(
+            conn,
+            pq.Proposal(
+                kind="contradiction",
+                key_body=pq.contradiction_key((pair[0], pair[1]), pair[1]),
+                producer=queue_producers.PRODUCER_CONTRADICTIONS,
+                payload=json.dumps({"pair_ids": list(pair)}),
+                targets=pair,
+                input_digests=(),
+            ),
+            commit_section=_section,
+            bundle_dir=layout.bundle_dir,
+        )
+    finally:
+        conn.close()
+
+
+def test_rows_naming_a_missing_concept_are_retired_even_on_a_truncated_pass(
+    root: Path,
+) -> None:
+    layout = _record_all(root)
+    _refresh(root, _group(*MEMBERS))
+    _enqueue_contradiction(layout, MEMBERS[0], MEMBERS[1])
+    (layout.bundle_dir / f"{MEMBERS[1]}.md").unlink()  # an identity member
+    (layout.bundle_dir / f"{DST}.md").unlink()  # a relation's target
+
+    outcome = _refresh(root, produced=500)  # truncated: nothing retired for absence
+
+    assert outcome.identity.complete is False
+    assert outcome.identity.retired == 0
+    assert (
+        outcome.identity.retired_missing,
+        outcome.relation_type.retired_missing,
+        outcome.volatility.retired_missing,
+    ) == (1, 1, 0)
+    open_rows = _open_by_kind(layout)
+    assert sorted(open_rows) == ["contradiction", "volatility"]
+
+
+def test_rows_over_concepts_that_exist_are_not_retired_for_a_missing_one(
+    root: Path,
+) -> None:
+    layout = _record_all(root)
+    _refresh(root, _group(*MEMBERS))
+
+    outcome = _refresh(root, _group(*MEMBERS))
+
+    assert (
+        outcome.identity.retired_missing,
+        outcome.relation_type.retired_missing,
+    ) == (0, 0)
+    assert sorted(_open_by_kind(layout)) == ["identity", "relation_type", "volatility"]
+
+
 def test_non_servable_stored_verdicts_are_not_enqueued(root: Path) -> None:
     layout = config.WorkspaceLayout(root)
     cfg = config.read_config(root)
@@ -589,9 +647,10 @@ def test_every_write_happens_inside_a_commit_section(
 
     assert depths, "the refresh wrote nothing"
     assert all(depth == 1 for depth in depths), depths
-    # One section creates the schema, then one per upserted row (three kinds),
-    # then one for the identity retirement (the only kind that can retire).
-    assert section.entries == 1 + 3 + 1
+    # One section creates the schema, one retires rows naming a missing page,
+    # then one per upserted row (three kinds), then one for the identity
+    # retirement (the only kind that can retire for absence).
+    assert section.entries == 1 + 1 + 3 + 1
     assert len(_rows(layout)) == 3
 
 

@@ -1903,6 +1903,11 @@ def preview_decision(
         return refusal
     if action is Action.SKIP:
         return skip_decision(decision_key)
+    # Every commit refuses a row whose inputs changed (`_stale_inputs`), so a
+    # plan for one could never be applied: the preview says so, with the same
+    # reason, rather than hand out a version that is Stale on arrival.
+    if item.fresh is False:
+        return Stale(decision_key, "row_inputs_changed")
     if selection is not None and action is not Action.MERGE_GROUP:
         return NotApplied(action, "invalid_selection")
     built = _build_preview(root, layout, row, action, policy, selection)

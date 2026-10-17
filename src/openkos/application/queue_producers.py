@@ -91,6 +91,10 @@ class ProducerResult:
     amended: int = 0
     """Open rows whose payload changed over unchanged inputs (a judge's verdict
     carried in or out) and were updated in place: neither new nor stale."""
+    retired_missing: int = 0
+    """Open rows retired because a concept they name is no longer in the bundle
+    (set by the refresh, `queue_refresh`); kept apart from `retired`, which
+    counts rows a complete pass no longer produced."""
 
 
 def _canonical(value: object) -> str:

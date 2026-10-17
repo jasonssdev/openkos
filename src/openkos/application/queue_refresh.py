@@ -19,9 +19,17 @@ rows already upserted stay, and the next refresh converges.
 **Retirement.** Only `identity` can prove completeness from persisted state: its
 pass is complete exactly when the report is not truncated. `relation_type` and
 `volatility` insert and amend only; their retirement stays the unattended
-pass's job. An event-driven row is never retired here.
+pass's job. An event-driven row is never retired here for being absent.
+
+**Missing pages.** Apart from that, every open `identity` and `relation_type`
+row naming a concept absent from the bundle is retired, complete pass or not:
+the bundle proves the absence, and such a row can never be acted on (#1475). A
+queue written before merges retired their rows (#1280), or edited by hand, heals
+here. A `contradiction` is left alone: one found while combining names the
+absorbed concept on purpose.
 """
 
+import dataclasses
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -37,6 +45,7 @@ from openkos.application import suggest_volatility_service as volatility_service
 from openkos.application.curate_queue import queue_present
 from openkos.application.lock_wait import CommitSection
 from openkos.errors import OpenKosError
+from openkos.model import okf
 from openkos.resolution.candidates import CandidateGroupReport
 from openkos.state import derived
 from openkos.state import pending_queue as pq
@@ -137,6 +146,13 @@ def refresh_decision_queue(
     conn = derived.open_derived_connection(layout.findings_db_path)
     try:
         _ensure_queue(conn, commit_section)
+        missing = pq.retire_open_naming_absent(
+            conn,
+            _MISSING_PAGE_KINDS,
+            _concept_absent(layout.bundle_dir),
+            commit_section=commit_section,
+            clock=clock,
+        )
         identity = identity_stage.enqueue_identity_report(
             conn, layout, report, commit_section=commit_section, clock=clock
         )
@@ -158,12 +174,37 @@ def refresh_decision_queue(
     finally:
         conn.close()
     return RefreshOutcome(
-        identity=identity,
-        relation_type=relation_type,
+        identity=dataclasses.replace(
+            identity, retired_missing=missing.get("identity", 0)
+        ),
+        relation_type=dataclasses.replace(
+            relation_type, retired_missing=missing.get("relation_type", 0)
+        ),
         volatility=volatility,
         volatility_ambiguous=stored.ambiguous,
         identity_truncation_notice=report.truncation_notice,
     )
+
+
+_MISSING_PAGE_KINDS = ("identity", "relation_type")
+"""The kinds whose actions write to the concepts they name, so a row naming a
+missing one can never be decided."""
+
+
+def _concept_absent(bundle_dir: Path) -> Callable[[str], bool]:
+    """True only for a target whose concept file does not exist. A path that
+    cannot be checked for another reason is not taken for missing."""
+
+    def absent(concept_id: str) -> bool:
+        try:
+            okf.concept_path_for(concept_id, bundle_dir).stat()
+        except FileNotFoundError:
+            return True
+        except OSError, ValueError:
+            return False
+        return False
+
+    return absent
 
 
 def _ensure_queue(conn: sqlite3.Connection, commit_section: CommitSection) -> None:

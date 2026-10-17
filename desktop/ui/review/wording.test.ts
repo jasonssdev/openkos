@@ -221,10 +221,20 @@ describe("identity decisions", () => {
 
   it("says when the decision changed since it was suggested", () => {
     expect(describeDecision(identity({ fresh: false }), pages).changed).toBe(
-      "Something about these pages changed since this was suggested. Here is the current version.",
+      "Something about these pages changed since this was suggested. Check them again before you decide.",
     );
     expect(describeDecision(identity(), pages).changed).toBeNull();
     expect(describeDecision(identity({ fresh: null }), pages).changed).toBeNull();
+  });
+
+  it("offers a changed decision only Check again and Decide later", () => {
+    const again = ["recheck", "Check again", "We'll look at these pages as they are now. Checking doesn't change anything. You'll still decide."];
+    const later = ["later", "Decide later", "Nothing changes. This stays in To review."];
+    for (const decision of [identity({ fresh: false }), { ...relation("part_of"), fresh: false }]) {
+      const view = describeDecision(decision, pagesOf(A, B, ORG));
+      expect(view.options.map((o) => [o.choice, o.label, o.does])).toEqual([again, later]);
+      expect(view.cannotAct).toBeNull();
+    }
   });
 });
 
@@ -474,6 +484,13 @@ describe("the check", () => {
       "0 are already checked and won't be checked again.",
     );
     expect(checkConsent(quote({ served: 0 })).lines).toHaveLength(2);
+  });
+
+  it("names connections and suggestions in the heading by the quote's kind", () => {
+    expect(checkConsent(quote({ kind: "relation_type" })).heading).toBe("Check 3 connections?");
+    expect(checkConsent(quote({ kind: "relation_type", to_judge: 1 })).heading).toBe("Check this connection?");
+    expect(checkConsent(quote({ kind: "volatility" })).heading).toBe("Check 3 suggestions?");
+    expect(checkConsent(quote({ kind: "volatility", to_judge: 1 })).heading).toBe("Check this suggestion?");
   });
 
   it("says when there is nothing to check", () => {

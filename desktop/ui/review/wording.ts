@@ -116,8 +116,8 @@ function quoted(titles: string[]): string {
 
 // -- options ------------------------------------------------------------------ //
 
-/** What a person can choose: an action the engine offers, the check, or later. */
-export type Choice = Action | "check" | "later";
+/** What a person can choose: an action the engine offers, the check, checking a changed decision again, or later. */
+export type Choice = Action | "check" | "recheck" | "later";
 
 export interface Option {
   choice: Choice;
@@ -141,6 +141,19 @@ const CHECK_THESE: Option = {
 
 export const CHANGED =
   "Something about these pages changed since this was suggested. Here is the current version.";
+
+/** A decision listed with `fresh` false: it is checked again before it is decided. */
+export const CHANGED_CHECK =
+  "Something about these pages changed since this was suggested. Check them again before you decide.";
+
+const CHECK_AGAIN: Option = {
+  choice: "recheck",
+  label: "Check again",
+  does: "We'll look at these pages as they are now. Checking doesn't change anything. You'll still decide.",
+};
+
+/** The kinds whose decisions carry actions, and so can be checked again. */
+const ACTIONABLE: readonly Decision["kind"][] = ["identity", "relation_type", "volatility"];
 
 export const CANNOT_ACT = "This can't be settled in the app yet.";
 
@@ -387,7 +400,7 @@ export function describeDecision(decision: Decision, pages: Pages, now: Date = n
     reason: reasonOf(decision),
     pages: (decision.kind === "identity" ? members(decision) : decision.targets).map((id) => pageView(pages, id, now)),
     options: [],
-    changed: decision.fresh === false ? CHANGED : null,
+    changed: decision.fresh === false ? CHANGED_CHECK : null,
     cannotAct: null,
   };
   let view: DecisionView;
@@ -395,6 +408,9 @@ export function describeDecision(decision: Decision, pages: Pages, now: Date = n
   else if (decision.kind === "relation_type") view = { ...base, ...connectionView(decision, pages) };
   else if (decision.kind === "volatility") view = { ...base, ...tierView(decision) };
   else view = { ...base, question: listedOnly(decision, pages) };
+  // A changed decision's own actions would be refused as stale: it is checked
+  // again first, and decided once it is current (#1475).
+  if (decision.fresh === false && ACTIONABLE.includes(decision.kind)) return { ...view, options: [CHECK_AGAIN, DECIDE_LATER] };
   if (view.options.length === 0) return { ...view, options: [], cannotAct: CANNOT_ACT };
   return { ...view, options: [...view.options, DECIDE_LATER] };
 }
@@ -556,7 +572,18 @@ export function checkConsent(quote: Schemas["JudgingQuote"]): Consent {
     lines.push("OpenKOS is also working in the background, so this may be slower.");
   }
   lines.push(CHECK_NEVER_COMBINES);
-  return { heading: n === 1 ? "Check these two?" : `Check ${n} pairs?`, lines, agree: `Check ${n}`, decline: "Not now" };
+  return { heading: checkHeading(quote.kind, n), lines, agree: `Check ${n}`, decline: "Not now" };
+}
+
+function checkHeading(kind: Schemas["JudgingQuote"]["kind"], n: number): string {
+  switch (kind) {
+    case "relation_type":
+      return n === 1 ? "Check this connection?" : `Check ${n} connections?`;
+    case "volatility":
+      return n === 1 ? "Check this suggestion?" : `Check ${n} suggestions?`;
+    default:
+      return n === 1 ? "Check these two?" : `Check ${n} pairs?`;
+  }
 }
 
 export function checkProgress(done: number, total: number, stopping: boolean): string {

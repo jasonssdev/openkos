@@ -2,7 +2,7 @@
 // transition (ADR-0066). It decides nothing: what to ask, offer and say comes
 // from model.ts and wording.ts. Every value is written as text.
 import { button, card, choiceGroup, el, heading, notice, redraw, type Tone } from "../components.ts";
-import type { ReviewModel, ReviewState } from "./model.ts";
+import { offersCheckAll, type ReviewModel, type ReviewState } from "./model.ts";
 import {
   CANNOT_ACT,
   COMBINED_HEADING,
@@ -77,14 +77,13 @@ function drawList(model: ReviewModel, state: ReviewState): HTMLElement[] {
     parts.push(busy("Looking for things to review…"));
     return parts;
   }
-  const unjudged = state.decisions.some((d) => d.kind === "identity" && d.evaluation === "pending_evaluation");
-  if (unjudged) {
+  if (offersCheckAll(state.decisions)) {
     parts.push(
       el(
         "div",
         { class: "actions" },
         button("Check all", () => model.startCheck(), { variant: "secondary", focusKey: "check-all" }),
-        el("p", { class: "muted" }, "Let the AI model compare the pages it hasn't checked yet. You'll still decide each one."),
+        el("p", { class: "muted" }, "Let the AI model compare the pages it hasn't checked yet, and the ones that changed. You'll still decide each one."),
       ),
     );
   }
