@@ -57,8 +57,15 @@ def search_state(root: Path, *, environ: Mapping[str, str] = os.environ) -> Sear
     cfg = setup.read_setup_config(root)
     layout = config.WorkspaceLayout(root)
     stored = vectorstore.read_stored_model_tag(layout.vectors_db_path)
-    model_changed = stored is not None and stored != reindex_module.embedding_tag(
-        cfg.embedding_model, cfg.backend
+    configured = reindex_module.embedding_tag(cfg.embedding_model, cfg.backend)
+    # A run that withheld only confidential pages from a remote embedder leaves
+    # the old tag (those pages keep their old vectors) but records it was
+    # remote-complete: a rebuild could send nothing more (#1529).
+    model_changed = (
+        stored is not None
+        and stored != configured
+        and vectorstore.read_stored_remote_complete_tag(layout.vectors_db_path)
+        != configured
     )
     stale = application_status.stale_index_names(layout, reads=("fts", "graph"))
     return SearchState(

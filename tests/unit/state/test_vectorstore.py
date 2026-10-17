@@ -216,6 +216,12 @@ def test_extended_fake_satisfies_vector_store_protocol_structurally() -> None:
         def write_model_tag(self, tag: str) -> None:
             self.model_tag = tag
 
+        def read_remote_complete_tag(self) -> str | None:
+            return None
+
+        def write_remote_complete_tag(self, tag: str) -> None:
+            pass
+
     fake: vectorstore.VectorStore = _FakeVectorStore()
     fake.upsert("concepts/a", [0.0] * EMBED_DIM, "hash")
     fake.prune("concepts/a")

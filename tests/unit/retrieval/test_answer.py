@@ -214,6 +214,12 @@ class _FakeVectorStore:
     def write_model_tag(self, tag: str) -> None:
         raise NotImplementedError  # pragma: no cover -- unused by answer()
 
+    def read_remote_complete_tag(self) -> str | None:
+        raise NotImplementedError  # pragma: no cover -- unused by answer()
+
+    def write_remote_complete_tag(self, tag: str) -> None:
+        raise NotImplementedError  # pragma: no cover -- unused by answer()
+
     def close(self) -> None:
         pass
 

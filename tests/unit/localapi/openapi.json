@@ -3408,7 +3408,7 @@
       },
       "RebuildOutcome": {
         "additionalProperties": false,
-        "description": "A finished rebuild. `embedded`: pages sent and stored; `unchanged`:\npages already current; `removed`: vectors of pages that no longer exist;\n`skipped`: pages that could not be read; `failed`: pages the AI model\ncould not embed (a later rebuild tries them again); `withheld`:\nconfidential pages not sent to an AI model that is not on this machine.\n`complete` is true exactly when nothing was skipped, failed or withheld;\notherwise the stored vectors keep their old model's tag, so\n`search_index` still reports `model_changed` after a model change.",
+        "description": "A finished rebuild. `embedded`: pages sent and stored; `unchanged`:\npages already current; `removed`: vectors of pages that no longer exist;\n`skipped`: pages that could not be read; `failed`: pages the AI model\ncould not embed (a later rebuild tries them again); `withheld`:\nconfidential pages not sent to an AI model that is not on this machine.\n`complete` is true exactly when nothing was skipped, failed or withheld;\notherwise the stored vectors keep their old model's tag. After a model\nchange `search_index` still reports `model_changed` unless `withheld` was\nthe only thing left, which a rebuild could not send anyway.",
         "properties": {
           "complete": {
             "title": "Complete",
