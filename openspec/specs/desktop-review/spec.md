@@ -9,7 +9,9 @@ desktop client (`desktop-client`) over the local API (`local-http-api`), words
 every question, option, confirmation and refusal from
 `docs/decision-wording.md`, previews before it applies, asks for consent once
 per batch before the AI model checks anything, checks a decision whose pages
-changed again rather than deciding it as it was, and offers the brief's Undo:
+changed again rather than deciding it as it was, settles a disagreement or a
+newer decision from the finding it carries, says why a file was not added, and
+offers the brief's Undo:
 "Split again" for a combine, from a list of every combined page, and a one-step
 reversal for keep separate, a connection and a how-quickly setting. Its behaviour lives in a view model and a wording module with no
 DOM, which are unit-tested; render functions draw from their state (ADR-0066).
@@ -23,9 +25,9 @@ control, that lists every decision `GET /v1/decisions` returns beside the one
 the person opens. Each entry MUST be worded from `docs/decision-wording.md` using the
 pages' titles read through `GET /v1/pages`, never a Concept ID, a command
 (`resolves_via`) or an engine word the brief's rule 1 lists. A decision the app
-cannot act on (`contradiction`, `revision`, `watch_refusal`, or one whose
-`actions` are empty) MUST still be listed, with the brief's plain sentence and
-no action. A decision whose `fresh` is false MUST be listed as changed, not
+cannot act on (a `watch_refusal`, a `contradiction` or `revision` without its
+`finding`, or one whose `actions` are empty) MUST still be listed, with the
+brief's plain sentence and no action. A decision whose `fresh` is false MUST be listed as changed, not
 dropped. A page that cannot be read MUST be shown as "a page that couldn't be
 read", never as its id. An empty queue MUST say there is nothing to review.
 
@@ -38,7 +40,8 @@ read", never as its id. An empty queue MUST say there is nothing to review.
 
 #### Scenario: A decision the app cannot act on is listed without a command
 
-- GIVEN an open contradiction decision whose `resolves_via` names a CLI command
+- GIVEN an open contradiction decision with no `finding`, whose `resolves_via`
+  names a CLI command
 - WHEN To review is shown
 - THEN it is listed with "Two pages say different things about {subject}."
 - AND no text of the command appears and no action is offered
@@ -84,7 +87,9 @@ confidence number is shown.
 ### Requirement: A Choice Is Previewed, Then Applied Against Its Version
 
 Choosing an option other than Decide later or Check these MUST first preview
-it (`POST /v1/decisions/{key}/preview`) and show what it will do from the plan
+it (`POST /v1/decisions/{key}/preview`, or `POST
+/v1/decisions/{key}/preview-finding` for a contradiction or a revision) and
+show what it will do from the plan
 (for a combine: the name the page keeps and the number of other pages that
 will point to it, and the "different files" line when the plan reports one),
 then apply it only when the person confirms, echoing the preview's version
@@ -92,7 +97,8 @@ unchanged. After apply the app MUST show the brief's confirmation in the past
 tense, MUST add "The combined page is marked Only on this Mac." when the
 result reports `committed_confidential`, and MUST reload To review. The
 confirmation of a combine, a keep separate, a connection and a how-quickly
-setting MUST offer Undo; no other confirmation offers one.
+setting MUST offer Undo; no other confirmation offers one, and a
+contradiction's or revision's confirmation does not mention one.
 
 #### Scenario: A combine is applied against the previewed version
 
@@ -329,6 +335,78 @@ NOT be applied again blindly.
 - WHEN the person chooses Undo and the preview answers `not_related`
 - THEN the app says "These pages aren't connected any more." and offers OK
 
+### Requirement: A Disagreement Or A Newer Decision Is Settled From Its Finding
+
+A `contradiction` or `revision` decision with a `finding` MUST be shown with its
+pages side by side, read through `GET /v1/pages`, and the model's reason under
+"Why the AI model thinks so", in quotation marks; no confidence is shown.
+
+A contradiction MUST ask "These pages say different things. Which is right?"
+and show its conflicting claims under "What doesn't match", each in quotation
+marks, as written. Its options, each offered only when the decision lists its
+action, MUST be "'{first title}' is right" (`supersede`), "'{second title}' is
+right" (`supersede_reversed`), "Both are right" (`reconcile`), "Leave them as
+they are" (`decline`) and Decide later. One found inside a combined page
+(`merged_absorbed_id` set) MUST show only that page, ask "Part of '{first
+title}' disagrees with what was combined into it.", offer only "Leave it as it
+is" (`decline`) and Decide later, and say under them "If combining them was a
+mistake, you can split it again under 'Pages you combined'."
+
+A revision MUST show each page with its quote in quotation marks and its date
+("No date" when there is none). When the finding's `later_id` is set, it MUST
+ask whether the later page replaces or updates the earlier one and offer only
+the one directed action the decision lists ("Yes, it replaces it" or "Yes, it
+updates it"), never choosing the direction itself; when `later_id` is null, it
+MUST say "These have no dates we can compare, so we can't tell which came
+first.", ask "How do these two relate?" and offer each directed action the
+decision lists, named by its pages. "Both still stand" (`reconcile`) and Decide
+later MUST always be offered.
+
+The preview MUST be worded from the plan (`ReconcilePlan` or `DeclinePlan`),
+naming the page marked out of date from `deprecates_id`, and the apply MUST
+echo its version unchanged, with the same stale, busy and refusal handling as
+any other decision; `already_reconciled` MUST say "You've already settled how
+these pages relate, in another way. Nothing was changed." and reload. The
+confirmation MUST be the brief's past tense ("Marked '{title}' as out of
+date.", "Noted that both are right.", "Left as they are.", "Left as it is.",
+"Noted that '{later}' updates '{earlier}'.", "Noted that both still stand.").
+
+A `watch_refusal` with a `finding` MUST be headed "'{file_name}' wasn't added."
+with the brief's sentence for its reason (rename it in the folder, or split it
+into smaller files), MUST show no page and no action, and MUST say "This can't
+be settled in the app yet."
+
+#### Scenario: A contradiction is settled with the finding preview
+
+- GIVEN a contradiction between "Marguerite Osei" and "M. Osei"
+- WHEN "'Marguerite Osei' is right" is chosen and confirmed
+- THEN `POST /v1/decisions/{key}/preview-finding` is sent with `supersede`,
+  and no decision preview
+- AND the apply echoes the finding preview's version, and the confirmation reads
+  "Marked 'M. Osei' as out of date." with no Undo
+
+#### Scenario: A contradiction inside a combined page points to Split again
+
+- GIVEN a contradiction whose `merged_absorbed_id` is set
+- WHEN it is opened
+- THEN its options are Leave it as it is and Decide later, and the line under
+  them points to "Pages you combined"
+
+#### Scenario: A dated revision offers the one direction its dates name
+
+- GIVEN a revision whose `later_id` is its second page and whose actions are
+  `supersede_reversed`, `reconcile` and `skip`
+- WHEN it is opened
+- THEN it asks "Does '{second}' replace '{first}'?" with Yes, it replaces it,
+  Both still stand and Decide later
+
+#### Scenario: A refused file says what to do in the folder
+
+- GIVEN a `watch_refusal` whose reason is `exceeds_pass_budget`
+- WHEN it is opened
+- THEN it says the file is too large to add automatically and to split it in
+  the folder, with no action and no command
+
 ### Requirement: A Changed Decision Is Checked Again, Never Decided As It Was
 
 A decision whose `fresh` is false MUST be shown with the notice "Something about
@@ -344,6 +422,26 @@ changed, the app MUST show it as it now is, with its own options; when it is
 still changed, the app MUST quote the decision's kind and show the check's
 consent, and MUST NOT start a run until the person agrees. The app MUST refresh
 the decision queue on each visit to To review, before it lists the decisions.
+
+A changed `contradiction` or `revision` cannot be checked again: the quote does
+not cover its kind and the refresh does not recompute it. It MUST be shown
+with "Something about these pages changed since this was found, so it can't be
+settled as it was. The app can't look at them again yet.", MUST offer only
+Decide later, and MUST NOT be counted as waiting for a check, so a check's
+"ready" count never includes one.
+
+#### Scenario: A changed contradiction can only wait
+
+- GIVEN a contradiction whose `fresh` is false
+- WHEN it is opened
+- THEN its only option is Decide later, and no quote is requested
+
+#### Scenario: A check never counts a finding as made ready
+
+- GIVEN an unjudged pair and a changed contradiction that becomes current
+  during a check, from outside the app
+- WHEN the check ends
+- THEN the result counts only the pair as ready
 
 #### Scenario: A changed pair offers only Check again and Decide later
 

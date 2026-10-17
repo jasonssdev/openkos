@@ -66,7 +66,7 @@ Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../eva
 - **The pages involved,** each by its title and a short opening excerpt, so the person can compare them side by side.
 - **Where each came from:** "From: allotment-volunteers.md, added 12 October", one line per file. When a page draws on several files, all are listed. **(H)** that file names and dates are enough evidence for a first-time reader.
 - **The model's reason,** when there is one, under "Why the AI model thinks so", in quotation marks, as written. Never paraphrased into the app's own voice, so the person can tell the app's statement from the model's guess.
-- **A changed decision** (`fresh` is false) says: "Something about these pages changed since this was suggested. Check them again before you decide." Its only options are **Check again** — "We'll look at these pages as they are now. Checking doesn't change anything. You'll still decide." — and **Decide later**: the engine refuses every other choice on a changed decision (`Stale`, `row_inputs_changed`), so none is offered. Check again first brings To review up to date, which runs no AI model (`refresh_decision_queue`); a decision that is gone then says "These pages changed, and this question no longer applies.", one that is current is shown as it now is, with its own options, and one still changed opens the check's consent for its kind, below. A preview that returns `Stale` for a decision that is not changed says "Something about these pages changed since this was suggested. Here is the current version." and reloads, never applying the old one.
+- **A changed decision** (`fresh` is false) says: "Something about these pages changed since this was suggested. Check them again before you decide." Its only options are **Check again** — "We'll look at these pages as they are now. Checking doesn't change anything. You'll still decide." — and **Decide later**: the engine refuses every other choice on a changed decision (`Stale`, `row_inputs_changed`), so none is offered. Check again first brings To review up to date, which runs no AI model (`refresh_decision_queue`); a decision that is gone then says "These pages changed, and this question no longer applies.", one that is current is shown as it now is, with its own options, and one still changed opens the check's consent for its kind, below. A preview that returns `Stale` for a decision that is not changed says "Something about these pages changed since this was suggested. Here is the current version." and reloads, never applying the old one. A changed disagreement or newer decision (below) cannot be checked again: the check does not cover those kinds and bringing To review up to date does not look at them again, so it says "Something about these pages changed since this was found, so it can't be settled as it was. The app can't look at them again yet." and offers only **Decide later** (#1523). It is not counted among those a check makes ready.
 
 ## Identity — "Are these the same?"
 
@@ -178,13 +178,15 @@ The screen shows the current setting and the suggestion, each by its plain line,
 
 **Found inside a combined page.** When the detail has a `merged_absorbed_id`, the disagreement is between a page and one that was combined into it, and only `decline` and `skip` are offered (`reconcile` is withheld as `merged_content`). The question reads: "Part of '{first title}' disagrees with what was combined into it." Options: **Leave it as it is** ("Nothing changes on the page. We won't point this out again.") and **Decide later**, with one line under them: "If combining them was a mistake, you can split it again under 'Pages you combined'."
 
-**Confirmations:** "Marked '{title}' as out of date." · "Noted that both are right." · "Left as they are." No Undo is offered yet (#1497); the confirmation does not mention one.
+**Confirmations:** "Marked '{title}' as out of date." · "Noted that both are right." · "Left as they are." ("Left as it is." for one found inside a combined page). The page named is the plan's `deprecates_id`. No Undo is offered yet (#1497); the confirmation does not mention one.
+
+**In To review,** the item is named by both pages' titles, with the question under them; one found inside a combined page is named by that page alone.
 
 ## A newer decision — "Does this replace the earlier one?"
 
 `kind: revision`. The engine found a later decision that may reverse or refine an earlier one. `finding` is a `RevisionDetail`: the two pages, `change` (`reverses` or `refines`), `later_id` when the dates say which came later, the quote from each page and the AI model's reason. Previewed and applied as a contradiction is. **(H)** for the whole section.
 
-The pages are shown side by side, each with its quote in quotation marks and its date ("No date" when there is none), and the model's reason under "Why the AI model thinks so".
+The pages are shown side by side, each with its quote in quotation marks in place of its excerpt and its date ("12 October", "No date" when there is none) beside its kind, and the model's reason under "Why the AI model thinks so".
 
 **When the dates say which came later** (`later_id` set), one write is offered, the one the dates and the change name, held by the later page:
 
