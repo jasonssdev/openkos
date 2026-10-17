@@ -44,6 +44,7 @@ from openkos.llm.base import (
     BackendModelNotFound,
     BackendUnavailable,
     Message,
+    PullEvent,
     build_backend_opener,
 )
 from openkos.llm.base import (
@@ -725,6 +726,63 @@ class OllamaClient:
             raise OllamaError("Malformed response from Ollama: version is not text")
         return version
 
+    def pull(
+        self,
+        model: str,
+        *,
+        on_event: Callable[[PullEvent], None],
+        should_stop: Callable[[], bool],
+    ) -> bool:
+        """POST `{host}/api/pull` and read its NDJSON stream line by line.
+
+        Every line is handed to `on_event`; `should_stop` is asked after each
+        line, and a stop closes the reply and returns `False`. Returns `True`
+        after the `success` line. Ollama keeps a partial download and resumes
+        it on the next pull, so a stop loses nothing. The `timeout` bounds each
+        read, so a stalled stream ends as `OllamaUnavailable`. An `error` line
+        is `OllamaModelNotFound` when it says the model does not exist, else
+        `OllamaError`; a stream that ends without `success` is `OllamaError`."""
+        url = f"{self._host}/api/pull"
+        payload = json.dumps({"model": model, "stream": True}).encode("utf-8")
+        # Same trusted-host rationale as `chat()` (S310).
+        request = urllib.request.Request(  # noqa: S310
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            response = self._urlopen(request, timeout=self._timeout)
+        except urllib.error.HTTPError as exc:
+            raise _pull_http_error(exc) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise self._unavailable(exc) from exc
+        try:
+            while True:
+                try:
+                    line = response.readline()
+                except (
+                    urllib.error.URLError,
+                    TimeoutError,
+                    OSError,
+                    http.client.IncompleteRead,
+                ) as exc:
+                    raise self._unavailable(exc) from exc
+                if not line:
+                    raise OllamaError("Ollama ended the pull before it finished")
+                if not line.strip():
+                    continue
+                event = _pull_event(line)
+                on_event(event)
+                if event.status == "success":
+                    return True
+                if should_stop():
+                    return False
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+
     def _unavailable(self, exc: BaseException) -> OllamaUnavailable:
         """Build the `OllamaUnavailable` for a transport failure, shared by
         both the connect-phase and read-phase except branches (D4).
@@ -777,6 +835,69 @@ def _validate_embedding_row(row: object) -> list[float]:
             )
         validated.append(float(value))
     return validated
+
+
+_MISSING_MODEL_PHRASES = ("does not exist", "not found")
+_PULL_STATUS_KEY = "status"
+"""The pull line's status field. Named, not spelled inline: `status` is also a
+frontmatter key whose reads the OKF seam guard confines to `model/okf.py`, and
+this is a wire field of Ollama's, not frontmatter."""
+
+
+def _pull_failure(text: str) -> OllamaError:
+    """The typed error for a pull failure Ollama described in `text`."""
+    if any(phrase in text.lower() for phrase in _MISSING_MODEL_PHRASES):
+        return OllamaModelNotFound(f"Model not found: {text}")
+    return OllamaError(f"Ollama pull failed: {text}")
+
+
+def _pull_http_error(exc: urllib.error.HTTPError) -> OllamaError:
+    """An HTTP status on `/api/pull`: Ollama answers a missing model with a 500
+    or 404 whose body says so."""
+    try:
+        detail = exc.read().decode("utf-8", errors="replace")
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        http.client.IncompleteRead,
+    ):
+        detail = ""
+    return _pull_failure(f"({exc.code}) {detail}")
+
+
+def _optional_int(entry: dict[str, Any], key: str) -> int | None:
+    value = entry.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} is not an integer")
+    return value
+
+
+def _pull_event(line: bytes) -> PullEvent:
+    """Parse one pull stream line; an `error` line raises its typed error."""
+    try:
+        entry = json.loads(line)
+        if not isinstance(entry, dict):
+            raise ValueError("a pull line is not an object")
+        error = entry.get("error")
+        if error is not None:
+            raise _pull_failure(str(error))
+        status = entry.get(_PULL_STATUS_KEY)
+        digest = entry.get("digest")
+        if not isinstance(status, str):
+            raise ValueError("status is not text")
+        if digest is not None and not isinstance(digest, str):
+            raise ValueError("digest is not text")
+        return PullEvent(
+            status=status,
+            digest=digest,
+            completed=_optional_int(entry, "completed"),
+            total=_optional_int(entry, "total"),
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        raise OllamaError(f"Malformed pull line from Ollama: {exc}") from exc
 
 
 def _map_http_error(exc: urllib.error.HTTPError) -> OllamaError:

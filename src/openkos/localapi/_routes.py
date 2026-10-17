@@ -25,6 +25,8 @@ from openkos.localapi._models import (
     MergeHistory,
     PreviewPlan,
     PreviewRequest,
+    PullRequest,
+    PullStatus,
     QuoteRequest,
     RefreshRequest,
     ReopenApplyRequest,
@@ -42,6 +44,7 @@ from openkos.localapi._models import (
     UnrelatePreviewRequest,
     UnrelateResponse,
 )
+from openkos.localapi._pulls import PullRegistry
 from openkos.localapi._runs import RunRegistry
 
 # Documents the scheme in the OpenAPI schema only: the guard enforces the token
@@ -77,6 +80,12 @@ def _asks(request: Request) -> AskRegistry:
     """The ask registry `_build` keeps on the app."""
     registry: AskRegistry = request.app.state.asks
     return registry
+
+
+def _pulls(request: Request) -> PullRegistry:
+    """The pull registry `_build` keeps on the app."""
+    pulls: PullRegistry = request.app.state.pulls
+    return pulls
 
 
 def _plain_mappings(s: api.WorkspaceStatus) -> api.WorkspaceStatus:
@@ -376,6 +385,33 @@ def make_router() -> APIRouter:
     ) -> api.SetupReadiness:
         # Reads the runtime's version and model list; never a model call.
         return invoke(lambda: api.setup_readiness(workspace))
+
+    @router.post(
+        "/setup/pulls", status_code=202, responses=_errors_of(409, 413, 424, 502, 503)
+    )
+    def start_pull(
+        body: PullRequest,
+        response: Response,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+        pulls: PullRegistry = Depends(_pulls),  # noqa: B008
+    ) -> PullStatus:
+        status = pulls.start(workspace, body.model)
+        response.headers["Location"] = f"{prefix()}/setup/pulls/{status.pull_id}"
+        return status
+
+    @router.get("/setup/pulls/{pull_id}", responses=_errors_of(404))
+    def pull_status(
+        pull_id: str,
+        pulls: PullRegistry = Depends(_pulls),  # noqa: B008
+    ) -> PullStatus:
+        return pulls.status(pull_id)
+
+    @router.post("/setup/pulls/{pull_id}/stop", responses=_errors_of(404))
+    def stop_pull(
+        pull_id: str,
+        pulls: PullRegistry = Depends(_pulls),  # noqa: B008
+    ) -> PullStatus:
+        return pulls.stop(pull_id)
 
     @router.post("/judging/quote", responses=_errors_of(413, 424, 502, 503))
     def quote(

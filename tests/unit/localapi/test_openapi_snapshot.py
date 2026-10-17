@@ -161,6 +161,9 @@ _ROUTE_ERRORS: dict[tuple[str, str], set[str]] = {
     ("post", "/v1/ask"): {"409", "413"},
     ("get", "/v1/ask/{ask_id}"): {"404"},
     ("get", "/v1/setup/readiness"): set(),
+    ("post", "/v1/setup/pulls"): {"409", "413", "424", "502", "503"},
+    ("get", "/v1/setup/pulls/{pull_id}"): {"404"},
+    ("post", "/v1/setup/pulls/{pull_id}/stop"): {"404"},
 }
 _RETRY_AFTER = {
     ("post", "/v1/decisions/{decision_key}/apply"),

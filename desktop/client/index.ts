@@ -169,6 +169,10 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
     ask: (body: Schemas["AskRequest"]) => call("post", "/v1/ask", { body }),
     askJob: (askId: string) => call("get", "/v1/ask/{ask_id}", { params: { ask_id: askId } }),
     setupReadiness: () => call("get", "/v1/setup/readiness"),
+    startModelPull: (body: Schemas["PullRequest"]) => call("post", "/v1/setup/pulls", { body }),
+    modelPull: (pullId: string) => call("get", "/v1/setup/pulls/{pull_id}", { params: { pull_id: pullId } }),
+    stopModelPull: (pullId: string) =>
+      call("post", "/v1/setup/pulls/{pull_id}/stop", { params: { pull_id: pullId } }),
     mergeHistory: (conceptId: string) => call("get", "/v1/merges", { query: { concept_id: conceptId } }),
     mergedConcepts: () => call("get", "/v1/merged"),
     readPage: (conceptId: string) => call("get", "/v1/pages", { query: { concept_id: conceptId } }),

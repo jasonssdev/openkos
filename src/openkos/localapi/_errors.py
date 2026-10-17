@@ -73,6 +73,11 @@ BACKEND_MODEL_NOT_FOUND: Final = "backend_model_not_found"
 GENERATION_CAPPED: Final = "generation_capped"
 BACKEND_ERROR: Final = "backend_error"
 
+# Setup rows.
+PULL_ACTIVE: Final = "pull_active"
+MODEL_NOT_CONFIGURED: Final = "model_not_configured"
+PULL_NOT_SUPPORTED: Final = "pull_not_supported"
+
 _REFUSAL_FALLBACK: Final = "the write was refused"
 
 
@@ -234,6 +239,22 @@ _NOT_APPLIED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
         INVALID_SELECTION,
         False,
         "the selection does not name a survivor and the members to combine with it",
+    ),
+}
+
+# Pull refusals returned by the pull operation, keyed by reason.
+_PULL_REFUSED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
+    "not_configured": (
+        422,
+        MODEL_NOT_CONFIGURED,
+        False,
+        "that model is not one this workspace uses",
+    ),
+    "backend_cannot_pull": (
+        422,
+        PULL_NOT_SUPPORTED,
+        False,
+        "the configured model backend cannot download models",
     ),
 }
 
@@ -410,6 +431,18 @@ def ask_active() -> ApiProblem:
     )
 
 
+def pull_active() -> ApiProblem:
+    """A pull was requested while another is active; trying again later can work."""
+    return ApiProblem(
+        409,
+        ErrorBody(
+            code=PULL_ACTIVE,
+            retryable=True,
+            message="a model download is already active",
+        ),
+    )
+
+
 def outcome_problem(
     outcome: (
         api.NotApplied
@@ -420,6 +453,7 @@ def outcome_problem(
         | api.UnmergeStale
         | api.NotUndoable
         | api.UndoStale
+        | api.PullRefused
     ),
 ) -> ApiProblem:
     """The failure a returned (not raised) outcome is answered with."""
@@ -449,6 +483,8 @@ def outcome_problem(
         row = _NOT_UNMERGEABLE.get(outcome.reason)
     elif isinstance(outcome, api.NotUndoable):
         row = _NOT_UNDOABLE.get(outcome.reason)
+    elif isinstance(outcome, api.PullRefused):
+        row = _PULL_REFUSED.get(outcome.reason)
     else:
         row = _NOT_APPLIED.get(outcome.reason)
     if row is None:  # a reason added after this table: report it, do not guess

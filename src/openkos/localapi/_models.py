@@ -102,6 +102,30 @@ class RunStatus(BaseModel):
     error: ErrorBody | None
 
 
+class PullStatus(BaseModel):
+    """A model pull as a poll sees it. The pull's own result is a field here,
+    never the poll's HTTP status."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pull_id: str
+    model: str
+    state: Literal["running", "stopping", "finished", "failed"]
+    phase: api.PullPhase | None
+    completed_bytes: int
+    total_bytes: int | None
+    outcome: api.PullOutcome | None
+    error: ErrorBody | None
+
+
+class PullRequest(BaseModel):
+    """Start a pull of one configured model tag."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: Annotated[str, Field(min_length=1, max_length=256)]
+
+
 class _EchoRequest(BaseModel):
     """A request that carries an echoed API dataclass.
 

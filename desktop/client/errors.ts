@@ -59,6 +59,10 @@ export const ERROR_CODES = [
   "backend_error",
   // Asking.
   "ask_active",
+  // Setup.
+  "pull_active",
+  "model_not_configured",
+  "pull_not_supported",
 ] as const;
 
 export type KnownErrorCode = (typeof ERROR_CODES)[number];
