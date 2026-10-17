@@ -118,7 +118,8 @@ every member through the existing keep-distinct path; `s` MUST write and record
 nothing. A drift MUST exit 3 with nothing written; a write failure MUST exit 1,
 and a group stopped after some merges MUST name the merges it kept. A stale or
 refused commit MUST be counted as skipped with its reason. A group whose open row
-does not offer merge-group MUST keep the earlier skip line (the pairwise
+does not offer merge-group, including a group in a workspace with no pending-work
+queue, MUST keep the earlier skip line (the pairwise
 `openkos merge` commands, or the `openkos merge --include-cross-type` command)
 and perform no merge. The walk MUST NOT run without a TTY, and neither
 `--auto-merge` nor `--accept` reaches it.
@@ -158,6 +159,12 @@ and perform no merge. The walk MUST NOT run without a TTY, and neither
 #### Scenario: A row that does not offer merge-group keeps the skip line
 
 - GIVEN a judged-SAME group of three whose open row does not carry a SAME judgment
+- WHEN Identity reaches it
+- THEN it prints the pairwise `openkos merge` commands and performs no merge
+
+#### Scenario: Without a queue the group keeps the skip line
+
+- GIVEN a judged-SAME group of three in a workspace with no pending-work queue
 - WHEN Identity reaches it
 - THEN it prints the pairwise `openkos merge` commands and performs no merge
 
