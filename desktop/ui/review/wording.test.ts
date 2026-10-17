@@ -18,6 +18,8 @@ import {
   sourceLine,
   splitQuestion,
   splitDone,
+  undoneLine,
+  COMBINED_HEADING,
   typeNoun,
   whoCanSee,
   type Pages,
@@ -528,6 +530,23 @@ describe("splitting again", () => {
   });
 });
 
+describe("undoing", () => {
+  it("says what each undo did, in the past tense", () => {
+    expect(undoneLine({ kind: "reopen", members: ["people/a", "people/b"] })).toBe(
+      "Undone. We'll ask you about these again.",
+    );
+    expect(undoneLine({ kind: "unrelate", source: "a", relationType: "part_of", target: "b" })).toBe(
+      "Undone. That connection is removed.",
+    );
+    expect(undoneLine({ kind: "tier", typeName: "Person", tier: null })).toBe("Undone. People are treated as before.");
+    expect(undoneLine({ kind: "tier", typeName: "Concept", tier: "slow" })).toBe("Undone. Ideas are treated as before.");
+  });
+
+  it("heads the combined pages for every session", () => {
+    expect(COMBINED_HEADING).toBe("Pages you combined");
+  });
+});
+
 describe("problemFor", () => {
   const api = (code: string) =>
     new ApiError({ status: 409, code, retryable: false, message: "engine text", retryAfterSeconds: null });
@@ -552,6 +571,9 @@ describe("problemFor", () => {
     ["survivor_edited", "This page was changed after it was combined, so it can't be split here.", "ok"],
     ["unmerge_interrupted", "Only some of these were split. Each page that was split is back as it was.", "reload"],
     ["quote_stale", "Something changed since you agreed — the AI model or the pages. Please look again.", "requote"],
+    ["not_kept_distinct", "These pages aren't kept separate any more.", "ok"],
+    ["not_related", "These pages aren't connected any more.", "ok"],
+    ["tier_unchanged", "This setting is already as it was.", "ok"],
   ] as const)("words %s", (code, message, action) => {
     expect(problemFor(api(code), "before")).toEqual({ message, action });
   });
@@ -592,7 +614,11 @@ describe("no engine words reach the screen", () => {
       ),
       describeDecision(relation("part_of", ["relate", "relate_reversed"]), pages),
       describeDecision(TIER, pages),
-      ...["workspace_busy", "stale", "write_failed", "quote_stale"].map((code) =>
+      undoneLine({ kind: "reopen", members: [] }),
+      undoneLine({ kind: "unrelate", source: "a", relationType: "part_of", target: "b" }),
+      undoneLine({ kind: "tier", typeName: "Person", tier: null }),
+      COMBINED_HEADING,
+      ...["workspace_busy", "stale", "write_failed", "quote_stale", "not_kept_distinct", "not_related", "tier_unchanged"].map((code) =>
         problemFor(new ApiError({ status: 409, code, retryable: false, message: "m", retryAfterSeconds: null }), "after"),
       ),
     ].map((value) => JSON.stringify(value).replaceAll(/"(choice|okfType)":"[^"]*"/g, ""));

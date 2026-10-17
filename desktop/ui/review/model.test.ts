@@ -71,11 +71,44 @@ function mergePlan(survivor = "people/a", absorbed = "people/b"): Schemas["Merge
   };
 }
 
-function preview(action: Schemas["Action"], version = VERSION): Schemas["DecisionPreview"] {
-  const plan: Schemas["PreviewPlan"] =
-    action === "keep_distinct" ? { kind: "keep_distinct", member_ids: ["people/a", "people/b"] } : mergePlan();
-  return { decision_key: version.decision_key, action, plan, version };
+const RELATE_PLAN: Schemas["RelatePlan"] = {
+  kind: "relate",
+  source_id: "people/c",
+  target_id: "orgs/acme",
+  relation_type: "part_of",
+};
+const TIER_PLAN: Schemas["TierPlan"] = { kind: "set_tier", type_name: "Person", tier: "volatile", configured_tier: null };
+
+function planFor(action: Schemas["Action"]): Schemas["PreviewPlan"] {
+  if (action === "keep_distinct") return { kind: "keep_distinct", member_ids: ["people/a", "people/b"] };
+  if (action === "relate" || action === "relate_reversed") return RELATE_PLAN;
+  if (action === "set_tier") return TIER_PLAN;
+  return mergePlan();
 }
+
+function preview(action: Schemas["Action"], version = VERSION): Schemas["DecisionPreview"] {
+  return { decision_key: version.decision_key, action, plan: planFor(action), version };
+}
+
+const COMBINED: Schemas["MergedConcept"][] = [
+  {
+    concept_id: "people/a",
+    merges: [{ survivor_id: "people/a", absorbed_id: "people/b", absorbed_title: "M. Osei", merged_at: "2026-10-16T12:00:00Z" }],
+  },
+];
+const COMBINED_LINES = [
+  { survivor: "people/a", title: "Marguerite Osei", lines: [{ text: "Combined from 'M. Osei' on 16 October", absorbed: "people/b" }] },
+];
+
+function refreshed(): Schemas["KindRefresh"] {
+  return { kind: "identity", inserted: 0, amended: 0, unchanged: 0, replaced: 0, suppressed: 0, retired: 0, complete: true, ambiguous: 0 };
+}
+const QUEUE_REFRESH: Schemas["QueueRefresh"] = {
+  identity: refreshed(),
+  relation_type: { ...refreshed(), kind: "relation_type" },
+  volatility: { ...refreshed(), kind: "volatility" },
+  identity_truncation_notice: null,
+};
 
 const BINDING = { backend: "ollama", model: "m", is_local: true, kind: "identity" as const, effective_confidential: false, rubric_digest: null };
 const TOKEN = { binding: BINDING, calls: 2, include_confidential: false, include_uncertain: false, work: [] };
@@ -138,8 +171,39 @@ function fake(decisions: Decision[] = [PAIR]) {
     startJudgingRun: vi.fn(async () => run("running")),
     judgingRun: vi.fn(async () => run("finished", { index: 2, outcome: outcome(2) })),
     stopJudgingRun: vi.fn(async () => run("stopping")),
-    mergeHistory: vi.fn(async () => ({
-      merges: [{ survivor_id: "people/a", absorbed_id: "people/b", absorbed_title: "M. Osei", merged_at: "2026-10-16T12:00:00Z" }],
+    mergedConcepts: vi.fn(async (): Promise<Schemas["MergedConceptList"]> => ({ concepts: [] })),
+    refreshQueue: vi.fn(async () => QUEUE_REFRESH),
+    previewReopen: vi.fn(async (body: Schemas["ReopenPreviewRequest"]) => ({
+      member_ids: body.member_ids,
+      version: { member_ids: body.member_ids, content_digest: "r1" },
+    })),
+    applyReopen: vi.fn(async (body: Schemas["ReopenApplyRequest"]) => ({
+      reopened: { member_ids: body.version.member_ids, commit_sha: "c" },
+      warnings: [],
+    })),
+    previewUnrelate: vi.fn(async (body: Schemas["UnrelatePreviewRequest"]) => ({
+      ...body,
+      withdraws_deprecation: false,
+      version: { ...body, content_digest: "n1" },
+    })),
+    applyUnrelate: vi.fn(async (body: Schemas["UnrelateApplyRequest"]) => ({
+      unrelated: {
+        source_id: body.version.source_id,
+        relation_type: body.version.relation_type,
+        target_id: body.version.target_id,
+        commit_sha: "c",
+        committed_confidential: false,
+      },
+      warnings: [],
+    })),
+    previewTierChange: vi.fn(async (body: Schemas["TierChangePreviewRequest"]) => ({
+      ...body,
+      configured_tier: "volatile",
+      version: { ...body, content_digest: "t1" },
+    })),
+    applyTierChange: vi.fn(async (body: Schemas["TierChangeApplyRequest"]) => ({
+      changed: { type_name: body.version.type_name, tier: body.version.tier, commit_sha: "c" },
+      warnings: [],
     })),
     previewUnmerge: vi.fn(async (body: Schemas["UnmergePreviewRequest"]) => unmergePreview(body.absorbed_id)),
     applyUnmerge: vi.fn(async () => ({
@@ -225,6 +289,25 @@ describe("loading To review", () => {
     expect(model.state.listProblem).toEqual({ message: "OpenKOS isn't responding. Nothing was changed.", action: "try_again" });
   });
 
+  it("lists every combined page with its lines, reading its title", async () => {
+    const { model, client } = fake([]);
+    client.mergedConcepts.mockResolvedValueOnce({ concepts: COMBINED });
+    await model.load();
+    expect(client.readPage).toHaveBeenCalledWith("people/a");
+    expect(model.state.combined).toEqual(COMBINED_LINES);
+  });
+
+  it("keeps the decisions and the last combined list when that list cannot be read", async () => {
+    const { model, client } = fake([PAIR]);
+    client.mergedConcepts.mockResolvedValueOnce({ concepts: COMBINED });
+    await model.load();
+    client.mergedConcepts.mockRejectedValueOnce(apiError("internal_error", 500));
+    await model.load();
+    expect(model.state.decisions).toHaveLength(1);
+    expect(model.state.listProblem).toBeNull();
+    expect(model.state.combined).toEqual(COMBINED_LINES);
+  });
+
   it("tells subscribers about every change", async () => {
     const { model } = fake();
     const seen: boolean[] = [];
@@ -255,26 +338,29 @@ describe("one decision", () => {
     expect(model.state.open?.step).toEqual({
       name: "done",
       lines: ["Combined into 'Marguerite Osei'."],
-      undo: { survivor: "people/a", absorbed: "people/b" },
+      undo: { kind: "split", survivor: "people/a", absorbed: "people/b" },
     });
     expect(client.decisions).toHaveBeenCalledTimes(2);
   });
 
-  it("remembers a combine with its history for Split again", async () => {
+  it("lists the combine for Split again from the engine's list", async () => {
     const { model, client } = await opened([PAIR], "pair");
     await model.choose({ choice: "merge", label: "", does: "" });
+    client.mergedConcepts.mockResolvedValueOnce({ concepts: COMBINED });
     await model.confirm();
-    expect(client.mergeHistory).toHaveBeenCalledWith("people/a");
-    expect(model.state.combined).toEqual([
-      { survivor: "people/a", title: "Marguerite Osei", lines: [{ text: "Combined from 'M. Osei' on 16 October", absorbed: "people/b" }] },
-    ]);
+    expect(client.mergedConcepts).toHaveBeenCalledTimes(2);
+    expect(model.state.combined).toEqual(COMBINED_LINES);
   });
 
-  it("offers no undo after keeping separate", async () => {
+  it("offers Undo after keeping separate, reopening exactly the plan's pages", async () => {
     const { model } = await opened([PAIR], "pair");
     await model.choose({ choice: "keep_distinct", label: "", does: "" });
     await model.confirm();
-    expect(model.state.open?.step).toEqual({ name: "done", lines: ["Kept separate."], undo: null });
+    expect(model.state.open?.step).toEqual({
+      name: "done",
+      lines: ["Kept separate."],
+      undo: { kind: "reopen", members: ["people/a", "people/b"] },
+    });
     expect(model.state.combined).toEqual([]);
   });
 
@@ -602,13 +688,12 @@ describe("split again", () => {
       phase: "confirm",
       text: "Split 'M. Osei' out again? Both pages go back exactly as they were.",
     });
-    client.mergeHistory.mockResolvedValueOnce({ merges: [] });
     await model.confirmSplit();
     expect(client.applyUnmerge).toHaveBeenCalledWith({
       version: { survivor_id: "people/a", absorbed_id: "people/b", content_digest: "u1" },
     });
     expect(model.state.split).toMatchObject({ phase: "done", text: "Split. 'M. Osei' is back as it was." });
-    expect(client.mergeHistory).toHaveBeenCalledWith("people/a");
+    expect(client.mergedConcepts).toHaveBeenCalledTimes(2);
     expect(client.decisions).toHaveBeenCalledTimes(2);
   });
 
@@ -642,7 +727,7 @@ describe("split again", () => {
       "Only some of these were split. Each page that was split is back as it was.",
     );
     await model.resolveSplitProblem();
-    expect(client.mergeHistory).toHaveBeenCalledWith("people/a");
+    expect(client.mergedConcepts).toHaveBeenCalledTimes(1);
     expect(model.state.split).toBeNull();
   });
 
@@ -672,5 +757,156 @@ describe("split again", () => {
     await model.undo();
     expect(client.previewUnmerge).toHaveBeenCalledWith({ survivor_id: "people/a", absorbed_id: "people/b" });
     expect(model.state.split?.phase).toBe("confirm");
+  });
+});
+
+const RELATION: Decision = {
+  ...PAIR,
+  decision_key: "rel",
+  kind: "relation_type",
+  targets: [],
+  actions: ["relate", "skip"],
+  detail: {
+    source_id: "people/c",
+    target_id: "orgs/acme",
+    effective_source_id: "people/c",
+    effective_target_id: "orgs/acme",
+    suggested_type: "part_of",
+    rationale: "r",
+  },
+};
+const TIER: Decision = {
+  ...PAIR,
+  decision_key: "tier",
+  kind: "volatility",
+  targets: [],
+  actions: ["set_tier", "skip"],
+  detail: { type_name: "Person", current_default: "slow", suggested_tier: "volatile", rationale: "r" },
+};
+
+async function decided(decision: Decision, action: Schemas["Action"]) {
+  const f = await opened([decision], decision.decision_key);
+  await f.model.choose({ choice: action, label: "", does: "" });
+  await f.model.confirm();
+  return f;
+}
+
+describe("undo", () => {
+  it("reopens a pair kept separate, asks the queue again and says so", async () => {
+    const { model, client } = await decided(PAIR, "keep_distinct");
+    await model.undo();
+    expect(client.previewReopen).toHaveBeenCalledWith({ member_ids: ["people/a", "people/b"] });
+    expect(client.applyReopen).toHaveBeenCalledWith({
+      version: { member_ids: ["people/a", "people/b"], content_digest: "r1" },
+    });
+    expect(client.refreshQueue).toHaveBeenCalledTimes(1);
+    expect(client.decisions).toHaveBeenCalledTimes(3);
+    expect(model.state.open?.step).toEqual({ name: "done", lines: ["Undone. We'll ask you about these again."], undo: null });
+  });
+
+  it("still reloads when the queue cannot be refreshed after a reopen", async () => {
+    const { model, client } = await decided(PAIR, "keep_distinct");
+    client.refreshQueue.mockRejectedValueOnce(apiError("workspace_busy", 503));
+    await model.undo();
+    expect(client.decisions).toHaveBeenCalledTimes(3);
+    expect(model.state.open?.problem).toBeNull();
+  });
+
+  it("removes exactly the connection the plan wrote", async () => {
+    const { model, client } = await decided(RELATION, "relate");
+    expect(model.state.open?.step).toMatchObject({
+      name: "done",
+      undo: { kind: "unrelate", source: "people/c", relationType: "part_of", target: "orgs/acme" },
+    });
+    await model.undo();
+    expect(client.previewUnrelate).toHaveBeenCalledWith({
+      source_id: "people/c",
+      relation_type: "part_of",
+      target_id: "orgs/acme",
+    });
+    expect(client.applyUnrelate).toHaveBeenCalledWith({
+      version: { source_id: "people/c", relation_type: "part_of", target_id: "orgs/acme", content_digest: "n1" },
+    });
+    expect(client.refreshQueue).not.toHaveBeenCalled();
+    expect(model.state.open?.step).toEqual({ name: "done", lines: ["Undone. That connection is removed."], undo: null });
+  });
+
+  it("restores the setting the plan replaced, removing it when there was none", async () => {
+    const { model, client } = await decided(TIER, "set_tier");
+    await model.undo();
+    expect(client.previewTierChange).toHaveBeenCalledWith({ type_name: "Person", tier: null });
+    expect(client.applyTierChange).toHaveBeenCalledWith({
+      version: { type_name: "Person", tier: null, content_digest: "t1" },
+    });
+    expect(model.state.open?.step).toEqual({ name: "done", lines: ["Undone. People are treated as before."], undo: null });
+  });
+
+  it("restores an earlier setting by name", async () => {
+    const f = await opened([TIER], "tier");
+    f.client.previewDecision.mockResolvedValueOnce({
+      decision_key: "tier",
+      action: "set_tier",
+      plan: { ...TIER_PLAN, configured_tier: "static" },
+      version: VERSION,
+    });
+    await f.model.choose({ choice: "set_tier", label: "", does: "" });
+    await f.model.confirm();
+    await f.model.undo();
+    expect(f.client.previewTierChange).toHaveBeenCalledWith({ type_name: "Person", tier: "static" });
+  });
+
+  it("offers no undo for a setting the app cannot name", async () => {
+    const f = await opened([TIER], "tier");
+    f.client.previewDecision.mockResolvedValueOnce({
+      decision_key: "tier",
+      action: "set_tier",
+      plan: { ...TIER_PLAN, configured_tier: "sometimes" },
+      version: VERSION,
+    });
+    await f.model.choose({ choice: "set_tier", label: "", does: "" });
+    await f.model.confirm();
+    expect(f.model.state.open?.step).toMatchObject({ name: "done", undo: null });
+  });
+
+  it("retries a busy undo, then applies once", async () => {
+    const { model, client } = await decided(PAIR, "keep_distinct");
+    client.applyReopen.mockRejectedValueOnce(apiError("workspace_busy", 503, 1));
+    await model.undo();
+    expect(client.applyReopen).toHaveBeenCalledTimes(2);
+    expect(client.previewReopen).toHaveBeenCalledTimes(1);
+    expect(model.state.open?.step).toMatchObject({ name: "done", undo: null });
+  });
+
+  it("words a refused undo and takes the Undo away", async () => {
+    const { model, client } = await decided(RELATION, "relate");
+    client.previewUnrelate.mockRejectedValueOnce(apiError("not_related"));
+    await model.undo();
+    expect(client.applyUnrelate).not.toHaveBeenCalled();
+    expect(model.state.open?.problem).toEqual({ message: "These pages aren't connected any more.", action: "ok" });
+    expect(model.state.open?.step).toMatchObject({ name: "done", undo: null });
+    await model.resolveProblem();
+    expect(model.state.open).toBeNull();
+  });
+
+  it("never applies a stale undo again blindly", async () => {
+    const { model, client } = await decided(PAIR, "keep_distinct");
+    client.applyReopen.mockRejectedValueOnce(apiError("stale"));
+    await model.undo();
+    expect(client.applyReopen).toHaveBeenCalledTimes(1);
+    expect(model.state.open?.problem?.action).toBe("reload");
+    await model.resolveProblem();
+    expect(client.applyReopen).toHaveBeenCalledTimes(1);
+    expect(model.state.open).toBeNull();
+  });
+
+  it("tries a failed undo again from its preview", async () => {
+    const { model, client } = await decided(PAIR, "keep_distinct");
+    client.previewReopen.mockRejectedValueOnce(new EngineUnreachable({ path: "/v1/reopen/preview" }));
+    await model.undo();
+    expect(model.state.open?.problem).toEqual({ message: "OpenKOS isn't responding. Nothing was changed.", action: "try_again" });
+    expect(model.state.open?.step).toMatchObject({ name: "done", undo: { kind: "reopen" } });
+    await model.resolveProblem();
+    expect(client.applyReopen).toHaveBeenCalledTimes(1);
+    expect(model.state.open?.step).toMatchObject({ name: "done", undo: null });
   });
 });
