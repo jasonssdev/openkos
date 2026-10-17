@@ -202,7 +202,7 @@ the ask raised, in which case the state is `failed` and there is no answer.
 retrievable; an older one is evicted and unknown. An ask has no stop. The
 registry is in memory: after a restart an ask id is unknown.
 
-#### Scenario: Start returns at once
+#### Scenario: An ask start returns at once
 
 - GIVEN a model call that blocks until the test releases it
 - WHEN an ask is started
@@ -214,7 +214,7 @@ registry is in memory: after a restart an ask id is unknown.
 - WHEN the job is polled until its state is not `running`
 - THEN the state is `finished` and the answer is present
 
-#### Scenario: A second start while active is refused
+#### Scenario: A second ask while one runs is refused
 
 - GIVEN an active ask
 - WHEN another is started

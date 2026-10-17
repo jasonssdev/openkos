@@ -5,17 +5,19 @@
 The one declared, versioned, in-process Python surface of OpenKOS (ADR-0039).
 `openkos.api` is a facade over the synchronous `application/` services; no
 `application/` module is public in place, and none moves. The v1 operation
-set is the review queue only: workspace status, the pending report, listing,
+set is the review queue, guided setup and asking: workspace status, the pending report, listing,
 previewing and applying open decisions, judging quote and run, the
 model-free queue refresh, reading the pages a decision shows, the merge
-history and its unmerge, the list of combined pages, and the undo of a
-keep-separate ruling, a typed relation or a type's tier, and guided setup's
-model-free readiness read and configured-model pull. Ingest, query and doctor
-are not part of v1.
+history and its unmerge, the list of combined pages, the undo of a
+keep-separate ruling, a typed relation or a type's tier, guided setup's
+model-free readiness read and configured-model pull, and asking a question.
+Ingest and doctor are not part of v1.
 
 The surface is owner-local, as the CLI is: its caller is the workspace owner.
-It applies no sensitivity disclosure gate; that gate stays the job of the
-local API (ADR-0058).
+It applies no sensitivity disclosure gate except to the answer `ask` returns,
+which follows the query disclosure rule of the MCP `query` tool and `query
+--json` (ADR-0068); any other disclosing adapter applies the local API's gate
+itself (ADR-0058).
 
 Compatibility is promised by `API_VERSION`, not by the package version, which
 is 0.x and promises nothing about this surface.
@@ -360,16 +362,18 @@ a `ValueError` for an unknown kind) MUST NOT be forced under the root.
 - WHEN the snapshot test runs
 - THEN it fails
 
-### Requirement: The Surface Is Owner-Local And Applies No Disclosure Gate
+### Requirement: The Surface Is Owner-Local And Gates Only An Answer
 
-The Python API MUST NOT apply the sensitivity disclosure gate to any result,
-and its documentation (the package docstring) MUST state that it is an
-owner-local, in-process surface whose caller is the owner, and that a
-disclosing adapter MUST apply the local API's gate itself (ADR-0058). Results
-MAY therefore carry stored content. The API MUST NOT send content to any model
-backend other than the configured one, and only through the judging run. The
-only other process it invokes is the local git auto-commit for a decision it
-applies, which never pushes. The docstring MUST also state that cancellation is
+The Python API MUST NOT apply the sensitivity disclosure gate to any result
+other than the `Answer` that `ask` returns, and its documentation (the package
+docstring) MUST state that it is an owner-local, in-process surface whose
+caller is the owner, that `ask` applies the query disclosure rule to its answer
+(ADR-0068), and that any other disclosing adapter MUST apply the local API's
+gate itself (ADR-0058). Results other than an answer MAY therefore carry stored
+content. The API MUST NOT send content to any model backend other than the
+configured one, and only through the judging run and `ask`. The only other
+process it invokes is the local git auto-commit for a decision it applies,
+which never pushes. The docstring MUST also state that cancellation is
 cooperative (a stop waits for the chunk in flight), that v1 apply does not
 reconcile merged bodies and does not refresh the derived stores, and that
 `API_VERSION`, not the package version, is the compatibility promise.
@@ -378,7 +382,8 @@ reconcile merged bodies and does not refresh the derived stores, and that
 
 - GIVEN `openkos.api` is imported
 - WHEN its `__doc__` is read
-- THEN it states that the surface is owner-local and applies no disclosure gate
+- THEN it states that the surface is owner-local and that only `ask` applies a
+  disclosure rule, to its answer
 
 #### Scenario: The facade does not depend on the gate
 
@@ -1254,3 +1259,118 @@ the change as additive.
 - GIVEN the surface on the base branch
 - WHEN the setup names are added
 - THEN the classifier reports an additive change and `API_VERSION` is still 1
+
+### Requirement: A Question Is Asked Under The Query Disclosure Rule
+
+`ask(workspace, question, *, limit=8, include_deprecated=False,
+include_confidential=False, progress=None)` MUST answer `question` through the
+query application service the CLI's `query` uses, with the chat and embedding
+clients built from the configuration read afresh by the API's own composition
+root, and the local exemption resolved by the shared resolver on the built chat
+client. It MUST write nothing, take no lock and create no derived store.
+
+It MUST return an `Answer` whose `outcome` is `answered`, `no_match` (every
+no-match cause except the sufficiency refusal), `no_answer_in_context` (the
+sufficiency refusal) or `withheld`, built by the same rule `query --json` and
+the MCP `query` tool apply, through `application.query_report`, with the
+disclosable set taken after the query ran:
+
+- Without `include_confidential`, no confidential concept is named, titled or
+  quoted anywhere in the `Answer`; it is counted in `withheld` only.
+- An answer whose prompt held a concept outside the disclosable set, or one of
+  whose citations was withheld, has `outcome` `withheld` and `answer` `None`.
+- `answer` is the text only when `outcome` is `answered`.
+
+Without `include_confidential`, a confidential concept MUST reach the chat
+model only when the shared resolver grants the local exemption (a verifiably
+local host and the workspace's exemption on). With it, confidential concepts
+enter retrieval and MAY be named, each citation marking `confidential`.
+`include_deprecated` includes deprecated and superseded concepts as on the CLI.
+
+`limit` below 1, or a `bool`, MUST raise `ValueError` before any client is
+built. An unreadable or invalid configuration MUST raise `WorkspaceUnreadable`.
+The neutral backend errors (`BackendUnavailable`, `BackendModelNotFound`,
+`BackendEmbeddingDimensionMismatch`, `BackendGenerationCapped`, `BackendError`)
+MUST propagate unchanged. `progress`, when given, MUST be called with an
+`AskProgress(phase, completed, total)` for each answer phase in order.
+
+The `Answer` MUST also report the no-match cause, the documents the context
+budget left out (`omitted`, filtered like citations), the attribution status,
+whether the sufficiency check ran and whether it could not run, whether the
+lexical or dense retriever was unavailable, and the stale derived stores the
+query reads.
+
+#### Scenario: A grounded answer cites its concepts
+
+- GIVEN a workspace whose index matches a public concept and a model that
+  answers citing it
+- WHEN `ask` is called
+- THEN `outcome` is `answered`, `answer` is the text and the citation names the
+  concept, and the workspace bytes are unchanged
+
+#### Scenario: A remote model never receives a confidential concept without consent
+
+- GIVEN a confidential and a public concept matching the question and a chat
+  backend that is not local
+- WHEN `ask` is called without `include_confidential`
+- THEN the confidential body is absent from every prompt sent and the
+  confidential concept is counted in `withheld`, never named
+
+#### Scenario: A local model's answer over a confidential concept is withheld
+
+- GIVEN the same concepts and a local chat backend with the exemption on
+- WHEN `ask` is called without `include_confidential`
+- THEN the confidential body reaches the prompt, `outcome` is `withheld`,
+  `answer` is `None`, and no field names the confidential concept
+
+#### Scenario: Consent names a confidential citation
+
+- GIVEN the same concepts
+- WHEN `ask` is called with `include_confidential=True`
+- THEN the answer is returned and the confidential concept's citation has
+  `confidential` true
+
+#### Scenario: An empty question is a no-match, not an error
+
+- GIVEN any workspace
+- WHEN `ask` is called with a blank question
+- THEN `outcome` is `no_match` with cause `empty_query` and no model is called
+
+#### Scenario: A sufficiency refusal is its own outcome
+
+- GIVEN the sufficiency check is on and the model replies that the context
+  does not answer
+- WHEN `ask` is called
+- THEN `outcome` is `no_answer_in_context` and `answer` is `None`
+
+#### Scenario: An invalid limit is refused before any client
+
+- GIVEN a factory that fails the test when a client is built
+- WHEN `ask` is called with `limit=0`
+- THEN `ValueError` is raised
+
+#### Scenario: An unreachable backend is the neutral error
+
+- GIVEN a chat backend that cannot be reached
+- WHEN `ask` is called
+- THEN `BackendUnavailable` is raised
+
+#### Scenario: Progress reports the phases in order
+
+- GIVEN the sufficiency check is on
+- WHEN `ask` is called with a progress callback
+- THEN it hears `retrieving`, `assembling`, `checking` and `synthesizing` with
+  a total of 4
+
+### Requirement: Ask Extends v1 Additively
+
+`ask`, `Answer`, `AnswerCitation`, `OmittedConcept`, `AskProgress` and
+`BackendEmbeddingDimensionMismatch` MUST be exported, and the committed surface
+snapshot MUST be regenerated so the classifier reports only additive changes;
+`API_VERSION` MUST stay 1.
+
+#### Scenario: The snapshot change is additive
+
+- GIVEN the snapshot from `main` before this change
+- WHEN the classifier compares it with the live surface
+- THEN every change it prints is additive and `API_VERSION` is 1
