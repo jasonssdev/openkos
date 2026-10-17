@@ -321,6 +321,28 @@ def _unchanged_since_pinned(
     )
 
 
+def ensure_queue(
+    layout: config.WorkspaceLayout, *, commit_section: CommitSection
+) -> None:
+    """Create the queue when it is absent. Only a caller holding a decision that
+    must commit against a row (`curate`'s group walk) asks for one: every other
+    producer keeps the absent-queue contract of `_enqueue_missing`. Never raises
+    for a store problem; the caller then finds no row and keeps its manual route."""
+    if queue_present(layout):
+        return
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+    except sqlite3.Error, OSError:
+        return
+    try:
+        with commit_section():
+            pq.ensure_schema(conn)
+    except sqlite3.Error, OSError, lock.WorkspaceBusyError:
+        return
+    finally:
+        conn.close()
+
+
 def _enqueue_missing(
     layout: config.WorkspaceLayout,
     proposals: Sequence[pq.Proposal],

@@ -1716,6 +1716,23 @@ def _interrupted_line(exc: MergeGroupInterrupted) -> str:
     )
 
 
+def _needs_group_walk(
+    layout: config.WorkspaceLayout, result: AdjudicatedCandidate
+) -> bool:
+    """Whether the Identity walk will ask the group decision for this verdict:
+    a judged-SAME group of more than two members, or a cross-type pair."""
+    members = result.candidate.member_ids
+    if result.verdict is not Verdict.SAME:
+        return False
+    if len(members) > 2:
+        return True
+    return (
+        len(members) == 2
+        and application_lifecycle.cross_type_concern(layout.bundle_dir, tuple(members))
+        is not None
+    )
+
+
 def _walk_identity_group(
     ctx: CurateContext, group: CandidateGroup, *, fallback: Callable[[], None]
 ) -> tuple[Literal["applied", "skipped"], str | None]:
@@ -1989,6 +2006,12 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         if served_by_key
         else batch.results
     )
+    # #1489: a group the walk will ask about commits against its queue row, so
+    # such a group creates the queue a producer pass has not. Nothing else does.
+    if any(_needs_group_walk(layout, result) for result in results):
+        curate_queue.ensure_queue(
+            layout, commit_section=cli_main._commit_section_for(ctx.root)
+        )
     # Every candidate group this run offers that holds no open row becomes one,
     # with its verdict: the human's decision below resolves it.
     curate_queue.enqueue_identity(
