@@ -13,5 +13,5 @@ Tracking issue: #1438. One PR (`Closes #1438`), forecast about 600 authored line
 - [x] 2. GREEN: the walk step in `cli/curate.py`; the two old tests that pinned the
   skip lines rewritten to the new behavior.
 - [x] 3. `docs/cli.md` Identity paragraph, CHANGELOG.
-- [ ] 4. Gates and mutation checks.
-- [ ] 5. Archive: merge the deltas, move the folder, write `archive-report.md`.
+- [x] 4. Gates and mutation checks.
+- [x] 5. Archive: merge the deltas, move the folder, write `archive-report.md`.
