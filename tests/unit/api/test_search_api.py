@@ -221,6 +221,15 @@ def test_a_remote_rebuild_that_withheld_only_confidential_pages_is_not_behind(
 
     # Back on this machine under a new model: the withheld page is embedded.
     local = install(monkeypatch, Embedder())
+    path = root / "openkos.yaml"
+    path.write_text(
+        "".join(
+            line
+            for line in path.read_text(encoding="utf-8").splitlines(keepends=True)
+            if not line.startswith("base_url:")
+        ),
+        encoding="utf-8",
+    )
     _set(root, backend="ollama", embedding_model="local-embedder")
     local_outcome = _rebuild(root)
     assert isinstance(local_outcome, api.RebuildOutcome), local_outcome

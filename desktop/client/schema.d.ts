@@ -2247,8 +2247,9 @@ export interface components {
          *     could not embed (a later rebuild tries them again); `withheld`:
          *     confidential pages not sent to an AI model that is not on this machine.
          *     `complete` is true exactly when nothing was skipped, failed or withheld;
-         *     otherwise the stored vectors keep their old model's tag, so
-         *     `search_index` still reports `model_changed` after a model change.
+         *     otherwise the stored vectors keep their old model's tag. After a model
+         *     change `search_index` still reports `model_changed` unless `withheld` was
+         *     the only thing left, which a rebuild could not send anyway.
          */
         RebuildOutcome: {
             /** Complete */
