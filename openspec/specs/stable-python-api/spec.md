@@ -1793,7 +1793,9 @@ last rebuild with that AI model embedded every page it may send and withheld
 only confidential pages from an AI model that is not on this machine: a
 rebuild could send nothing more, so search is not reported as behind; the
 withheld pages are found only by their words until an AI model on this machine
-rebuilds search),
+rebuilds search; and also when a switch of the AI model for search was left
+unfinished, so the vector store mixes the vectors of two models, under every AI
+model for search but the one that mixed it),
 `stale_indexes` (the derived indexes whose contents predate the pages, as
 `status` names them), `needs_rebuild` (true exactly when either holds) and
 `sends_to` (the redacted host of the embedding endpoint when it is not on this
@@ -1813,6 +1815,14 @@ store or write. An unreadable `openkos.yaml` MUST raise `WorkspaceUnreadable`.
 - WHEN that rebuild finishes with `withheld` of 1 and `search_index` is called
 - THEN `model_changed` and `needs_rebuild` are false, and a later change of the
   AI model for search makes `model_changed` true again
+
+#### Scenario: Switching back after an unfinished switch reads as behind
+
+- GIVEN vectors stored under model A, then a rebuild against model B that
+  withheld a confidential page, then `embedding_model` set back to A
+- WHEN `search_index` is called
+- THEN `model_changed` and `needs_rebuild` are true, and a rebuild under A
+  re-embeds every page and leaves both false
 
 #### Scenario: A library with nothing embedded is not changed
 

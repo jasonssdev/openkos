@@ -120,6 +120,13 @@ was allowed to send to a remote embedder and withheld only confidential ones
 withheld page keeps its old vector -- so this is how a reader tells "a rebuild
 can do more" from "only withheld pages remain". It never gates a re-embed."""
 
+MIXED_KEY = "embedding_model_mixed"
+"""The `meta.key` recording the tag of a model that embedded some pages in a run
+that did NOT re-tag the store (#1548): the stored `embedding_model` tag stays
+the previous model's, yet part of the store now holds the other model's
+vectors. Present means the store mixes two models whenever it is read under any
+tag but this one. A complete re-tagging run clears it."""
+
 # Confirmed against the real sqlite-vec 0.1.9 extension by the spike tests in
 # `tests/unit/state/test_vectorstore.py` (Phase 1): DELETE-by-`concept_id`
 # (a metadata column, not the vec0 `embedding` column) works directly, no
@@ -309,6 +316,21 @@ class VectorStore(Protocol):
         """Record `tag` as remote-complete, WITHOUT committing."""
         ...  # pragma: no cover -- Protocol stub body, never executed
 
+    def read_mixed_tag(self) -> str | None:
+        """The tag of a model whose vectors sit beside the stored tag's (#1548),
+        or `None` when the store holds one model's vectors only."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def write_mixed_tag(self, tag: str) -> None:
+        """Record `tag` as the other model in a mixed store, WITHOUT
+        committing."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def clear_switch_markers(self) -> None:
+        """Drop the remote-complete and mixed records, WITHOUT committing --
+        the store is again one model's vectors under its tag (#1548)."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
     def close(self) -> None:
         """Release the underlying resource."""
         ...  # pragma: no cover -- Protocol stub body, never executed
@@ -438,22 +460,34 @@ def vector_store_is_empty(path: Path) -> bool:
     return bool(row is None or row[0] == 0)
 
 
-def read_stored_remote_complete_tag(path: Path) -> str | None:
-    """The remote-complete tag of the vector store at `path` (#1529), read the
-    way `read_stored_model_tag` reads: read-only, never creating the store;
-    `None` when absent, empty, unset or unreadable."""
+def _read_stored_meta(path: Path, key: str) -> str | None:
+    """One `meta` value of the vector store at `path`, read over a plain
+    read-only connection that never creates the store; `None` when the store is
+    absent, empty, the key unset or the store unreadable."""
     if vector_store_is_empty(path):
         return None
     conn: sqlite3.Connection | None = None
     try:
         conn = open_read_only(path)
-        row = conn.execute(_SELECT_META_SQL, (REMOTE_COMPLETE_KEY,)).fetchone()
+        row = conn.execute(_SELECT_META_SQL, (key,)).fetchone()
     except sqlite3.Error:
         return None
     finally:
         if conn is not None:
             conn.close()
     return None if row is None else str(row[0])
+
+
+def read_stored_remote_complete_tag(path: Path) -> str | None:
+    """The remote-complete tag of the vector store at `path` (#1529), read the
+    way `read_stored_model_tag` reads: read-only, never creating the store."""
+    return _read_stored_meta(path, REMOTE_COMPLETE_KEY)
+
+
+def read_stored_mixed_tag(path: Path) -> str | None:
+    """The mixed-store tag of the vector store at `path` (#1548), read the same
+    way: read-only, never creating the store."""
+    return _read_stored_meta(path, MIXED_KEY)
 
 
 def read_stored_model_tag(path: Path) -> str | None:
@@ -837,6 +871,21 @@ class VectorStoreDB:
     def write_remote_complete_tag(self, tag: str) -> None:
         """Upsert the remote-complete tag. Does NOT commit."""
         self._conn.execute(_UPSERT_META_SQL, (REMOTE_COMPLETE_KEY, tag))
+
+    def read_mixed_tag(self) -> str | None:
+        """The mixed-store tag from the generic `meta` table, or `None`."""
+        row = self._conn.execute(_SELECT_META_SQL, (MIXED_KEY,)).fetchone()
+        return None if row is None else str(row[0])
+
+    def write_mixed_tag(self, tag: str) -> None:
+        """Upsert the mixed-store tag. Does NOT commit."""
+        self._conn.execute(_UPSERT_META_SQL, (MIXED_KEY, tag))
+
+    def clear_switch_markers(self) -> None:
+        """Delete the remote-complete and mixed rows. Does NOT commit."""
+        self._conn.execute(
+            "DELETE FROM meta WHERE key IN (?, ?)", (REMOTE_COMPLETE_KEY, MIXED_KEY)
+        )
 
     def close(self) -> None:
         """Close the underlying connection.

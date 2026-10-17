@@ -325,7 +325,9 @@ def read_decision_vectors(
         return _ABSENT_COVERAGE
 
     try:
-        if store.read_model_tag() != reindex.embedding_tag(embedding_model, backend):
+        wanted = reindex.embedding_tag(embedding_model, backend)
+        mixed = store.read_mixed_tag()
+        if store.read_model_tag() != wanted or (mixed is not None and mixed != wanted):
             return _MODEL_MISMATCH_COVERAGE
         stored = store.document_vectors(decision_ids)
     finally:
