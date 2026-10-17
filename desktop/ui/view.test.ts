@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { ApiError, EngineUnreachable, ProtocolError, type Schemas } from "../client/index.ts";
-import { describeEngine, statusFacts, statusFailure } from "./view.ts";
+import {
+  describeEngine,
+  engineBadge,
+  navEntries,
+  openDecisions,
+  reviewCount,
+  statusFacts,
+  statusFailure,
+  workspaceSummary,
+} from "./view.ts";
 
 const TOKEN = "f".repeat(64);
 
@@ -81,5 +90,77 @@ describe("statusFailure", () => {
 
   it("shows nothing of an error it does not know", () => {
     expect(statusFailure(new Error(`token ${TOKEN}`))).toBe("The workspace status could not be read.");
+  });
+});
+
+const STATUS = {
+  root: "/Users/me/knowledge",
+  sources: 4,
+  concepts: 21,
+  open_decisions_by_kind: { identity: 2, relation_type: 3 },
+} as unknown as Schemas["WorkspaceStatus"];
+
+describe("engineBadge", () => {
+  it.each([
+    [{ state: "starting", attempt: 1 }, ["info", "Engine starting"]],
+    [{ state: "ready", attempt: 1, base_url: "http://127.0.0.1:1/v1", token: TOKEN, pid: 3 }, ["success", "Engine running"]],
+    [{ state: "restarting", attempt: 1, delay_ms: 500, reason: "exited", detail: "boom" }, ["warning", "Engine restarting"]],
+    [{ state: "failed", reason: "r", detail: "trace" }, ["error", "Engine not running"]],
+    [{ state: "stopped" }, ["error", "Engine stopped"]],
+  ] as const)("gives %o a tone and a word", (state, expected) => {
+    expect(engineBadge(state)).toEqual(expected);
+  });
+
+  it("words a state it does not know, or none at all, as unknown", () => {
+    expect(engineBadge({ state: "rebooting" } as never)).toEqual(["neutral", "Engine state unknown"]);
+    expect(engineBadge(null)).toEqual(["error", "Engine state unknown"]);
+  });
+});
+
+describe("navEntries", () => {
+  it("offers Ask as coming soon, To review with its count, then Status", () => {
+    expect(navEntries(3)).toEqual([
+      { id: "ask", label: "Ask", disabled: true, hint: "Coming soon" },
+      { id: "review", label: "To review", count: 3 },
+      { id: "status", label: "Status" },
+    ]);
+  });
+
+  it("shows no count when none is known", () => {
+    expect(navEntries(undefined)[1]).toEqual({ id: "review", label: "To review" });
+  });
+});
+
+describe("openDecisions", () => {
+  it("sums the open decisions of every kind", () => {
+    expect(openDecisions(STATUS)).toBe(5);
+  });
+});
+
+describe("reviewCount", () => {
+  it("counts what To review lists once its list is read", () => {
+    expect(reviewCount({ loaded: true, decisions: [{}, {}] }, 5)).toBe(2);
+  });
+
+  it("falls back to what the status counted before the list is read", () => {
+    expect(reviewCount({ loaded: false, decisions: [] }, 5)).toBe(5);
+    expect(reviewCount(null, 5)).toBe(5);
+  });
+
+  it("is unknown when nothing has been read", () => {
+    expect(reviewCount(null, undefined)).toBeUndefined();
+  });
+});
+
+describe("workspaceSummary", () => {
+  it("shows the counts and keeps the folder for the details", () => {
+    expect(workspaceSummary(STATUS)).toEqual({
+      shown: [
+        ["Decisions waiting for you", "5"],
+        ["Concepts", "21"],
+        ["Sources", "4"],
+      ],
+      more: [["Folder", "/Users/me/knowledge", "code"]],
+    });
   });
 });
