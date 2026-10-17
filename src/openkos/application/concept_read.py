@@ -14,9 +14,10 @@ may disclose.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from typing import Final, Literal, cast
 
 from openkos import config, lifecycle, read_outcome
 from openkos.application import lifecycle as application_lifecycle
@@ -247,3 +248,43 @@ def read_source_file(
         file_name=resource.rsplit("/", 1)[-1],
         added_at=added_at if isinstance(added_at, str) else None,
     )
+
+
+EXCERPT_LIMIT: Final = 280
+"""The longest plain excerpt, in characters, before the closing ellipsis."""
+
+_LINK: Final = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_CITATION: Final = re.compile(r"\s*\[\d+\]")
+_HEADING_MARK: Final = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+_EMPHASIS: Final = re.compile(r"[*`]|(?<!\w)_|_(?!\w)")
+
+
+def plain_excerpt(body: str, title: str) -> str:
+    """The opening of `body` as plain text for a reader who sees no markdown:
+    a leading level-one heading equal to `title` is dropped, a link keeps its
+    label, citation markers, emphasis and heading marks go, whitespace
+    collapses, and text over `EXCERPT_LIMIT` characters is cut at the last
+    word boundary and ends in `…`."""
+    text = body.lstrip()
+    first, _, rest = text.partition("\n")
+    if first.startswith("# ") and " ".join(first[2:].split()) == title:
+        text = rest
+    text = _LINK.sub(r"\1", text)
+    text = _CITATION.sub("", text)
+    text = _HEADING_MARK.sub("", text)
+    text = _EMPHASIS.sub("", text)
+    text = " ".join(text.split())
+    if len(text) <= EXCERPT_LIMIT:
+        return text
+    cut = text[:EXCERPT_LIMIT]
+    if text[EXCERPT_LIMIT] != " " and " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip() + "…"
+
+
+def sensitivity_level(raw: object) -> Literal["public", "private", "confidential"]:
+    """A raw frontmatter `sensitivity` as one of the three levels, ranked
+    fail-closed by the engine's own rule: missing or blank is `private`,
+    anything unrecognised is `confidential`."""
+    level = okf.combine_sensitivity(raw, "public")
+    return cast(Literal["public", "private", "confidential"], level)

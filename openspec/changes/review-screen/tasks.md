@@ -54,7 +54,11 @@ Delivery strategy: stacked-to-main.
   and no write. RED: `test_read_page.py` failed to collect (`cannot import
   name 'Page' from 'openkos.api'`). The Source file is read by
   `application.concept_read.read_source_file`; an unquoted `generated.at`
-  (parsed as a datetime) is returned as ISO text.
+  (parsed as a datetime) is returned as ISO text. The first CI run failed six
+  inventory tests the targeted run had not covered: the API facade may import
+  only `application` (the excerpt and the sensitivity rank moved to
+  `application.concept_read`), the excerpt's link regex joined the link
+  recognizer inventory's exemptions, and the route joined both route tables.
 - [x] S2.2 Surface snapshot regenerated; the classifier reports every
   difference additive (P2).
 - [x] S2.3 `GET /v1/pages?concept_id=` with 404 `not_found` for `None` and 422
