@@ -24,7 +24,7 @@
 | Domain | Action | Details |
 |--------|--------|---------|
 | curate-command | Updated | 1 MODIFIED requirement replaced in place (Identity Stage Reuses Merge Cores; its scenario "N>2 group prints pairwise commands, never auto-merges" is replaced by "A group of three is walked, never auto-merged"). 1 ADDED requirement appended (Identity Walks A Group Through The Group Decision, 8 scenarios). 30 requirements now. |
-| curate-decisions | Updated | 1 MODIFIED requirement replaced in place (Behavior Of The Command Is Unchanged). 22 requirements now. |
+| curate-decisions | Updated | 1 MODIFIED requirement replaced in place (Behavior Of The Command Is Unchanged). 23 requirements now, after rebasing onto a main that added one. |
 
 ### Heading Name-Match
 
