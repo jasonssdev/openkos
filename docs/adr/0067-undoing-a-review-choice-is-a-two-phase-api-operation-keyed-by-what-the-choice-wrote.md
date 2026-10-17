@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0067: Undoing a review choice is a two-phase API operation keyed by what the choice wrote"
 description: openkos.api undoes keep separate, a connection and a how-quickly setting with a preview and an apply per kind, keyed by the member set, the edge or the type rather than a decision key; each apply re-plans under one lock against a version digest, resolves no queue row, and a tier undo restores the configured entry, removing it when there was none.
-status: Proposed
+status: Accepted
 date: 2026-10-16
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0067: Undoing a review choice is a two-phase API operation keyed by what the choice wrote
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-16
 
 ## Context

@@ -88,7 +88,8 @@ deprecated-status export is withdrawn (`withdraws_deprecation`) and an
 bytes, and the target page's bytes when the export is withdrawn.
 It MUST return `NotUndoable("not_related")` when the source holds no such
 relation, either page no longer exists, an id is not a valid Concept ID, the two
-ids are the same page, or the type is not a relation type. It MUST NOT take the
+ids are the same page, or the type is blank (it is read as `unrelate`
+reads it, surrounding spaces stripped). It MUST NOT take the
 lock, build a client or write.
 
 The apply MUST take the lock once as `apply_reopen` does, re-plan, return
