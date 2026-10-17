@@ -325,6 +325,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/unrelate/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unrelate Apply */
+        post: operations["unrelate_apply_v1_unrelate_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/unrelate/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unrelate Preview */
+        post: operations["unrelate_preview_v1_unrelate_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1294,6 +1328,94 @@ export interface components {
             restored_ids: string[];
             /** Survivor Id */
             survivor_id: string;
+        };
+        /**
+         * UnrelateApplyRequest
+         * @description The version the unrelate preview issued (echoed unchanged) and how long
+         *     to wait for the workspace lock; a client can shorten the wait only.
+         */
+        UnrelateApplyRequest: {
+            version: components["schemas"]["UnrelateVersion"];
+            /**
+             * Wait Seconds
+             * @default 5
+             */
+            wait_seconds?: number;
+        };
+        /**
+         * UnrelatePreview
+         * @description Removing the `relation_type` relation from `source_id` to `target_id`.
+         *     `withdraws_deprecation`: the target stops being marked superseded, because
+         *     nothing else supersedes it.
+         */
+        UnrelatePreview: {
+            /** Relation Type */
+            relation_type: string;
+            /** Source Id */
+            source_id: string;
+            /** Target Id */
+            target_id: string;
+            version: components["schemas"]["UnrelateVersion"];
+            /** Withdraws Deprecation */
+            withdraws_deprecation: boolean;
+        };
+        /**
+         * UnrelatePreviewRequest
+         * @description The typed relation to remove: the source page, the type and the target.
+         */
+        UnrelatePreviewRequest: {
+            /** Relation Type */
+            relation_type: string;
+            /** Source Id */
+            source_id: string;
+            /** Target Id */
+            target_id: string;
+        };
+        /**
+         * UnrelateResponse
+         * @description What was removed, and the warnings the apply raised along the way.
+         */
+        UnrelateResponse: {
+            unrelated: components["schemas"]["Unrelated"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * UnrelateVersion
+         * @description The version a stateless caller removes a relation against: echo it
+         *     unchanged. `content_digest` covers the edge and the pages the removal
+         *     rewrites.
+         */
+        UnrelateVersion: {
+            /** Content Digest */
+            content_digest: string;
+            /** Relation Type */
+            relation_type: string;
+            /** Source Id */
+            source_id: string;
+            /** Target Id */
+            target_id: string;
+        };
+        /**
+         * Unrelated
+         * @description The relation was removed. `commit_sha` is `None` when its commit could
+         *     not be made (the write itself landed); `committed_confidential` is true when
+         *     the commit holds a concept explicitly marked confidential.
+         */
+        Unrelated: {
+            /** Commit Sha */
+            commit_sha: string | null;
+            /**
+             * Committed Confidential
+             * @default false
+             */
+            committed_confidential?: boolean;
+            /** Relation Type */
+            relation_type: string;
+            /** Source Id */
+            source_id: string;
+            /** Target Id */
+            target_id: string;
         };
         /**
          * WithheldAction
@@ -2678,6 +2800,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnmergePreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    unrelate_apply_v1_unrelate_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnrelateApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnrelateResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    /** @description Seconds to wait before retrying a busy workspace. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    unrelate_preview_v1_unrelate_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnrelatePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnrelatePreview"];
                 };
             };
             /** @description Unauthorized */

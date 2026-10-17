@@ -69,7 +69,13 @@ class WriteFailed(Refused):
     def __init__(
         self,
         operation: Literal[
-            "merge", "relate", "set_tier", "merge_group", "unmerge", "reopen"
+            "merge",
+            "relate",
+            "set_tier",
+            "merge_group",
+            "unmerge",
+            "reopen",
+            "unrelate",
         ],
         subjects: tuple[str, ...],
         error: str,

@@ -85,7 +85,7 @@ wait_seconds=0.0, on_warning=None)`. The preview MUST plan the removal of the
 does, and return an `UnrelatePreview` carrying the edge, whether the target's
 deprecated-status export is withdrawn (`withdraws_deprecation`) and an
 `UnrelateVersion`, whose `content_digest` covers the edge, the source page's
-bytes, the target page's bytes when the export is withdrawn, and whether it is.
+bytes, and the target page's bytes when the export is withdrawn.
 It MUST return `NotUndoable("not_related")` when the source holds no such
 relation, either page no longer exists, an id is not a valid Concept ID, the two
 ids are the same page, or the type is not a relation type. It MUST NOT take the

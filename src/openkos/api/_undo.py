@@ -141,3 +141,115 @@ def apply_reopen(
     if isinstance(result, undo_service.UndoStale):
         return UndoStale()
     return Reopened(member_ids=result.member_ids, commit_sha=result.commit_sha)
+
+
+# -- a connection ------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class UnrelateVersion:
+    """The version a stateless caller removes a relation against: echo it
+    unchanged. `content_digest` covers the edge and the pages the removal
+    rewrites."""
+
+    source_id: str
+    relation_type: str
+    target_id: str
+    content_digest: str
+
+
+@dataclass(frozen=True)
+class UnrelatePreview:
+    """Removing the `relation_type` relation from `source_id` to `target_id`.
+    `withdraws_deprecation`: the target stops being marked superseded, because
+    nothing else supersedes it."""
+
+    source_id: str
+    relation_type: str
+    target_id: str
+    withdraws_deprecation: bool
+    version: UnrelateVersion
+
+
+@dataclass(frozen=True)
+class Unrelated:
+    """The relation was removed. `commit_sha` is `None` when its commit could
+    not be made (the write itself landed); `committed_confidential` is true when
+    the commit holds a concept explicitly marked confidential."""
+
+    source_id: str
+    relation_type: str
+    target_id: str
+    commit_sha: str | None
+    committed_confidential: bool = False
+
+
+def preview_unrelate(
+    workspace: Workspace, source_id: str, relation_type: str, target_id: str
+) -> UnrelatePreview | NotUndoable:
+    """What removing one typed relation would do, exactly as `openkos unrelate`
+    plans it, with the version to apply it against. A relation that is not
+    there, a page that no longer exists, an invalid id or a blank type is the
+    returned `NotUndoable("not_related")`. Writes nothing, takes no lock,
+    builds no client."""
+    plan = undo_service.preview_unrelate(
+        workspace.root, source_id, relation_type, target_id
+    )
+    if isinstance(plan, undo_service.UndoRefusal):
+        return _refusal(plan)
+    return UnrelatePreview(
+        source_id=plan.source_id,
+        relation_type=plan.relation_type,
+        target_id=plan.target_id,
+        withdraws_deprecation=plan.withdraws_deprecation,
+        version=UnrelateVersion(
+            source_id=plan.source_id,
+            relation_type=plan.relation_type,
+            target_id=plan.target_id,
+            content_digest=plan.content_digest,
+        ),
+    )
+
+
+def apply_unrelate(
+    workspace: Workspace,
+    version: UnrelateVersion,
+    *,
+    wait_seconds: float = 0.0,
+    on_warning: Callable[[str], None] | None = None,
+) -> Unrelated | NotUndoable | UndoStale:
+    """Remove the relation `version` was previewed for.
+
+    The lock is taken once, as `apply_reopen` takes it, and held while the plan
+    is made again and written. A changed page or version is the returned
+    `UndoStale`, a relation no longer there the returned `NotUndoable`; neither
+    writes anything. The source page, the target's withdrawal when planned and
+    a `log.md` line are written and committed on their own; a commit that cannot
+    be made is reported once through `on_warning`."""
+    wait = _wiring.validated_wait(wait_seconds)
+    notes = _wiring.CommitNotes()
+    result = undo_service.apply_unrelate(
+        workspace.root,
+        version.source_id,
+        version.relation_type,
+        version.target_id,
+        version.content_digest,
+        ports=_wiring.decision_ports(
+            workspace,
+            wait_seconds=wait,
+            on_warning=on_warning,
+            notes=notes,
+            what="the undo",
+        ),
+    )
+    if isinstance(result, undo_service.UndoRefusal):
+        return _refusal(result)
+    if isinstance(result, undo_service.UndoStale):
+        return UndoStale()
+    return Unrelated(
+        source_id=result.source_id,
+        relation_type=result.relation_type,
+        target_id=result.target_id,
+        commit_sha=result.commit_sha,
+        committed_confidential=notes.confidential,
+    )
