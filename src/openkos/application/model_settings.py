@@ -169,19 +169,29 @@ _FIELDS: Final[tuple[SettingField, ...]] = (
 )
 
 
+def remote_host(
+    cfg: config.Config,
+    purpose: Literal["chat", "embed"],
+    environ: Mapping[str, str] = os.environ,
+) -> str | None:
+    """The redacted display host of `cfg`'s `purpose` endpoint, resolved as the
+    client resolves it, when it is not on this machine; `None` when it is."""
+    endpoint = backends.resolve_endpoint(cfg, purpose=purpose, environ=environ)
+    url = (
+        environ.get("OLLAMA_HOST") if endpoint.source == "OLLAMA_HOST" else endpoint.url
+    )
+    locality = classify_backend_host(url)
+    return None if locality.is_local else locality.display_host
+
+
 def _settings(cfg: config.Config, environ: Mapping[str, str]) -> ModelSettings:
     """`cfg`'s model setup, each endpoint resolved as the clients resolve it."""
     remote: list[str] = []
-    for purpose in ("chat", "embed"):
-        endpoint = backends.resolve_endpoint(cfg, purpose=purpose, environ=environ)
-        url = (
-            environ.get("OLLAMA_HOST")
-            if endpoint.source == "OLLAMA_HOST"
-            else endpoint.url
-        )
-        locality = classify_backend_host(url)
-        if not locality.is_local and locality.display_host not in remote:
-            remote.append(locality.display_host)
+    purposes: tuple[Literal["chat", "embed"], ...] = ("chat", "embed")
+    for purpose in purposes:
+        host = remote_host(cfg, purpose, environ)
+        if host is not None and host not in remote:
+            remote.append(host)
     backend: ModelBackend = (
         "openai-compatible"
         if cfg.backend == backends.BACKEND_OPENAI_COMPATIBLE

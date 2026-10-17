@@ -2216,6 +2216,112 @@
       "kind": "dataclass",
       "members": {}
     },
+    "RebuildObserver": {
+      "bases": [
+        "Protocol"
+      ],
+      "kind": "protocol",
+      "members": {
+        "progress": {
+          "kind": "method",
+          "parameters": [
+            {
+              "annotation": "RebuildProgress",
+              "default": null,
+              "kind": "POSITIONAL_OR_KEYWORD",
+              "name": "event"
+            }
+          ],
+          "returns": "None"
+        }
+      }
+    },
+    "RebuildOutcome": {
+      "fields": [
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "embedded"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "unchanged"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "removed"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "skipped"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "failed"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "withheld"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "complete"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "RebuildPhase": {
+      "kind": "alias",
+      "value": "Literal['embedding', 'finishing']"
+    },
+    "RebuildProgress": {
+      "fields": [
+        {
+          "annotation": "Literal['embedding', 'finishing']",
+          "default": false,
+          "name": "phase"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "done"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "total"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "RebuildRefused": {
+      "fields": [
+        {
+          "annotation": "Literal['remote_not_allowed']",
+          "default": false,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "RebuildStopped": {
+      "fields": [],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "ReconcilePlan": {
       "fields": [
         {
@@ -2506,6 +2612,41 @@
       ],
       "frozen": true,
       "kind": "dataclass",
+      "members": {}
+    },
+    "SearchIndex": {
+      "fields": [
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "model_changed"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "stale_indexes"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "needs_rebuild"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "sends_to"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "SearchUnavailable": {
+      "bases": [
+        "OpenKosError"
+      ],
+      "fields": {},
+      "kind": "exception",
       "members": {}
     },
     "SensitivityChanged": {
@@ -4006,6 +4147,42 @@
       ],
       "returns": "Page | None"
     },
+    "rebuild_search": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "kind": "KEYWORD_ONLY",
+          "name": "allow_remote"
+        },
+        {
+          "annotation": "StopToken | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "stop"
+        },
+        {
+          "annotation": "RebuildObserver | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "observer"
+        },
+        {
+          "annotation": "float",
+          "default": "30.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        }
+      ],
+      "returns": "RebuildOutcome | RebuildRefused | RebuildStopped"
+    },
     "refresh_decision_queue": {
       "kind": "function",
       "parameters": [
@@ -4107,6 +4284,18 @@
         }
       ],
       "returns": "JudgingOutcome | QuoteStale | RunRefused"
+    },
+    "search_index": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "SearchIndex"
     },
     "setup_readiness": {
       "kind": "function",

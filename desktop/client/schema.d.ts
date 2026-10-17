@@ -444,6 +444,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Index */
+        get: operations["search_index_v1_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/search/rebuilds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Rebuild */
+        post: operations["start_rebuild_v1_search_rebuilds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/search/rebuilds/{rebuild_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Rebuild Status */
+        get: operations["rebuild_status_v1_search_rebuilds__rebuild_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/search/rebuilds/{rebuild_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop Rebuild */
+        post: operations["stop_rebuild_v1_search_rebuilds__rebuild_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/settings/model": {
         parameters: {
             query?: never;
@@ -1965,6 +2033,69 @@ export interface components {
             title: string;
         };
         /**
+         * RebuildOutcome
+         * @description A finished rebuild. `embedded`: pages sent and stored; `unchanged`:
+         *     pages already current; `removed`: vectors of pages that no longer exist;
+         *     `skipped`: pages that could not be read; `failed`: pages the AI model
+         *     could not embed (a later rebuild tries them again); `withheld`:
+         *     confidential pages not sent to an AI model that is not on this machine.
+         *     `complete` is true exactly when nothing was skipped, failed or withheld;
+         *     otherwise the stored vectors keep their old model's tag, so
+         *     `search_index` still reports `model_changed` after a model change.
+         */
+        RebuildOutcome: {
+            /** Complete */
+            complete: boolean;
+            /** Embedded */
+            embedded: number;
+            /** Failed */
+            failed: number;
+            /** Removed */
+            removed: number;
+            /** Skipped */
+            skipped: number;
+            /** Unchanged */
+            unchanged: number;
+            /** Withheld */
+            withheld: number;
+        };
+        /**
+         * RebuildRequest
+         * @description Start a search rebuild. `allow_remote` agrees to send page text to an
+         *     AI model for search that is not on this machine; it is never needed for one
+         *     that is.
+         */
+        RebuildRequest: {
+            /**
+             * Allow Remote
+             * @default false
+             */
+            allow_remote?: boolean;
+        };
+        /**
+         * RebuildStatus
+         * @description A search rebuild as a poll sees it. `done` of `total` counts the pages
+         *     sent during `embedding`; the rebuild's own result is a field here, never
+         *     the poll's HTTP status. `stopped`: it stopped before writing anything.
+         */
+        RebuildStatus: {
+            /** Done */
+            done: number;
+            error: components["schemas"]["ErrorBody"] | null;
+            outcome: components["schemas"]["RebuildOutcome"] | null;
+            /** Phase */
+            phase: ("embedding" | "finishing") | null;
+            /** Rebuild Id */
+            rebuild_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "running" | "stopping" | "stopped" | "finished" | "failed";
+            /** Total */
+            total: number;
+        };
+        /**
          * ReconcilePlan
          * @description Recording how two pages relate, as `reconcile` writes it: both stand
          *     (`reconciled_with`, no holder), one replaces the other (`supersedes`, the
@@ -2221,6 +2352,26 @@ export interface components {
             reachable: boolean;
             /** Version */
             version: string | null;
+        };
+        /**
+         * SearchIndex
+         * @description Whether search needs rebuilding.
+         *
+         *     `model_changed`: the stored vectors were made by another AI model for
+         *     search (or another backend). `stale_indexes`: the derived indexes whose
+         *     contents predate the pages, by name. `needs_rebuild`: either holds.
+         *     `sends_to`: the redacted host a rebuild would send page text to, when it
+         *     is not this machine; `None` when it is.
+         */
+        SearchIndex: {
+            /** Model Changed */
+            model_changed: boolean;
+            /** Needs Rebuild */
+            needs_rebuild: boolean;
+            /** Sends To */
+            sends_to: string | null;
+            /** Stale Indexes */
+            stale_indexes: string[];
         };
         /**
          * SensitivityApplyRequest
@@ -4662,6 +4813,274 @@ export interface operations {
             };
             /** @description Content Too Large */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    search_index_v1_search_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchIndex"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    start_rebuild_v1_search_rebuilds_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RebuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RebuildStatus"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    rebuild_status_v1_search_rebuilds__rebuild_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rebuild_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RebuildStatus"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    stop_rebuild_v1_search_rebuilds__rebuild_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rebuild_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RebuildStatus"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

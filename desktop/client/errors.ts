@@ -78,6 +78,10 @@ export const ERROR_CODES = [
   // Who can see a page.
   "page_not_found",
   "sensitivity_unchanged",
+  // Rebuilding search.
+  "rebuild_active",
+  "remote_not_allowed",
+  "search_unavailable",
 ] as const;
 
 export type KnownErrorCode = (typeof ERROR_CODES)[number];

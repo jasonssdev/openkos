@@ -429,6 +429,7 @@ SPEC_CODES = {
     "backend_model_not_found",
     "generation_capped",
     "backend_error",
+    "search_unavailable",
     "internal_error",
 }
 

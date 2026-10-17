@@ -3163,6 +3163,139 @@
         "title": "RaisedPage",
         "type": "object"
       },
+      "RebuildOutcome": {
+        "additionalProperties": false,
+        "description": "A finished rebuild. `embedded`: pages sent and stored; `unchanged`:\npages already current; `removed`: vectors of pages that no longer exist;\n`skipped`: pages that could not be read; `failed`: pages the AI model\ncould not embed (a later rebuild tries them again); `withheld`:\nconfidential pages not sent to an AI model that is not on this machine.\n`complete` is true exactly when nothing was skipped, failed or withheld;\notherwise the stored vectors keep their old model's tag, so\n`search_index` still reports `model_changed` after a model change.",
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "embedded": {
+            "title": "Embedded",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "removed": {
+            "title": "Removed",
+            "type": "integer"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "integer"
+          },
+          "withheld": {
+            "title": "Withheld",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "embedded",
+          "unchanged",
+          "removed",
+          "skipped",
+          "failed",
+          "withheld",
+          "complete"
+        ],
+        "title": "RebuildOutcome",
+        "type": "object"
+      },
+      "RebuildRequest": {
+        "additionalProperties": false,
+        "description": "Start a search rebuild. `allow_remote` agrees to send page text to an\nAI model for search that is not on this machine; it is never needed for one\nthat is.",
+        "properties": {
+          "allow_remote": {
+            "default": false,
+            "title": "Allow Remote",
+            "type": "boolean"
+          }
+        },
+        "title": "RebuildRequest",
+        "type": "object"
+      },
+      "RebuildStatus": {
+        "additionalProperties": false,
+        "description": "A search rebuild as a poll sees it. `done` of `total` counts the pages\nsent during `embedding`; the rebuild's own result is a field here, never\nthe poll's HTTP status. `stopped`: it stopped before writing anything.",
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RebuildOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "embedding",
+                  "finishing"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "rebuild_id": {
+            "title": "Rebuild Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "stopping",
+              "stopped",
+              "finished",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rebuild_id",
+          "state",
+          "phase",
+          "done",
+          "total",
+          "outcome",
+          "error"
+        ],
+        "title": "RebuildStatus",
+        "type": "object"
+      },
       "ReconcilePlan": {
         "description": "Recording how two pages relate, as `reconcile` writes it: both stand\n(`reconciled_with`, no holder), one replaces the other (`supersedes`, the\ntarget listed as deprecated), or one refines the other (`revises`, both\nstay current).",
         "properties": {
@@ -3738,6 +3871,45 @@
           "download_url"
         ],
         "title": "RuntimeReadiness",
+        "type": "object"
+      },
+      "SearchIndex": {
+        "description": "Whether search needs rebuilding.\n\n`model_changed`: the stored vectors were made by another AI model for\nsearch (or another backend). `stale_indexes`: the derived indexes whose\ncontents predate the pages, by name. `needs_rebuild`: either holds.\n`sends_to`: the redacted host a rebuild would send page text to, when it\nis not this machine; `None` when it is.",
+        "properties": {
+          "model_changed": {
+            "title": "Model Changed",
+            "type": "boolean"
+          },
+          "needs_rebuild": {
+            "title": "Needs Rebuild",
+            "type": "boolean"
+          },
+          "sends_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sends To"
+          },
+          "stale_indexes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stale Indexes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "model_changed",
+          "stale_indexes",
+          "needs_rebuild",
+          "sends_to"
+        ],
+        "title": "SearchIndex",
         "type": "object"
       },
       "SensitivityApplyRequest": {
@@ -7287,6 +7459,330 @@
           }
         ],
         "summary": "Reopen Preview"
+      }
+    },
+    "/v1/search": {
+      "get": {
+        "operationId": "search_index_v1_search_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchIndex"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Search Index"
+      }
+    },
+    "/v1/search/rebuilds": {
+      "post": {
+        "operationId": "start_rebuild_v1_search_rebuilds_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RebuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RebuildStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Start Rebuild"
+      }
+    },
+    "/v1/search/rebuilds/{rebuild_id}": {
+      "get": {
+        "operationId": "rebuild_status_v1_search_rebuilds__rebuild_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rebuild_id",
+            "required": true,
+            "schema": {
+              "title": "Rebuild Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RebuildStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Rebuild Status"
+      }
+    },
+    "/v1/search/rebuilds/{rebuild_id}/stop": {
+      "post": {
+        "operationId": "stop_rebuild_v1_search_rebuilds__rebuild_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rebuild_id",
+            "required": true,
+            "schema": {
+              "title": "Rebuild Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RebuildStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Stop Rebuild"
       }
     },
     "/v1/settings/model": {

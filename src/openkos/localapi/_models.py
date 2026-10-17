@@ -153,6 +153,32 @@ class PullStatus(BaseModel):
     error: ErrorBody | None
 
 
+class RebuildStatus(BaseModel):
+    """A search rebuild as a poll sees it. `done` of `total` counts the pages
+    sent during `embedding`; the rebuild's own result is a field here, never
+    the poll's HTTP status. `stopped`: it stopped before writing anything."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rebuild_id: str
+    state: Literal["running", "stopping", "stopped", "finished", "failed"]
+    phase: api.RebuildPhase | None
+    done: int
+    total: int
+    outcome: api.RebuildOutcome | None
+    error: ErrorBody | None
+
+
+class RebuildRequest(BaseModel):
+    """Start a search rebuild. `allow_remote` agrees to send page text to an
+    AI model for search that is not on this machine; it is never needed for one
+    that is."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    allow_remote: bool = False
+
+
 class PullRequest(BaseModel):
     """Start a pull of one configured model tag."""
 

@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -150,6 +150,10 @@ class ReindexPorts:
     open_vector_store: Callable[[Path], AbstractContextManager[VectorStoreDB]]
     open_proximity: Callable[[Path], proximity.VectorProximitySource | None]
     local_exemption: Callable[[application_backends.HasLocality, config.Config], bool]
+    commit_section: Callable[[], AbstractContextManager[None]] | None = None
+    """Taken around the store writes only (ADR-0036): the vectors and lexical
+    write inside `state.reindex.reindex`, then the graph write. `None` holds
+    nothing, the CLI's and the daemon's behaviour."""
 
 
 @dataclass(frozen=True)
@@ -211,6 +215,7 @@ def reindex_workspace(
                 embedding_backend=cfg.backend,
                 on_progress=observer.progress_callback(),
                 local_exemption=ports.local_exemption(embedder_locality, cfg),
+                commit_section=ports.commit_section,
             )
     except BackendUnavailable as exc:
         raise BackendNotReachable(
@@ -249,15 +254,17 @@ def reindex_workspace(
     # import `openkos.graph`), with its own ladder: its only failure mode is a
     # bare `sqlite3.Error`, and a locked graph.db reads exactly like the
     # other stores' lock contention.
+    section = ports.commit_section if ports.commit_section is not None else nullcontext
     try:
         with_candidates = ports.open_proximity(layout.vectors_db_path)
         try:
-            sqlite_graph.reindex_graph(
-                layout.bundle_dir,
-                layout.graph_db_path,
-                force=force,
-                candidates=with_candidates,
-            )
+            with section():
+                sqlite_graph.reindex_graph(
+                    layout.bundle_dir,
+                    layout.graph_db_path,
+                    force=force,
+                    candidates=with_candidates,
+                )
         finally:
             if with_candidates is not None:
                 with_candidates.close()

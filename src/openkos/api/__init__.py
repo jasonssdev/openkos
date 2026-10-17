@@ -86,6 +86,17 @@ from openkos.api._reads import (
     status,
 )
 from openkos.api._refresh import KindRefresh, QueueRefresh, refresh_decision_queue
+from openkos.api._search import (
+    RebuildObserver,
+    RebuildOutcome,
+    RebuildPhase,
+    RebuildProgress,
+    RebuildRefused,
+    RebuildStopped,
+    SearchIndex,
+    rebuild_search,
+    search_index,
+)
 from openkos.api._sensitivity import (
     PageSensitivity,
     RaisedPage,
@@ -191,6 +202,7 @@ from openkos.application.model_settings import (
 from openkos.application.pending_queue_report import QueueUnavailableError
 from openkos.application.queue_refresh import QueueRefreshRefused
 from openkos.application.runtime import StopToken
+from openkos.application.search_rebuild import SearchUnavailable
 from openkos.application.setup import (
     MemoryReadiness,
     ModelReadiness,
@@ -318,6 +330,12 @@ __all__ = [
     "QuoteStale",
     "QuoteToken",
     "RaisedPage",
+    "RebuildObserver",
+    "RebuildOutcome",
+    "RebuildPhase",
+    "RebuildProgress",
+    "RebuildRefused",
+    "RebuildStopped",
     "ReconcilePlan",
     "Refused",
     "RefusedFileDetail",
@@ -330,6 +348,8 @@ __all__ = [
     "RunRefused",
     "RunResult",
     "RuntimeReadiness",
+    "SearchIndex",
+    "SearchUnavailable",
     "SensitivityChanged",
     "SensitivityPreview",
     "SensitivityRefused",
@@ -392,9 +412,11 @@ __all__ = [
     "quote_judging",
     "quote_refused_file",
     "read_page",
+    "rebuild_search",
     "refresh_decision_queue",
     "run_ingest",
     "run_judging",
+    "search_index",
     "setup_readiness",
     "status",
 ]

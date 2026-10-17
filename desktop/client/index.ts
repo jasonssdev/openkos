@@ -186,6 +186,12 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
     mergeHistory: (conceptId: string) => call("get", "/v1/merges", { query: { concept_id: conceptId } }),
     mergedConcepts: () => call("get", "/v1/merged"),
     readPage: (conceptId: string) => call("get", "/v1/pages", { query: { concept_id: conceptId } }),
+    searchIndex: () => call("get", "/v1/search"),
+    startSearchRebuild: (body: Schemas["RebuildRequest"]) => call("post", "/v1/search/rebuilds", { body }),
+    searchRebuild: (rebuildId: string) =>
+      call("get", "/v1/search/rebuilds/{rebuild_id}", { params: { rebuild_id: rebuildId } }),
+    stopSearchRebuild: (rebuildId: string) =>
+      call("post", "/v1/search/rebuilds/{rebuild_id}/stop", { params: { rebuild_id: rebuildId } }),
     previewSensitivity: (body: Schemas["SensitivityPreviewRequest"]) =>
       call("post", "/v1/pages/sensitivity/preview", { body }),
     applySensitivity: (body: Schemas["SensitivityApplyRequest"]) =>

@@ -254,6 +254,16 @@ describe("the requests", () => {
       "/v1/pages/sensitivity/apply",
       { version: { concept_id: "concepts/a", level: "confidential", content_digest: "d" } },
     ],
+    ["searchIndex", (c) => c.searchIndex(), "GET", "/v1/search", null],
+    [
+      "startSearchRebuild",
+      (c) => c.startSearchRebuild({ allow_remote: true }),
+      "POST",
+      "/v1/search/rebuilds",
+      { allow_remote: true },
+    ],
+    ["searchRebuild", (c) => c.searchRebuild("r1"), "GET", "/v1/search/rebuilds/r1", null],
+    ["stopSearchRebuild", (c) => c.stopSearchRebuild("r1"), "POST", "/v1/search/rebuilds/r1/stop", null],
     [
       "readPage",
       (c) => c.readPage("people/m osei"),

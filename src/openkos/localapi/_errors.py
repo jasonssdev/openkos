@@ -89,6 +89,11 @@ BASE_URL_REQUIRED: Final = "base_url_required"
 PAGE_NOT_FOUND: Final = "page_not_found"
 SENSITIVITY_UNCHANGED: Final = "sensitivity_unchanged"
 
+# Search rows.
+REBUILD_ACTIVE: Final = "rebuild_active"
+REMOTE_NOT_ALLOWED: Final = "remote_not_allowed"
+SEARCH_UNAVAILABLE: Final = "search_unavailable"
+
 # Setup rows.
 PULL_ACTIVE: Final = "pull_active"
 MODEL_NOT_CONFIGURED: Final = "model_not_configured"
@@ -222,6 +227,13 @@ _ROWS: Final[tuple[_Row, ...]] = (
         "the model's reply was cut off before it finished",
     ),
     _Row(api.BackendError, 502, BACKEND_ERROR, False, "the model backend failed"),
+    _Row(
+        api.SearchUnavailable,
+        500,
+        SEARCH_UNAVAILABLE,
+        False,
+        "a search store cannot be used",
+    ),
 )
 
 # Outcomes returned (not raised) by the write operations. (status, code,
@@ -479,6 +491,19 @@ def ingest_active() -> ApiProblem:
     )
 
 
+def rebuild_active() -> ApiProblem:
+    """A rebuild was started while another is active; trying again later can
+    work."""
+    return ApiProblem(
+        409,
+        ErrorBody(
+            code=REBUILD_ACTIVE,
+            retryable=True,
+            message="a search rebuild is already running",
+        ),
+    )
+
+
 def pull_active() -> ApiProblem:
     """A pull was requested while another is active; trying again later can work."""
     return ApiProblem(
@@ -498,6 +523,16 @@ _SENSITIVITY_REFUSED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
         SENSITIVITY_UNCHANGED,
         False,
         "the concept already has that sensitivity",
+    ),
+}
+
+_REBUILD_REFUSED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
+    "remote_not_allowed": (
+        422,
+        REMOTE_NOT_ALLOWED,
+        False,
+        "the embedding model is not on this machine; start again with "
+        "allow_remote to send page text to it",
     ),
 }
 
@@ -554,6 +589,7 @@ def outcome_problem(
         | api.ModelSettingsStale
         | api.SensitivityRefused
         | api.SensitivityStale
+        | api.RebuildRefused
     ),
 ) -> ApiProblem:
     """The failure a returned (not raised) outcome is answered with."""
@@ -595,6 +631,8 @@ def outcome_problem(
         row = _SETTINGS_REFUSED.get(outcome.reason)
     elif isinstance(outcome, api.SensitivityRefused):
         row = _SENSITIVITY_REFUSED.get(outcome.reason)
+    elif isinstance(outcome, api.RebuildRefused):
+        row = _REBUILD_REFUSED.get(outcome.reason)
     else:
         row = _NOT_APPLIED.get(outcome.reason)
     if row is None:  # a reason added after this table: report it, do not guess

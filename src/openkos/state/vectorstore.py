@@ -422,6 +422,28 @@ def vector_store_is_empty(path: Path) -> bool:
     return bool(row is None or row[0] == 0)
 
 
+def read_stored_model_tag(path: Path) -> str | None:
+    """The stored `embedding_model` tag of the vector store at `path`, read
+    over a plain read-only connection that never creates the store and never
+    loads `sqlite-vec`; `None` when the store is absent, holds no embedded
+    concept, has no tag, or cannot be read.
+
+    An empty store answers `None` even when a tag is stored: with nothing
+    embedded there are no vectors for a changed model to invalidate."""
+    if vector_store_is_empty(path):
+        return None
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = open_read_only(path)
+        row = conn.execute(_SELECT_META_SQL, (EMBEDDING_MODEL_KEY,)).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+    return None if row is None else str(row[0])
+
+
 def _migrate_legacy_vectors_shape_if_needed(conn: sqlite3.Connection) -> None:
     """Detect a pre-chunking `vectors` table (#888, design D1) by probing
     for `chunk_index`, and on detection drop and recreate it under the
