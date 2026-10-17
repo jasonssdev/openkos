@@ -26,12 +26,15 @@ The local API MUST serve `GET /v1/search` answering `SearchIndex`; `POST
 `RebuildStatus` and a `Location`; `GET /v1/search/rebuilds/{rebuild_id}`; and
 `POST /v1/search/rebuilds/{rebuild_id}/stop`. At most one rebuild MUST be
 active: another start answers 409 `rebuild_active`. The rebuild MUST run on its
-own daemon thread; the start MUST wait for admission, so a refusal
-(`remote_not_allowed`, 422) or an unreachable runtime (503
-`backend_unavailable`) answers the start itself. `RebuildStatus` MUST carry
+own daemon thread; the start MUST wait for admission (after the consent check,
+before any page is sent), so a refusal (`remote_not_allowed`, 422) answers the
+start itself, and a failure after admission (an unreachable AI model, a busy
+workspace, an unusable store) is reported on the poll as `failed` with its
+`error` row. `RebuildStatus` MUST carry
 `rebuild_id`, `state` (`running`, `stopping`, `stopped`, `finished`,
 `failed`), `phase`, `done`, `total`, `outcome` and `error`. An unknown id MUST
-answer 404 `not_found`.
+answer 404 `not_found`. `SearchUnavailable` MUST answer 500
+`search_unavailable`. Shutting the server down MUST stop an active rebuild.
 
 #### Scenario: A rebuild is started, polled and finished
 

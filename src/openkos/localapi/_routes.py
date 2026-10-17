@@ -38,6 +38,8 @@ from openkos.localapi._models import (
     PullRequest,
     PullStatus,
     QuoteRequest,
+    RebuildRequest,
+    RebuildStatus,
     RefreshRequest,
     RefusedFileQuoteRequest,
     ReopenApplyRequest,
@@ -59,6 +61,7 @@ from openkos.localapi._models import (
     UnrelateResponse,
 )
 from openkos.localapi._pulls import PullRegistry
+from openkos.localapi._rebuilds import RebuildRegistry
 from openkos.localapi._runs import RunRegistry
 
 # Documents the scheme in the OpenAPI schema only: the guard enforces the token
@@ -106,6 +109,12 @@ def _ingests(request: Request) -> IngestRegistry:
     """The ingest registry `_build` keeps on the app."""
     ingests: IngestRegistry = request.app.state.ingests
     return ingests
+
+
+def _rebuilds(request: Request) -> RebuildRegistry:
+    """The rebuild registry `_build` keeps on the app."""
+    rebuilds: RebuildRegistry = request.app.state.rebuilds
+    return rebuilds
 
 
 # The one decision kind whose file `quote_refused_file` can quote.
@@ -455,6 +464,42 @@ def make_router() -> APIRouter:
         if isinstance(result, api.SensitivityChanged):
             return SensitivityResponse(changed=result, warnings=warnings)
         raise _errors.outcome_problem(result)
+
+    @router.get("/search")
+    def search_index(
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.SearchIndex:
+        # Reads the stores' tags and manifests: no client, no lock, no write.
+        return invoke(lambda: api.search_index(workspace))
+
+    @router.post(
+        "/search/rebuilds",
+        status_code=202,
+        responses=_errors_of(409, 413),
+    )
+    def start_rebuild(
+        body: RebuildRequest,
+        response: Response,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+        rebuilds: RebuildRegistry = Depends(_rebuilds),  # noqa: B008
+    ) -> RebuildStatus:
+        status = rebuilds.start(workspace, allow_remote=body.allow_remote)
+        response.headers["Location"] = f"{prefix()}/search/rebuilds/{status.rebuild_id}"
+        return status
+
+    @router.get("/search/rebuilds/{rebuild_id}", responses=_errors_of(404))
+    def rebuild_status(
+        rebuild_id: str,
+        rebuilds: RebuildRegistry = Depends(_rebuilds),  # noqa: B008
+    ) -> RebuildStatus:
+        return rebuilds.status(rebuild_id)
+
+    @router.post("/search/rebuilds/{rebuild_id}/stop", responses=_errors_of(404))
+    def stop_rebuild(
+        rebuild_id: str,
+        rebuilds: RebuildRegistry = Depends(_rebuilds),  # noqa: B008
+    ) -> RebuildStatus:
+        return rebuilds.stop(rebuild_id)
 
     @router.get("/settings/model")
     def model_settings(
