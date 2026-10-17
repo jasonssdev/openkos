@@ -202,6 +202,229 @@ the same grace as a judging run.
 (Previously: its first polling scenario was named "Poll to completion", the
 name of the judging job's scenario too.)
 
+### Requirement: Outcomes And Errors Map To Status Codes With A Uniform Body
+
+Every non-success response, from the security checks, request validation,
+returned outcome values and raised errors alike, MUST be JSON of the form
+`{"code": <string>, "retryable": <boolean>, "message": <string>}`. The `code`
+is stable and machine-readable; `retryable` is true only where trying the same
+request again later can succeed; the `message` is a fixed text per code. The
+mapping MUST be evaluated subclass-first and MUST be:
+
+| Source | Status | `code` | `retryable` |
+|---|---|---|---|
+| Missing or malformed credential | 401 | `unauthorized` | false |
+| Wrong token | 403 | `forbidden` | false |
+| Host not allowed | 403 | `host_not_allowed` | false |
+| Origin not allowed | 403 | `origin_not_allowed` | false |
+| Preflight rejected | 403 | `preflight_rejected` | false |
+| Request body above the cap | 413 | `request_too_large` | false |
+| Unknown path or run id | 404 | `not_found` | false |
+| Known path, method not allowed | 405 | `method_not_allowed` | false |
+| Invalid request body or parameter | 422 | `invalid_request` | false |
+| Path key differs from `version.decision_key` | 422 | `key_mismatch` | false |
+| `Stale` outcome (any reason, `unknown_key` included) | 409 | `stale` | false |
+| `QuoteStale` or `IngestQuoteStale` outcome | 409 | `quote_stale` | false |
+| `NotApplied("not_offered")` | 422 | `action_not_offered` | false |
+| `NotApplied("skipped")` | 422 | `skip_not_applicable` | false |
+| `NotApplied("invalid_selection")` | 422 | `invalid_selection` | false |
+| `NotApplied("not_mergeable")` | 409 | `not_mergeable` | false |
+| `NotApplied("member_missing")` | 409 | `member_missing` | false |
+| `NotApplied("record_failed")` | 409 | `record_failed` | true |
+| `UnmergeStale` outcome | 409 | `stale` | false |
+| `NotUnmergeable("survivor_missing")` | 409 | `survivor_missing` | false |
+| `NotUnmergeable("not_merged")` | 409 | `not_merged` | false |
+| `NotUnmergeable("survivor_edited")` | 409 | `survivor_edited` | false |
+| `UndoStale` outcome | 409 | `stale` | false |
+| `NotUndoable("not_kept_distinct")` | 409 | `not_kept_distinct` | false |
+| `NotUndoable("not_related")` | 409 | `not_related` | false |
+| `NotUndoable("tier_unchanged")` | 409 | `tier_unchanged` | false |
+| `NotUndoable("unknown_type")` | 422 | `unknown_type` | false |
+| `RunRefused` outcome | 422 | `run_refused` | false |
+| A judging run already active | 409 | `run_active` | true |
+| A model pull already active | 409 | `pull_active` | true |
+| An ingest run already active | 409 | `ingest_active` | true |
+| `PullRefused("not_configured")` | 422 | `model_not_configured` | false |
+| `PullRefused("backend_cannot_pull")` | 422 | `pull_not_supported` | false |
+| `DriftDetected` | 409 | `write_drift` | true |
+| `MergeGroupInterrupted` | 500 | `merge_group_interrupted` | false |
+| `UnmergeInterrupted` | 500 | `unmerge_interrupted` | false |
+| `WriteRefused` (not drift, not failed) | 422 | `write_refused` | false |
+| `WriteFailed` | 500 | `write_failed` | false |
+| `WorkspaceBusyError` | 503 | `workspace_busy` | true |
+| `WorkspaceLockUnavailableError` | 500 | `workspace_lock_unavailable` | false |
+| Queue unavailable | 503 | `queue_unavailable` | false |
+| Queue refresh refused | 503 | `queue_refresh_refused` | false |
+| `JudgingRefused` | 503 | `judging_refused` | false |
+| `IngestRefused` | 503 | `ingest_refused` | false |
+| Workspace not found | 500 | `workspace_not_found` | false |
+| Workspace unreadable | 500 | `workspace_unreadable` | false |
+| `BackendUnavailable` | 503 | `backend_unavailable` | true |
+| `BackendModelNotFound` | 424 | `backend_model_not_found` | false |
+| `BackendGenerationCapped` | 502 | `generation_capped` | false |
+| Any other `BackendError` (host locality, base) | 502 | `backend_error` | false |
+| Any other exception, including any other `OpenKosError` and `OSError` | 500 | `internal_error` | false |
+
+The `message` MUST be a fixed text chosen by the server for each code and MUST
+NOT contain the text of the exception (`str(exc)`), a path, a stack trace or
+stored content, with one exception: for `write_refused` the message MUST be the
+`WriteRefused` exception's own user-facing `message`, which is documented
+user-facing text. An unexpected exception MUST be logged to stderr (without the
+token) and MUST yield `internal_error`; the process MUST keep serving. The
+confirmation-declined and confirmation-unavailable refusals are unreachable
+through this API and, if raised, MUST be reported as `internal_error`. The
+`merge_group_interrupted` body carries no completed steps: a client learns the
+group's state by listing the decisions again; the `unmerge_interrupted` body
+carries no completed steps either: a client reads the survivor's merge history
+again.
+
+#### Scenario: A stale decision is a 409
+
+- GIVEN a decision edited after its preview
+- WHEN apply is posted with the previewed version
+- THEN the response is 409 with `{"code": "stale", "retryable": false,
+  "message": <fixed text>}` and the bundle is unchanged
+
+#### Scenario: A stale quote is a 409
+
+- GIVEN a quote and a changed configured model
+- WHEN a run is started with the quote's token
+- THEN the response is 409 with code `quote_stale` and no model call is made
+
+#### Scenario: A not-offered action is a 422
+
+- GIVEN an action the decision does not offer
+- WHEN apply or preview is posted for it
+- THEN the response is 422 with code `action_not_offered` and `retryable` false
+
+#### Scenario: Skip is not applicable
+
+- GIVEN a skip action
+- WHEN apply is posted for it
+- THEN the response is 422 with code `skip_not_applicable`
+
+#### Scenario: An invalid group selection is a 422
+
+- GIVEN a merge-group preview request whose survivor is not among the marked
+  members
+- WHEN it is posted
+- THEN the response is 422 with code `invalid_selection` and `retryable` false
+
+#### Scenario: A state conflict is a 409
+
+- GIVEN an apply that finds its merge not possible, a member missing, or the
+  record not written
+- WHEN the responses are read
+- THEN each is 409 with code `not_mergeable`, `member_missing` or
+  `record_failed` respectively, and only `record_failed` is retryable
+
+#### Scenario: A wrong method is a 405
+
+- GIVEN a valid Host and a valid token
+- WHEN `DELETE /v1/status` is requested
+- THEN the response is 405 with code `method_not_allowed`
+
+#### Scenario: Drift is retryable
+
+- GIVEN a write refused because the files drifted
+- WHEN the response is read
+- THEN the status is 409, the code is `write_drift` and `retryable` is true
+
+#### Scenario: An interrupted group is not a generic write failure
+
+- GIVEN a merge-group apply whose second step fails
+- WHEN the response is read
+- THEN the status is 500, the code is `merge_group_interrupted`, not
+  `write_failed`, and `retryable` is false
+
+#### Scenario: A write refusal passes its documented message
+
+- GIVEN a `WriteRefused` carrying a user-facing message
+- WHEN the response is read
+- THEN the status is 422, the code is `write_refused` and the message equals
+  that user-facing message
+
+#### Scenario: An unreachable backend is retryable
+
+- GIVEN a backend that is unreachable
+- WHEN a quote or run needs it
+- THEN the response is 503 with code `backend_unavailable` and `retryable`
+  true
+
+#### Scenario: A missing model is not retryable
+
+- GIVEN a configured model that the backend does not have
+- WHEN a quote or run needs it
+- THEN the response is 424 with code `backend_model_not_found` and `retryable`
+  false
+
+#### Scenario: An unexpected exception is generic
+
+- GIVEN an operation that raises an exception whose text contains a file path
+  and a secret-looking string
+- WHEN the response is read
+- THEN the status is 500, the code is `internal_error`, the body contains
+  neither the path nor the string, and the server still serves the next request
+
+#### Scenario: A capped generation is not a generic backend error
+
+- GIVEN a run whose generation was capped
+- WHEN the response is read
+- THEN the status is 502, the code is `generation_capped` and `retryable` is false
+
+#### Scenario: Subclass-first mapping
+
+- GIVEN a `DriftDetected`, which is also a `WriteRefused` and an
+  `OpenKosError`
+- WHEN it is mapped
+- THEN it yields `write_drift`, not `write_refused`
+
+#### Scenario: Security rejections share the body
+
+- GIVEN a request rejected for a missing token
+- WHEN the body is parsed
+- THEN it has exactly the keys `code`, `retryable` and `message`
+
+#### Scenario: Validation errors share the body
+
+- GIVEN a request body of the wrong type
+- WHEN the response is read
+- THEN it is 422 with exactly the keys `code`, `retryable` and `message`, and
+  the code is `invalid_request`
+
+#### Scenario: An unmerge refusal is a 409
+
+- GIVEN an unmerge preview whose survivor was itself absorbed, one naming an id
+  never merged into the survivor, and one whose survivor was edited since the
+  merge
+- WHEN each is posted
+- THEN each is 409 with code `survivor_missing`, `not_merged` or
+  `survivor_edited` respectively, and none is retryable
+
+#### Scenario: An interrupted unwind is not a generic write failure
+
+- GIVEN an unmerge apply whose second step fails
+- WHEN the response is read
+- THEN the status is 500, the code is `unmerge_interrupted`, not `write_failed`,
+  and `retryable` is false
+
+#### Scenario: An undo refusal is answered by its reason
+
+- GIVEN a reopen preview over a pair never kept separate, an unrelate preview
+  for an absent relation, a tier preview for the entry the type already has and
+  one for an unknown type
+- WHEN each is posted
+- THEN they are 409 `not_kept_distinct`, 409 `not_related`, 409
+  `tier_unchanged` and 422 `unknown_type`, and none is retryable
+
+#### Scenario: An unconfigured model is a 422
+
+- GIVEN a model tag the workspace does not configure
+- WHEN a pull is started for it
+- THEN the response is 422 with code `model_not_configured` and no job exists
+
+(Previously: the table had no ingest rows.)
+
 ## ADDED Requirements
 
 ### Requirement: Adding Files Runs As A Single Pollable Job

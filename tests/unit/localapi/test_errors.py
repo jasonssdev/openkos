@@ -404,6 +404,7 @@ SPEC_CODES = {
     "already_reconciled",
     "run_refused",
     "run_active",
+    "ingest_active",
     "write_drift",
     "write_refused",
     "write_failed",
@@ -421,6 +422,7 @@ SPEC_CODES = {
     "queue_unavailable",
     "queue_refresh_refused",
     "judging_refused",
+    "ingest_refused",
     "workspace_not_found",
     "workspace_unreadable",
     "backend_unavailable",
@@ -466,6 +468,7 @@ def test_every_code_in_the_spec_table_is_produced_exactly_once_and_no_other(
         _errors.outcome_problem(api.QuoteStale("identity", ("model",))).body.code,
         _errors.outcome_problem(api.RunRefused("no_quote_token")).body.code,
         _errors.run_active().body.code,
+        _errors.ingest_active().body.code,
         _errors.error_body(RuntimeError("x"))[1].code,
     ]
     produced = [

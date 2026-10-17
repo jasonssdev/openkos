@@ -126,6 +126,23 @@ describe("the requests", () => {
     ["stopJudgingRun", (c) => c.stopJudgingRun("r1"), "POST", "/v1/judging/runs/r1/stop", null],
     ["ask", (c) => c.ask({ question: "q" }), "POST", "/v1/ask", { question: "q" }],
     ["askJob", (c) => c.askJob("a/1"), "GET", "/v1/ask/a%2F1", null],
+    [
+      "quoteIngest",
+      (c) => c.quoteIngest({ paths: ["/a/notes.md"] }),
+      "POST",
+      "/v1/ingest/quote",
+      { paths: ["/a/notes.md"] },
+    ],
+    [
+      "quoteRefusedFile",
+      (c) => c.quoteRefusedFile("watch_refusal:k/1", {}),
+      "POST",
+      "/v1/decisions/watch_refusal%3Ak%2F1/ingest-quote",
+      {},
+    ],
+    ["startIngest", (c) => c.startIngest({ token: null }), "POST", "/v1/ingest/runs", { token: null }],
+    ["ingestRun", (c) => c.ingestRun("r/1"), "GET", "/v1/ingest/runs/r%2F1", null],
+    ["stopIngest", (c) => c.stopIngest("r1"), "POST", "/v1/ingest/runs/r1/stop", null],
     ["setupReadiness", (c) => c.setupReadiness(), "GET", "/v1/setup/readiness", null],
     [
       "startModelPull",
@@ -269,6 +286,11 @@ describe("the requests", () => {
     await expect(client.ask({ question: "q" })).resolves.toEqual({ ask_id: "a1" });
   });
 
+  it("accepts the 202 of a started ingest", async () => {
+    const { client } = engine(json({ run_id: "i1" }, { status: 202 }));
+    await expect(client.startIngest({})).resolves.toEqual({ run_id: "i1" });
+  });
+
   it("accepts the 202 of a started run", async () => {
     const { client } = engine(json({ run_id: "r1" }, { status: 202 }));
     await expect(client.startJudgingRun({})).resolves.toEqual({ run_id: "r1" });
@@ -276,6 +298,13 @@ describe("the requests", () => {
 });
 
 describe("the failures", () => {
+  it("turn an active ingest into a typed, retryable refusal", async () => {
+    const { client } = engine(envelope(409, "ingest_active", true));
+    const error = await client.startIngest({ token: null }).catch((e) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect([error.status, error.code, error.retryable]).toEqual([409, "ingest_active", true]);
+  });
+
   it("turn an active pull into a typed, retryable refusal", async () => {
     const { client } = engine(envelope(409, "pull_active", true));
     const error = await client.startModelPull({ model: "bge-m3" }).catch((e) => e);

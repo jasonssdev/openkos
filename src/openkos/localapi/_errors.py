@@ -69,6 +69,8 @@ QUOTE_STALE: Final = "quote_stale"
 RUN_REFUSED: Final = "run_refused"
 RUN_ACTIVE: Final = "run_active"
 ASK_ACTIVE: Final = "ask_active"
+INGEST_ACTIVE: Final = "ingest_active"
+INGEST_REFUSED: Final = "ingest_refused"
 JUDGING_REFUSED: Final = "judging_refused"
 BACKEND_UNAVAILABLE: Final = "backend_unavailable"
 BACKEND_MODEL_NOT_FOUND: Final = "backend_model_not_found"
@@ -186,6 +188,13 @@ _ROWS: Final[tuple[_Row, ...]] = (
         JUDGING_REFUSED,
         False,
         "judging cannot be run on this workspace",
+    ),
+    _Row(
+        api.IngestRefused,
+        503,
+        INGEST_REFUSED,
+        False,
+        "files cannot be added to this workspace",
     ),
     _Row(
         api.BackendUnavailable,
@@ -453,6 +462,19 @@ def ask_active() -> ApiProblem:
     )
 
 
+def ingest_active() -> ApiProblem:
+    """An ingest run was started while another is active; trying again later can
+    work."""
+    return ApiProblem(
+        409,
+        ErrorBody(
+            code=INGEST_ACTIVE,
+            retryable=True,
+            message="files are already being added",
+        ),
+    )
+
+
 def pull_active() -> ApiProblem:
     """A pull was requested while another is active; trying again later can work."""
     return ApiProblem(
@@ -507,6 +529,7 @@ def outcome_problem(
         api.NotApplied
         | api.Stale
         | api.QuoteStale
+        | api.IngestQuoteStale
         | api.RunRefused
         | api.NotUnmergeable
         | api.UnmergeStale
@@ -521,7 +544,7 @@ def outcome_problem(
     if isinstance(outcome, api.UnmergeStale | api.UndoStale | api.ModelSettingsStale):
         message = _STALE_MESSAGES["content_changed"]
         return ApiProblem(409, ErrorBody(code=STALE, retryable=False, message=message))
-    if isinstance(outcome, api.QuoteStale):
+    if isinstance(outcome, api.QuoteStale | api.IngestQuoteStale):
         # Only the `ChangedField` literals, never anything a client supplied.
         changed = ", ".join(outcome.changed)
         message = f"the quote is stale (changed: {changed}); quote again"

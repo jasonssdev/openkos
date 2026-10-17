@@ -70,6 +70,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/decisions/{decision_key}/ingest-quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refused File Quote */
+        post: operations["refused_file_quote_v1_decisions__decision_key__ingest_quote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/decisions/{decision_key}/preview": {
         parameters: {
             query?: never;
@@ -115,6 +132,74 @@ export interface paths {
         get: operations["health_v1_health_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ingest/quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Quote */
+        post: operations["ingest_quote_v1_ingest_quote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ingest/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Ingest */
+        post: operations["start_ingest_v1_ingest_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ingest/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ingest Status */
+        get: operations["ingest_status_v1_ingest_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ingest/runs/{run_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop Ingest */
+        post: operations["stop_ingest_v1_ingest_runs__run_id__stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -966,6 +1051,185 @@ export interface components {
             verdict: ("same" | "different" | "uncertain") | null;
         };
         /**
+         * IngestBinding
+         * @description What consent was given to, beside the files. A change is stale.
+         */
+        IngestBinding: {
+            /** Backend */
+            backend: string;
+            /** Include Confidential */
+            include_confidential: boolean;
+            /** Is Local */
+            is_local: boolean;
+            /** Model */
+            model: string;
+            /** Settings Digest */
+            settings_digest: string;
+        };
+        /**
+         * IngestFileQuote
+         * @description One chosen file, priced.
+         */
+        IngestFileQuote: {
+            /** Calls */
+            calls: number;
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Refusal */
+            refusal?: ("not_absolute" | "not_found" | "not_a_file" | "inside_workspace" | "duplicate_name" | "changed_after_import" | "inconsistent_workspace" | "symlinked_destination" | "unreadable") | null;
+            /** Size */
+            size: number | null;
+            /** Source Only */
+            source_only?: ("not_text" | "blank" | "confidential_floor") | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "extracts" | "source_only" | "unchanged" | "refused";
+        };
+        /** IngestFileResult */
+        IngestFileResult: {
+            /** Calls */
+            calls: number;
+            /** Created */
+            created: number;
+            /** Extraction Degraded */
+            extraction_degraded: boolean;
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Refusal */
+            refusal?: ("not_absolute" | "not_found" | "not_a_file" | "inside_workspace" | "duplicate_name" | "changed_after_import" | "inconsistent_workspace" | "symlinked_destination" | "unreadable") | null;
+            /** Revised */
+            revised: number;
+            /** Source Id */
+            source_id: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "added" | "updated" | "unchanged" | "refused" | "interrupted" | "busy" | "failed" | "not_reached";
+        };
+        /**
+         * IngestJob
+         * @description An ingest run as a poll sees it. The run's own result is a field here,
+         *     never the poll's HTTP status. A response model only: no `extra="forbid"`,
+         *     which would reach the nested dataclasses.
+         */
+        IngestJob: {
+            /** Calls */
+            calls: number;
+            error: components["schemas"]["ErrorBody"] | null;
+            /** Index */
+            index: number | null;
+            outcome: components["schemas"]["IngestRunOutcome"] | null;
+            /** Phase */
+            phase: ("reading" | "extracting" | "writing" | "refreshing") | null;
+            /** Run Id */
+            run_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "running" | "stopping" | "finished" | "failed";
+            /** Total */
+            total: number | null;
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * IngestQuote
+         * @description What adding the chosen files would cost, and the token to run it.
+         */
+        IngestQuote: {
+            /** Backend */
+            backend: string;
+            /** Calls */
+            calls: number;
+            /** Files */
+            files: components["schemas"]["IngestFileQuote"][];
+            /** Host */
+            host: string;
+            /** Include Confidential */
+            include_confidential: boolean;
+            /** Is Local */
+            is_local: boolean;
+            /** Model */
+            model: string;
+            token: components["schemas"]["IngestQuoteToken"];
+        };
+        /**
+         * IngestQuoteRequest
+         * @description The files to price, by absolute path, and whether the run may send text
+         *     above the workspace's floor. Every path check is the API's.
+         */
+        IngestQuoteRequest: {
+            /**
+             * Include Confidential
+             * @default false
+             */
+            include_confidential?: boolean;
+            /** Paths */
+            paths: string[];
+        };
+        /**
+         * IngestQuoteToken
+         * @description The context consent was given for. Refused files are not in it.
+         */
+        IngestQuoteToken: {
+            binding: components["schemas"]["IngestBinding"];
+            /** Calls */
+            calls: number;
+            /** Files */
+            files: components["schemas"]["IngestTokenFile"][];
+        };
+        /** IngestRunOutcome */
+        IngestRunOutcome: {
+            /** Calls */
+            calls: number;
+            /** Files */
+            files: components["schemas"]["IngestFileResult"][];
+            /**
+             * Indexes
+             * @enum {string}
+             */
+            indexes: "refreshed" | "not_needed" | "stale";
+            /**
+             * Observer Failed
+             * @default false
+             */
+            observer_failed?: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "stopped" | "busy";
+        };
+        /**
+         * IngestRunRequest
+         * @description The ingest quote's token, echoed unchanged. A missing or null token is a
+         *     refusal the route answers (422 `run_refused`), not a validation error.
+         */
+        IngestRunRequest: {
+            token?: components["schemas"]["IngestQuoteToken"] | null;
+        };
+        /**
+         * IngestTokenFile
+         * @description One file the consent covers: its path, its bytes' sha256 and the most
+         *     calls it may spend.
+         */
+        IngestTokenFile: {
+            /** Calls */
+            calls: number;
+            /** Digest */
+            digest: string;
+            /** Path */
+            path: string;
+        };
+        /**
          * JobSummary
          * @description One unattended job outcome.
          */
@@ -1703,6 +1967,18 @@ export interface components {
              * @enum {string}
              */
             reason: "changed_after_import" | "exceeds_pass_budget";
+        };
+        /**
+         * RefusedFileQuoteRequest
+         * @description Whether the run of a refused file's quote may send text above the
+         *     workspace's floor.
+         */
+        RefusedFileQuoteRequest: {
+            /**
+             * Include Confidential
+             * @default false
+             */
+            include_confidential?: boolean;
         };
         /**
          * RelatePlan
@@ -2601,6 +2877,95 @@ export interface operations {
             };
         };
     };
+    refused_file_quote_v1_decisions__decision_key__ingest_quote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefusedFileQuoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestQuote"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     preview_v1_decisions__decision_key__preview_post: {
         parameters: {
             query?: never;
@@ -2790,6 +3155,305 @@ export interface operations {
             };
             /** @description Forbidden */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    ingest_quote_v1_ingest_quote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngestQuoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestQuote"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    start_ingest_v1_ingest_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngestRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestJob"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    ingest_status_v1_ingest_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestJob"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    stop_ingest_v1_ingest_runs__run_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestJob"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

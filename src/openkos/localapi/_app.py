@@ -16,7 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from openkos import api
-from openkos.localapi import _asks, _errors, _pulls, _routes, _runs
+from openkos.localapi import _asks, _errors, _ingests, _pulls, _routes, _runs
 from openkos.localapi._guard import ALLOWED_ORIGINS, LocalApiGuard, _GuardConfig
 
 DEFAULT_ORIGINS: Final = tuple(sorted(ALLOWED_ORIGINS))
@@ -73,8 +73,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # leaves the event loop. A call in flight is abandoned with its daemon thread.
     registry: _runs.RunRegistry = app.state.registry
     pulls: _pulls.PullRegistry = app.state.pulls
+    ingests: _ingests.IngestRegistry = app.state.ingests
     await asyncio.to_thread(registry.shutdown, _runs.SHUTDOWN_GRACE_SECONDS)
     await asyncio.to_thread(pulls.shutdown, _runs.SHUTDOWN_GRACE_SECONDS)
+    await asyncio.to_thread(ingests.shutdown, _runs.SHUTDOWN_GRACE_SECONDS)
 
 
 def _build() -> FastAPI:
@@ -89,6 +91,7 @@ def _build() -> FastAPI:
     app.state.registry = _runs.RunRegistry()
     app.state.asks = _asks.AskRegistry()
     app.state.pulls = _pulls.PullRegistry()
+    app.state.ingests = _ingests.IngestRegistry()
     app.include_router(_routes.make_router())
     handlers: dict[Any, Any] = {
         _errors.ApiProblem: _on_api_problem,

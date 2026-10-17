@@ -12,6 +12,7 @@ from openkos import api
 from openkos.localapi import _errors
 from openkos.localapi._asks import AskRegistry
 from openkos.localapi._errors import ApiProblem, ErrorBody, invoke
+from openkos.localapi._ingests import IngestRegistry
 from openkos.localapi._models import (
     ApplyRequest,
     ApplyResponse,
@@ -23,6 +24,9 @@ from openkos.localapi._models import (
     FindingPreview,
     FindingPreviewRequest,
     HealthBody,
+    IngestJob,
+    IngestQuoteRequest,
+    IngestRunRequest,
     KeptDistinctList,
     MergedConceptList,
     MergeHistory,
@@ -35,6 +39,7 @@ from openkos.localapi._models import (
     PullStatus,
     QuoteRequest,
     RefreshRequest,
+    RefusedFileQuoteRequest,
     ReopenApplyRequest,
     ReopenPreviewRequest,
     ReopenResponse,
@@ -92,6 +97,16 @@ def _pulls(request: Request) -> PullRegistry:
     """The pull registry `_build` keeps on the app."""
     pulls: PullRegistry = request.app.state.pulls
     return pulls
+
+
+def _ingests(request: Request) -> IngestRegistry:
+    """The ingest registry `_build` keeps on the app."""
+    ingests: IngestRegistry = request.app.state.ingests
+    return ingests
+
+
+# The one decision kind whose file `quote_refused_file` can quote.
+_REFUSAL_KIND = "watch_refusal"
 
 
 def _plain_mappings(s: api.WorkspaceStatus) -> api.WorkspaceStatus:
@@ -542,5 +557,71 @@ def make_router() -> APIRouter:
         asks: AskRegistry = Depends(_asks),  # noqa: B008
     ) -> AskJob:
         return asks.status(ask_id)
+
+    @router.post("/ingest/quote", responses=_errors_of(413, 503))
+    def ingest_quote(
+        body: IngestQuoteRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.IngestQuote:
+        # The paths are handed over as given: the API checks each one before
+        # reading it, and reports a refused path in the quote.
+        return invoke(
+            lambda: api.quote_ingest(
+                workspace, body.paths, include_confidential=body.include_confidential
+            )
+        )
+
+    @router.post(
+        "/decisions/{decision_key}/ingest-quote", responses=_errors_of(409, 413, 503)
+    )
+    def refused_file_quote(
+        decision_key: str,
+        body: RefusedFileQuoteRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.IngestQuote:
+        if decision_key.partition(":")[0] != _REFUSAL_KIND:
+            raise ApiProblem(
+                422,
+                ErrorBody(
+                    code=_errors.INVALID_REQUEST,
+                    retryable=False,
+                    message="the request is not valid",
+                ),
+            )
+        result = invoke(
+            lambda: api.quote_refused_file(
+                workspace, decision_key, include_confidential=body.include_confidential
+            )
+        )
+        if isinstance(result, api.IngestQuote):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post("/ingest/runs", status_code=202, responses=_errors_of(409, 413, 503))
+    def start_ingest(
+        body: IngestRunRequest,
+        response: Response,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+        ingests: IngestRegistry = Depends(_ingests),  # noqa: B008
+    ) -> IngestJob:
+        if body.token is None:
+            raise _errors.outcome_problem(api.RunRefused("no_quote_token"))
+        job = ingests.start(workspace, body.token)
+        response.headers["Location"] = f"{prefix()}/ingest/runs/{job.run_id}"
+        return job
+
+    @router.get("/ingest/runs/{run_id}", responses=_errors_of(404))
+    def ingest_status(
+        run_id: str,
+        ingests: IngestRegistry = Depends(_ingests),  # noqa: B008
+    ) -> IngestJob:
+        return ingests.status(run_id)
+
+    @router.post("/ingest/runs/{run_id}/stop", responses=_errors_of(404))
+    def stop_ingest(
+        run_id: str,
+        ingests: IngestRegistry = Depends(_ingests),  # noqa: B008
+    ) -> IngestJob:
+        return ingests.stop(run_id)
 
     return router

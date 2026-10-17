@@ -172,6 +172,12 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
       call("post", "/v1/judging/runs/{run_id}/stop", { params: { run_id: runId } }),
     ask: (body: Schemas["AskRequest"]) => call("post", "/v1/ask", { body }),
     askJob: (askId: string) => call("get", "/v1/ask/{ask_id}", { params: { ask_id: askId } }),
+    quoteIngest: (body: Schemas["IngestQuoteRequest"]) => call("post", "/v1/ingest/quote", { body }),
+    quoteRefusedFile: (decisionKey: string, body: Schemas["RefusedFileQuoteRequest"]) =>
+      call("post", "/v1/decisions/{decision_key}/ingest-quote", { params: { decision_key: decisionKey }, body }),
+    startIngest: (body: Schemas["IngestRunRequest"]) => call("post", "/v1/ingest/runs", { body }),
+    ingestRun: (runId: string) => call("get", "/v1/ingest/runs/{run_id}", { params: { run_id: runId } }),
+    stopIngest: (runId: string) => call("post", "/v1/ingest/runs/{run_id}/stop", { params: { run_id: runId } }),
     setupReadiness: () => call("get", "/v1/setup/readiness"),
     startModelPull: (body: Schemas["PullRequest"]) => call("post", "/v1/setup/pulls", { body }),
     modelPull: (pullId: string) => call("get", "/v1/setup/pulls/{pull_id}", { params: { pull_id: pullId } }),

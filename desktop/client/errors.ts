@@ -61,6 +61,9 @@ export const ERROR_CODES = [
   "backend_error",
   // Asking.
   "ask_active",
+  // Adding files.
+  "ingest_active",
+  "ingest_refused",
   // Setup.
   "pull_active",
   "model_not_configured",

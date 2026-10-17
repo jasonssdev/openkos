@@ -428,3 +428,52 @@ class AskJob(BaseModel):
     total: int | None
     answer: api.Answer | None
     error: ErrorBody | None
+
+
+class IngestQuoteRequest(BaseModel):
+    """The files to price, by absolute path, and whether the run may send text
+    above the workspace's floor. Every path check is the API's."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    paths: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=4096)]],
+        Field(min_length=1, max_length=500),
+    ]
+    include_confidential: bool = False
+
+
+class RefusedFileQuoteRequest(BaseModel):
+    """Whether the run of a refused file's quote may send text above the
+    workspace's floor."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    include_confidential: bool = False
+
+
+class IngestRunRequest(_EchoRequest):
+    """The ingest quote's token, echoed unchanged. A missing or null token is a
+    refusal the route answers (422 `run_refused`), not a validation error."""
+
+    token: api.IngestQuoteToken | None = None
+
+
+class IngestJob(BaseModel):
+    """An ingest run as a poll sees it. The run's own result is a field here,
+    never the poll's HTTP status. A response model only: no `extra="forbid"`,
+    which would reach the nested dataclasses."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    state: Literal["running", "stopping", "finished", "failed"]
+    index: int | None
+    total: int | None
+    phase: Literal["reading", "extracting", "writing", "refreshing"] | None
+    calls: int
+    """Chat calls spent so far."""
+    outcome: api.IngestRunOutcome | None
+    warnings: list[str]
+    """Commits that could not be made, in the API's words."""
+    error: ErrorBody | None
