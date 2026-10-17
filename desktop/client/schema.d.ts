@@ -291,6 +291,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tiers/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tier Apply */
+        post: operations["tier_apply_v1_tiers_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tiers/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tier Preview */
+        post: operations["tier_preview_v1_tiers_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/unmerge/apply": {
         parameters: {
             query?: never;
@@ -1184,6 +1218,81 @@ export interface components {
             total: number | null;
         };
         /**
+         * TierChangeApplyRequest
+         * @description The version the tier preview issued (echoed unchanged) and how long to
+         *     wait for the workspace lock; a client can shorten the wait only.
+         */
+        TierChangeApplyRequest: {
+            version: components["schemas"]["TierChangeVersion"];
+            /**
+             * Wait Seconds
+             * @default 5
+             */
+            wait_seconds?: number;
+        };
+        /**
+         * TierChangePreview
+         * @description Setting `type_name`'s tier to `tier`, or, with `tier` `None`, removing
+         *     its setting so the engine's default applies. `configured_tier` is the
+         *     setting now (`None` when there is none).
+         */
+        TierChangePreview: {
+            /** Configured Tier */
+            configured_tier: string | null;
+            /** Tier */
+            tier: ("static" | "slow" | "volatile") | null;
+            /** Type Name */
+            type_name: string;
+            version: components["schemas"]["TierChangeVersion"];
+        };
+        /**
+         * TierChangePreviewRequest
+         * @description The type whose tier to set, and the tier, or `null` to remove its
+         *     setting so the engine's default applies.
+         */
+        TierChangePreviewRequest: {
+            /** Tier */
+            tier: ("static" | "slow" | "volatile") | null;
+            /** Type Name */
+            type_name: string;
+        };
+        /**
+         * TierChangeResponse
+         * @description What was changed, and the warnings the apply raised along the way.
+         */
+        TierChangeResponse: {
+            changed: components["schemas"]["TierChanged"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * TierChangeVersion
+         * @description The version a stateless caller changes a tier against: echo it unchanged.
+         *     `content_digest` covers the type, the tier asked for and `openkos.yaml`.
+         */
+        TierChangeVersion: {
+            /** Content Digest */
+            content_digest: string;
+            /** Tier */
+            tier: ("static" | "slow" | "volatile") | null;
+            /** Type Name */
+            type_name: string;
+        };
+        /**
+         * TierChanged
+         * @description The tier was set (`tier`) or its setting removed (`tier` `None`).
+         *     `commit_sha` is `None` when the commit could not be made (the write itself
+         *     landed).
+         */
+        TierChanged: {
+            /** Commit Sha */
+            commit_sha: string | null;
+            /** Tier */
+            tier: ("static" | "slow" | "volatile") | null;
+            /** Type Name */
+            type_name: string;
+        };
+        /**
          * TierDetail
          * @description A volatility decision: a suggested tier for one concept type.
          */
@@ -1202,6 +1311,8 @@ export interface components {
          * @description Setting one concept type's volatility tier.
          */
         TierPlan: {
+            /** Configured Tier */
+            configured_tier: string | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -2664,6 +2775,173 @@ export interface operations {
             };
             /** @description Forbidden */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    tier_apply_v1_tiers_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TierChangeApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TierChangeResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    /** @description Seconds to wait before retrying a busy workspace. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    tier_preview_v1_tiers_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TierChangePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TierChangePreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

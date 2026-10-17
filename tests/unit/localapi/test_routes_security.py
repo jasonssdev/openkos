@@ -34,6 +34,8 @@ EXPECTED_ROUTES = {
     ("POST", "/v1/reopen/apply"),
     ("POST", "/v1/unrelate/preview"),
     ("POST", "/v1/unrelate/apply"),
+    ("POST", "/v1/tiers/preview"),
+    ("POST", "/v1/tiers/apply"),
     ("POST", "/v1/judging/quote"),
     ("POST", "/v1/judging/runs"),
     ("GET", "/v1/judging/runs/{run_id}"),

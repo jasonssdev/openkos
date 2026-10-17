@@ -257,6 +257,33 @@ class UnrelateResponse(BaseModel):
     warnings: list[str]
 
 
+class TierChangePreviewRequest(BaseModel):
+    """The type whose tier to set, and the tier, or `null` to remove its
+    setting so the engine's default applies."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type_name: str
+    tier: api.VolatilityTier | None
+
+
+class TierChangeApplyRequest(_EchoRequest):
+    """The version the tier preview issued (echoed unchanged) and how long to
+    wait for the workspace lock; a client can shorten the wait only."""
+
+    version: api.TierChangeVersion
+    wait_seconds: float = Field(default=WRITE_WAIT_SECONDS, ge=0, le=WRITE_WAIT_SECONDS)
+
+
+class TierChangeResponse(BaseModel):
+    """What was changed, and the warnings the apply raised along the way."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    changed: api.TierChanged
+    warnings: list[str]
+
+
 class UnmergePreviewRequest(BaseModel):
     """Which merge to undo: the survivor and the absorbed concept, and whether
     the first step may discard an edit made to the survivor since its merge."""

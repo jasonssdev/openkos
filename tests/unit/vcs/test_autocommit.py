@@ -284,6 +284,21 @@ def test_plan_config_edit_plans_over_an_unrelated_dirty_edit(
     )
 
 
+def test_plan_config_edit_with_no_tier_plans_removing_the_entry(
+    tmp_path: Path, identity: None
+) -> None:
+    repo = _config_repo(tmp_path)
+    (repo / "openkos.yaml").write_text(_CONFIG + "extra: 1\n", encoding="utf-8")
+
+    plan = autocommit.plan_config_edit(repo, "Person", None, _baseline(repo))
+
+    assert isinstance(plan, autocommit.ConfigCommitPlan)
+    assert (
+        plan.apply(_CONFIG.encode())
+        == config.clear_type_tier(_CONFIG, "Person").encode()
+    )
+
+
 def test_plan_config_edit_conflicts_on_an_edit_to_the_same_entry(
     tmp_path: Path, identity: None
 ) -> None:

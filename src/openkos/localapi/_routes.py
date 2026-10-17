@@ -29,6 +29,9 @@ from openkos.localapi._models import (
     ReopenResponse,
     RunRequest,
     RunStatus,
+    TierChangeApplyRequest,
+    TierChangePreviewRequest,
+    TierChangeResponse,
     UnmergeApplyRequest,
     UnmergePreviewRequest,
     UnmergeResponse,
@@ -326,6 +329,36 @@ def make_router() -> APIRouter:
         )
         if isinstance(result, api.Unrelated):
             return UnrelateResponse(unrelated=result, warnings=warnings)
+        raise _errors.outcome_problem(result)
+
+    @router.post("/tiers/preview", responses=_errors_of(409, 413))
+    def tier_preview(
+        body: TierChangePreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.TierChangePreview:
+        result = invoke(
+            lambda: api.preview_tier_change(workspace, body.type_name, body.tier)
+        )
+        if isinstance(result, api.TierChangePreview):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post("/tiers/apply", responses=_errors_of(409, 413, 503, retry_after=True))
+    def tier_apply(
+        body: TierChangeApplyRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> TierChangeResponse:
+        warnings: list[str] = []
+        result = invoke(
+            lambda: api.apply_tier_change(
+                workspace,
+                body.version,
+                wait_seconds=_wait(body.wait_seconds),
+                on_warning=warnings.append,
+            )
+        )
+        if isinstance(result, api.TierChanged):
+            return TierChangeResponse(changed=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
     @router.post("/judging/quote", responses=_errors_of(413, 424, 502, 503))

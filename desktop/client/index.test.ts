@@ -151,6 +151,20 @@ describe("the requests", () => {
       { version: { source_id: "a", relation_type: "part_of", target_id: "b", content_digest: "d" } },
     ],
     [
+      "previewTierChange",
+      (c) => c.previewTierChange({ type_name: "Person", tier: null }),
+      "POST",
+      "/v1/tiers/preview",
+      { type_name: "Person", tier: null },
+    ],
+    [
+      "applyTierChange",
+      (c) => c.applyTierChange({ version: { type_name: "Person", tier: null, content_digest: "d" } }),
+      "POST",
+      "/v1/tiers/apply",
+      { version: { type_name: "Person", tier: null, content_digest: "d" } },
+    ],
+    [
       "applyReopen",
       (c) => c.applyReopen({ version: { member_ids: ["a", "b"], content_digest: "d" } }),
       "POST",

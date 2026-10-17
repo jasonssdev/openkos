@@ -127,7 +127,7 @@ class ConfigEditConflict:
 def plan_config_edit(
     root: Path,
     concept_type: str,
-    tier: str,
+    tier: str | None,
     baseline: bytes,
 ) -> ConfigCommitPlan | ConfigEditConflict | None:
     """Before a config-rewriting verb writes (#1330): `None` when
@@ -135,7 +135,8 @@ def plan_config_edit(
     so the ordinary path-scoped commit is correct. Otherwise the file carries
     uncommitted edits that `git add -- openkos.yaml` would sweep into a commit
     titled for another change, so return a plan that commits the change
-    applied to the committed version.
+    applied to the committed version. A `tier` of `None` plans removing the
+    type's entry (`config.clear_type_tier`) instead of setting it.
 
     Returns a `ConfigEditConflict` (nothing written) when the user's edit
     touches the very `type_tiers` entry being set, or the committed file is
@@ -151,6 +152,8 @@ def plan_config_edit(
 
     def apply(content: bytes) -> bytes:
         text = content.decode("utf-8")
+        if tier is None:
+            return config.clear_type_tier(text, concept_type).encode("utf-8")
         return config.set_type_tier(text, concept_type, tier).encode("utf-8")
 
     try:

@@ -1510,6 +1510,77 @@
         }
       }
     },
+    "TierChangePreview": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "type_name"
+        },
+        {
+          "annotation": "Literal['static', 'slow', 'volatile'] | None",
+          "default": false,
+          "name": "tier"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "configured_tier"
+        },
+        {
+          "annotation": "TierChangeVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "TierChangeVersion": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "type_name"
+        },
+        {
+          "annotation": "Literal['static', 'slow', 'volatile'] | None",
+          "default": false,
+          "name": "tier"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "TierChanged": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "type_name"
+        },
+        {
+          "annotation": "Literal['static', 'slow', 'volatile'] | None",
+          "default": false,
+          "name": "tier"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "commit_sha"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "TierDetail": {
       "fields": [
         {
@@ -1553,6 +1624,11 @@
           "annotation": "Literal['set_tier']",
           "default": true,
           "name": "kind"
+        },
+        {
+          "annotation": "str | None",
+          "default": true,
+          "name": "configured_tier"
         }
       ],
       "frozen": true,
@@ -1820,6 +1896,10 @@
       "kind": "dataclass",
       "members": {}
     },
+    "VolatilityTier": {
+      "kind": "alias",
+      "value": "Literal['static', 'slow', 'volatile']"
+    },
     "WithheldAction": {
       "fields": [
         {
@@ -2083,6 +2163,36 @@
       ],
       "returns": "Reopened | NotUndoable | UndoStale"
     },
+    "apply_tier_change": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "TierChangeVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "TierChanged | NotUndoable | UndoStale"
+    },
     "apply_unmerge": {
       "kind": "function",
       "parameters": [
@@ -2256,6 +2366,30 @@
         }
       ],
       "returns": "ReopenPreview | NotUndoable"
+    },
+    "preview_tier_change": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "type_name"
+        },
+        {
+          "annotation": "Literal['static', 'slow', 'volatile'] | None",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "tier"
+        }
+      ],
+      "returns": "TierChangePreview | NotUndoable"
     },
     "preview_unmerge": {
       "kind": "function",

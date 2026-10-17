@@ -195,6 +195,9 @@ class TierPlan:
     type_name: str
     tier: str
     kind: Literal["set_tier"] = "set_tier"
+    configured_tier: str | None = None
+    """The type's setting before this change, `None` when it had none and the
+    engine's default applied: what `preview_tier_change` restores."""
 
 
 @dataclass(frozen=True)
@@ -269,7 +272,7 @@ def _plan_of(
     if isinstance(body, curate_decisions.RelateDecisionPreview):
         return RelatePlan(body.source_id, body.target_id, body.relation_type)
     if isinstance(body, curate_decisions.TierDecisionPreview):
-        return TierPlan(body.type_name, body.tier)
+        return TierPlan(body.type_name, body.tier, configured_tier=body.configured_tier)
     return KeepDistinctPlan(body.member_ids)
 
 

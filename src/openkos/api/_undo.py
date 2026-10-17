@@ -1,5 +1,6 @@
-"""Undoing a review choice (ADR-0067): keep separate is reopened, and the
-rulings it can be reopened from are listed.
+"""Undoing a review choice (ADR-0067): a keep-separate ruling is reopened, a
+typed relation removed, and a type's tier set or restored; the rulings that can
+be reopened are listed.
 
 An undo is keyed by what the choice wrote, never by a decision key: the queue
 row was resolved when the choice was applied, and the CLI writes the same files
@@ -252,4 +253,103 @@ def apply_unrelate(
         target_id=result.target_id,
         commit_sha=result.commit_sha,
         committed_confidential=notes.confidential,
+    )
+
+
+# -- how quickly a type goes out of date --------------------------------------- #
+
+VolatilityTier = Literal["static", "slow", "volatile"]
+"""How quickly facts about a type go out of date: the engine's volatility
+tiers."""
+
+
+@dataclass(frozen=True)
+class TierChangeVersion:
+    """The version a stateless caller changes a tier against: echo it unchanged.
+    `content_digest` covers the type, the tier asked for and `openkos.yaml`."""
+
+    type_name: str
+    tier: VolatilityTier | None
+    content_digest: str
+
+
+@dataclass(frozen=True)
+class TierChangePreview:
+    """Setting `type_name`'s tier to `tier`, or, with `tier` `None`, removing
+    its setting so the engine's default applies. `configured_tier` is the
+    setting now (`None` when there is none)."""
+
+    type_name: str
+    tier: VolatilityTier | None
+    configured_tier: str | None
+    version: TierChangeVersion
+
+
+@dataclass(frozen=True)
+class TierChanged:
+    """The tier was set (`tier`) or its setting removed (`tier` `None`).
+    `commit_sha` is `None` when the commit could not be made (the write itself
+    landed)."""
+
+    type_name: str
+    tier: VolatilityTier | None
+    commit_sha: str | None
+
+
+def preview_tier_change(
+    workspace: Workspace, type_name: str, tier: VolatilityTier | None
+) -> TierChangePreview | NotUndoable:
+    """What setting `type_name`'s tier would do, or, with `tier=None`, removing
+    its setting from `openkos.yaml` so the engine's default applies again; the
+    undo of a set-tier decision passes its plan's `configured_tier`. Every
+    other line of `openkos.yaml` is kept byte for byte.
+
+    A type the engine does not know is the returned
+    `NotUndoable("unknown_type")`, a setting that already is `tier` the returned
+    `NotUndoable("tier_unchanged")`. A tier outside `VolatilityTier` raises
+    `ValueError`. Writes nothing, takes no lock, builds no client."""
+    plan = undo_service.preview_tier_change(workspace.root, type_name, tier)
+    if isinstance(plan, undo_service.UndoRefusal):
+        return _refusal(plan)
+    return TierChangePreview(
+        type_name=plan.type_name,
+        tier=tier,
+        configured_tier=plan.configured_tier,
+        version=TierChangeVersion(
+            type_name=plan.type_name, tier=tier, content_digest=plan.content_digest
+        ),
+    )
+
+
+def apply_tier_change(
+    workspace: Workspace,
+    version: TierChangeVersion,
+    *,
+    wait_seconds: float = 0.0,
+    on_warning: Callable[[str], None] | None = None,
+) -> TierChanged | NotUndoable | UndoStale:
+    """Set or remove the tier `version` was previewed for.
+
+    The lock is taken once, as `apply_reopen` takes it. A changed
+    `openkos.yaml` or version is the returned `UndoStale`; a setting that
+    already holds the returned `NotUndoable`; neither writes anything. An
+    uncommitted edit to the same entry raises `Refused`, as for a set-tier
+    decision. Only this change is committed; a commit that cannot be made is
+    reported once through `on_warning`."""
+    wait = _wiring.validated_wait(wait_seconds)
+    result = undo_service.apply_tier_change(
+        workspace.root,
+        version.type_name,
+        version.tier,
+        version.content_digest,
+        ports=_wiring.decision_ports(
+            workspace, wait_seconds=wait, on_warning=on_warning, what="the undo"
+        ),
+    )
+    if isinstance(result, undo_service.UndoRefusal):
+        return _refusal(result)
+    if isinstance(result, undo_service.UndoStale):
+        return UndoStale()
+    return TierChanged(
+        type_name=result.type_name, tier=version.tier, commit_sha=result.commit_sha
     )
