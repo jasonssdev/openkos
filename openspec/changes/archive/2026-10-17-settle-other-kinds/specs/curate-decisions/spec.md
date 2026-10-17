@@ -91,11 +91,12 @@ computed, marked stale, rather than omitting them. A stale item MUST NOT be
 applied silently: an apply against it MUST return the typed Stale result.
 
 A preview MUST agree with the apply about a stale item: previewing any write
-action of an open row whose inputs have changed MUST return the typed Stale
-result `row_inputs_changed`, the reason the apply returns, and MUST write
-nothing. An action the item does not take MUST still be refused as not applied,
-and skip, which writes nothing, MUST still return its not-applied result. The
-list MUST keep reporting the stale item's actions unchanged.
+action of an open row whose inputs have changed, through the decision preview
+or the finding preview, MUST return the typed Stale result `row_inputs_changed`,
+the reason the apply returns, and MUST write nothing. An action the item does
+not take MUST still be refused as not applied, and skip, which writes nothing,
+MUST still return its not-applied result. The list MUST keep reporting the stale
+item's actions unchanged.
 
 Freshness MUST be computed for the kinds that carry actions. A `contradiction`
 row is fresh when every input it recorded that names a concept still hashes as
@@ -130,12 +131,6 @@ computed (`fresh` is `None`, never `True`).
 - WHEN a client lists the open decisions
 - THEN the row is present and marked stale
 
-#### Scenario: A refused file reports freshness as not computed
-
-- GIVEN an open watch_refusal item
-- WHEN a client lists the open decisions
-- THEN the item's freshness is reported as not computed, not as fresh
-
 #### Scenario: A stale item's preview is the apply's Stale
 
 - GIVEN an open judged-same identity row whose member was edited since the row
@@ -148,6 +143,13 @@ computed (`fresh` is `None`, never `True`).
 - GIVEN an open stale row
 - WHEN a client previews skip
 - THEN the preview returns the not-applied result `skipped`
+
+#### Scenario: A refused file reports freshness as not computed
+
+- GIVEN an open watch_refusal item
+- WHEN a client lists the open decisions
+- THEN the item's freshness is reported as not computed, not as fresh
+
 
 ## ADDED Requirements
 

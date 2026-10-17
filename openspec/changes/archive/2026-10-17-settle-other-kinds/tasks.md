@@ -24,4 +24,4 @@
 
 ## 5. Archive
 
-- [ ] 5.1 Merge the deltas, move the change to `archive/`, write `archive-report.md`, accept ADR-0072.
+- [x] 5.1 Merge the deltas, move the change to `archive/`, write `archive-report.md`, accept ADR-0072.
