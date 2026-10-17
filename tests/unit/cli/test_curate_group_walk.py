@@ -431,19 +431,42 @@ def test_two_names_for_one_survivor_are_asked_again(
     assert not _exists(tmp_path, "concepts/a")
 
 
-def test_without_a_queue_the_group_keeps_the_skip_line(
+def test_without_a_queue_the_walk_creates_one_and_asks(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The group decision commits against its open row; a workspace no
-    producer pass has run in has no queue to hold one, so the manual route is
-    still named rather than a prompt offered that could not commit."""
+    """The group decision commits against its open row, so a group the walk
+    must ask about creates the queue a producer pass has not (#1489) instead of
+    printing the manual `openkos merge` commands."""
     _three(tmp_path, tmp_path_factory, monkeypatch)
-    config.WorkspaceLayout(tmp_path).findings_db_path.unlink()
+    findings = config.WorkspaceLayout(tmp_path).findings_db_path
+    findings.unlink()
 
-    result = runner.invoke(app, ["curate"], input="y\n")
+    result = runner.invoke(app, ["curate"], input="y\ns\n")
 
     assert result.exit_code == 0, result.output
-    assert "skipped (N>2, merge manually)" in result.stdout
-    assert all(_exists(tmp_path, m) for m in _THREE)
+    assert "Which of these are the same?" in result.stdout
+    assert "skipped (N>2, merge manually)" not in result.stdout
+    assert curate_queue.queue_present(config.WorkspaceLayout(tmp_path))
+
+
+def test_without_a_queue_a_pair_that_needs_no_walk_creates_none(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The absent-queue contract holds for every group the walk is not
+    needed for: a same-type pair merges without a queue row."""
+    _build(
+        tmp_path,
+        tmp_path_factory,
+        monkeypatch,
+        {"concepts/a": "Concept", "concepts/b": "Concept"},
+    )
+    config.WorkspaceLayout(tmp_path).findings_db_path.unlink()
+
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0, result.output
+    assert not curate_queue.queue_present(config.WorkspaceLayout(tmp_path))

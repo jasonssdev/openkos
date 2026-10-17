@@ -21,6 +21,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config
 from openkos.application import backends as application_backends
+from openkos.application import curate_queue
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application.consent import BooleanConfirmation
 from openkos.bundle import decisions as bundle_decisions
@@ -1960,6 +1961,9 @@ def test_identity_n_gt2_group_prints_pairwise_commands_no_merge(
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # No queue row to commit against: the fallback line is what these pin (#1489
+    # makes the walk create the queue; `test_curate_group_walk.py` covers that).
+    monkeypatch.setattr(curate_queue, "ensure_queue", lambda *a, **k: None)
     _stub_later_stages_empty(monkeypatch)
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     for name in ("a", "b", "c"):
@@ -6143,6 +6147,9 @@ def test_identity_walk_skips_a_cross_type_pair(
     to commit against, so it prints the skip line `adjudicate --apply` prints
     -- a guard landing in one walk and forgotten in the other is exactly
     #796's drift."""
+    # No queue row to commit against: the fallback line is what these pin (#1489
+    # makes the walk create the queue; `test_curate_group_walk.py` covers that).
+    monkeypatch.setattr(curate_queue, "ensure_queue", lambda *a, **k: None)
     _stub_later_stages_empty(monkeypatch)
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_bodied_doc(
