@@ -187,6 +187,15 @@ class MergeHistory(BaseModel):
     merges: list[api.MergeRecord]
 
 
+class MergedConceptList(BaseModel):
+    """Every combined page, newest combine first, in an envelope that leaves
+    room for additive fields."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    concepts: list[api.MergedConcept]
+
+
 class UnmergePreviewRequest(BaseModel):
     """Which merge to undo: the survivor and the absorbed concept, and whether
     the first step may discard an edit made to the survivor since its merge."""

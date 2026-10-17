@@ -131,6 +131,7 @@ _ROUTE_ERRORS: dict[tuple[str, str], set[str]] = {
     ("post", "/v1/decisions/{decision_key}/apply"): {"409", "413", "503"},
     ("post", "/v1/queue/refresh"): {"413", "503"},
     ("get", "/v1/merges"): set(),
+    ("get", "/v1/merged"): set(),
     ("get", "/v1/pages"): {"404"},
     ("post", "/v1/unmerge/preview"): {"409", "413"},
     ("post", "/v1/unmerge/apply"): {"409", "413", "503"},

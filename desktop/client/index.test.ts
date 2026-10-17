@@ -124,6 +124,7 @@ describe("the requests", () => {
       "/v1/merges?concept_id=concepts%2Fa+b",
       null,
     ],
+    ["mergedConcepts", (c) => c.mergedConcepts(), "GET", "/v1/merged", null],
     [
       "readPage",
       (c) => c.readPage("people/m osei"),

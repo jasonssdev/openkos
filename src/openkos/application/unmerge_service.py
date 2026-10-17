@@ -636,6 +636,66 @@ def merge_history(root: Path, concept_id: str) -> tuple[MergeHistoryEntry, ...]:
 
 
 @dataclass(frozen=True)
+class MergedConcept:
+    """A page whose ledger records at least one merge, with its history."""
+
+    concept_id: str
+    merges: tuple[MergeHistoryEntry, ...]
+    """`merge_history` for the page: newest first, never empty."""
+
+
+_OLDEST = datetime.min.replace(tzinfo=UTC)
+
+
+def _merged_time(stamp: str) -> datetime:
+    """`stamp` as an aware time, for ordering; an unparseable one sorts last
+    and a naive one is read as UTC."""
+    try:
+        parsed = datetime.fromisoformat(stamp)
+    except ValueError:
+        return _OLDEST
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def order_merged(pages: Sequence[MergedConcept]) -> tuple[MergedConcept, ...]:
+    """`pages` by their newest merge, newest first, then by Concept ID."""
+    by_id = sorted(pages, key=lambda page: page.concept_id)
+    return tuple(
+        sorted(
+            by_id, key=lambda page: _merged_time(page.merges[0].merged_at), reverse=True
+        )
+    )
+
+
+def merged_concepts(root: Path) -> tuple[MergedConcept, ...]:
+    """Every existing page whose committed ledger records a merge, newest
+    combine first (design D1).
+
+    Walks the ledger sidecars and reads each through `merge_history`, so the
+    records are exactly the per-page read's. The Concept ID comes from the
+    walked path, never from the sidecar's own `survivor_id`. A ledger whose
+    page no longer exists (an absorbed survivor's) is left out: its merges are
+    undone after the merge that absorbed it. A ledger that cannot be read is
+    skipped, as every bundle-wide ledger walk skips one. Reads only: no lock,
+    no write."""
+    layout = config.WorkspaceLayout(root)
+    ledger_root = bundle_ledger.ledger_root(layout.bundle_dir)
+    pages: list[MergedConcept] = []
+    for path in bundle_ledger.iter_ledgers(layout.bundle_dir):
+        relative = path.relative_to(ledger_root).as_posix()
+        concept_id = relative.removesuffix(bundle_ledger.LEDGER_SUFFIX)
+        if not okf.concept_path_for(concept_id, layout.bundle_dir).is_file():
+            continue
+        try:
+            merges = merge_history(root, concept_id)
+        except Refused:
+            continue
+        if merges:
+            pages.append(MergedConcept(concept_id=concept_id, merges=merges))
+    return order_merged(pages)
+
+
+@dataclass(frozen=True)
 class UnwindStepSummary:
     """One step of a stateless unwind, as data derived from its ledger entry."""
 

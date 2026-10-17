@@ -41,22 +41,22 @@ JSON and `schema.d.ts` are never hand-merged).
 
 ## S1 Plan
 
-- [ ] S1.1 Write `proposal.md`, `design.md`, `tasks.md` and the three delta specs.
-- [ ] S1.2 Write ADR-0067 (Proposed) and its README index row;
+- [x] S1.1 Write `proposal.md`, `design.md`, `tasks.md` and the three delta specs.
+- [x] S1.2 Write ADR-0067 (Proposed) and its README index row;
   `uv run pytest tests/unit/test_adr_index.py` passes.
 
 ## S2 Combined pages (P1, P5, H1; #1467)
 
-- [ ] S2.1 RED: application test for `unmerge_service.merged_concepts` (two pages
+- [x] S2.1 RED: application test for `unmerge_service.merged_concepts` (two pages
   newest first, a page absorbed after its own combine left out, an unreadable
   ledger skipped, no ledgers lists nothing, nothing written).
-- [ ] S2.2 GREEN: `merged_concepts` in `application/unmerge_service.py` (D1).
-- [ ] S2.3 RED then GREEN: facade `MergedConcept`, `merged_concepts` over real
+- [x] S2.2 GREEN: `merged_concepts` in `application/unmerge_service.py` (D1).
+- [x] S2.3 RED then GREEN: facade `MergedConcept`, `merged_concepts` over real
   merges made through the decision surface; no lock, no client.
-- [ ] S2.4 `GET /v1/merged` with `MergedConceptList`; both route tables; OpenAPI
+- [x] S2.4 `GET /v1/merged` with `MergedConceptList`; both route tables; OpenAPI
   snapshot; `api_surface.json` (classifier additive); `pnpm --dir desktop
   generate`; `client.mergedConcepts`.
-- [ ] S2.5 Mutation-check the page-exists filter and the ordering.
+- [x] S2.5 Mutation-check the page-exists filter and the ordering.
 
 ## S3 Reopen (P2, P5, H1-H3)
 

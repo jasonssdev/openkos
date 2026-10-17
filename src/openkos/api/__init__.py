@@ -68,6 +68,7 @@ from openkos.api._reads import (
 )
 from openkos.api._refresh import KindRefresh, QueueRefresh, refresh_decision_queue
 from openkos.api._unmerge import (
+    MergedConcept,
     MergeRecord,
     NotUnmergeable,
     Unmerged,
@@ -77,6 +78,7 @@ from openkos.api._unmerge import (
     UnmergeVersion,
     apply_unmerge,
     merge_history,
+    merged_concepts,
     preview_unmerge,
 )
 from openkos.api._workspace import Workspace, WorkspaceNotFound, WorkspaceUnreadable
@@ -168,6 +170,7 @@ __all__ = [
     "MergePlan",
     "MergeRecord",
     "MergeStep",
+    "MergedConcept",
     "Message",
     "NotApplied",
     "NotUnmergeable",
@@ -212,6 +215,7 @@ __all__ = [
     "apply_unmerge",
     "list_decisions",
     "merge_history",
+    "merged_concepts",
     "pending_report",
     "preview_decision",
     "preview_unmerge",
