@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0069: The desktop components are a design system built ahead of the screens, and tested in jsdom"
 description: The desktop app's components live in one design system under desktop/ui/system/, built and reviewed in a gallery before the screens that use them, with their DOM behavior tested in jsdom as a development dependency; this extends ADR-0066, whose view models and plain-DOM render functions stand.
-status: Proposed
+status: Accepted
 date: 2026-10-16
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0069: The desktop components are a design system built ahead of the screens, and tested in jsdom
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-16
 - **Extends:** [ADR-0066](0066-the-desktop-screens-are-plain-dom-over-a-tested-view-model-with-no-ui-framework.md)
 

@@ -107,4 +107,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0066](0066-the-desktop-screens-are-plain-dom-over-a-tested-view-model-with-no-ui-framework.md) | The desktop screens are plain DOM over a tested view model, with no UI framework | Accepted | 2026-10-16 |
 | [0067](0067-undoing-a-review-choice-is-a-two-phase-api-operation-keyed-by-what-the-choice-wrote.md) | Undoing a review choice is a two-phase API operation keyed by what the choice wrote | Accepted | 2026-10-16 |
 | [0068](0068-asking-through-the-api-applies-the-query-disclosure-rule-with-one-consent.md) | Asking through the API applies the query disclosure rule, with one consent | Proposed | 2026-10-16 |
-| [0069](0069-the-desktop-components-are-a-design-system-built-ahead-of-screens-and-tested-in-jsdom.md) | The desktop components are a design system built ahead of the screens, and tested in jsdom | Proposed | 2026-10-16 |
+| [0069](0069-the-desktop-components-are-a-design-system-built-ahead-of-screens-and-tested-in-jsdom.md) | The desktop components are a design system built ahead of the screens, and tested in jsdom | Accepted | 2026-10-16 |
