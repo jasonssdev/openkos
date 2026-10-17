@@ -75,6 +75,9 @@ export const ERROR_CODES = [
   "invalid_model",
   "invalid_embedding_model",
   "base_url_required",
+  // Who can see a page.
+  "page_not_found",
+  "sensitivity_unchanged",
 ] as const;
 
 export type KnownErrorCode = (typeof ERROR_CODES)[number];

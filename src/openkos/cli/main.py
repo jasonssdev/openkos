@@ -69,6 +69,7 @@ from openkos.application import query as application_query
 from openkos.application import query_report as application_query_report
 from openkos.application import repair as application_repair
 from openkos.application import revisions as revisions_service
+from openkos.application import sensitivity_service as application_sensitivity
 from openkos.application import status as application_status
 from openkos.application import suggest_relations_service as relations_service
 from openkos.application import suggest_volatility_service as volatility_service
@@ -7568,10 +7569,7 @@ def set_sensitivity_cmd(
         log_bytes, log_text = _snapshot_read(log_path)
         metadata["sensitivity"] = level
         new_concept_text = okf.dump_frontmatter(metadata, body)
-        log_line = (
-            f"**Set-sensitivity**: Set [{canonical_id}](/{canonical_id}.md) "
-            f"sensitivity to {level!r} (was {current!r})."
-        )
+        log_line = application_sensitivity.log_line(canonical_id, level, current)
 
         def set_sensitivity_log(current_log: str) -> str:
             return bundle_log.insert_log_entry(
@@ -7775,7 +7773,7 @@ def set_sensitivity_cmd(
                 for descendant_raise in descendant_raises
             ]
             + [f"bundle/{canonical_id}.md", "bundle/log.md"],
-            f"openkos: set-sensitivity {canonical_id} -> {level}",
+            application_sensitivity.commit_message(canonical_id, level),
         )
 
         # #640: a frontmatter-only write is a vector cache-hit (#554 excludes

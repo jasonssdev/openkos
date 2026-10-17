@@ -240,6 +240,21 @@ describe("the requests", () => {
       { version: { member_ids: ["a", "b"], content_digest: "d" } },
     ],
     [
+      "previewSensitivity",
+      (c) => c.previewSensitivity({ concept_id: "concepts/a", level: "confidential" }),
+      "POST",
+      "/v1/pages/sensitivity/preview",
+      { concept_id: "concepts/a", level: "confidential" },
+    ],
+    [
+      "applySensitivity",
+      (c) =>
+        c.applySensitivity({ version: { concept_id: "concepts/a", level: "confidential", content_digest: "d" } }),
+      "POST",
+      "/v1/pages/sensitivity/apply",
+      { version: { concept_id: "concepts/a", level: "confidential", content_digest: "d" } },
+    ],
+    [
       "readPage",
       (c) => c.readPage("people/m osei"),
       "GET",

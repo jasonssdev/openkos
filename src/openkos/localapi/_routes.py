@@ -45,6 +45,9 @@ from openkos.localapi._models import (
     ReopenResponse,
     RunRequest,
     RunStatus,
+    SensitivityApplyRequest,
+    SensitivityPreviewRequest,
+    SensitivityResponse,
     TierChangeApplyRequest,
     TierChangePreviewRequest,
     TierChangeResponse,
@@ -418,6 +421,39 @@ def make_router() -> APIRouter:
         )
         if isinstance(result, api.TierChanged):
             return TierChangeResponse(changed=result, warnings=warnings)
+        raise _errors.outcome_problem(result)
+
+    @router.post("/pages/sensitivity/preview", responses=_errors_of(404, 409, 413))
+    def sensitivity_preview(
+        body: SensitivityPreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.SensitivityPreview:
+        result = invoke(
+            lambda: api.preview_sensitivity(workspace, body.concept_id, body.level)
+        )
+        if isinstance(result, api.SensitivityPreview):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post(
+        "/pages/sensitivity/apply",
+        responses=_errors_of(404, 409, 413, 503, retry_after=True),
+    )
+    def sensitivity_apply(
+        body: SensitivityApplyRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> SensitivityResponse:
+        warnings: list[str] = []
+        result = invoke(
+            lambda: api.apply_sensitivity(
+                workspace,
+                body.version,
+                wait_seconds=_wait(body.wait_seconds),
+                on_warning=warnings.append,
+            )
+        )
+        if isinstance(result, api.SensitivityChanged):
+            return SensitivityResponse(changed=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
     @router.get("/settings/model")

@@ -342,6 +342,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/pages/sensitivity/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sensitivity Apply */
+        post: operations["sensitivity_apply_v1_pages_sensitivity_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/pages/sensitivity/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sensitivity Preview */
+        post: operations["sensitivity_preview_v1_pages_sensitivity_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/pending": {
         parameters: {
             query?: never;
@@ -1911,6 +1945,26 @@ export interface components {
             work: components["schemas"]["WorkItem"][];
         };
         /**
+         * RaisedPage
+         * @description A page raised with the one changed, because it was made from it.
+         */
+        RaisedPage: {
+            /**
+             * After
+             * @enum {string}
+             */
+            after: "public" | "private" | "confidential";
+            /**
+             * Before
+             * @enum {string}
+             */
+            before: "public" | "private" | "confidential";
+            /** Concept Id */
+            concept_id: string;
+            /** Title */
+            title: string;
+        };
+        /**
          * ReconcilePlan
          * @description Recording how two pages relate, as `reconcile` writes it: both stand
          *     (`reconciled_with`, no holder), one replaces the other (`supersedes`, the
@@ -2167,6 +2221,118 @@ export interface components {
             reachable: boolean;
             /** Version */
             version: string | null;
+        };
+        /**
+         * SensitivityApplyRequest
+         * @description The version the sensitivity preview issued (echoed unchanged) and how
+         *     long to wait for the workspace lock; a client can shorten the wait only.
+         */
+        SensitivityApplyRequest: {
+            version: components["schemas"]["SensitivityVersion"];
+            /**
+             * Wait Seconds
+             * @default 5
+             */
+            wait_seconds?: number;
+        };
+        /**
+         * SensitivityChanged
+         * @description The level was set. `previous` is the stored value it replaced (`None`
+         *     when there was none). `commit_sha` is `None` when the commit could not be
+         *     made (the write itself landed). `committed_confidential`: the commit holds
+         *     a page explicitly marked confidential.
+         */
+        SensitivityChanged: {
+            /** Also Raised */
+            also_raised: string[];
+            /** Commit Sha */
+            commit_sha: string | null;
+            /**
+             * Committed Confidential
+             * @default false
+             */
+            committed_confidential?: boolean;
+            /** Concept Id */
+            concept_id: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "public" | "private" | "confidential";
+            /** Previous */
+            previous: string | null;
+        };
+        /**
+         * SensitivityPreview
+         * @description Setting `concept_id` to `level`. `current` is the page's level now,
+         *     ranked fail-closed (missing is `private`, unrecognised `confidential`).
+         *     `direction` compares the stored value with `level`; `same` rewrites a
+         *     missing or unrecognised value as the level it already reads as.
+         *     `also_raised` is the pages raised with it: only a raise of a page of type
+         *     `Source` has any, and a lowering never lowers another page.
+         */
+        SensitivityPreview: {
+            /** Also Raised */
+            also_raised: components["schemas"]["RaisedPage"][];
+            /** Concept Id */
+            concept_id: string;
+            /**
+             * Current
+             * @enum {string}
+             */
+            current: "public" | "private" | "confidential";
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "raise" | "same" | "lower";
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "public" | "private" | "confidential";
+            /** Title */
+            title: string;
+            version: components["schemas"]["SensitivityVersion"];
+        };
+        /**
+         * SensitivityPreviewRequest
+         * @description The page, by its Concept ID, and who may see it.
+         */
+        SensitivityPreviewRequest: {
+            /** Concept Id */
+            concept_id: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "public" | "private" | "confidential";
+        };
+        /**
+         * SensitivityResponse
+         * @description What was set, and the warnings the apply raised along the way.
+         */
+        SensitivityResponse: {
+            changed: components["schemas"]["SensitivityChanged"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * SensitivityVersion
+         * @description The version a stateless caller applies against: echo it unchanged.
+         *     `content_digest` covers the page, the level and, for a raise of a source
+         *     file's page, every page that could be derived from it.
+         */
+        SensitivityVersion: {
+            /** Concept Id */
+            concept_id: string;
+            /** Content Digest */
+            content_digest: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "public" | "private" | "confidential";
         };
         /**
          * SettingChange
@@ -3999,6 +4165,191 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    sensitivity_apply_v1_pages_sensitivity_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SensitivityApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SensitivityResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    /** @description Seconds to wait before retrying a busy workspace. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    sensitivity_preview_v1_pages_sensitivity_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SensitivityPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SensitivityPreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
