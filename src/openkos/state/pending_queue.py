@@ -669,6 +669,49 @@ def retire_open_naming(
     return cursor.rowcount
 
 
+def retire_open_naming_absent(
+    conn: sqlite3.Connection,
+    kinds: Collection[str],
+    absent: Callable[[str], bool],
+    *,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] | None = None,
+) -> dict[str, int]:
+    """Retire as `stale` every open row of `kinds` that names, as a target, a
+    concept `absent` answers true for, and return how many moved per kind.
+
+    For a queue written before a removing write retired its rows (or edited by
+    hand): the counterpart of `retire_open_naming`, which needs the removed ids.
+    `absent` is asked INSIDE the transaction, so a concept restored before it
+    opens is not taken for gone. Input refs are not consulted (they may be
+    synthetic). Resolved rows keep their state; an absent queue answers `{}` and
+    is never created."""
+    unknown = set(kinds) - set(KINDS)
+    if unknown:
+        raise ValueError(f"unknown pending-work kind(s): {sorted(unknown)!r}")
+    if not kinds or not queue_exists(conn):
+        return {}
+    now = (clock or _now)().isoformat()
+    marks = ",".join("?" for _ in kinds)
+    with _transaction(conn, commit_section):
+        rows = conn.execute(
+            "SELECT p.id, p.kind, t.concept_id FROM pending_items p"  # noqa: S608
+            " JOIN pending_item_targets t ON t.item_id = p.id"
+            f" WHERE p.status IN ('pending','claimed') AND p.kind IN ({marks})",
+            tuple(kinds),
+        ).fetchall()
+        doomed = {item_id: kind for item_id, kind, target in rows if absent(target)}
+        conn.executemany(
+            "UPDATE pending_items SET status='stale', resolution='stale',"
+            " claimed_by=NULL, resolved_at=? WHERE id = ?",
+            [(now, item_id) for item_id in sorted(doomed)],
+        )
+    counts: dict[str, int] = {}
+    for kind in doomed.values():
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
 def _platform() -> str:
     """`sys.platform` read through a function so mypy does not narrow the
     per-OS branches below to the host it runs on (with `warn_unreachable`,

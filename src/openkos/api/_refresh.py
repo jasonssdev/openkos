@@ -33,6 +33,11 @@ class KindRefresh:
     """`volatility` only: types skipped because the two confidentiality regimes
     held different cached answers."""
 
+    retired_missing: int = 0
+    """`identity` and `relation_type` only: open rows retired because a page
+    they name is no longer in the bundle, whether or not the pass was complete.
+    Counted apart from `retired`."""
+
 
 @dataclass(frozen=True)
 class QueueRefresh:
@@ -61,6 +66,7 @@ def _kind(
         retired=result.retired,
         complete=result.complete,
         ambiguous=ambiguous,
+        retired_missing=result.retired_missing,
     )
 
 

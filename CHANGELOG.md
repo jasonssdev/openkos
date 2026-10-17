@@ -32,6 +32,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- `openkos.api.preview_decision` now answers a decision whose pages changed since it was computed with `Stale("row_inputs_changed")`, the result its apply always returned, instead of a plan whose version could never be applied; skip still answers `skipped`, and `list_decisions` still lists the decision with `fresh=False`. `refresh_decision_queue` retires every open identity and connection decision that names a page no longer in the library, whether or not its pass was complete, so a queue written before merges retired their rows heals; the count is the new `KindRefresh.retired_missing`, and a contradiction found while combining stays open. The change is additive; `API_VERSION` is unchanged (#1475).
 - `query` now honours an attribution marker the model appends to the last sentence (`... Euros. USED: 2, 3`): the named blocks are cited and the marker is stripped from the answer prose, instead of citing every retrieved concept and filing the marker into the bundle with `--save`. Only a case-sensitive `USED:` at the very end of the reply with an integer or `none` payload qualifies, and an own-line marker still takes precedence (#1384).
 
 ### Changed

@@ -1197,6 +1197,11 @@
             "title": "Retired",
             "type": "integer"
           },
+          "retired_missing": {
+            "default": 0,
+            "title": "Retired Missing",
+            "type": "integer"
+          },
           "suppressed": {
             "title": "Suppressed",
             "type": "integer"

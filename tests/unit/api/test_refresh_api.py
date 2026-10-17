@@ -153,3 +153,14 @@ def test_a_wait_out_of_range_is_refused_before_anything_is_written(
         refresh_decision_queue(Workspace.open(root), wait_seconds=wait)
 
     assert support.snapshot(root) == before
+
+
+def test_rows_naming_a_missing_page_are_counted_apart(root: Path) -> None:
+    support.enqueue_identity(root, ("concepts/g0-a", "concepts/gone"))
+    support.enqueue_relation(root, "concepts/g0-a", "concepts/gone")
+
+    result = refresh_decision_queue(Workspace.open(root))
+
+    assert result.identity.retired_missing == 1
+    assert result.relation_type.retired_missing == 1
+    assert result.volatility.retired_missing == 0

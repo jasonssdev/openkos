@@ -832,3 +832,64 @@ def test_amend_same_inputs_leaves_the_other_outcomes_alone(
     proposal = _proposal()
     assert pq.upsert_proposal(conn, proposal, **kwargs) is pq.UpsertOutcome.INSERTED
     assert pq.upsert_proposal(conn, proposal, **kwargs) is pq.UpsertOutcome.UNCHANGED
+
+
+# -- retire_open_naming_absent --------------------------------------------------
+
+
+def test_retiring_rows_naming_an_absent_concept_moves_only_those_of_the_kinds(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    _upsert(
+        conn, _proposal(targets=("concepts/a", "concepts/gone")), section, bundle_dir
+    )
+    _upsert(conn, _proposal(targets=("concepts/a", "concepts/b")), section, bundle_dir)
+    identity = _proposal(
+        kind="identity",
+        key_body=pq.identity_key(("concepts/gone", "concepts/x")),
+        targets=("concepts/gone", "concepts/x"),
+    )
+    _upsert(conn, identity, section, bundle_dir)
+    asked: list[str] = []
+
+    def absent(concept_id: str) -> bool:
+        asked.append(concept_id)
+        return concept_id == "concepts/gone"
+
+    moved = pq.retire_open_naming_absent(
+        conn, ("relation_type",), absent, commit_section=section, clock=lambda: T0
+    )
+
+    assert moved == {"relation_type": 1}
+    statuses = [(row[0].split(":")[0], row[1]) for row in _rows(conn)]
+    assert statuses == [
+        ("relation_type", "stale"),
+        ("relation_type", "pending"),
+        ("identity", "pending"),
+    ]
+    assert "concepts/x" not in asked  # the identity row was never consulted
+    again = pq.retire_open_naming_absent(
+        conn, ("relation_type",), absent, commit_section=section
+    )
+    assert again == {}  # a stale row is not moved twice
+
+
+def test_retiring_rows_naming_an_absent_concept_never_creates_the_queue(
+    conn: sqlite3.Connection, section: _Section
+) -> None:
+    moved = pq.retire_open_naming_absent(
+        conn, ("identity",), lambda _: True, commit_section=section
+    )
+
+    assert moved == {}
+    assert not pq.queue_exists(conn)
+    assert section.entered == 0
+
+
+def test_retiring_rows_naming_an_absent_concept_refuses_an_unknown_kind(
+    conn: sqlite3.Connection, section: _Section
+) -> None:
+    with pytest.raises(ValueError, match="unknown pending-work kind"):
+        pq.retire_open_naming_absent(
+            conn, ("identity", "nonsense"), lambda _: True, commit_section=section
+        )

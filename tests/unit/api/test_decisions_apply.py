@@ -154,19 +154,25 @@ def _enqueue_merge(root: Path) -> None:
             ),
         ),
         (
-            lambda r: support.enqueue_identity(r, PAIR, verdict="different"),
+            lambda r: support.enqueue_identity(
+                r, PAIR, verdict="different", fresh=True
+            ),
             IDENTITY_KEY,
             Action.KEEP_DISTINCT,
             KeepDistinctPlan(member_ids=PAIR),
         ),
         (
-            lambda r: support.enqueue_relation(r, "concepts/a", "concepts/c"),
+            lambda r: support.enqueue_relation(
+                r, "concepts/a", "concepts/c", fresh=True
+            ),
             _relation_key("concepts/a", "concepts/c"),
             Action.RELATE,
             RelatePlan("concepts/a", "concepts/c", "member_of"),
         ),
         (
-            lambda r: support.enqueue_relation(r, "concepts/a", "concepts/c"),
+            lambda r: support.enqueue_relation(
+                r, "concepts/a", "concepts/c", fresh=True
+            ),
             _relation_key("concepts/a", "concepts/c"),
             Action.RELATE_REVERSED,
             RelatePlan("concepts/c", "concepts/a", "member_of"),
@@ -266,6 +272,51 @@ def test_an_action_the_decision_does_not_offer_is_returned_not_raised(
 
 def test_skip_has_no_plan_and_is_returned_as_not_applied(root: Path) -> None:
     _enqueue_merge(root)
+
+    result = preview_decision(Workspace.open(root), IDENTITY_KEY, Action.SKIP)
+
+    assert result == NotApplied(Action.SKIP, "skipped")
+
+
+def _edit(root: Path, concept_id: str) -> None:
+    page = root / "bundle" / f"{concept_id}.md"
+    page.write_text(page.read_text(encoding="utf-8") + "\nEdited.\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("enqueue", "key", "action"),
+    [
+        (_enqueue_merge, IDENTITY_KEY, Action.MERGE),
+        (_enqueue_merge, IDENTITY_KEY, Action.KEEP_DISTINCT),
+        (
+            lambda r: support.enqueue_relation(
+                r, "concepts/a", "concepts/c", fresh=True
+            ),
+            _relation_key("concepts/a", "concepts/c"),
+            Action.RELATE,
+        ),
+    ],
+    ids=["merge", "keep-distinct", "relate"],
+)
+def test_a_changed_decision_previews_as_the_stale_its_apply_returns(
+    root: Path, enqueue: Callable[[Path], None], key: str, action: Action
+) -> None:
+    enqueue(root)
+    _edit(root, "concepts/a")
+    [decision] = list_decisions(Workspace.open(root))
+    assert decision.fresh is False
+    assert action in decision.actions  # still listed with its actions
+    before = support.snapshot(root)
+
+    result = preview_decision(Workspace.open(root), key, action)
+
+    assert result == Stale(key, "row_inputs_changed")
+    assert support.snapshot(root) == before
+
+
+def test_skip_on_a_changed_decision_is_still_skip(root: Path) -> None:
+    _enqueue_merge(root)
+    _edit(root, "concepts/a")
 
     result = preview_decision(Workspace.open(root), IDENTITY_KEY, Action.SKIP)
 
@@ -625,7 +676,9 @@ def test_preview_and_apply_both_ask_for_no_reconciliation(
 
 
 def test_the_stored_decision_payload_is_never_part_of_a_preview(root: Path) -> None:
-    support.enqueue_relation(root, "concepts/a", "concepts/c", rationale="Because.")
+    support.enqueue_relation(
+        root, "concepts/a", "concepts/c", rationale="Because.", fresh=True
+    )
 
     result = _preview(root, _relation_key("concepts/a", "concepts/c"), Action.RELATE)
 

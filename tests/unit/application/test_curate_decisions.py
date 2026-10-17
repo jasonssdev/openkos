@@ -3562,14 +3562,20 @@ def test_a_row_superseded_since_the_token_is_stale_and_writes_nothing(
 def test_a_row_whose_inputs_changed_is_stale_and_writes_nothing(tmp_path: Path) -> None:
     root, layout, proposal = _identity_seeded(tmp_path)
     _edit(layout, _SURVIVOR)  # the row was computed against the unedited member
-    version = _must_decision_preview(
-        root, layout, proposal.decision_key, Action.MERGE
-    ).version
     before = _snapshot(root)
     recorder = _Recorder()
 
-    outcome = _apply(root, layout, version, Action.MERGE, recorder)
+    # The preview agrees with the commit (#1475): no plan for a row it refuses.
+    preview = curate_decisions.preview_decision(
+        root, layout, proposal.decision_key, Action.MERGE
+    )
+    # A token issued over the current bytes (an older engine's preview) is
+    # refused inside the section all the same.
+    outcome = _apply(
+        root, layout, _token(root, layout, proposal), Action.MERGE, recorder
+    )
 
+    assert preview == Stale(proposal.decision_key, "row_inputs_changed")
     assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
     assert recorder.commits == []
     assert _snapshot(root) == before
@@ -3598,14 +3604,22 @@ def test_a_keep_distinct_token_for_a_row_with_stale_inputs_is_stale(
 ) -> None:
     root, layout, proposal = _identity_seeded(tmp_path, verdict=None)
     _edit(layout, _ABSORBED)
-    version = _must_decision_preview(
-        root, layout, proposal.decision_key, Action.KEEP_DISTINCT
-    ).version
     before = _snapshot(root)
     recorder = _Recorder()
 
+    preview = curate_decisions.preview_decision(
+        root, layout, proposal.decision_key, Action.KEEP_DISTINCT
+    )
+    version = curate_decisions.version_of(
+        curate_decisions.KeepDistinctDecisionPreview(
+            tuple(sorted(proposal.targets)), proposal.decision_key
+        ),
+        layout=layout,
+        payload_digest=pq.payload_digest_for(proposal),
+    )
     outcome = _apply(root, layout, version, Action.KEEP_DISTINCT, recorder)
 
+    assert preview == Stale(proposal.decision_key, "row_inputs_changed")
     assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
     assert recorder.commits == []
     assert recorder.events == ["enter", "exit"]

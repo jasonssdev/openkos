@@ -923,6 +923,11 @@ export interface components {
             replaced: number;
             /** Retired */
             retired: number;
+            /**
+             * Retired Missing
+             * @default 0
+             */
+            retired_missing?: number;
             /** Suppressed */
             suppressed: number;
             /** Unchanged */

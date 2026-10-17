@@ -885,6 +885,11 @@
           "annotation": "int",
           "default": true,
           "name": "ambiguous"
+        },
+        {
+          "annotation": "int",
+          "default": true,
+          "name": "retired_missing"
         }
       ],
       "frozen": true,
