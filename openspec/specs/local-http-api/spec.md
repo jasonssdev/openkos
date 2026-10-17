@@ -412,6 +412,12 @@ operations MUST be reachable as follows, and the server MUST call the matching
 | `GET /v1/settings/model` | `model_settings` |
 | `POST /v1/settings/model/preview` | `preview_model_settings` |
 | `POST /v1/settings/model/apply` | `apply_model_settings` |
+| `POST /v1/pages/sensitivity/preview` | `preview_sensitivity` |
+| `POST /v1/pages/sensitivity/apply` | `apply_sensitivity` |
+| `GET /v1/search` | `search_index` |
+| `POST /v1/search/rebuilds` | `rebuild_search`, as a job (see the rebuild job requirement) |
+| `GET /v1/search/rebuilds/{id}` | the rebuild job's state |
+| `POST /v1/search/rebuilds/{id}/stop` | the rebuild job's cooperative stop |
 
 The health route is authenticated like every other route. Every successful
 response MUST be JSON. A request body that is not valid for its operation (an
@@ -699,6 +705,11 @@ mapping MUST be evaluated subclass-first and MUST be:
 | An ingest run already active | 409 | `ingest_active` | true |
 | `PullRefused("not_configured")` | 422 | `model_not_configured` | false |
 | `PullRefused("backend_cannot_pull")` | 422 | `pull_not_supported` | false |
+| `SensitivityStale` outcome | 409 | `stale` | false |
+| `SensitivityRefused("not_found")` | 404 | `page_not_found` | false |
+| `SensitivityRefused("unchanged")` | 409 | `sensitivity_unchanged` | false |
+| A search rebuild already active | 409 | `rebuild_active` | true |
+| `RebuildRefused("remote_not_allowed")` | 422 | `remote_not_allowed` | false |
 | `DriftDetected` | 409 | `write_drift` | true |
 | `MergeGroupInterrupted` | 500 | `merge_group_interrupted` | false |
 | `UnmergeInterrupted` | 500 | `unmerge_interrupted` | false |
@@ -716,6 +727,7 @@ mapping MUST be evaluated subclass-first and MUST be:
 | `BackendModelNotFound` | 424 | `backend_model_not_found` | false |
 | `BackendGenerationCapped` | 502 | `generation_capped` | false |
 | Any other `BackendError` (host locality, base) | 502 | `backend_error` | false |
+| `SearchUnavailable` | 500 | `search_unavailable` | false |
 | Any other exception, including any other `OpenKosError` and `OSError` | 500 | `internal_error` | false |
 
 The `message` MUST be a fixed text chosen by the server for each code and MUST
@@ -1584,3 +1596,49 @@ grace as a judging run.
 - GIVEN the workspace lock held by another process
 - WHEN a run is started and polled
 - THEN the job is `finished` with outcome status `busy`
+
+### Requirement: A Page's Sensitivity Is Served Under `/v1/pages/sensitivity`
+
+The local API MUST serve `POST /v1/pages/sensitivity/preview` (body
+`concept_id`, `level`) answering `SensitivityPreview`, and `POST
+/v1/pages/sensitivity/apply` (body: the echoed `version`, `wait_seconds` capped
+at the write wait) answering `{changed, warnings}`. A missing page MUST answer
+404 `page_not_found`; a level already set, 409 `sensitivity_unchanged`; a stale
+version, 409 `stale`; a busy workspace, 503 `workspace_busy` with
+`Retry-After`; a level outside the three, 422 `invalid_request`.
+
+#### Scenario: A round trip sets the level
+
+- WHEN a client previews `concepts/garden` at `confidential` and applies the
+  returned version
+- THEN the apply answers 200 with `changed.level` `confidential` and the page
+  reads `confidential`
+
+### Requirement: Search Rebuilds Are A Pollable Job Under `/v1/search`
+
+The local API MUST serve `GET /v1/search` answering `SearchIndex`; `POST
+/v1/search/rebuilds` (body `allow_remote`, default false) answering 202 with a
+`RebuildStatus` and a `Location`; `GET /v1/search/rebuilds/{rebuild_id}`; and
+`POST /v1/search/rebuilds/{rebuild_id}/stop`. At most one rebuild MUST be
+active: another start answers 409 `rebuild_active`. The rebuild MUST run on its
+own daemon thread; the start MUST wait for admission (after the consent check,
+before any page is sent), so a refusal (`remote_not_allowed`, 422) answers the
+start itself, and a failure after admission (an unreachable AI model, a busy
+workspace, an unusable store) is reported on the poll as `failed` with its
+`error` row. `RebuildStatus` MUST carry
+`rebuild_id`, `state` (`running`, `stopping`, `stopped`, `finished`,
+`failed`), `phase`, `done`, `total`, `outcome` and `error`. An unknown id MUST
+answer 404 `not_found`. `SearchUnavailable` MUST answer 500
+`search_unavailable`. Shutting the server down MUST stop an active rebuild.
+
+#### Scenario: A rebuild is started, polled and finished
+
+- WHEN a client starts a rebuild against a local AI model for search and polls
+  it
+- THEN the poll reaches `finished` with an `outcome`
+
+#### Scenario: A second rebuild is refused while one runs
+
+- GIVEN a running rebuild
+- WHEN another is started
+- THEN it answers 409 `rebuild_active`

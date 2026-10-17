@@ -23,4 +23,4 @@
 
 ## 4. Close (PR 3)
 
-- [ ] 4.1 Archive: merge the deltas, move the change, write the archive report.
+- [x] 4.1 Archive: merge the deltas, move the change, write the archive report.
