@@ -5,14 +5,17 @@
 import { ApiError, isBusy, isStale, retryWhileBusy, type Client, type Schemas } from "../../client/index.ts";
 import {
   CHANGED,
-  CHANGED_CHECK,
   DECIDE_LATER,
+  changedNotice,
+  checkable,
   checkConsent,
   checkProgress,
   checkResult,
   confirmation,
+  findingPages,
   historyLine,
   identityShape,
+  isFinding,
   previewLines,
   problemFor,
   splitDone,
@@ -33,6 +36,7 @@ export type ReviewClient = Pick<
   | "decisions"
   | "readPage"
   | "previewDecision"
+  | "previewFinding"
   | "applyDecision"
   | "quoteJudging"
   | "startJudgingRun"
@@ -86,11 +90,14 @@ export interface Selection {
   okfType: string | null;
 }
 
+/** A previewed choice: a decision's, or a contradiction's or revision's (ADR-0072). */
+export type Preview = Schemas["DecisionPreview"] | Schemas["FindingPreview"];
+
 export type Step =
   | { name: "choosing" }
   | { name: "previewing"; action: Action }
-  | { name: "preview"; action: Action; preview: Schemas["DecisionPreview"]; lines: string[] }
-  | { name: "applying"; action: Action; preview: Schemas["DecisionPreview"]; lines: string[] }
+  | { name: "preview"; action: Action; preview: Preview; lines: string[] }
+  | { name: "applying"; action: Action; preview: Preview; lines: string[] }
   | { name: "done"; lines: string[]; undo: Undo | null }
   | { name: "undoing"; lines: string[]; undo: Exclude<Undo, { kind: "split" }> };
 
@@ -151,9 +158,14 @@ const GONE = "These pages changed, and this question no longer applies.";
 
 type Operation = { kind: "preview"; action: Action } | { kind: "apply" } | { kind: "undo" };
 
-/** Waiting for a check: an unjudged pair, or any decision whose pages changed. */
+/**
+ * Waiting for a check: an unjudged pair, or a changed decision of a kind the
+ * check covers. A changed disagreement or newer decision is not: no check makes
+ * it current, so it is never counted as made ready by one.
+ */
 function waitsForCheck(decision: Decision): boolean {
-  return (decision.kind === "identity" && decision.evaluation === "pending_evaluation") || decision.fresh === false;
+  if (decision.kind === "identity" && decision.evaluation === "pending_evaluation") return true;
+  return decision.fresh === false && checkable(decision);
 }
 
 /** Whether To review offers Check all: some pair is unjudged, or changed. */
@@ -163,6 +175,8 @@ export function offersCheckAll(decisions: readonly Decision[]): boolean {
 
 /** The ids of the pages a decision shows. */
 function pageIds(decision: Decision): string[] {
+  const shown = findingPages(decision);
+  if (shown !== null) return shown;
   const detail = decision.detail;
   if (detail && "member_ids" in detail) return detail.member_ids;
   if (detail && "effective_source_id" in detail) return [detail.effective_source_id, detail.effective_target_id];
@@ -300,7 +314,7 @@ export class ReviewModel {
         decision,
         selection: firstSelection(decision),
         step: { name: "choosing" },
-        changed: decision.fresh === false ? CHANGED_CHECK : null,
+        changed: changedNotice(decision),
         problem: null,
       },
     });
@@ -420,10 +434,10 @@ export class ReviewModel {
     this.#setOpen({ step: { name: "previewing", action }, problem: null });
     const selection = this.#selectionFor(action);
     try {
-      const preview = await this.#client.previewDecision(
-        open.key,
-        selection === undefined ? { action } : { action, selection },
-      );
+      // The finding preview for a disagreement or a newer decision (ADR-0072).
+      const preview: Preview = isFinding(open.decision)
+        ? await this.#client.previewFinding(open.key, { action })
+        : await this.#client.previewDecision(open.key, selection === undefined ? { action } : { action, selection });
       const lines = previewLines(open.decision, preview.plan, this.#state.pages);
       this.#setOpen({ step: { name: "preview", action, preview, lines } });
     } catch (error) {
@@ -445,8 +459,8 @@ export class ReviewModel {
       return;
     }
     if (decision.fresh === false) {
-      // Its preview would be stale too: it is checked again before anything else.
-      this.#setOpen({ decision, changed: CHANGED_CHECK, step: { name: "choosing" }, problem: null });
+      // Its preview would be stale too: it is checked again, or waits, before anything else.
+      this.#setOpen({ decision, changed: changedNotice(decision), step: { name: "choosing" }, problem: null });
       return;
     }
     this.#setOpen({ decision, changed: CHANGED });
@@ -471,7 +485,7 @@ export class ReviewModel {
       );
       const undo = undoFor(preview.plan, applied);
       this.#setOpen({
-        step: { name: "done", lines: confirmation(open.decision, applied, this.#state.pages), undo },
+        step: { name: "done", lines: confirmation(open.decision, applied, this.#state.pages, preview.plan), undo },
         changed: null,
       });
       await this.load();
@@ -519,8 +533,7 @@ export class ReviewModel {
     if (open === null) return;
     const decision = this.#state.decisions.find((d) => d.decision_key === open.key);
     if (decision !== undefined) {
-      const changed = decision.fresh === false ? CHANGED_CHECK : null;
-      this.#setOpen({ decision, changed, step: { name: "choosing" }, problem: null });
+      this.#setOpen({ decision, changed: changedNotice(decision), step: { name: "choosing" }, problem: null });
     }
   }
 
@@ -612,8 +625,10 @@ export class ReviewModel {
    * now is; still changed, its kind is quoted and the person is asked first.
    */
   async recheck(): Promise<void> {
-    const key = this.#state.open?.key;
-    if (key === undefined) return;
+    const open = this.#state.open;
+    // Only a kind the check covers is checked again; a changed finding waits.
+    if (open === null || !checkable(open.decision)) return;
+    const key = open.key;
     this.#set({ check: { phase: "quoting", consent: null, text: null, problem: null } });
     await this.#refreshQueue();
     await this.load();
@@ -782,9 +797,15 @@ export class ReviewModel {
   }
 }
 
-/** What a confirmation's Undo reverses, from the plan that was applied. */
-function undoFor(plan: Schemas["PreviewPlan"], applied: Schemas["Applied"]): Undo | null {
+/**
+ * What a confirmation's Undo reverses, from the plan that was applied. A
+ * finding's has none yet (#1497): its confirmation does not mention one.
+ */
+function undoFor(plan: Preview["plan"], applied: Schemas["Applied"]): Undo | null {
   switch (plan.kind) {
+    case "reconcile":
+    case "decline":
+      return null;
     case "merge": {
       const first = applied.merged?.[0];
       return first === undefined ? null : { kind: "split", survivor: first[0], absorbed: first[1] };

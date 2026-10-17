@@ -8,6 +8,8 @@ import type { Undo } from "./model.ts";
 type Decision = Schemas["Decision"];
 type Page = Schemas["Page"];
 type Action = Schemas["Action"];
+/** What a preview returns a plan of: a decision's, or a contradiction's or revision's (ADR-0072). */
+export type AnyPlan = Schemas["PreviewPlan"] | Schemas["FindingPlan"];
 
 /** The pages a screen has read, by Concept ID. A missing entry could not be read. */
 export type Pages = ReadonlyMap<string, Page>;
@@ -150,6 +152,25 @@ export const CHANGED =
 export const CHANGED_CHECK =
   "Something about these pages changed since this was suggested. Check them again before you decide.";
 
+/**
+ * A changed disagreement or newer decision. The check does not cover these
+ * kinds and the free refresh does not recompute them, so nothing in the app can
+ * make one current: it is listed as changed with Decide later only.
+ */
+export const CHANGED_FINDING =
+  "Something about these pages changed since this was found, so it can't be settled as it was. The app can't look at them again yet.";
+
+/** The kinds the check covers (`QuoteRequest.kind`): a changed one can be checked again. */
+export function checkable(decision: Decision): boolean {
+  return decision.kind === "identity" || decision.kind === "relation_type" || decision.kind === "volatility";
+}
+
+/** The notice a changed decision is shown with, or null when it is current. */
+export function changedNotice(decision: Decision): string | null {
+  if (decision.fresh !== false) return null;
+  return checkable(decision) ? CHANGED_CHECK : CHANGED_FINDING;
+}
+
 const CHECK_AGAIN: Option = {
   choice: "recheck",
   label: "Check again",
@@ -165,6 +186,10 @@ export interface PageView {
   excerpt: string;
   whoCanSee: { label: string; meaning: string } | null;
   sources: string[];
+  /** A newer decision's quote from this page, in quotation marks. */
+  quote?: string;
+  /** A newer decision's date for this page, or "No date". */
+  date?: string;
 }
 
 export interface DecisionView {
@@ -181,6 +206,10 @@ export interface DecisionView {
   options: Option[];
   /** The question asked after "Same thing", for a group or pages of different kinds. */
   next: { lead: string; question: string; options: Option[] } | null;
+  /** What the AI model saw as not matching, each in quotation marks, as written. */
+  claims: string[];
+  /** One line under the options: where else the person can settle this. */
+  after: string | null;
   changed: string | null;
   cannotAct: string | null;
 }
@@ -381,6 +410,178 @@ function tierView(decision: Decision): Pick<DecisionView, "question" | "facts" |
   return { question: `How quickly do facts about ${noun.many} go out of date?`, facts, options };
 }
 
+// -- contradictions, revisions and refused files (ADR-0072) --------------------- //
+
+type ContradictionDetail = Schemas["ContradictionDetail"];
+type RevisionDetail = Schemas["RevisionDetail"];
+type RefusedFileDetail = Schemas["RefusedFileDetail"];
+
+function contradictionOf(decision: Decision): ContradictionDetail | null {
+  const finding = decision.finding;
+  return decision.kind === "contradiction" && finding && "conflicting_claims" in finding ? finding : null;
+}
+
+function revisionOf(decision: Decision): RevisionDetail | null {
+  const finding = decision.finding;
+  return decision.kind === "revision" && finding && "change" in finding ? finding : null;
+}
+
+function refusedFileOf(decision: Decision): RefusedFileDetail | null {
+  const finding = decision.finding;
+  return decision.kind === "watch_refusal" && finding && "file_name" in finding ? finding : null;
+}
+
+/**
+ * The pages a finding shows: both of a disagreement, only the page that was
+ * combined into for one found inside a combined page, both of a newer decision,
+ * none for a refused file. Null when the decision is not a finding with detail.
+ */
+export function findingPages(decision: Decision): string[] | null {
+  const contradiction = contradictionOf(decision);
+  if (contradiction !== null) {
+    return contradiction.merged_absorbed_id === null
+      ? [contradiction.first_id, contradiction.second_id]
+      : [contradiction.first_id];
+  }
+  const revision = revisionOf(decision);
+  if (revision !== null) return [revision.first_id, revision.second_id];
+  return decision.kind === "watch_refusal" ? [] : null;
+}
+
+/** Whether a decision is previewed with the finding preview rather than the decision one. */
+export function isFinding(decision: Decision): boolean {
+  return decision.kind === "contradiction" || decision.kind === "revision";
+}
+
+const OUT_OF_DATE = (title: string) =>
+  `We'll mark '${title}' as out of date. It stays in your library, but answers won't use it.`;
+const UPDATES = (later: string, earlier: string) =>
+  `Both stay current, and '${later}' is noted as an update to '${earlier}'.`;
+const BOTH_RIGHT =
+  "Both pages stay as they are, and each gets a short note that you checked them against each other.";
+const BOTH_STAND =
+  "Both pages stay current, and each gets a short note that you checked them against each other. We won't ask about these two again.";
+const LEAVE_THEM = "Nothing on either page changes. We won't point this out again.";
+const LEAVE_IT = "Nothing changes on the page. We won't point this out again.";
+
+/** Above what the AI model saw as not matching. */
+export const CLAIMS_HEADING = "What doesn't match";
+
+/** Under a disagreement found inside a combined page: Split again is the other way out. */
+export const SPLIT_INSTEAD =
+  "If combining them was a mistake, you can split it again under 'Pages you combined'.";
+
+function contradictionView(decision: Decision, pages: Pages): KindView {
+  const finding = contradictionOf(decision);
+  if (finding === null) return { question: listedOnly(decision, pages) };
+  const offers = (action: Action) => decision.actions.includes(action);
+  const first = titleOf(pages, finding.first_id);
+  const claims = finding.conflicting_claims.map((claim) => `“${claim}”`);
+  if (finding.merged_absorbed_id !== null) {
+    return {
+      question: `Part of '${first}' disagrees with what was combined into it.`,
+      claims,
+      options: offers("decline") ? [{ choice: "decline", label: "Leave it as it is", does: LEAVE_IT }] : [],
+      after: SPLIT_INSTEAD,
+    };
+  }
+  const second = titleOf(pages, finding.second_id);
+  const options: Option[] = [];
+  if (offers("supersede")) options.push({ choice: "supersede", label: `'${first}' is right`, does: OUT_OF_DATE(second) });
+  if (offers("supersede_reversed")) {
+    options.push({ choice: "supersede_reversed", label: `'${second}' is right`, does: OUT_OF_DATE(first) });
+  }
+  if (offers("reconcile")) options.push({ choice: "reconcile", label: "Both are right", does: BOTH_RIGHT });
+  if (offers("decline")) options.push({ choice: "decline", label: "Leave them as they are", does: LEAVE_THEM });
+  return { question: "These pages say different things. Which is right?", claims, options };
+}
+
+const DIRECTED: readonly Action[] = ["supersede", "revise", "supersede_reversed", "revise_reversed"];
+
+/** One directed revision write: which page holds it, and what it does. */
+function directedOption(action: Action, first: string, second: string, dated: boolean): Option {
+  const reversed = action.endsWith("_reversed");
+  const [holder, other] = reversed ? [second, first] : [first, second];
+  const replaces = action.startsWith("supersede");
+  const does = replaces ? OUT_OF_DATE(other) : UPDATES(holder, other);
+  if (dated) return { choice: action, label: replaces ? "Yes, it replaces it" : "Yes, it updates it", does };
+  return { choice: action, label: `'${holder}' ${replaces ? "replaces" : "updates"} '${other}'`, does };
+}
+
+/** A revision's date, as the page gives it; "No date" when there is none. */
+function revisionDate(value: string | null, now: Date): string {
+  if (value === null || value.trim() === "") return "No date";
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  // A date with no time is that day here, never shifted by the time zone.
+  const iso = day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])).toISOString() : value;
+  return formatDate(iso, now) ?? value;
+}
+
+function revisionView(decision: Decision, pages: Pages): KindView {
+  const finding = revisionOf(decision);
+  if (finding === null) return { question: listedOnly(decision, pages) };
+  const first = titleOf(pages, finding.first_id);
+  const second = titleOf(pages, finding.second_id);
+  const dated = finding.later_id !== null;
+  // The direction is the engine's, from the dates (ADR-0025): the app reads which write is offered.
+  const directed = DIRECTED.filter((action) => decision.actions.includes(action));
+  const options = directed.map((action) => directedOption(action, first, second, dated));
+  if (decision.actions.includes("reconcile")) options.push({ choice: "reconcile", label: "Both still stand", does: BOTH_STAND });
+  if (!dated) {
+    return {
+      lead: "These have no dates we can compare, so we can't tell which came first.",
+      question: "How do these two relate?",
+      options,
+    };
+  }
+  const [later, earlier] = finding.later_id === finding.first_id ? [first, second] : [second, first];
+  const replaces = directed.length > 0 ? directed[0]!.startsWith("supersede") : finding.change === "reverses";
+  return { question: `Does '${later}' ${replaces ? "replace" : "update"} '${earlier}'?`, options };
+}
+
+const REFUSED: Record<RefusedFileDetail["reason"], string> = {
+  changed_after_import:
+    "A file with this name is already in your library, with different contents. To add this one too, give it a new name in your folder.",
+  exceeds_pass_budget: "It's too large to add automatically. To add it, split it into smaller files in your folder.",
+};
+
+/**
+ * A file that wasn't added: what happened and what to do in the folder, with no
+ * action. Adding it runs the AI model, which needs the person's agreement first
+ * (#1496); when that reaches the app, its option joins `options` here.
+ */
+function refusedFileView(decision: Decision, pages: Pages): KindView {
+  const finding = refusedFileOf(decision);
+  if (finding === null) return { question: listedOnly(decision, pages) };
+  return { question: `'${finding.file_name}' wasn't added.`, statement: REFUSED[finding.reason], options: [] };
+}
+
+/** What a finding's plan will do, from the plan. */
+function findingLines(decision: Decision, plan: Schemas["FindingPlan"], pages: Pages): string[] {
+  if (plan.kind === "decline") return [plan.merged_absorbed_id === null ? LEAVE_THEM : LEAVE_IT];
+  switch (plan.relation_type) {
+    case "supersedes":
+      return [OUT_OF_DATE(titleOf(pages, plan.deprecates_id ?? plan.target_id ?? ""))];
+    case "revises":
+      return [UPDATES(titleOf(pages, plan.holder_id ?? ""), titleOf(pages, plan.target_id ?? ""))];
+    case "reconciled_with":
+      return [decision.kind === "revision" ? BOTH_STAND : BOTH_RIGHT];
+  }
+}
+
+/** A finding's confirmation, in the past tense, from the plan that was applied. */
+function findingConfirmation(decision: Decision, plan: Schemas["FindingPlan"], pages: Pages): string {
+  if (plan.kind === "decline") return plan.merged_absorbed_id === null ? "Left as they are." : "Left as it is.";
+  switch (plan.relation_type) {
+    case "supersedes":
+      return `Marked '${titleOf(pages, plan.deprecates_id ?? plan.target_id ?? "")}' as out of date.`;
+    case "revises":
+      return `Noted that '${titleOf(pages, plan.holder_id ?? "")}' updates '${titleOf(pages, plan.target_id ?? "")}'.`;
+    case "reconciled_with":
+      return decision.kind === "revision" ? "Noted that both still stand." : "Noted that both are right.";
+  }
+}
+
 // -- one decision ------------------------------------------------------------- //
 
 function listedOnly(decision: Decision, pages: Pages): string {
@@ -401,27 +602,42 @@ function listedOnly(decision: Decision, pages: Pages): string {
 }
 
 function reasonOf(decision: Decision): string | null {
-  const detail = decision.detail;
+  const detail = decision.detail ?? decision.finding;
   return detail && "rationale" in detail ? modelReason(detail.rationale) : null;
 }
 
-type KindView = Partial<Pick<DecisionView, "question" | "lead" | "statement" | "facts" | "options" | "next">>;
+function pageViews(decision: Decision, pages: Pages, now: Date): PageView[] {
+  const revision = revisionOf(decision);
+  const ids = findingPages(decision) ?? (decision.kind === "identity" ? members(decision) : decision.targets);
+  return ids.map((id) => {
+    const view = pageView(pages, id, now);
+    if (revision === null) return view;
+    const first = id === revision.first_id;
+    return {
+      ...view,
+      quote: `“${first ? revision.first_quote : revision.second_quote}”`,
+      date: revisionDate(first ? revision.first_date : revision.second_date, now),
+    };
+  });
+}
+
+type KindView = Partial<Pick<DecisionView, "question" | "lead" | "statement" | "facts" | "options" | "next" | "claims" | "after">>;
 
 /**
- * What each kind asks and offers. A kind maps to null while the brief words no
- * action for it: it is listed with its plain sentence and "This can't be settled
- * in the app yet.", whatever the engine lists. Settling one in the app is one
- * entry here (its question and one option per action, offered only when the
- * engine lists the action), its plan in `previewLines` and its result in
- * `confirmation`; the screen draws whatever options it is given.
+ * What each kind asks and offers: its question and one option per action,
+ * offered only when the engine lists the action; its plan is worded in
+ * `previewLines` and its result in `confirmation`, and the screen draws whatever
+ * options it is given. A kind that offers nothing (a refused file, or a finding
+ * without its detail) is listed with its plain sentence and "This can't be
+ * settled in the app yet.", whatever the engine lists.
  */
 const KINDS: Record<Decision["kind"], ((decision: Decision, pages: Pages) => KindView) | null> = {
   identity: identityView,
   relation_type: connectionView,
   volatility: tierView,
-  contradiction: null,
-  revision: null,
-  watch_refusal: null,
+  contradiction: contradictionView,
+  revision: revisionView,
+  watch_refusal: refusedFileView,
 };
 
 /** Everything one decision's screen says, before any preview. */
@@ -432,17 +648,25 @@ export function describeDecision(decision: Decision, pages: Pages, now: Date = n
     statement: null,
     facts: [],
     reason: reasonOf(decision),
-    pages: (decision.kind === "identity" ? members(decision) : decision.targets).map((id) => pageView(pages, id, now)),
+    pages: pageViews(decision, pages, now),
     options: [],
     next: null,
-    changed: decision.fresh === false ? CHANGED_CHECK : null,
+    claims: [],
+    after: null,
+    changed: changedNotice(decision),
     cannotAct: null,
   };
   const settle = KINDS[decision.kind] ?? null;
   const view: DecisionView = settle === null ? { ...base, question: listedOnly(decision, pages) } : { ...base, ...settle(decision, pages) };
   // A changed decision's own actions would be refused as stale: it is checked
-  // again first, and decided once it is current (#1475).
-  if (decision.fresh === false && settle !== null) return { ...view, options: [CHECK_AGAIN, DECIDE_LATER], next: null };
+  // again first, and decided once it is current (#1475). A changed finding
+  // cannot be checked again in the app, so it can only wait.
+  // A finding with nothing to offer (no detail to word) is listed only, changed or not.
+  if (view.options.length === 0 && !checkable(decision)) return { ...view, options: [], next: null, cannotAct: CANNOT_ACT };
+  if (decision.fresh === false && settle !== null) {
+    const options = checkable(decision) ? [CHECK_AGAIN, DECIDE_LATER] : [DECIDE_LATER];
+    return { ...view, options, next: null, after: null };
+  }
   if (view.options.length === 0) return { ...view, options: [], next: null, cannotAct: CANNOT_ACT };
   return { ...view, options: [...view.options, DECIDE_LATER] };
 }
@@ -460,10 +684,16 @@ export interface ListEntry {
 export function listEntry(decision: Decision, pages: Pages): ListEntry {
   const view = describeDecision(decision, pages);
   const canAct = view.cannotAct === null;
-  const identity = decision.kind === "identity";
+  // Pages compared side by side are named by their titles, with the question.
+  const byPages = decision.kind === "identity" || (isFinding(decision) && findingPages(decision) !== null);
+  const title = byPages
+    ? view.pages.map((p) => p.title).join(" · ")
+    : decision.kind === "watch_refusal"
+      ? view.question
+      : (view.statement ?? view.question);
   return {
-    title: identity ? view.pages.map((p) => p.title).join(" · ") : (view.statement ?? view.question),
-    meta: !canAct ? CANNOT_ACT : identity ? view.question : null,
+    title,
+    meta: !canAct ? CANNOT_ACT : byPages ? view.question : null,
     changed: decision.fresh === false,
     canAct,
   };
@@ -520,8 +750,11 @@ function mergeLines(decision: Decision, plan: Schemas["MergePlan"], pages: Pages
 }
 
 /** What the previewed plan will do, from the plan itself. */
-export function previewLines(decision: Decision, plan: Schemas["PreviewPlan"], pages: Pages): string[] {
+export function previewLines(decision: Decision, plan: AnyPlan, pages: Pages): string[] {
   switch (plan.kind) {
+    case "reconcile":
+    case "decline":
+      return findingLines(decision, plan, pages);
     case "merge":
       return mergeLines(decision, plan, pages);
     case "keep_distinct":
@@ -548,8 +781,12 @@ function connectionSource(decision: Decision): string | null {
   return detail && "effective_source_id" in detail ? detail.effective_source_id : null;
 }
 
-/** The confirmation after apply, in the past tense. */
-export function confirmation(decision: Decision, applied: Schemas["Applied"], pages: Pages): string[] {
+/**
+ * The confirmation after apply, in the past tense. A finding's names the page
+ * marked out of date, so it is worded from the plan that was applied.
+ */
+export function confirmation(decision: Decision, applied: Schemas["Applied"], pages: Pages, plan?: AnyPlan): string[] {
+  if (plan?.kind === "reconcile" || plan?.kind === "decline") return [findingConfirmation(decision, plan, pages)];
   const lines: string[] = [];
   switch (applied.action) {
     case "merge":
@@ -727,6 +964,10 @@ const PROBLEMS: Record<string, Problem> = {
   not_kept_distinct: { message: "These pages aren't kept separate any more.", action: "ok" },
   not_related: { message: "These pages aren't connected any more.", action: "ok" },
   tier_unchanged: { message: "This setting is already as it was.", action: "ok" },
+  already_reconciled: {
+    message: "You've already settled how these pages relate, in another way. Nothing was changed.",
+    action: "reload",
+  },
   quote_stale: {
     message: "Something changed since you agreed — the AI model or the pages. Please look again.",
     action: "requote",

@@ -400,7 +400,7 @@ describe("decisions the app cannot act on", () => {
     expect(JSON.stringify(view)).not.toContain("openkos");
   });
 
-  it("offers no action the brief has not worded, even when the engine lists one", () => {
+  it("offers no action without the finding to word it, even when the engine lists one", () => {
     const decision = { ...identity(), kind: "contradiction", actions: ["decline", "skip"], detail: null } as unknown as Decision;
     const view = describeDecision(decision, pages);
     expect(view.options).toEqual([]);
@@ -680,6 +680,288 @@ describe("no engine words reach the screen", () => {
       for (const word of ENGINE_WORDS) {
         expect(text.toLowerCase(), word).not.toMatch(new RegExp(`\\b${word}\\b`));
       }
+    }
+  });
+});
+
+// -- contradictions, revisions and refused files (#1476) ------------------------ //
+
+const D1 = page("decisions/lisbon", "Move to Lisbon", "Decision");
+const D2 = page("decisions/porto", "Stay in Porto", "Decision");
+const FINDING_PAGES = pagesOf(D1, D2);
+
+function contradiction(over: Partial<Schemas["ContradictionDetail"]> = {}, decision: Partial<Decision> = {}): Decision {
+  const finding: Schemas["ContradictionDetail"] = {
+    first_id: "decisions/lisbon",
+    second_id: "decisions/porto",
+    merged_absorbed_id: null,
+    conflicting_claims: ["The team moves to Lisbon in May.", "The team stays in Porto."],
+    rationale: "One says they move, the other that they stay.",
+    ...over,
+  };
+  const merged = finding.merged_absorbed_id !== null;
+  return {
+    decision_key: "c1",
+    kind: "contradiction",
+    targets: [finding.first_id, finding.second_id],
+    fresh: true,
+    evaluation: "not_applicable",
+    actions: merged ? ["decline", "skip"] : ["decline", "reconcile", "supersede", "supersede_reversed", "skip"],
+    withheld: merged ? [{ action: "reconcile", reason: "merged_content" }] : [],
+    resolves_via: "openkos contradictions --decline, openkos reconcile or openkos unmerge",
+    detail: null,
+    finding,
+    ...decision,
+  };
+}
+
+function revision(over: Partial<Schemas["RevisionDetail"]> = {}, actions?: Schemas["Action"][]): Decision {
+  const finding: Schemas["RevisionDetail"] = {
+    first_id: "decisions/lisbon",
+    second_id: "decisions/porto",
+    change: "reverses",
+    later_id: "decisions/porto",
+    first_date: "2026-03-02",
+    second_date: "2026-09-14",
+    first_quote: "We move to Lisbon.",
+    second_quote: "We stay in Porto after all.",
+    rationale: "The later one takes the move back.",
+    ...over,
+  };
+  return {
+    decision_key: "r1",
+    kind: "revision",
+    targets: [finding.first_id, finding.second_id],
+    fresh: true,
+    evaluation: "not_applicable",
+    actions: actions ?? ["supersede_reversed", "reconcile", "skip"],
+    withheld: [],
+    resolves_via: "openkos reconcile --from-findings",
+    detail: null,
+    finding,
+  };
+}
+
+function refused(reason: Schemas["RefusedFileDetail"]["reason"] | null): Decision {
+  return {
+    decision_key: "w1",
+    kind: "watch_refusal",
+    targets: ["sources/notes"],
+    fresh: null,
+    evaluation: "not_applicable",
+    actions: [],
+    withheld: [],
+    resolves_via: "openkos ingest inbox/notes.md",
+    detail: null,
+    finding: reason === null ? null : { file_name: "notes.md", reason },
+  };
+}
+
+const reconcilePlan = (over: Partial<Schemas["ReconcilePlan"]>): Schemas["ReconcilePlan"] => ({
+  kind: "reconcile",
+  first_id: "decisions/lisbon",
+  second_id: "decisions/porto",
+  relation_type: "reconciled_with",
+  holder_id: null,
+  target_id: null,
+  deprecates_id: null,
+  pages_changed: ["decisions/lisbon", "decisions/porto"],
+  ...over,
+});
+const declinePlan = (merged: string | null = null): Schemas["DeclinePlan"] => ({
+  kind: "decline",
+  first_id: "decisions/lisbon",
+  second_id: "decisions/porto",
+  merged_absorbed_id: merged,
+});
+const appliedAs = (action: Schemas["Action"]): Schemas["Applied"] => ({ action, commit_sha: "c", decision_key: "c1" });
+
+describe("two pages disagree", () => {
+  it("asks which is right, with the pages, what doesn't match and the model's reason", () => {
+    const view = describeDecision(contradiction(), FINDING_PAGES, NOW);
+    expect(view.question).toBe("These pages say different things. Which is right?");
+    expect(view.pages.map((p) => p.title)).toEqual(["Move to Lisbon", "Stay in Porto"]);
+    expect(view.claims).toEqual(["“The team moves to Lisbon in May.”", "“The team stays in Porto.”"]);
+    expect(view.reason).toBe("“One says they move, the other that they stay.”");
+    expect(view.cannotAct).toBeNull();
+    expect(view.options.map((o) => [o.choice, o.label, o.does])).toEqual([
+      ["supersede", "'Move to Lisbon' is right", "We'll mark 'Stay in Porto' as out of date. It stays in your library, but answers won't use it."],
+      ["supersede_reversed", "'Stay in Porto' is right", "We'll mark 'Move to Lisbon' as out of date. It stays in your library, but answers won't use it."],
+      ["reconcile", "Both are right", "Both pages stay as they are, and each gets a short note that you checked them against each other."],
+      ["decline", "Leave them as they are", "Nothing on either page changes. We won't point this out again."],
+      ["later", "Decide later", "Nothing changes. This stays in To review."],
+    ]);
+  });
+
+  it("offers only what the engine lists", () => {
+    const view = describeDecision(contradiction({}, { actions: ["decline", "skip"] }), FINDING_PAGES, NOW);
+    expect(view.options.map((o) => o.choice)).toEqual(["decline", "later"]);
+  });
+
+  it("found inside a combined page, offers only leave it and points to Split again", () => {
+    const view = describeDecision(contradiction({ merged_absorbed_id: "decisions/porto" }), FINDING_PAGES, NOW);
+    expect(view.question).toBe("Part of 'Move to Lisbon' disagrees with what was combined into it.");
+    expect(view.pages.map((p) => p.title)).toEqual(["Move to Lisbon"]);
+    expect(view.options.map((o) => [o.choice, o.label, o.does])).toEqual([
+      ["decline", "Leave it as it is", "Nothing changes on the page. We won't point this out again."],
+      ["later", "Decide later", "Nothing changes. This stays in To review."],
+    ]);
+    expect(view.after).toBe("If combining them was a mistake, you can split it again under 'Pages you combined'.");
+  });
+
+  it("previews each choice from its plan", () => {
+    const d = contradiction();
+    expect(previewLines(d, reconcilePlan({ relation_type: "supersedes", holder_id: "decisions/porto", target_id: "decisions/lisbon", deprecates_id: "decisions/lisbon" }), FINDING_PAGES)).toEqual([
+      "We'll mark 'Move to Lisbon' as out of date. It stays in your library, but answers won't use it.",
+    ]);
+    expect(previewLines(d, reconcilePlan({}), FINDING_PAGES)).toEqual([
+      "Both pages stay as they are, and each gets a short note that you checked them against each other.",
+    ]);
+    expect(previewLines(d, declinePlan(), FINDING_PAGES)).toEqual(["Nothing on either page changes. We won't point this out again."]);
+    expect(previewLines(contradiction({ merged_absorbed_id: "decisions/porto" }), declinePlan("decisions/porto"), FINDING_PAGES)).toEqual([
+      "Nothing changes on the page. We won't point this out again.",
+    ]);
+  });
+
+  it("confirms in the past tense, naming the page marked out of date from the plan", () => {
+    const d = contradiction();
+    const supersedes = reconcilePlan({ relation_type: "supersedes", holder_id: "decisions/lisbon", target_id: "decisions/porto", deprecates_id: "decisions/porto" });
+    expect(confirmation(d, appliedAs("supersede"), FINDING_PAGES, supersedes)).toEqual(["Marked 'Stay in Porto' as out of date."]);
+    expect(confirmation(d, appliedAs("reconcile"), FINDING_PAGES, reconcilePlan({}))).toEqual(["Noted that both are right."]);
+    expect(confirmation(d, appliedAs("decline"), FINDING_PAGES, declinePlan())).toEqual(["Left as they are."]);
+    expect(confirmation(contradiction({ merged_absorbed_id: "x" }), appliedAs("decline"), FINDING_PAGES, declinePlan("x"))).toEqual(["Left as it is."]);
+  });
+
+  it("lists by the pages' titles, with the question", () => {
+    expect(listEntry(contradiction(), FINDING_PAGES)).toEqual({
+      title: "Move to Lisbon · Stay in Porto",
+      meta: "These pages say different things. Which is right?",
+      changed: false,
+      canAct: true,
+    });
+  });
+});
+
+describe("a newer decision", () => {
+  it("dated, asks the one direction the dates name, with both still stand", () => {
+    const view = describeDecision(revision(), FINDING_PAGES, NOW);
+    expect(view.lead).toBeNull();
+    expect(view.question).toBe("Does 'Stay in Porto' replace 'Move to Lisbon'?");
+    expect(view.pages.map((p) => [p.title, p.quote, p.date])).toEqual([
+      ["Move to Lisbon", "“We move to Lisbon.”", "2 March"],
+      ["Stay in Porto", "“We stay in Porto after all.”", "14 September"],
+    ]);
+    expect(view.reason).toBe("“The later one takes the move back.”");
+    expect(view.options.map((o) => [o.choice, o.label, o.does])).toEqual([
+      ["supersede_reversed", "Yes, it replaces it", "We'll mark 'Move to Lisbon' as out of date. It stays in your library, but answers won't use it."],
+      ["reconcile", "Both still stand", "Both pages stay current, and each gets a short note that you checked them against each other. We won't ask about these two again."],
+      ["later", "Decide later", "Nothing changes. This stays in To review."],
+    ]);
+  });
+
+  it("dated and refining, asks whether it updates the earlier one", () => {
+    const view = describeDecision(revision({ change: "refines", later_id: "decisions/lisbon" }, ["revise", "reconcile", "skip"]), FINDING_PAGES, NOW);
+    expect(view.question).toBe("Does 'Move to Lisbon' update 'Stay in Porto'?");
+    expect(view.options[0]).toMatchObject({
+      choice: "revise",
+      label: "Yes, it updates it",
+      does: "Both stay current, and 'Move to Lisbon' is noted as an update to 'Stay in Porto'.",
+    });
+  });
+
+  it("undated, says so and offers all four directions", () => {
+    const view = describeDecision(
+      revision({ later_id: null, first_date: null, second_date: null }, ["supersede", "supersede_reversed", "revise", "revise_reversed", "reconcile", "skip"]),
+      FINDING_PAGES,
+      NOW,
+    );
+    expect(view.lead).toBe("These have no dates we can compare, so we can't tell which came first.");
+    expect(view.question).toBe("How do these two relate?");
+    expect(view.pages.map((p) => p.date)).toEqual(["No date", "No date"]);
+    expect(view.options.map((o) => [o.choice, o.label])).toEqual([
+      ["supersede", "'Move to Lisbon' replaces 'Stay in Porto'"],
+      ["revise", "'Move to Lisbon' updates 'Stay in Porto'"],
+      ["supersede_reversed", "'Stay in Porto' replaces 'Move to Lisbon'"],
+      ["revise_reversed", "'Stay in Porto' updates 'Move to Lisbon'"],
+      ["reconcile", "Both still stand"],
+      ["later", "Decide later"],
+    ]);
+  });
+
+  it("previews and confirms from the plan", () => {
+    const d = revision();
+    const supersedes = reconcilePlan({ relation_type: "supersedes", holder_id: "decisions/porto", target_id: "decisions/lisbon", deprecates_id: "decisions/lisbon" });
+    const revises = reconcilePlan({ relation_type: "revises", holder_id: "decisions/porto", target_id: "decisions/lisbon" });
+    expect(previewLines(d, revises, FINDING_PAGES)).toEqual(["Both stay current, and 'Stay in Porto' is noted as an update to 'Move to Lisbon'."]);
+    expect(previewLines(d, reconcilePlan({}), FINDING_PAGES)).toEqual([
+      "Both pages stay current, and each gets a short note that you checked them against each other. We won't ask about these two again.",
+    ]);
+    expect(confirmation(d, appliedAs("supersede_reversed"), FINDING_PAGES, supersedes)).toEqual(["Marked 'Move to Lisbon' as out of date."]);
+    expect(confirmation(d, appliedAs("revise_reversed"), FINDING_PAGES, revises)).toEqual(["Noted that 'Stay in Porto' updates 'Move to Lisbon'."]);
+    expect(confirmation(d, appliedAs("reconcile"), FINDING_PAGES, reconcilePlan({}))).toEqual(["Noted that both still stand."]);
+  });
+});
+
+describe("a changed disagreement or newer decision", () => {
+  it.each([["contradiction", contradiction({}, { fresh: false })], ["revision", { ...revision(), fresh: false }]] as const)(
+    "a changed %s offers only Decide later, never Check again",
+    (_kind, decision) => {
+      const view = describeDecision(decision, FINDING_PAGES, NOW);
+      expect(view.changed).toBe(
+        "Something about these pages changed since this was found, so it can't be settled as it was. The app can't look at them again yet.",
+      );
+      expect(view.options.map((o) => o.choice)).toEqual(["later"]);
+      expect(listEntry(decision, FINDING_PAGES).changed).toBe(true);
+    },
+  );
+});
+
+describe("a file that wasn't added", () => {
+  it.each([
+    [
+      "changed_after_import",
+      "'notes.md' wasn't added.",
+      "A file with this name is already in your library, with different contents. To add this one too, give it a new name in your folder.",
+    ],
+    ["exceeds_pass_budget", "'notes.md' wasn't added.", "It's too large to add automatically. To add it, split it into smaller files in your folder."],
+  ] as const)("says what happened and what to do in the folder (%s), with no action", (reason, question, statement) => {
+    const view = describeDecision(refused(reason), pagesOf(), NOW);
+    expect(view.question).toBe(question);
+    expect(view.statement).toBe(statement);
+    expect(view.pages).toEqual([]);
+    expect(view.options).toEqual([]);
+    expect(view.cannotAct).toBe("This can't be settled in the app yet.");
+    expect(JSON.stringify(view)).not.toContain("openkos");
+    expect(listEntry(refused(reason), pagesOf())).toEqual({ title: question, meta: "This can't be settled in the app yet.", changed: false, canAct: false });
+  });
+
+  it("without its detail, says only that a file was not added", () => {
+    const view = describeDecision(refused(null), pagesOf(), NOW);
+    expect(view.question).toBe("A file was not added.");
+    expect(view.cannotAct).toBe("This can't be settled in the app yet.");
+  });
+});
+
+describe("settling findings is refused in plain words", () => {
+  it("words a pair already settled another way", () => {
+    expect(problemFor(new ApiError({ status: 409, code: "already_reconciled", retryable: false, message: "m", retryAfterSeconds: null }), "before")).toEqual({
+      message: "You've already settled how these pages relate, in another way. Nothing was changed.",
+      action: "reload",
+    });
+  });
+
+  it("leaves every rule-1 word out of the findings' wording", () => {
+    const texts = [
+      describeDecision(contradiction(), FINDING_PAGES, NOW),
+      describeDecision(contradiction({ merged_absorbed_id: "x" }), FINDING_PAGES, NOW),
+      describeDecision(revision(), FINDING_PAGES, NOW),
+      describeDecision(revision({ later_id: null }, ["supersede", "supersede_reversed", "revise", "revise_reversed", "reconcile"]), FINDING_PAGES, NOW),
+      describeDecision({ ...revision(), fresh: false }, FINDING_PAGES, NOW),
+      describeDecision(refused("changed_after_import"), FINDING_PAGES, NOW),
+      describeDecision(refused("exceeds_pass_budget"), FINDING_PAGES, NOW),
+    ].map((value) => JSON.stringify(value).replaceAll(/"(choice|okfType)":"[^"]*"/g, ""));
+    for (const text of texts) {
+      for (const word of ENGINE_WORDS) expect(text.toLowerCase(), word).not.toMatch(new RegExp(`\\b${word}\\b`));
     }
   });
 });
