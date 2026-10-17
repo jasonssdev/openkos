@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError, EngineUnreachable } from "../../client/index.ts";
 import { fileQuote, job, outcome, quote, result } from "./fixtures.ts";
-import { ENGINE_WORDS, describeOutcome, describeQuote, problemFor, progressLine, refusalLine } from "./wording.ts";
+import { ENGINE_WORDS, addCue, describeOutcome, nextUnseen, describeQuote, problemFor, progressLine, refusalLine } from "./wording.ts";
 
 const api = (code: string, retryable = false) => new ApiError({ status: 409, code, retryable, message: "x", retryAfterSeconds: null });
 
@@ -239,5 +239,46 @@ describe("the brief's rule 1", () => {
       .join(" ")
       .toLowerCase();
     for (const word of ENGINE_WORDS) expect(text).not.toMatch(new RegExp(`\\b${word}\\b`));
+  });
+});
+
+describe("addCue", () => {
+  it("says a run is going while it starts, runs or stops", () => {
+    for (const phase of ["starting", "running", "stopping"] as const) expect(addCue({ phase, outcome: null }, false)).toBe("Adding…");
+  });
+
+  it("is quiet when there is no run, or while the person is choosing", () => {
+    for (const phase of ["idle", "quoting", "consent"] as const) expect(addCue({ phase, outcome: null }, true)).toBeNull();
+  });
+
+  it("names how an ended run ended until it is seen", () => {
+    expect(addCue({ phase: "done", outcome: outcome([result("a.md")]) }, true)).toBe("Added");
+    expect(addCue({ phase: "done", outcome: outcome([], { status: "stopped" }) }, true)).toBe("Stopped");
+    expect(addCue({ phase: "done", outcome: outcome([], { status: "busy" }) }, true)).toBe("Library busy");
+    expect(addCue({ phase: "problem", outcome: null }, true)).toBe("Problem");
+    expect(addCue({ phase: "done", outcome: outcome([result("a.md")]) }, false)).toBeNull();
+    expect(addCue({ phase: "problem", outcome: null }, false)).toBeNull();
+  });
+});
+
+describe("nextUnseen", () => {
+  it("marks a run that ends while the person is elsewhere", () => {
+    expect(nextUnseen(false, "running", "done", false)).toBe(true);
+    expect(nextUnseen(false, "running", "problem", false)).toBe(true);
+  });
+
+  it("does not mark one that ends on the screen, or one that has not ended", () => {
+    expect(nextUnseen(false, "running", "done", true)).toBe(false);
+    expect(nextUnseen(false, "running", "running", false)).toBe(false);
+  });
+
+  it("keeps the mark until the screen is visited, and does not raise it again for the same end", () => {
+    expect(nextUnseen(true, "done", "done", false)).toBe(true);
+    expect(nextUnseen(true, "done", "done", true)).toBe(false);
+    expect(nextUnseen(false, "done", "done", false)).toBe(false);
+  });
+
+  it("clears the mark when a new run begins", () => {
+    expect(nextUnseen(true, "done", "quoting", false)).toBe(false);
   });
 });

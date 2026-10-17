@@ -129,6 +129,11 @@ describe("navEntries", () => {
     ]);
   });
 
+  it("puts a cue beside Add files only when there is one", () => {
+    expect(navEntries(3, "Adding…")[1]).toEqual({ id: "add", label: "Add files", hint: "Adding…" });
+    expect(navEntries(3, null)[1]).toEqual({ id: "add", label: "Add files" });
+  });
+
   it("shows no count when none is known", () => {
     expect(navEntries(undefined)[2]).toEqual({ id: "review", label: "To review" });
   });

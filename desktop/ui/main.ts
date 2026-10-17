@@ -16,6 +16,7 @@ import {
 } from "../client/index.ts";
 import { AddModel } from "./add/model.ts";
 import { renderAdd } from "./add/render.ts";
+import { addCue, nextUnseen } from "./add/wording.ts";
 import { AskModel } from "./ask/model.ts";
 import { renderAsk } from "./ask/render.ts";
 import { LabelModel } from "./label/model.ts";
@@ -190,7 +191,15 @@ function paintAdd(): void {
     resolveProblem: () => add.resolveProblem(),
   });
 }
-add.subscribe(() => paintAdd());
+// A run goes on off the screen: the sidebar says so, and how it ended until the person looks.
+let addPhase = add.state.phase;
+let addUnseen = false;
+add.subscribe((next) => {
+  addUnseen = nextUnseen(addUnseen, addPhase, next.phase, view === "add");
+  addPhase = next.phase;
+  paintAdd();
+  paintNav();
+});
 
 /** A refused file's "Add it": quote it on the Add files screen. */
 function addRefusedFile(decisionKey: string): void {
@@ -228,7 +237,7 @@ search.subscribe(() => {
 function paintNav(): void {
   const count = reviewCount(review?.state ?? null, statusOpen);
   redraw(shell.nav, "nav", () =>
-    shell.nav.replaceChildren(...navEntries(count).map((entry) => navItem(entry, entry.id === view, navigate))),
+    shell.nav.replaceChildren(...navEntries(count, addCue(add.state, addUnseen)).map((entry) => navItem(entry, entry.id === view, navigate))),
   );
 }
 
@@ -258,6 +267,7 @@ function navigate(id: string): void {
 
 function show(next: View): void {
   view = next;
+  if (next === "add") addUnseen = false;
   statusRoot.hidden = next !== "status";
   askRoot.hidden = next !== "ask";
   addRoot.hidden = next !== "add";
