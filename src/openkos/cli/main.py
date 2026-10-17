@@ -1521,7 +1521,7 @@ def _decide_config_commit(
     root: Path,
     verb: str,
     concept_type: str,
-    tier: str,
+    tier: str | None,
     baseline: bytes,
 ) -> _ConfigCommitPlan | curate_decisions.ConfigCommitRefusal | None:
     """Before a config-rewriting verb writes (#1330): `None` when

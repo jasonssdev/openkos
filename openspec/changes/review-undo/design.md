@@ -100,7 +100,10 @@ change, or `None` when it had none and the engine's default applied. An undo
 calls `preview_tier_change(type, configured_tier)`. With `None` the entry is
 removed by `config.clear_type_tier`, the same text surgery as `set_type_tier`
 (every other line byte-identical, the same un-editable shapes refused); a
-`type_tiers:` header left with no entries stays. `vcs.autocommit.plan_config_edit`
+`type_tiers:` header left with no entries stays. A restore over an earlier
+entry is therefore byte-identical to before the change; a restore by removal is
+too, except that a `type_tiers:` header the change appended stays (nothing tells
+a header the person wrote from one the change added). `vcs.autocommit.plan_config_edit`
 takes `tier: str | None` so an uncommitted edit elsewhere in `openkos.yaml` is
 handled as for a set (#1330). Writing the old effective tier explicitly was
 rejected: it would pin the type and stop it following a later default.

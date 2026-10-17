@@ -243,12 +243,14 @@ class DecisionPorts:
 
     plan_config_commit: (
         Callable[
-            [Path, str, str, str, bytes], ConfigCommitPlan | ConfigCommitRefusal | None
+            [Path, str, str, str | None, bytes],
+            ConfigCommitPlan | ConfigCommitRefusal | None,
         ]
         | None
     ) = None
     """Decides, from the working tree and git, how a config edit is committed:
-    `(root, surface, concept_type, tier, baseline)` to a plan, a refusal, or
+    `(root, surface, concept_type, tier, baseline)` (`tier` `None` removes the
+    type's entry) to a plan, a refusal, or
     `None` when the ordinary path-scoped commit is right. It reads git, so it
     stays adapter-side. When unset, the commit is always the ordinary one."""
 
@@ -1348,6 +1350,9 @@ class TierDecisionPreview:
     type_name: str
     tier: str
     decision_key: str
+    configured_tier: str | None = None
+    """The type's `type_tiers` entry before the change, `None` when it had
+    none: what an undo of this change restores (ADR-0067)."""
 
 
 def preview_set_tier(
@@ -1361,6 +1366,9 @@ def preview_set_tier(
         prepared = application_lifecycle.prepare_set_volatility(
             layout.config_path, type_name, tier
         )
+        configured = config.type_tier_entry(
+            prepared.config_bytes.decode("utf-8"), type_name
+        )
     except (OSError, ValueError) as exc:
         raise WriteFailed("set_tier", (type_name,), str(exc)) from exc
     return TierDecisionPreview(
@@ -1368,6 +1376,7 @@ def preview_set_tier(
         type_name=type_name,
         tier=tier,
         decision_key=pq.stored_decision_key("volatility", pq.volatility_key(type_name)),
+        configured_tier=configured,
     )
 
 

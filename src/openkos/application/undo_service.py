@@ -16,13 +16,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from openkos import config
+from openkos import config, fsio
 from openkos.application import curate_decisions, duplicates_service
 from openkos.application import lifecycle as application_lifecycle
 from openkos.application import pending as application_pending
-from openkos.application.write_gate import WriteFailed
+from openkos.application.write_gate import Refused, WriteFailed
 from openkos.bundle import decisions as bundle_decisions
-from openkos.model import relations
+from openkos.model import relations, types
 
 UndoReason = Literal[
     "not_kept_distinct", "not_related", "tier_unchanged", "unknown_type"
@@ -313,3 +313,141 @@ def apply_unrelate(
         target_id=plan.target_id,
         commit_sha=commit_sha,
     )
+
+
+# -- how quickly a type goes out of date -------------------------------------- #
+
+
+@dataclass(frozen=True)
+class TierChangePlan:
+    """Setting `type_name`'s `type_tiers` entry to `tier`, or removing it when
+    `tier` is `None` so the engine's default applies. `configured_tier` is the
+    entry now (`None` when there is none): what an undo of this change sets
+    back."""
+
+    type_name: str
+    tier: str | None
+    configured_tier: str | None
+    content_digest: str
+
+
+@dataclass(frozen=True)
+class _TierChanging:
+    plan: TierChangePlan
+    config_bytes: bytes
+    new_text: str
+
+
+def _plan_tier_change(
+    root: Path, type_name: str, tier: str | None
+) -> _TierChanging | UndoRefusal:
+    """The tier change from the bytes of `openkos.yaml` now."""
+    if tier is not None and tier not in types.VOLATILITY_TIERS:
+        raise ValueError(
+            f"{tier!r} is not a volatility tier "
+            f"(expected one of {sorted(types.VOLATILITY_TIERS)} or None)"
+        )
+    if type_name not in {ot.name for ot in types.REGISTRY}:
+        return UndoRefusal("unknown_type")
+    config_path = config.WorkspaceLayout(root).config_path
+    try:
+        config_bytes, text = fsio.snapshot_read(config_path)
+        configured = config.type_tier_entry(text, type_name)
+        new_text = (
+            config.clear_type_tier(text, type_name)
+            if tier is None
+            else config.set_type_tier(text, type_name, tier)
+        )
+    except (OSError, ValueError) as exc:
+        raise WriteFailed("set_tier", (type_name,), str(exc)) from exc
+    if configured == tier:
+        return UndoRefusal("tier_unchanged")
+    lines = [
+        f"type\t{type_name}",
+        f"tier\t{'-' if tier is None else tier}",
+        f"config\t{hashlib.sha256(config_bytes).hexdigest()}",
+    ]
+    plan = TierChangePlan(
+        type_name=type_name,
+        tier=tier,
+        configured_tier=configured,
+        content_digest=_digest(lines),
+    )
+    return _TierChanging(plan, config_bytes, new_text)
+
+
+def preview_tier_change(
+    root: Path, type_name: str, tier: str | None
+) -> TierChangePlan | UndoRefusal:
+    """Plan setting `type_name`'s tier, or removing its entry when `tier` is
+    `None`, by the same text surgery `set-volatility` uses.
+
+    The digest covers the type, the requested tier and the bytes of
+    `openkos.yaml`. A tier outside the vocabulary raises `ValueError`; a shape
+    of `openkos.yaml` that cannot be edited raises `WriteFailed`. Writes
+    nothing and takes no lock."""
+    planned = _plan_tier_change(root, type_name, tier)
+    return planned if isinstance(planned, UndoRefusal) else planned.plan
+
+
+@dataclass(frozen=True)
+class TierChanged:
+    """The entry was set (`tier`) or removed (`tier` `None`). `commit_sha` is
+    `None` when the commit could not be made (the write itself landed)."""
+
+    type_name: str
+    tier: str | None
+    commit_sha: str | None
+
+
+_SURFACE = "api"
+"""The surface named to the config-commit port, as the decision surface names
+itself."""
+
+
+def apply_tier_change(
+    root: Path,
+    type_name: str,
+    tier: str | None,
+    content_digest: str,
+    *,
+    ports: curate_decisions.DecisionPorts,
+) -> TierChanged | UndoRefusal | UndoStale:
+    """Set or remove the entry previewed as `content_digest`, under one lock.
+
+    Plans again inside the commit section; a refusal or a moved digest writes
+    nothing. An uncommitted edit to the same entry is refused, through the
+    config-commit port, as a set-tier decision refuses it (`Refused`).
+    Otherwise `openkos.yaml` is written and only this change is committed."""
+    config_path = config.WorkspaceLayout(root).config_path
+    with ports.commit_section():
+        planned = _plan_tier_change(root, type_name, tier)
+        if isinstance(planned, UndoRefusal):
+            return planned
+        plan = planned.plan
+        if plan.content_digest != content_digest:
+            return UndoStale()
+        decision = (
+            None
+            if ports.plan_config_commit is None
+            else ports.plan_config_commit(
+                root, _SURFACE, plan.type_name, plan.tier, planned.config_bytes
+            )
+        )
+        if isinstance(decision, curate_decisions.ConfigCommitRefusal):
+            raise Refused(decision.message)
+        try:
+            fsio.write_atomic(config_path, planned.new_text)
+        except OSError as exc:
+            raise WriteFailed("set_tier", (plan.type_name,), str(exc)) from exc
+        message = (
+            f"openkos: clear-volatility {plan.type_name}"
+            if plan.tier is None
+            else f"openkos: set-volatility {plan.type_name} -> {plan.tier}"
+        )
+        commit_sha = (
+            ports.autocommit(root, ["openkos.yaml"], message)
+            if ports.autocommit_config_edit is None
+            else ports.autocommit_config_edit(root, message, decision)
+        )
+    return TierChanged(type_name=plan.type_name, tier=plan.tier, commit_sha=commit_sha)

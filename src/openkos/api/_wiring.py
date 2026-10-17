@@ -116,7 +116,11 @@ def decision_ports(
         return report(commit_paths(root, paths, message))
 
     def plan_config_commit(
-        root: Path, surface: str, concept_type: str, tier: str, baseline: bytes
+        root: Path,
+        surface: str,
+        concept_type: str,
+        tier: str | None,
+        baseline: bytes,
     ) -> ConfigCommitPlan | curate_decisions.ConfigCommitRefusal | None:
         planned = plan_config_edit(root, concept_type, tier, baseline)
         if isinstance(planned, ConfigEditConflict):

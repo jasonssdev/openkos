@@ -2209,13 +2209,17 @@ class _TypeTierEntry:
     rest: str
 
 
-def _validate_type_tier_vocab(concept_type: str, tier: str) -> None:
+def _validate_type_name(concept_type: str) -> None:
     valid_types = {ot.name for ot in types.REGISTRY}
     if concept_type not in valid_types:
         raise ValueError(
             f"{concept_type!r} is not a known concept type "
             f"(expected one of {sorted(valid_types)})"
         )
+
+
+def _validate_type_tier_vocab(concept_type: str, tier: str) -> None:
+    _validate_type_name(concept_type)
     if tier not in types.VOLATILITY_TIERS:
         raise ValueError(
             f"{tier!r} is not a valid volatility tier "
@@ -2330,6 +2334,58 @@ def type_tier_entry(yaml_text: str, concept_type: str) -> str | None:
     return None if existing is None else existing.val
 
 
+def _editable_type_tiers_header(lines: list[str]) -> int | None:
+    """The index of the one uncommented `type_tiers:` header in `lines`, or
+    `None` when there is none. Raises `ValueError` on more than one header, an
+    inline flow-mapping or a non-mapping value: shapes the text surgery below
+    cannot edit confidently."""
+    header_indices = [
+        i
+        for i, line in enumerate(lines)
+        if _split_line_ending(line)[0].startswith(_TYPE_TIERS_HEADER_PREFIX)
+    ]
+    if len(header_indices) > 1:
+        raise ValueError("openkos.yaml: multiple 'type_tiers:' keys found")
+    if not header_indices:
+        return None
+    header_idx = header_indices[0]
+    header_content, _ = _split_line_ending(lines[header_idx])
+    trailing = header_content[len(_TYPE_TIERS_HEADER_PREFIX) :]
+    trailing_stripped = trailing.strip()
+    if trailing_stripped and not trailing_stripped.startswith("#"):
+        if trailing_stripped.startswith("{"):
+            raise ValueError(
+                "openkos.yaml: inline flow-mapping 'type_tiers: {...}' is not supported"
+            )
+        raise ValueError(
+            "openkos.yaml: 'type_tiers:' has a non-mapping value "
+            f"({trailing_stripped!r})"
+        )
+    return header_idx
+
+
+def clear_type_tier(yaml_text: str, concept_type: str) -> str:
+    """Return `yaml_text` without `concept_type`'s `type_tiers` entry, so the
+    engine's default tier applies to it again: the inverse of `set_type_tier`,
+    by the same comment-safe text surgery. Only that entry's line is removed;
+    every other line, including comments and a header left with no entries,
+    stays byte-identical. A type with no entry (or no block) returns
+    `yaml_text` unchanged.
+
+    Raises `ValueError` for a type outside the known vocabulary and on every
+    `type_tiers:` shape `set_type_tier` refuses to edit."""
+    _validate_type_name(concept_type)
+    lines = yaml_text.splitlines(keepends=True)
+    header_idx = _editable_type_tiers_header(lines)
+    if header_idx is None:
+        return yaml_text
+    entries = _parse_type_tiers_block(lines, header_idx)
+    existing = next((entry for entry in entries if entry.key == concept_type), None)
+    if existing is None:
+        return yaml_text
+    return "".join(lines[: existing.line_index] + lines[existing.line_index + 1 :])
+
+
 def set_type_tier(yaml_text: str, concept_type: str, tier: str) -> str:
     """Return `yaml_text` with `type_tiers[concept_type] = tier` set via
     comment-safe text surgery -- never a YAML round-trip, so every other
@@ -2360,31 +2416,9 @@ def set_type_tier(yaml_text: str, concept_type: str, tier: str) -> str:
     _validate_type_tier_vocab(concept_type, tier)
 
     lines = yaml_text.splitlines(keepends=True)
-    header_indices = [
-        i
-        for i, line in enumerate(lines)
-        if _split_line_ending(line)[0].startswith(_TYPE_TIERS_HEADER_PREFIX)
-    ]
-
-    if len(header_indices) > 1:
-        raise ValueError("openkos.yaml: multiple 'type_tiers:' keys found")
-
-    if not header_indices:
+    header_idx = _editable_type_tiers_header(lines)
+    if header_idx is None:
         return _append_fresh_type_tiers_block(yaml_text, concept_type, tier)
-
-    header_idx = header_indices[0]
-    header_content, _ = _split_line_ending(lines[header_idx])
-    trailing = header_content[len(_TYPE_TIERS_HEADER_PREFIX) :]
-    trailing_stripped = trailing.strip()
-    if trailing_stripped and not trailing_stripped.startswith("#"):
-        if trailing_stripped.startswith("{"):
-            raise ValueError(
-                "openkos.yaml: inline flow-mapping 'type_tiers: {...}' is not supported"
-            )
-        raise ValueError(
-            "openkos.yaml: 'type_tiers:' has a non-mapping value "
-            f"({trailing_stripped!r})"
-        )
 
     entries = _parse_type_tiers_block(lines, header_idx)
     existing = next((entry for entry in entries if entry.key == concept_type), None)

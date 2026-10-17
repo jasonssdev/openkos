@@ -340,3 +340,102 @@ def test_the_unrelate_version_reaches_the_api_and_the_wait_is_capped(
     assert seen == [
         (api.UnrelateVersion(A, "member_of", B, "d" * 64), _errors.WRITE_WAIT_SECONDS)
     ]
+
+
+# -- how quickly a type goes out of date ------------------------------------------- #
+
+
+def test_a_tier_is_set_and_restored_over_http(
+    settings: ServerSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    root = _seed(settings, tmp_path, monkeypatch, (A, B))
+    before = support.snapshot(root)
+    preview = _post(
+        client, "/v1/tiers/preview", {"type_name": "Person", "tier": "static"}
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["configured_tier"] is None
+    assert support.snapshot(root) == before
+
+    applied = _post(client, "/v1/tiers/apply", {"version": preview.json()["version"]})
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["changed"]["tier"] == "static"
+
+    restore = _post(client, "/v1/tiers/preview", {"type_name": "Person", "tier": None})
+    assert restore.status_code == 200, restore.text
+    assert restore.json()["configured_tier"] == "static"
+    undone = _post(client, "/v1/tiers/apply", {"version": restore.json()["version"]})
+    assert undone.status_code == 200, undone.text
+    assert (
+        TypeAdapter(api.TierChanged).validate_python(undone.json()["changed"]).tier
+        is None
+    )
+
+
+def test_tier_refusals_are_answered_by_their_reason(
+    settings: ServerSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    _seed(settings, tmp_path, monkeypatch, (A, B))
+
+    unchanged = _post(
+        client, "/v1/tiers/preview", {"type_name": "Person", "tier": None}
+    )
+    unknown = _post(client, "/v1/tiers/preview", {"type_name": "Ship", "tier": "slow"})
+
+    assert (unchanged.status_code, unchanged.json()["code"]) == (409, "tier_unchanged")
+    assert (unknown.status_code, unknown.json()["code"]) == (422, "unknown_type")
+
+
+_TIER_VERSION = {"type_name": "Person", "tier": "slow", "content_digest": "d" * 64}
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/v1/tiers/preview", {"type_name": "Person", "tier": "sometimes"}),
+        ("/v1/tiers/preview", {"type_name": "Person"}),
+        ("/v1/tiers/preview", {"type_name": "Person", "tier": "slow", "extra": 1}),
+        ("/v1/tiers/apply", {"version": {**_TIER_VERSION, "tier": "sometimes"}}),
+        ("/v1/tiers/apply", {"version": _TIER_VERSION, "extra": 1}),
+        ("/v1/tiers/apply", {"version": _TIER_VERSION, "wait_seconds": 6}),
+    ],
+)
+def test_an_invalid_tier_body_is_422_and_the_api_is_never_called(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str, body: Any
+) -> None:
+    calls: list[str] = []
+    for name in ("preview_tier_change", "apply_tier_change"):
+        monkeypatch.setattr(api, name, lambda *a, _n=name, **k: calls.append(_n))
+
+    response = _post(client, path, body)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_request"
+    assert calls == []
+
+
+def test_the_tier_version_reaches_the_api_and_the_wait_is_capped(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[tuple[Any, float]] = []
+
+    def stub(
+        workspace: api.Workspace, version: api.TierChangeVersion, **kw: Any
+    ) -> api.TierChanged:
+        seen.append((version, kw["wait_seconds"]))
+        return api.TierChanged("Person", "slow", None)
+
+    monkeypatch.setattr(api, "apply_tier_change", stub)
+
+    response = _post(client, "/v1/tiers/apply", {"version": _TIER_VERSION})
+
+    assert response.status_code == 200, response.text
+    assert seen == [
+        (api.TierChangeVersion("Person", "slow", "d" * 64), _errors.WRITE_WAIT_SECONDS)
+    ]

@@ -295,7 +295,7 @@ describe("previews", () => {
     expect(
       previewLines(relation("part_of"), { kind: "relate", relation_type: "part_of", source_id: "orgs/acme", target_id: "people/a" }, pages),
     ).toEqual(["We'll record that Acme is part of Marguerite Osei."]);
-    expect(previewLines(TIER, { kind: "set_tier", tier: "slow", type_name: "Person" }, pages)).toEqual([
+    expect(previewLines(TIER, { kind: "set_tier", tier: "slow", type_name: "Person", configured_tier: null }, pages)).toEqual([
       "From now on, people are treated as changing slowly.",
     ]);
   });

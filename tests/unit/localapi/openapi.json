@@ -1945,6 +1945,207 @@
         "title": "RunStatus",
         "type": "object"
       },
+      "TierChangeApplyRequest": {
+        "description": "The version the tier preview issued (echoed unchanged) and how long to\nwait for the workspace lock; a client can shorten the wait only.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/TierChangeVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "TierChangeApplyRequest",
+        "type": "object"
+      },
+      "TierChangePreview": {
+        "description": "Setting `type_name`'s tier to `tier`, or, with `tier` `None`, removing\nits setting so the engine's default applies. `configured_tier` is the\nsetting now (`None` when there is none).",
+        "properties": {
+          "configured_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured Tier"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "enum": [
+                  "static",
+                  "slow",
+                  "volatile"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          },
+          "type_name": {
+            "title": "Type Name",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/TierChangeVersion"
+          }
+        },
+        "required": [
+          "type_name",
+          "tier",
+          "configured_tier",
+          "version"
+        ],
+        "title": "TierChangePreview",
+        "type": "object"
+      },
+      "TierChangePreviewRequest": {
+        "additionalProperties": false,
+        "description": "The type whose tier to set, and the tier, or `null` to remove its\nsetting so the engine's default applies.",
+        "properties": {
+          "tier": {
+            "anyOf": [
+              {
+                "enum": [
+                  "static",
+                  "slow",
+                  "volatile"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          },
+          "type_name": {
+            "title": "Type Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type_name",
+          "tier"
+        ],
+        "title": "TierChangePreviewRequest",
+        "type": "object"
+      },
+      "TierChangeResponse": {
+        "additionalProperties": false,
+        "description": "What was changed, and the warnings the apply raised along the way.",
+        "properties": {
+          "changed": {
+            "$ref": "#/components/schemas/TierChanged"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "changed",
+          "warnings"
+        ],
+        "title": "TierChangeResponse",
+        "type": "object"
+      },
+      "TierChangeVersion": {
+        "description": "The version a stateless caller changes a tier against: echo it unchanged.\n`content_digest` covers the type, the tier asked for and `openkos.yaml`.",
+        "properties": {
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "enum": [
+                  "static",
+                  "slow",
+                  "volatile"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          },
+          "type_name": {
+            "title": "Type Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type_name",
+          "tier",
+          "content_digest"
+        ],
+        "title": "TierChangeVersion",
+        "type": "object"
+      },
+      "TierChanged": {
+        "additionalProperties": false,
+        "description": "The tier was set (`tier`) or its setting removed (`tier` `None`).\n`commit_sha` is `None` when the commit could not be made (the write itself\nlanded).",
+        "properties": {
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "enum": [
+                  "static",
+                  "slow",
+                  "volatile"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          },
+          "type_name": {
+            "title": "Type Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type_name",
+          "tier",
+          "commit_sha"
+        ],
+        "title": "TierChanged",
+        "type": "object"
+      },
       "TierDetail": {
         "additionalProperties": false,
         "description": "A volatility decision: a suggested tier for one concept type.",
@@ -1978,6 +2179,17 @@
       "TierPlan": {
         "description": "Setting one concept type's volatility tier.",
         "properties": {
+          "configured_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured Tier"
+          },
           "kind": {
             "const": "set_tier",
             "default": "set_tier",
@@ -1996,7 +2208,8 @@
         "required": [
           "type_name",
           "tier",
-          "kind"
+          "kind",
+          "configured_tier"
         ],
         "title": "TierPlan",
         "type": "object"
@@ -4063,6 +4276,210 @@
           }
         ],
         "summary": "Status"
+      }
+    },
+    "/v1/tiers/apply": {
+      "post": {
+        "operationId": "tier_apply_v1_tiers_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TierChangeApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierChangeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Tier Apply"
+      }
+    },
+    "/v1/tiers/preview": {
+      "post": {
+        "operationId": "tier_preview_v1_tiers_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TierChangePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierChangePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Tier Preview"
       }
     },
     "/v1/unmerge/apply": {

@@ -147,8 +147,17 @@ before the change (`None` when it had none), so a client can restore it.
   whose preview reported `configured_tier` `None`
 - WHEN `preview_tier_change(workspace, type, None)` then `apply_tier_change` are
   called
-- THEN `openkos.yaml` has no entry for the type and every other line is
-  byte-identical to before the decision
+- THEN `openkos.yaml` has no entry for the type, so the engine's default
+  applies again, and every other line is kept; a `type_tiers:` header the
+  decision added stays
+
+#### Scenario: A tier set over an earlier entry is restored byte for byte
+
+- GIVEN a type whose entry is `slow`, set to `volatile` through a decision
+  whose preview reported `configured_tier` `slow`
+- WHEN `preview_tier_change(workspace, type, "slow")` then `apply_tier_change`
+  are called
+- THEN `openkos.yaml` is byte-identical to before the decision
 
 #### Scenario: A tier that already holds is refused
 

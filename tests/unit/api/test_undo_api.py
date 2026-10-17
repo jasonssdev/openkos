@@ -6,10 +6,11 @@ pinned. Previews and lists take no lock, build no client and write nothing."""
 import dataclasses
 import shutil
 from pathlib import Path
+from typing import cast, get_args
 
 import pytest
 
-from openkos import lock
+from openkos import config, lock
 from openkos.api import (
     Action,
     Applied,
@@ -17,27 +18,36 @@ from openkos.api import (
     KeepDistinctPlan,
     KeptDistinct,
     NotUndoable,
+    Refused,
     RelatePlan,
     Reopened,
     ReopenPreview,
     ReopenVersion,
+    TierChanged,
+    TierChangePreview,
+    TierChangeVersion,
+    TierPlan,
     UndoStale,
     Unrelated,
     UnrelatePreview,
     UnrelateVersion,
+    VolatilityTier,
     Workspace,
     WorkspaceBusyError,
     apply_decision,
     apply_reopen,
+    apply_tier_change,
     apply_unrelate,
     kept_distinct,
     list_decisions,
     preview_decision,
     preview_reopen,
+    preview_tier_change,
     preview_unrelate,
     refresh_decision_queue,
 )
 from openkos.application import curate_decisions
+from openkos.model import types
 from openkos.state import pending_queue as pq
 from tests.unit.api import support
 from tests.unit.api.test_decisions_apply import _git, _head_files, _pin_identity
@@ -307,3 +317,125 @@ def test_an_unrelate_on_a_held_lock_raises_busy(related: Path) -> None:
         apply_unrelate(Workspace.open(related), preview.version)
 
     assert support.snapshot(related) == before
+
+
+# -- how quickly a type goes out of date ----------------------------------------- #
+
+
+def _set_tier_through_a_decision(root: Path, suggested: str) -> TierPlan:
+    support.enqueue_volatility(root, "Person", suggested)
+    key = pq.stored_decision_key("volatility", pq.volatility_key("Person"))
+    preview = preview_decision(Workspace.open(root), key, Action.SET_TIER)
+    assert isinstance(preview, DecisionPreview), preview
+    assert isinstance(preview.plan, TierPlan)
+    applied = apply_decision(Workspace.open(root), preview.version, Action.SET_TIER)
+    assert isinstance(applied, Applied), applied
+    return preview.plan
+
+
+@pytest.fixture
+def plain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = _workspace(tmp_path, monkeypatch, (A, B))
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "settle the workspace", "--allow-empty")
+    return root
+
+
+def test_a_tier_decision_reports_the_entry_it_replaces(plain: Path) -> None:
+    assert _set_tier_through_a_decision(plain, "volatile").configured_tier is None
+
+
+def test_a_tier_decision_over_an_entry_reports_that_entry(plain: Path) -> None:
+    yaml = plain / "openkos.yaml"
+    yaml.write_text(
+        yaml.read_text(encoding="utf-8") + "type_tiers:\n  Person: slow\n", "utf-8"
+    )
+    _git(plain, "commit", "-qam", "a tier")
+
+    assert _set_tier_through_a_decision(plain, "volatile").configured_tier == "slow"
+
+
+def _undo_tier(root: Path, plan: TierPlan) -> TierChanged:
+    # `configured_tier` is the configuration's own text, so a caller narrows it
+    # to a tier before passing it back.
+    assert plan.configured_tier in (None, *get_args(VolatilityTier))
+    restore = cast(VolatilityTier | None, plan.configured_tier)
+    with lock.workspace_lock(root):
+        preview = preview_tier_change(Workspace.open(root), "Person", restore)
+    assert isinstance(preview, TierChangePreview), preview
+    assert (preview.type_name, preview.tier) == ("Person", plan.configured_tier)
+    assert preview.configured_tier == plan.tier
+    assert type(preview.version) is TierChangeVersion
+    changed = apply_tier_change(Workspace.open(root), preview.version)
+    assert isinstance(changed, TierChanged), changed
+    assert (changed.type_name, changed.tier) == ("Person", plan.configured_tier)
+    assert changed.commit_sha is not None
+    assert _head_files(root) == ["openkos.yaml"]
+    return changed
+
+
+def test_a_tier_with_no_earlier_entry_is_restored_by_removing_it(plain: Path) -> None:
+    plan = _set_tier_through_a_decision(plain, "volatile")
+
+    _undo_tier(plain, plan)
+
+    yaml = (plain / "openkos.yaml").read_text(encoding="utf-8")
+    assert config.type_tier_entry(yaml, "Person") is None
+    assert _git(plain, "log", "-1", "--format=%s") == "openkos: clear-volatility Person"
+
+
+def test_a_tier_over_an_entry_is_restored_byte_for_byte(plain: Path) -> None:
+    yaml = plain / "openkos.yaml"
+    yaml.write_text(
+        yaml.read_text(encoding="utf-8") + "type_tiers:\n  Person: slow\n", "utf-8"
+    )
+    _git(plain, "commit", "-qam", "a tier")
+    before = yaml.read_bytes()
+    plan = _set_tier_through_a_decision(plain, "volatile")
+    assert yaml.read_bytes() != before
+
+    _undo_tier(plain, plan)
+
+    assert yaml.read_bytes() == before
+    assert _git(plain, "log", "-1", "--format=%s") == (
+        "openkos: set-volatility Person -> slow"
+    )
+
+
+def test_a_tier_it_already_has_is_not_undoable(plain: Path) -> None:
+    assert preview_tier_change(Workspace.open(plain), "Person", None) == NotUndoable(
+        "tier_unchanged"
+    )
+    assert preview_tier_change(Workspace.open(plain), "Spaceship", "slow") == (
+        NotUndoable("unknown_type")
+    )
+
+
+def test_a_tier_change_against_an_edited_config_is_stale(plain: Path) -> None:
+    preview = preview_tier_change(Workspace.open(plain), "Person", "slow")
+    assert isinstance(preview, TierChangePreview), preview
+    yaml = plain / "openkos.yaml"
+    yaml.write_text(yaml.read_text(encoding="utf-8") + "# edited\n", "utf-8")
+    before = support.snapshot(plain)
+
+    assert apply_tier_change(Workspace.open(plain), preview.version) == UndoStale()
+    assert support.snapshot(plain) == before
+
+
+def test_an_uncommitted_edit_to_the_same_entry_is_refused(plain: Path) -> None:
+    yaml = plain / "openkos.yaml"
+    yaml.write_text(
+        yaml.read_text(encoding="utf-8") + "type_tiers:\n  Person: static\n", "utf-8"
+    )
+    preview = preview_tier_change(Workspace.open(plain), "Person", "slow")
+    assert isinstance(preview, TierChangePreview), preview
+    before = support.snapshot(plain)
+
+    with pytest.raises(Refused, match="Person"):
+        apply_tier_change(Workspace.open(plain), preview.version)
+
+    assert support.snapshot(plain) == before
+
+
+def test_the_tier_alias_names_exactly_the_engines_tiers() -> None:
+    assert set(get_args(VolatilityTier)) == set(types.VOLATILITY_TIERS)

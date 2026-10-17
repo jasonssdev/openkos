@@ -89,18 +89,18 @@ JSON and `schema.d.ts` are never hand-merged).
 
 ## S5 Tier change (P4, P5, H1-H3)
 
-- [ ] S5.1 RED: `config.clear_type_tier` text-surgery tests (entry removed,
+- [x] S5.1 RED: `config.clear_type_tier` text-surgery tests (entry removed,
   every other byte kept, absent entry unchanged, un-editable shapes refused).
-- [ ] S5.2 RED: `plan_config_edit` with `tier=None`.
-- [ ] S5.3 RED: application tests: restore by removal after a set-tier decision,
+- [x] S5.2 RED: `plan_config_edit` with `tier=None`.
+- [x] S5.3 RED: application tests: restore by removal after a set-tier decision,
   restore to an earlier explicit tier, `tier_unchanged`, `unknown_type`, stale on
   an edited config, uncommitted same-entry edit refused.
-- [ ] S5.4 GREEN: `clear_type_tier`, `plan_config_edit`, `undo_service` tier
+- [x] S5.4 GREEN: `clear_type_tier`, `plan_config_edit`, `undo_service` tier
   change, `TierDecisionPreview.configured_tier` and `TierPlan.configured_tier`
   (D6).
-- [ ] S5.5 Facade, `VolatilityTier`, routes, `tier_unchanged` and `unknown_type`
+- [x] S5.5 Facade, `VolatilityTier`, routes, `tier_unchanged` and `unknown_type`
   rows, snapshots, client.
-- [ ] S5.6 Mutation-check `clear_type_tier`, the unchanged check and the digest.
+- [x] S5.6 Mutation-check `clear_type_tier`, the unchanged check and the digest.
 
 ## S6 Review screen (R1-R3; Closes #1467, #1466)
 

@@ -2251,12 +2251,17 @@ class _TierRecorder(_Recorder):
         super().__init__(sha=sha)
         self.plan = plan
         self.refusal = refusal
-        self.plan_calls: list[tuple[Path, str, str, str, bytes]] = []
+        self.plan_calls: list[tuple[Path, str, str, str | None, bytes]] = []
         self.edit_commits: list[tuple[Path, str, object]] = []
         self._on_enter = on_enter
 
     def plan_config_commit(
-        self, root: Path, verb: str, concept_type: str, tier: str, baseline: bytes
+        self,
+        root: Path,
+        verb: str,
+        concept_type: str,
+        tier: str | None,
+        baseline: bytes,
     ) -> object:
         self.events.append("plan")
         self.plan_calls.append((root, verb, concept_type, tier, baseline))
