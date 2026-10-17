@@ -27,4 +27,4 @@
 ## 5. Close (PR 2)
 
 - [x] 5.1 Issues for setting a page's sensitivity from the app (#1517) and rebuilding search from it (#1518).
-- [ ] 5.2 Archive: merge the deltas, move the change, write the archive report.
+- [x] 5.2 Archive: merge the deltas, move the change, write the archive report.
