@@ -9,7 +9,8 @@ neutral `Backend*` error hierarchy (`BackendError`, `BackendUnavailable`,
 `BackendEmbeddingDimensionMismatch`) that code outside a concrete client
 catches. This spec is the contract for that neutral seam and for the
 default concrete client, `OllamaClient`, which talks to a locally running
-Ollama server (`/api/chat`, `/api/embed`, `/api/tags`) via stdlib `urllib`
+Ollama server (`/api/chat`, `/api/embed`, `/api/tags`, and for guided setup
+`/api/version` and `/api/pull`) via stdlib `urllib`
 and maps every failure mode to a typed exception. The opt-in
 `openai-compatible` client is specified in `openai-compatible-client`, and
 the config keys and resolver that choose between the two in
@@ -21,7 +22,8 @@ effect; every LLM-calling verb reaches it only through the resolver.
 This spec DOES define retry-with-backoff for the embedding path:
 `OllamaClient.embed(texts)` retries a bounded number of times on a
 transient, retryable failure before propagating. What this spec does not
-define is: streaming (`stream:true`/NDJSON); tool/function calling; retries
+define is: streaming (`stream:true`/NDJSON) for chat and embedding (the
+model pull's NDJSON stream is specified below); tool/function calling; retries
 or backoff for the CHAT path (`OllamaClient.chat` raises on first failure —
 see "Ollama Unavailable Raises A Typed Error" and "Other Failures Raise A
 Generic Typed Error", neither of which retries); `/api/generate`; the
@@ -554,3 +556,56 @@ requirements for the selection, normalization, and warning contracts.
 - THEN the existing Embedding-Model Tag Gate (`reindex-command` spec)
   forces one full re-embed and `ReindexReport.model_reembedded` is `True`
   for that run
+
+### Requirement: Ollama Reports Its Version
+
+`OllamaClient.version()` MUST send `GET {host}/api/version` and return the
+`version` string of the reply. A transport failure MUST raise
+`OllamaUnavailable` naming only the redacted display host; a reply without a
+string `version` MUST raise `OllamaError`.
+
+#### Scenario: The version is read
+
+- GIVEN a server answering `{"version": "0.32.9"}`
+- WHEN `version()` is called
+- THEN it returns `"0.32.9"`
+
+#### Scenario: A refused connection is unavailable
+
+- GIVEN a host that refuses connections
+- WHEN `version()` is called
+- THEN `OllamaUnavailable` is raised
+
+### Requirement: Ollama Pulls A Model As A Progress Stream
+
+`OllamaClient.pull(model, *, on_event, should_stop)` MUST send
+`POST {host}/api/pull` with `{"model": <model>, "stream": true}`, read the reply
+one JSON line at a time, and call `on_event` with a `PullEvent` (`status`,
+`digest`, `completed`, `total`, each null when absent) for every line. It MUST
+call `should_stop` after each line and, when it returns true, close the reply
+and return `False`. It MUST return `True` after a line whose status is
+`success`. A line carrying `error` MUST raise `OllamaModelNotFound` when the
+text says the model does not exist or was not found, and `OllamaError`
+otherwise. A stream that ends without `success` MUST raise `OllamaError`; a
+transport failure MUST raise `OllamaUnavailable`. A malformed line MUST raise
+`OllamaError`, and unknown fields MUST be ignored. The capability is declared by
+the `ModelRuntime` Protocol in `llm/base.py`, which extends `BackendDiagnostics`
+with `version` and `pull`.
+
+#### Scenario: A stream is read to success
+
+- GIVEN a reply of three progress lines and `{"status": "success"}`
+- WHEN `pull` is called
+- THEN `on_event` received four events and the result is `True`
+
+#### Scenario: A stop closes the reply
+
+- GIVEN `should_stop` returns true after the first line
+- WHEN `pull` is called
+- THEN the reply is closed, no further line is read, and the result is `False`
+
+#### Scenario: An unknown model is not found
+
+- GIVEN a reply line `{"error": "pull model manifest: file does not exist"}`
+- WHEN `pull` is called
+- THEN `OllamaModelNotFound` is raised
