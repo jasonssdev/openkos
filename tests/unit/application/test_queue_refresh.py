@@ -649,8 +649,9 @@ def test_every_write_happens_inside_a_commit_section(
     assert all(depth == 1 for depth in depths), depths
     # One section creates the schema, one retires rows naming a missing page,
     # then one per upserted row (three kinds), then one for the identity
-    # retirement (the only kind that can retire for absence).
-    assert section.entries == 1 + 1 + 3 + 1
+    # retirement (the only kind that can retire for absence), then one for the
+    # changed-connection retirement.
+    assert section.entries == 1 + 1 + 3 + 1 + 1
     assert len(_rows(layout)) == 3
 
 
@@ -758,3 +759,44 @@ def test_an_unchanged_identity_row_the_truncated_search_dropped_stays_open(
     assert outcome.identity.retired == 0
     targets = [item.targets for item in _open_by_kind(layout)["identity"]]
     assert MEMBERS in targets
+
+
+# -- #1546 a changed connection row the stored verdicts no longer serve ------------
+
+
+def _relation_rows(layout: config.WorkspaceLayout) -> list[Any]:
+    return [r for r in _rows(layout) if r.kind == "relation_type"]
+
+
+def test_a_changed_connection_row_no_stored_verdict_serves_is_retired(
+    root: Path,
+) -> None:
+    layout = _record_all(root)
+    _refresh(root)
+    write_doc(root, SRC, {"type": "Concept", "title": "edited"}, "New body.\n")
+
+    outcome = _refresh(root)
+
+    assert outcome.relation_type.retired == 1
+    assert {r.status for r in _relation_rows(layout)} == {"stale"}
+    assert _open_by_kind(layout).get("relation_type", []) == []
+
+
+def test_an_unchanged_connection_row_the_stored_verdicts_omit_stays_open(
+    root: Path,
+) -> None:
+    layout = _record_all(root)
+    _refresh(root)
+    conn = sqlite3.connect(layout.findings_db_path)
+    try:
+        conn.execute("DELETE FROM edge_suggestions")
+        conn.commit()
+    except sqlite3.Error:
+        pytest.skip("store table name differs")
+    finally:
+        conn.close()
+
+    outcome = _refresh(root)
+
+    assert outcome.relation_type.retired == 0
+    assert len(_open_by_kind(layout)["relation_type"]) == 1

@@ -30,7 +30,13 @@ here.
 **Changed rows outside the search.** A truncated identity pass cannot retire the
 rows it did not reach, but an open identity row whose inputs changed and which
 the search no longer keeps can never be applied and nothing re-judges it (#1504).
-It is retired and counted in `retired`; an unchanged row outside the search stays. A `contradiction` is left alone: one found while combining names the
+It is retired and counted in `retired`; an unchanged row outside the search stays.
+
+The same holds for a `relation_type` row, whose candidate set a model-free refresh
+can never know: an open row whose inputs changed and which no stored verdict
+produces any more can never be applied and nothing re-judges it (#1546). It is
+retired the same way; the stored verdict is untouched, so a re-judged connection
+is published anew. A `contradiction` is left alone: one found while combining names the
 absorbed concept on purpose.
 """
 
@@ -128,14 +134,19 @@ def refresh_decision_queue(
     identity_proposals = queue_producers.identity_proposals(
         report, current_digest=current_digest
     )
-    nothing_to_publish = (
-        not identity_proposals
-        and not any(
-            queue_producers.relation_suggestion_proposal(
+    relation_proposals = [
+        proposal
+        for suggestion in suggestions
+        if (
+            proposal := queue_producers.relation_suggestion_proposal(
                 suggestion, current_digest=current_digest
             )
-            for suggestion in suggestions
         )
+        is not None
+    ]
+    nothing_to_publish = (
+        not identity_proposals
+        and not relation_proposals
         and not any(
             queue_producers.volatility_suggestion_proposal(answer)
             for answer in stored.answers
@@ -184,6 +195,14 @@ def refresh_decision_queue(
             commit_section=commit_section,
             clock=clock,
         )
+        retired_changed_relations = pq.retire_open_changed_unseen(
+            conn,
+            "relation_type",
+            {proposal.decision_key for proposal in relation_proposals},
+            current_digest,
+            commit_section=commit_section,
+            clock=clock,
+        )
         volatility = queue_producers.enqueue_stored_volatility(
             conn,
             stored.answers,
@@ -200,7 +219,9 @@ def refresh_decision_queue(
             retired_missing=missing.get("identity", 0),
         ),
         relation_type=dataclasses.replace(
-            relation_type, retired_missing=missing.get("relation_type", 0)
+            relation_type,
+            retired=relation_type.retired + retired_changed_relations,
+            retired_missing=missing.get("relation_type", 0),
         ),
         volatility=volatility,
         volatility_ambiguous=stored.ambiguous,

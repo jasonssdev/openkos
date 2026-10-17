@@ -801,6 +801,31 @@ published anew.
 - WHEN a refresh runs
 - THEN the row stays open
 
+### Requirement: A Refresh Retires A Changed Connection Row No Stored Verdict Produces
+
+A refresh MUST retire as `stale` every open `relation_type` row that the stored
+verdicts did not produce and whose recorded inputs no longer hash as recorded,
+and MUST count it in the connection result's `retired`. The candidate set of
+connections cannot be known without a model client, so a row whose inputs are
+unchanged MUST stay open, an input that cannot be read MUST NOT count as a
+change, and a row is never applied or decided by the rule. The rule MUST call no
+model and write only the queue; the stored verdict is left as is, and a
+connection that is judged again is published anew.
+
+#### Scenario: A changed connection no stored verdict produces is retired
+
+- GIVEN an open connection row whose source page was edited since it was written
+  and no stored verdict produces it
+- WHEN a refresh runs
+- THEN the row is `stale` and the connection result counts it as retired
+
+#### Scenario: An unchanged connection the stored verdicts omit stays open
+
+- GIVEN an open connection row whose pages are unchanged and which no stored
+  verdict produces
+- WHEN a refresh runs
+- THEN the row stays open
+
 ### Requirement: A Reconcile Resolves The Revision Row Over Its Pair
 
 The reconcile write core MUST resolve, besides the typed-edge contradiction row
