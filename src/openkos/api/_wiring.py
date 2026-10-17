@@ -31,6 +31,7 @@ from openkos.application import (
     curate_decisions,
     judging,
     lock_wait,
+    model_settings,
     setup,
     unmerge_service,
 )
@@ -41,9 +42,11 @@ from openkos.vcs.autocommit import (
     CommitOutcome,
     ConfigCommitPlan,
     ConfigEditConflict,
+    ModelSettingsConflict,
     commit_config_edit,
     commit_paths,
     plan_config_edit,
+    plan_model_settings_edit,
 )
 
 _NOT_COMMITTED = "{what} was applied but not committed: "
@@ -250,3 +253,50 @@ def setup_client(cfg: config.Config, timeout: float) -> BackendDiagnostics:
 def setup_ports() -> setup.SetupPorts:
     """The effects setup reaches, bound to this module's client classes."""
     return setup.SetupPorts(client=setup_client)
+
+
+_SETTINGS_CONFLICT = (
+    "the model settings cannot be committed on their own: openkos.yaml has "
+    "uncommitted changes to the model or endpoint lines (or a shape this "
+    "operation cannot edit in the committed version); commit or discard them, "
+    "then try again"
+)
+
+
+def settings_ports(
+    workspace: Workspace,
+    *,
+    wait_seconds: float,
+    on_warning: Callable[[str], None] | None,
+) -> model_settings.SettingsPorts:
+    """The effects a model-settings change needs, bound to `workspace`: the
+    lock inside the commit section only, waiting at most `wait_seconds`, and
+    the config commit that leaves the user's other uncommitted edits alone."""
+    warn = on_warning if on_warning is not None else _ignore
+
+    def plan_commit(
+        root: Path, edit: Callable[[str], str], baseline: bytes
+    ) -> ConfigCommitPlan | curate_decisions.ConfigCommitRefusal | None:
+        planned = plan_model_settings_edit(root, edit, baseline)
+        if isinstance(planned, ModelSettingsConflict):
+            return curate_decisions.ConfigCommitRefusal(_SETTINGS_CONFLICT)
+        return planned
+
+    def commit(
+        root: Path, message: str, plan: curate_decisions.ConfigCommitPlan | None
+    ) -> str | None:
+        outcome = commit_config_edit(
+            root, message, plan if isinstance(plan, ConfigCommitPlan) else None
+        )
+        warning = skipped_warning(outcome, "the settings change")
+        if warning is not None:
+            warn(warning)
+        return outcome.sha
+
+    return model_settings.SettingsPorts(
+        commit_section=lock_wait.locked_commit_section(
+            workspace.root, wait_seconds=wait_seconds
+        ),
+        plan_commit=plan_commit,
+        commit=commit,
+    )

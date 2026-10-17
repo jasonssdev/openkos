@@ -76,6 +76,7 @@ class WriteFailed(Refused):
             "unmerge",
             "reopen",
             "unrelate",
+            "model_settings",
         ],
         subjects: tuple[str, ...],
         error: str,

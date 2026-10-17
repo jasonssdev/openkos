@@ -168,6 +168,48 @@ def plan_config_edit(
     return ConfigCommitPlan(apply=apply)
 
 
+@dataclass(frozen=True)
+class ModelSettingsConflict:
+    """The model-settings change cannot be applied cleanly to the committed
+    `openkos.yaml`. Neutral on purpose: the adapter words the refusal."""
+
+
+def plan_model_settings_edit(
+    root: Path, edit: Callable[[str], str], baseline: bytes
+) -> ConfigCommitPlan | ModelSettingsConflict | None:
+    """`plan_config_edit` for a model-settings change: `None` when
+    `openkos.yaml` is clean (or has no committed version, or there is no git);
+    otherwise a plan that commits `edit` applied to the committed version, so
+    the user's uncommitted edits stay out of the commit.
+
+    Returns a `ModelSettingsConflict` (nothing written) when the user's edit
+    touches one of the five model-settings lines (`config.MODEL_SETTINGS_KEYS`),
+    or `edit` cannot apply to the committed file. It reads git and nothing
+    else."""
+    try:
+        if not git.paths_dirty(root, [_CONFIG_REL_PATH]):
+            return None
+        head = git.head_file_bytes(root, _CONFIG_REL_PATH)
+    except git.GitError:
+        return None
+    if head is None:
+        return None
+
+    def apply(content: bytes) -> bytes:
+        return edit(content.decode("utf-8")).encode("utf-8")
+
+    try:
+        same_lines = config.model_settings_lines(
+            head.decode("utf-8")
+        ) == config.model_settings_lines(baseline.decode("utf-8"))
+        apply(head)
+    except ValueError:
+        same_lines = False
+    if not same_lines:
+        return ModelSettingsConflict()
+    return ConfigCommitPlan(apply=apply)
+
+
 def config_edit_pending(root: Path) -> bool:
     """`True` when `openkos.yaml` has something to commit. A git error counts
     as pending, so the commit itself reports the real condition."""

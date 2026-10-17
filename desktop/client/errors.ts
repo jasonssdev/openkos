@@ -65,6 +65,13 @@ export const ERROR_CODES = [
   "pull_active",
   "model_not_configured",
   "pull_not_supported",
+  // Settings.
+  "settings_unchanged",
+  "invalid_base_url",
+  "invalid_embedding_base_url",
+  "invalid_model",
+  "invalid_embedding_model",
+  "base_url_required",
 ] as const;
 
 export type KnownErrorCode = (typeof ERROR_CODES)[number];

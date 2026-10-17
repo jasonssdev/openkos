@@ -415,3 +415,88 @@ def test_commit_config_edit_with_a_plan_reports_a_git_failure(
 
     assert outcome.skipped == "failed"
     assert outcome.detail == "cannot edit"
+
+
+# -- Model settings edit plan --------------------------------------------
+
+
+def _to_remote(text: str) -> str:
+    return config.set_model_settings(
+        text,
+        backend="openai-compatible",
+        base_url="https://api.example.com",
+        embedding_base_url=None,
+        model="gpt-4o-mini",
+        embedding_model="bge-m3",
+    )
+
+
+_SETTINGS = "model: qwen3:8b\nembedding_model: bge-m3\nreview: true\n"
+
+
+def _settings_repo(path: Path) -> Path:
+    repo = _repo(path)
+    (repo / "openkos.yaml").write_text(_SETTINGS, encoding="utf-8")
+    _git(["add", "--", "openkos.yaml"], repo)
+    _git(["commit", "-m", "config"], repo)
+    return repo
+
+
+def test_plan_model_settings_edit_is_none_on_a_clean_file(
+    tmp_path: Path, identity: None
+) -> None:
+    repo = _settings_repo(tmp_path)
+
+    assert (
+        autocommit.plan_model_settings_edit(repo, _to_remote, _baseline(repo)) is None
+    )
+
+
+def test_plan_model_settings_edit_is_none_outside_a_repository(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "openkos.yaml").write_text(_SETTINGS, encoding="utf-8")
+
+    assert autocommit.plan_model_settings_edit(tmp_path, _to_remote, b"") is None
+
+
+def test_an_unrelated_dirty_edit_stays_out_of_the_settings_commit(
+    tmp_path: Path, identity: None
+) -> None:
+    repo = _settings_repo(tmp_path)
+    yaml = repo / "openkos.yaml"
+    yaml.write_text(_SETTINGS.replace("review: true", "review: false"), "utf-8")
+
+    plan = autocommit.plan_model_settings_edit(repo, _to_remote, _baseline(repo))
+    assert isinstance(plan, autocommit.ConfigCommitPlan)
+    outcome = autocommit.commit_config_edit(repo, "openkos: settings", plan)
+
+    assert outcome.sha is not None
+    committed = vcs_git.head_file_bytes(repo, "openkos.yaml")
+    assert committed == _to_remote(_SETTINGS).encode()
+    assert "review: false" in yaml.read_text(encoding="utf-8")
+
+
+def test_a_dirty_edit_to_a_model_line_conflicts(tmp_path: Path, identity: None) -> None:
+    repo = _settings_repo(tmp_path)
+    (repo / "openkos.yaml").write_text(
+        _SETTINGS.replace("qwen3:8b", "llama3"), encoding="utf-8"
+    )
+
+    plan = autocommit.plan_model_settings_edit(repo, _to_remote, _baseline(repo))
+
+    assert plan == autocommit.ModelSettingsConflict()
+
+
+def test_a_committed_file_the_edit_cannot_apply_to_conflicts(
+    tmp_path: Path, identity: None
+) -> None:
+    repo = _repo(tmp_path)
+    (repo / "openkos.yaml").write_text("model: a\nmodel: b\n", encoding="utf-8")
+    _git(["add", "--", "openkos.yaml"], repo)
+    _git(["commit", "-m", "config"], repo)
+    (repo / "openkos.yaml").write_text(_SETTINGS, encoding="utf-8")
+
+    plan = autocommit.plan_model_settings_edit(repo, _to_remote, _baseline(repo))
+
+    assert plan == autocommit.ModelSettingsConflict()

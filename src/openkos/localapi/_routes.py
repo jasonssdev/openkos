@@ -26,6 +26,9 @@ from openkos.localapi._models import (
     KeptDistinctList,
     MergedConceptList,
     MergeHistory,
+    ModelSettingsApplyRequest,
+    ModelSettingsPreviewRequest,
+    ModelSettingsResponse,
     PreviewPlan,
     PreviewRequest,
     PullRequest,
@@ -400,6 +403,51 @@ def make_router() -> APIRouter:
         )
         if isinstance(result, api.TierChanged):
             return TierChangeResponse(changed=result, warnings=warnings)
+        raise _errors.outcome_problem(result)
+
+    @router.get("/settings/model")
+    def model_settings(
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.ModelSettings:
+        # Reads openkos.yaml only: no client, no network, no lock.
+        return invoke(lambda: api.model_settings(workspace))
+
+    @router.post("/settings/model/preview", responses=_errors_of(409, 413))
+    def model_settings_preview(
+        body: ModelSettingsPreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.ModelSettingsPreview:
+        change = api.ModelSettingsChange(
+            backend=body.backend,
+            base_url=body.base_url,
+            embedding_base_url=body.embedding_base_url,
+            model=body.model,
+            embedding_model=body.embedding_model,
+        )
+        result = invoke(lambda: api.preview_model_settings(workspace, change))
+        if isinstance(result, api.ModelSettingsPreview):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post(
+        "/settings/model/apply",
+        responses=_errors_of(409, 413, 503, retry_after=True),
+    )
+    def model_settings_apply(
+        body: ModelSettingsApplyRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> ModelSettingsResponse:
+        warnings: list[str] = []
+        result = invoke(
+            lambda: api.apply_model_settings(
+                workspace,
+                body.version,
+                wait_seconds=_wait(body.wait_seconds),
+                on_warning=warnings.append,
+            )
+        )
+        if isinstance(result, api.ModelSettingsChanged):
+            return ModelSettingsResponse(changed=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
     @router.get("/setup/readiness")

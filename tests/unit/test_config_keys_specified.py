@@ -3,8 +3,9 @@
 `openkos.yaml` is a public interface, and `openspec/specs/{domain}/spec.md` is
 the contract for public interfaces. Three keys shipped with behaviour in
 `docs/cli.md` and a docstring in `config.py` but no requirement anywhere in the
-specs. The accepted-key set is read from `config.read_config` itself, so a key
-added there without a spec mention fails here instead of landing unspecified.
+specs. The accepted-key set is read from `config.parse_config`, the parser
+`read_config` runs on the file's text, so a key added there without a spec
+mention fails here instead of landing unspecified.
 """
 
 import ast
@@ -17,15 +18,15 @@ _SPECS = _REPO_ROOT / "openspec" / "specs"
 
 
 def _accepted_keys() -> set[str]:
-    """String keys `read_config` pulls out of the parsed YAML mapping `raw`."""
+    """String keys `parse_config` pulls out of the parsed YAML mapping `raw`."""
     tree = ast.parse(_CONFIG.read_text(encoding="utf-8"))
-    read_config = next(
+    parser = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "read_config"
+        if isinstance(node, ast.FunctionDef) and node.name == "parse_config"
     )
     keys: set[str] = set()
-    for node in ast.walk(read_config):
+    for node in ast.walk(parser):
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -56,7 +57,7 @@ def _spec_text() -> str:
 def test_the_accepted_key_set_is_read_from_config_and_is_not_empty() -> None:
     keys = _accepted_keys()
 
-    # Anchors so a refactor of `read_config` that hides the keys from this
+    # Anchors so a refactor of `parse_config` that hides the keys from this
     # scan fails here rather than turning the test below into a vacuous pass.
     assert {"model", "backend", "rationale_language", "volatility_windows"} <= keys
     assert len(keys) >= 20

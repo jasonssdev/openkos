@@ -1183,6 +1183,10 @@
       "kind": "class",
       "members": {}
     },
+    "ModelBackend": {
+      "kind": "alias",
+      "value": "Literal['ollama', 'openai-compatible']"
+    },
     "ModelReadiness": {
       "fields": [
         {
@@ -1209,6 +1213,175 @@
           "annotation": "bool",
           "default": false,
           "name": "pullable"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ModelSettings": {
+      "fields": [
+        {
+          "annotation": "Literal['ollama', 'openai-compatible']",
+          "default": false,
+          "name": "backend"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "base_url"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "embedding_base_url"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "model"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "embedding_model"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "remote_hosts"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "is_local"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "takes_api_key"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ModelSettingsChange": {
+      "fields": [
+        {
+          "annotation": "Literal['ollama', 'openai-compatible']",
+          "default": false,
+          "name": "backend"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "base_url"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "embedding_base_url"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "model"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "embedding_model"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ModelSettingsChanged": {
+      "fields": [
+        {
+          "annotation": "ModelSettings",
+          "default": false,
+          "name": "settings"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "commit_sha"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ModelSettingsPreview": {
+      "fields": [
+        {
+          "annotation": "ModelSettings",
+          "default": false,
+          "name": "current"
+        },
+        {
+          "annotation": "ModelSettings",
+          "default": false,
+          "name": "proposed"
+        },
+        {
+          "annotation": "tuple[SettingChange, ...]",
+          "default": false,
+          "name": "changes"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "search_rebuild"
+        },
+        {
+          "annotation": "ModelSettingsVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ModelSettingsRefused": {
+      "fields": [
+        {
+          "annotation": "Literal['invalid_base_url', 'invalid_embedding_base_url', 'invalid_model', 'invalid_embedding_model', 'base_url_required', 'unchanged']",
+          "default": false,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ModelSettingsStale": {
+      "fields": [
+        {
+          "annotation": "Literal['content_changed']",
+          "default": true,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ModelSettingsVersion": {
+      "fields": [
+        {
+          "annotation": "ModelSettingsChange",
+          "default": false,
+          "name": "change"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
         }
       ],
       "frozen": true,
@@ -1999,6 +2172,28 @@
       "kind": "dataclass",
       "members": {}
     },
+    "SettingChange": {
+      "fields": [
+        {
+          "annotation": "Literal['backend', 'base_url', 'embedding_base_url', 'model', 'embedding_model']",
+          "default": false,
+          "name": "field"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "before"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "after"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "SetupReadiness": {
       "fields": [
         {
@@ -2720,6 +2915,36 @@
       ],
       "returns": "Applied | NotApplied | Stale"
     },
+    "apply_model_settings": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "ModelSettingsVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "ModelSettingsChanged | ModelSettingsRefused | ModelSettingsStale"
+    },
     "apply_reopen": {
       "kind": "function",
       "parameters": [
@@ -2936,6 +3161,18 @@
       ],
       "returns": "tuple[MergedConcept, ...]"
     },
+    "model_settings": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "ModelSettings"
+    },
     "pending_report": {
       "kind": "function",
       "parameters": [
@@ -3001,6 +3238,24 @@
         }
       ],
       "returns": "FindingPreview | NotApplied | Stale"
+    },
+    "preview_model_settings": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "ModelSettingsChange",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "change"
+        }
+      ],
+      "returns": "ModelSettingsPreview | ModelSettingsRefused"
     },
     "preview_reopen": {
       "kind": "function",
