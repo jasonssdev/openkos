@@ -178,6 +178,25 @@ def test_no_declined_record_for_exactly_this_finding_is_refused(
     assert tree(root) == before
 
 
+def test_a_merged_body_decline_over_one_page_named_twice_is_reopened(
+    root: Path,
+) -> None:
+    """A contradiction found inside a combined page names that page twice, with
+    the absorbed page as the discriminator; its decline is reopened like any
+    other."""
+    _rule(root, (A, A), merged=B)
+    plan = _preview(root, A, A, B)
+    recorder = CommitRecorder()
+
+    done = _apply(root, plan, recorder)
+
+    assert done == svc.ContradictionReopened(
+        first_id=A, second_id=A, merged_absorbed_id=B, commit_sha="abc1234"
+    )
+    assert not _declined(root, (A, A), B)
+    assert svc.declined_contradictions(root) == ()
+
+
 def test_only_the_typed_edge_decline_does_not_cover_the_merged_body_one(
     root: Path,
 ) -> None:
