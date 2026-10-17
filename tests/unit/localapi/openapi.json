@@ -974,6 +974,505 @@
         "title": "IdentityDetail",
         "type": "object"
       },
+      "IngestBinding": {
+        "description": "What consent was given to, beside the files. A change is stale.",
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "include_confidential": {
+            "title": "Include Confidential",
+            "type": "boolean"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "settings_digest": {
+            "title": "Settings Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "backend",
+          "is_local",
+          "include_confidential",
+          "settings_digest"
+        ],
+        "title": "IngestBinding",
+        "type": "object"
+      },
+      "IngestFileQuote": {
+        "description": "One chosen file, priced.",
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_absolute",
+                  "not_found",
+                  "not_a_file",
+                  "inside_workspace",
+                  "duplicate_name",
+                  "changed_after_import",
+                  "inconsistent_workspace",
+                  "symlinked_destination",
+                  "unreadable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "source_only": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_text",
+                  "blank",
+                  "confidential_floor"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Only"
+          },
+          "status": {
+            "enum": [
+              "extracts",
+              "source_only",
+              "unchanged",
+              "refused"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "size",
+          "status",
+          "calls"
+        ],
+        "title": "IngestFileQuote",
+        "type": "object"
+      },
+      "IngestFileResult": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "created": {
+            "title": "Created",
+            "type": "integer"
+          },
+          "extraction_degraded": {
+            "title": "Extraction Degraded",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_absolute",
+                  "not_found",
+                  "not_a_file",
+                  "inside_workspace",
+                  "duplicate_name",
+                  "changed_after_import",
+                  "inconsistent_workspace",
+                  "symlinked_destination",
+                  "unreadable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal"
+          },
+          "revised": {
+            "title": "Revised",
+            "type": "integer"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "status": {
+            "enum": [
+              "added",
+              "updated",
+              "unchanged",
+              "refused",
+              "interrupted",
+              "busy",
+              "failed",
+              "not_reached"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "status",
+          "source_id",
+          "created",
+          "revised",
+          "extraction_degraded",
+          "calls"
+        ],
+        "title": "IngestFileResult",
+        "type": "object"
+      },
+      "IngestJob": {
+        "description": "An ingest run as a poll sees it. The run's own result is a field here,\nnever the poll's HTTP status. A response model only: no `extra=\"forbid\"`,\nwhich would reach the nested dataclasses.",
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IngestRunOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reading",
+                  "extracting",
+                  "writing",
+                  "refreshing"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "stopping",
+              "finished",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "state",
+          "index",
+          "total",
+          "phase",
+          "calls",
+          "outcome",
+          "warnings",
+          "error"
+        ],
+        "title": "IngestJob",
+        "type": "object"
+      },
+      "IngestQuote": {
+        "description": "What adding the chosen files would cost, and the token to run it.",
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/IngestFileQuote"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "include_confidential": {
+            "title": "Include Confidential",
+            "type": "boolean"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "token": {
+            "$ref": "#/components/schemas/IngestQuoteToken"
+          }
+        },
+        "required": [
+          "files",
+          "calls",
+          "model",
+          "backend",
+          "is_local",
+          "host",
+          "include_confidential",
+          "token"
+        ],
+        "title": "IngestQuote",
+        "type": "object"
+      },
+      "IngestQuoteRequest": {
+        "additionalProperties": false,
+        "description": "The files to price, by absolute path, and whether the run may send text\nabove the workspace's floor. Every path check is the API's.",
+        "properties": {
+          "include_confidential": {
+            "default": false,
+            "title": "Include Confidential",
+            "type": "boolean"
+          },
+          "paths": {
+            "items": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "title": "IngestQuoteRequest",
+        "type": "object"
+      },
+      "IngestQuoteToken": {
+        "description": "The context consent was given for. Refused files are not in it.",
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/IngestBinding"
+          },
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/IngestTokenFile"
+            },
+            "title": "Files",
+            "type": "array"
+          }
+        },
+        "required": [
+          "binding",
+          "files",
+          "calls"
+        ],
+        "title": "IngestQuoteToken",
+        "type": "object"
+      },
+      "IngestRunOutcome": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/IngestFileResult"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "indexes": {
+            "enum": [
+              "refreshed",
+              "not_needed",
+              "stale"
+            ],
+            "title": "Indexes",
+            "type": "string"
+          },
+          "observer_failed": {
+            "default": false,
+            "title": "Observer Failed",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "stopped",
+              "busy"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "files",
+          "calls",
+          "indexes"
+        ],
+        "title": "IngestRunOutcome",
+        "type": "object"
+      },
+      "IngestRunRequest": {
+        "description": "The ingest quote's token, echoed unchanged. A missing or null token is a\nrefusal the route answers (422 `run_refused`), not a validation error.",
+        "properties": {
+          "token": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IngestQuoteToken"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "IngestRunRequest",
+        "type": "object"
+      },
+      "IngestTokenFile": {
+        "description": "One file the consent covers: its path, its bytes' sha256 and the most\ncalls it may spend.",
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "digest",
+          "calls"
+        ],
+        "title": "IngestTokenFile",
+        "type": "object"
+      },
       "JobSummary": {
         "description": "One unattended job outcome.",
         "properties": {
@@ -2744,6 +3243,19 @@
         "title": "RefusedFileDetail",
         "type": "object"
       },
+      "RefusedFileQuoteRequest": {
+        "additionalProperties": false,
+        "description": "Whether the run of a refused file's quote may send text above the\nworkspace's floor.",
+        "properties": {
+          "include_confidential": {
+            "default": false,
+            "title": "Include Confidential",
+            "type": "boolean"
+          }
+        },
+        "title": "RefusedFileQuoteRequest",
+        "type": "object"
+      },
       "RelatePlan": {
         "description": "Writing one typed relation, as it would be written.",
         "properties": {
@@ -4502,6 +5014,120 @@
         "summary": "Apply"
       }
     },
+    "/v1/decisions/{decision_key}/ingest-quote": {
+      "post": {
+        "operationId": "refused_file_quote_v1_decisions__decision_key__ingest_quote_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_key",
+            "required": true,
+            "schema": {
+              "title": "Decision Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefusedFileQuoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestQuote"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Refused File Quote"
+      }
+    },
     "/v1/decisions/{decision_key}/preview": {
       "post": {
         "operationId": "preview_v1_decisions__decision_key__preview_post",
@@ -4771,6 +5397,370 @@
           }
         ],
         "summary": "Health"
+      }
+    },
+    "/v1/ingest/quote": {
+      "post": {
+        "operationId": "ingest_quote_v1_ingest_quote_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestQuoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestQuote"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Ingest Quote"
+      }
+    },
+    "/v1/ingest/runs": {
+      "post": {
+        "operationId": "start_ingest_v1_ingest_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Start Ingest"
+      }
+    },
+    "/v1/ingest/runs/{run_id}": {
+      "get": {
+        "operationId": "ingest_status_v1_ingest_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Ingest Status"
+      }
+    },
+    "/v1/ingest/runs/{run_id}/stop": {
+      "post": {
+        "operationId": "stop_ingest_v1_ingest_runs__run_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Stop Ingest"
       }
     },
     "/v1/judging/quote": {

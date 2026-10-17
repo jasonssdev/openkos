@@ -46,6 +46,11 @@ EXPECTED_ROUTES = {
     ("POST", "/v1/judging/runs/{run_id}/stop"),
     ("POST", "/v1/ask"),
     ("GET", "/v1/ask/{ask_id}"),
+    ("POST", "/v1/ingest/quote"),
+    ("POST", "/v1/decisions/{decision_key}/ingest-quote"),
+    ("POST", "/v1/ingest/runs"),
+    ("GET", "/v1/ingest/runs/{run_id}"),
+    ("POST", "/v1/ingest/runs/{run_id}/stop"),
     ("GET", "/v1/setup/readiness"),
     ("POST", "/v1/setup/pulls"),
     ("GET", "/v1/setup/pulls/{pull_id}"),
@@ -231,6 +236,9 @@ _BODY_ROUTES = [
     "/v1/judging/quote",
     "/v1/judging/runs",
     "/v1/ask",
+    "/v1/ingest/quote",
+    "/v1/decisions/watch_refusal:abc/ingest-quote",
+    "/v1/ingest/runs",
     "/v1/setup/pulls",
 ]
 
