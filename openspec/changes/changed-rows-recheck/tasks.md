@@ -18,7 +18,9 @@ Authored changed lines are additions plus deletions; the generated
 | S3 | Archive: merge delta specs, archive report | docs | S2 |
 
 Delivery strategy: stacked-to-main; each slice branches from `main` after the
-previous one is squash-merged.
+previous one is squash-merged. S1 and S2 shipped as one PR (#1491): `main` moved
+four times while S1 waited on CI, each needing a rebase and a fresh run, so the
+screen slice was folded in rather than queued behind another round.
 
 ## 1. Engine and API (S1)
 
@@ -40,19 +42,19 @@ previous one is squash-merged.
 
 ## 2. Review screen (S2)
 
-- [ ] 2.1 RED: a changed decision offers Check again and Decide later only.
-- [ ] 2.2 RED: Check again refreshes and lists again; gone, fresh and still
+- [x] 2.1 RED: a changed decision offers Check again and Decide later only.
+- [x] 2.2 RED: Check again refreshes and lists again; gone, fresh and still
       changed outcomes (design D3).
-- [ ] 2.3 RED: a check refreshes before quoting and after the run (design D2);
+- [x] 2.3 RED: a check refreshes before quoting and after the run (design D2);
       Check all is shown for a changed identity decision.
-- [ ] 2.4 RED: a stale apply whose decision is now changed is not previewed
+- [x] 2.4 RED: a stale apply whose decision is now changed is not previewed
       again.
-- [ ] 2.5 RED: `visit()` refreshes before listing (design D6).
-- [ ] 2.6 GREEN: `wording.ts` (Check again, the changed notice, the consent
+- [x] 2.5 RED: `visit()` refreshes before listing (design D6).
+- [x] 2.6 GREEN: `wording.ts` (Check again, the changed notice, the consent
       heading by kind), `model.ts` (`visit`, `recheck`, `startCheck(kind)`),
       `main.ts` (`visit`), `render.ts` (Check all's condition and line only).
-- [ ] 2.7 `docs/decision-wording.md` and the CHANGELOG.
-- [ ] 2.8 Gates: Python gates, `pnpm typecheck`, `pnpm test`, `pnpm build`,
+- [x] 2.7 `docs/decision-wording.md` and the CHANGELOG.
+- [x] 2.8 Gates: Python gates, `pnpm typecheck`, `pnpm test`, `pnpm build`,
       `pnpm check:schema`.
 
 ## 3. Archive (S3)

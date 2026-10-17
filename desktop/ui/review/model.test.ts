@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, EngineUnreachable, type Schemas } from "../../client/index.ts";
-import { ReviewModel, type ReviewClient } from "./model.ts";
-import { CHANGED, DECIDE_LATER } from "./wording.ts";
+import { ReviewModel, offersCheckAll, type ReviewClient } from "./model.ts";
+import { CHANGED, CHANGED_CHECK, DECIDE_LATER } from "./wording.ts";
 
 type Decision = Schemas["Decision"];
 type Page = Schemas["Page"];
@@ -499,7 +499,19 @@ describe("stale, busy and refused", () => {
 
   it("shows a decision listed as changed with the changed notice", async () => {
     const { model } = await opened([{ ...PAIR, fresh: false }], "pair");
-    expect(model.state.open?.changed).toBe(CHANGED);
+    expect(model.state.open?.changed).toBe(CHANGED_CHECK);
+  });
+
+  it("shows a stale apply whose decision is now changed as changed, never previewing it again", async () => {
+    const { model, client } = await opened([PAIR], "pair");
+    await model.choose({ choice: "merge", label: "", does: "" });
+    client.applyDecision.mockRejectedValueOnce(apiError("stale"));
+    client.decisions.mockResolvedValue({ decisions: [{ ...PAIR, fresh: false }] });
+    await model.confirm();
+    expect(client.previewDecision).toHaveBeenCalledTimes(1);
+    expect(model.state.open?.changed).toBe(CHANGED_CHECK);
+    expect(model.state.open?.step).toEqual({ name: "choosing" });
+    expect(model.state.open?.problem).toBeNull();
   });
 
   it("retries busy for the bounded time, then offers Try again that repeats the apply", async () => {
@@ -655,7 +667,114 @@ describe("the check", () => {
     );
     await model.agreeCheck();
     expect(model.state.check?.problem?.message).toBe("The AI model isn't running. OpenKOS needs it to check pages.");
-    expect(client.decisions).toHaveBeenCalledTimes(2);
+    // Listed on load, again before the quote, and again after the run.
+    expect(client.decisions).toHaveBeenCalledTimes(3);
+  });
+
+  it("refreshes the queue before it quotes and after the run, so changed pairs come back decidable", async () => {
+    const { model, client } = fake([UNJUDGED]);
+    await model.load();
+    const calls: string[] = [];
+    client.refreshQueue.mockImplementation(async () => {
+      calls.push("refresh");
+      return QUEUE_REFRESH;
+    });
+    client.quoteJudging.mockImplementation(async () => {
+      calls.push("quote");
+      return QUOTE;
+    });
+    client.decisions.mockImplementation(async () => {
+      calls.push("list");
+      return { decisions: [UNJUDGED] };
+    });
+    await model.startCheck();
+    await model.agreeCheck();
+    expect(calls).toEqual(["refresh", "list", "quote", "refresh", "list"]);
+  });
+
+  it("counts a changed pair the check made decidable as ready", async () => {
+    const changed = { ...PAIR, fresh: false };
+    const { model, client } = fake([changed]);
+    await model.load();
+    await model.startCheck();
+    client.decisions.mockResolvedValue({ decisions: [PAIR] });
+    await model.agreeCheck();
+    expect(model.state.check?.text).toBe("Checked 2. 1 is ready for you to decide.");
+  });
+});
+
+describe("a changed decision", () => {
+  const CHANGED_PAIR = { ...PAIR, fresh: false };
+
+  it("checks again for free when the refresh makes it decidable", async () => {
+    const { model, client } = await opened([CHANGED_PAIR], "pair");
+    client.decisions.mockResolvedValue({ decisions: [PAIR] });
+    await model.choose({ choice: "recheck", label: "", does: "" });
+    expect(client.refreshQueue).toHaveBeenCalledTimes(1);
+    expect(client.quoteJudging).not.toHaveBeenCalled();
+    expect(model.state.check).toBeNull();
+    expect(model.state.open).toMatchObject({ decision: PAIR, changed: null, step: { name: "choosing" } });
+  });
+
+  it("asks agreement to check its kind when it is still changed", async () => {
+    const relation: Decision = { ...CHANGED_PAIR, decision_key: "rel", kind: "relation_type", evaluation: "not_applicable" };
+    const { model, client } = await opened([relation], "rel");
+    await model.choose({ choice: "recheck", label: "", does: "" });
+    expect(client.refreshQueue).toHaveBeenCalledTimes(1);
+    expect(client.quoteJudging).toHaveBeenCalledWith({ kind: "relation_type" });
+    expect(model.state.check?.phase).toBe("consent");
+    expect(client.startJudgingRun).not.toHaveBeenCalled();
+  });
+
+  it("says the question no longer applies when the refresh retired it", async () => {
+    const { model, client } = await opened([CHANGED_PAIR], "pair");
+    client.decisions.mockResolvedValue({ decisions: [] });
+    await model.choose({ choice: "recheck", label: "", does: "" });
+    expect(model.state.open).toBeNull();
+    expect(model.state.check).toBeNull();
+    expect(model.state.notice).toEqual({ tone: "warning", text: "These pages changed, and this question no longer applies." });
+    expect(client.quoteJudging).not.toHaveBeenCalled();
+  });
+
+  it("checks again even when the refresh fails", async () => {
+    const { model, client } = await opened([CHANGED_PAIR], "pair");
+    client.refreshQueue.mockRejectedValueOnce(apiError("workspace_busy", 503));
+    await model.choose({ choice: "recheck", label: "", does: "" });
+    expect(client.quoteJudging).toHaveBeenCalledWith({ kind: "identity" });
+  });
+});
+
+describe("Check all", () => {
+  it("is offered for an unjudged pair and for a changed one, and not otherwise", () => {
+    expect(offersCheckAll([UNJUDGED])).toBe(true);
+    expect(offersCheckAll([{ ...PAIR, fresh: false }])).toBe(true);
+    expect(offersCheckAll([PAIR])).toBe(false);
+    expect(offersCheckAll([{ ...PAIR, kind: "relation_type", fresh: false }])).toBe(false);
+  });
+});
+
+describe("a visit", () => {
+  it("refreshes the queue before it lists the decisions", async () => {
+    const { model, client } = fake([PAIR]);
+    const calls: string[] = [];
+    client.refreshQueue.mockImplementation(async () => {
+      calls.push("refresh");
+      return QUEUE_REFRESH;
+    });
+    client.decisions.mockImplementation(async () => {
+      calls.push("list");
+      return { decisions: [PAIR] };
+    });
+    await model.visit();
+    expect(calls).toEqual(["refresh", "list"]);
+    expect(model.state.loaded).toBe(true);
+  });
+
+  it("still lists when the refresh fails", async () => {
+    const { model, client } = fake([PAIR]);
+    client.refreshQueue.mockRejectedValueOnce(apiError("workspace_busy", 503));
+    await model.visit();
+    expect(model.state.decisions).toEqual([PAIR]);
   });
 
   it("shows the open decision as it is after the check", async () => {

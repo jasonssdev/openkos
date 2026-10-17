@@ -89,7 +89,7 @@ function show(next: View): void {
   paintNav();
   if (next === "review") {
     // Everything is read again on each visit: To review is never stale.
-    if (review !== null) void review.load();
+    if (review !== null) void review.visit();
   } else {
     statusRoot.querySelector<HTMLElement>('[data-view="heading"]')?.focus();
   }
@@ -107,7 +107,7 @@ function startReview(state: Extract<EngineState, { state: "ready" }>): void {
   };
   reviewWaiting.hidden = true;
   renderReview(reviewRoot, live, model, model.state);
-  if (view === "review") void model.load();
+  if (view === "review") void model.visit();
 }
 
 function stopReview(): void {

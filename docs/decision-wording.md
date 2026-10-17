@@ -33,7 +33,7 @@ Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../eva
    - **Spending is agreed to in bulk.** One "Check all" agreement covers a batch of checks, with the batch's size shown first. The person is never asked per item to spend.
    - **Combining is never automatic and never in bulk.** Each "same thing?" question is answered on its own screen. No "accept all" ever reaches an identity decision, and checking never combines anything.
    - Bulk acceptance is offered only where the engine already allows it: suggested connections that read the same both ways, and "how quickly does this go out of date" suggestions.
-7. **List, never hide.** A decision that cannot be acted on in the app is still listed, with a plain reason. A stale decision is shown as changed, not dropped.
+7. **List, never hide.** A decision that cannot be acted on in the app is still listed, with a plain reason. A stale decision is shown as changed, not dropped. A decision about a page that no longer exists is not a decision: To review is brought up to date on every visit, with no AI model, and that removes it, so the app never asks about a page that isn't there.
 8. **Never show a command.** Where the engine names a CLI command (`resolves_via`), the app shows a plain reason and, if the app cannot act, says so. A screen that tells the person to open a terminal is a defect.
 9. **No confidence numbers.** The model's confidence is never shown or used to rank (ADR-0053). The model's reason, in its words, may be shown, labelled as the model's.
 
@@ -62,7 +62,7 @@ Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../eva
 - **The pages involved,** each by its title and a short opening excerpt, so the person can compare them side by side.
 - **Where each came from:** "From: allotment-volunteers.md, added 12 October", one line per file. When a page draws on several files, all are listed. **(H)** that file names and dates are enough evidence for a first-time reader.
 - **The model's reason,** when there is one, under "Why the AI model thinks so", in quotation marks, as written. Never paraphrased into the app's own voice, so the person can tell the app's statement from the model's guess.
-- **A changed decision** (`fresh` is false, or a preview returns `Stale`) says: "Something about these pages changed since this was suggested. Here is the current version." and reloads, never applying the old one.
+- **A changed decision** (`fresh` is false) says: "Something about these pages changed since this was suggested. Check them again before you decide." Its only options are **Check again** — "We'll look at these pages as they are now. Checking doesn't change anything. You'll still decide." — and **Decide later**: the engine refuses every other choice on a changed decision (`Stale`, `row_inputs_changed`), so none is offered. Check again first brings To review up to date, which runs no AI model (`refresh_decision_queue`); a decision that is gone then says "These pages changed, and this question no longer applies.", one that is current is shown as it now is, with its own options, and one still changed opens the check's consent for its kind, below. A preview that returns `Stale` for a decision that is not changed says "Something about these pages changed since this was suggested. Here is the current version." and reloads, never applying the old one.
 
 ## Identity — "Are these the same?"
 
@@ -87,6 +87,7 @@ A withheld combine is never shown as a disabled button with no reason. The line 
 - **Keep separate** — "We won't suggest combining these again." Shown from `KeepDistinctPlan`.
 - **Decide later** — "Nothing changes. This stays in To review."
 - **Check these** (pending evaluation only) — opens the check consent below. "Checking doesn't change anything. You'll still decide."
+- **Check again** (changed decisions only, of every kind) — as above, under "A changed decision".
 
 **Undo, and how it is shown:**
 
@@ -164,9 +165,9 @@ Contradictions, revisions and refused files (`contradiction`, `revision`, `watch
 
 Judging runs the AI model, which costs time and, with a cloud model, money. It follows the quote → consent → run protocol of ADR-0059; the quote is free.
 
-**Consent screen,** one per batch, never per item. It opens from **Check these** on an unchecked pair, and from **Check all** at the top of To review whenever any pair is unchecked:
+**Consent screen,** one per batch, never per item. It opens from **Check these** on an unchecked pair, from **Check again** on a changed decision, and from **Check all** at the top of To review whenever any pair is unchecked or changed ("Let the AI model compare the pages it hasn't checked yet, and the ones that changed. You'll still decide each one."). Before it is shown, To review is brought up to date (no AI model), so a pair whose check is already done is not counted again; after a check, it is brought up to date again, so what was checked can be decided:
 
-- Heading: "Check {n} pairs?" ("Check these two?" when one).
+- Heading: "Check {n} pairs?" ("Check these two?" when one). For connections, "Check {n} connections?" ("Check this connection?"); for how quickly something goes out of date, "Check {n} suggestions?" ("Check this suggestion?").
 - "The AI model on this Mac will compare them. Nothing leaves this Mac." When the backend is not local: "The text of these pages will be sent to the provider of {model} to compare them. Pages marked 'Only on this Mac' are not sent. The provider may charge you." — the same send rule as the cloud warning below. The quote names the model, not its provider, so the provider is named through the model.
 - When some are already checked: "{k} are already checked and won't be checked again."
 - When the engine is busy in the background: "OpenKOS is also working in the background, so this may be slower."

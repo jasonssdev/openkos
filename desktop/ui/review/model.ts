@@ -5,6 +5,7 @@
 import { ApiError, isBusy, isStale, retryWhileBusy, type Client, type Schemas } from "../../client/index.ts";
 import {
   CHANGED,
+  CHANGED_CHECK,
   DECIDE_LATER,
   checkConsent,
   checkProgress,
@@ -25,6 +26,7 @@ import {
 type Decision = Schemas["Decision"];
 type Page = Schemas["Page"];
 type Action = Schemas["Action"];
+type CheckKind = Schemas["QuoteRequest"]["kind"];
 
 export type ReviewClient = Pick<
   Client,
@@ -141,6 +143,16 @@ const GONE = "These pages changed, and this question no longer applies.";
 
 type Operation = { kind: "preview"; action: Action } | { kind: "apply" } | { kind: "undo" };
 
+/** Waiting for a check: an unjudged pair, or any decision whose pages changed. */
+function waitsForCheck(decision: Decision): boolean {
+  return (decision.kind === "identity" && decision.evaluation === "pending_evaluation") || decision.fresh === false;
+}
+
+/** Whether To review offers Check all: some pair is unjudged, or changed. */
+export function offersCheckAll(decisions: readonly Decision[]): boolean {
+  return decisions.some((d) => d.kind === "identity" && (d.evaluation === "pending_evaluation" || d.fresh === false));
+}
+
 /** The ids of the pages a decision shows. */
 function pageIds(decision: Decision): string[] {
   const detail = decision.detail;
@@ -209,6 +221,21 @@ export class ReviewModel {
   // -- the list ----------------------------------------------------------------- //
 
   /**
+   * A visit to To review: the queue is refreshed first, with no AI model, so a
+   * decision about a page that no longer exists is gone and a changed one whose
+   * check is already done is current; then everything is listed. A refresh
+   * that fails is ignored: the list is read either way.
+   */
+  async visit(): Promise<void> {
+    await this.#refreshQueue();
+    await this.load();
+  }
+
+  #refreshQueue(): Promise<unknown> {
+    return this.#client.refreshQueue().catch(() => undefined);
+  }
+
+  /**
    * Lists the open decisions and every combined page, and reads every page
    * they show. A combined list that cannot be read leaves the last one shown.
    */
@@ -258,7 +285,7 @@ export class ReviewModel {
         decision,
         selection: { marked: shape === "group" ? [] : [...members(decision)], name: null, okfType: null },
         step: { name: "choosing" },
-        changed: decision.fresh === false ? CHANGED : null,
+        changed: decision.fresh === false ? CHANGED_CHECK : null,
         problem: null,
       },
     });
@@ -321,6 +348,9 @@ export class ReviewModel {
       case "check":
         await this.startCheck();
         return;
+      case "recheck":
+        await this.recheck();
+        return;
       case "merge_group":
         if (option.okfType !== undefined && !this.#chooseKind(option.okfType)) return;
         if (!this.canCombineMarked()) return;
@@ -377,6 +407,11 @@ export class ReviewModel {
     const decision = this.#state.decisions.find((d) => d.decision_key === key);
     if (decision === undefined) {
       this.#set({ open: null, notice: { tone: "warning", text: GONE } });
+      return;
+    }
+    if (decision.fresh === false) {
+      // Its preview would be stale too: it is checked again before anything else.
+      this.#setOpen({ decision, changed: CHANGED_CHECK, step: { name: "choosing" }, problem: null });
       return;
     }
     this.#setOpen({ decision, changed: CHANGED });
@@ -448,7 +483,10 @@ export class ReviewModel {
     const open = this.#state.open;
     if (open === null) return;
     const decision = this.#state.decisions.find((d) => d.decision_key === open.key);
-    if (decision !== undefined) this.#setOpen({ decision, step: { name: "choosing" }, problem: null });
+    if (decision !== undefined) {
+      const changed = decision.fresh === false ? CHANGED_CHECK : null;
+      this.#setOpen({ decision, changed, step: { name: "choosing" }, problem: null });
+    }
   }
 
   /**
@@ -510,15 +548,51 @@ export class ReviewModel {
 
   // -- the check -------------------------------------------------------------------- //
 
-  /** Quotes the identity batch and shows the consent; nothing runs yet. */
-  async startCheck(text: string | null = null): Promise<void> {
+  /**
+   * Refreshes the queue (no AI model) and lists again, so a changed decision
+   * whose check is already done is not checked twice, then quotes the batch of
+   * `kind` and shows the consent; nothing runs yet.
+   */
+  async startCheck(text: string | null = null, kind: CheckKind = "identity"): Promise<void> {
+    this.#set({ check: { phase: "quoting", consent: null, text, problem: null } });
+    await this.#refreshQueue();
+    await this.load();
+    this.#refreshOpen();
+    await this.#quoteCheck(text, kind);
+  }
+
+  async #quoteCheck(text: string | null, kind: CheckKind): Promise<void> {
     this.#set({ check: { phase: "quoting", consent: null, text, problem: null } });
     try {
-      this.#quote = await this.#client.quoteJudging({ kind: "identity" });
+      this.#quote = await this.#client.quoteJudging({ kind });
       this.#set({ check: { phase: "consent", consent: checkConsent(this.#quote), text, problem: null } });
     } catch (error) {
       this.#checkProblem(problemFor(error, "before"));
     }
+  }
+
+  /**
+   * Check again, for the changed decision on screen: refresh the queue and list
+   * again, which costs nothing. Gone, it is said so; current, it is shown as it
+   * now is; still changed, its kind is quoted and the person is asked first.
+   */
+  async recheck(): Promise<void> {
+    const key = this.#state.open?.key;
+    if (key === undefined) return;
+    this.#set({ check: { phase: "quoting", consent: null, text: null, problem: null } });
+    await this.#refreshQueue();
+    await this.load();
+    const decision = this.#state.decisions.find((d) => d.decision_key === key);
+    if (decision === undefined) {
+      this.#set({ check: null, open: null, notice: { tone: "warning", text: GONE } });
+      return;
+    }
+    this.#refreshOpen();
+    if (decision.fresh !== false) {
+      this.#set({ check: null });
+      return;
+    }
+    await this.#quoteCheck(null, decision.kind as CheckKind);
   }
 
   #checkProblem(problem: Problem): void {
@@ -534,9 +608,7 @@ export class ReviewModel {
   async agreeCheck(): Promise<void> {
     const quote = this.#quote;
     if (quote === null || this.#state.check?.phase !== "consent" || quote.to_judge === 0) return;
-    const unjudged = this.#state.decisions
-      .filter((d) => d.kind === "identity" && d.evaluation === "pending_evaluation")
-      .map((d) => d.decision_key);
+    const unjudged = this.#state.decisions.filter(waitsForCheck).map((d) => d.decision_key);
     let status: Schemas["RunStatus"];
     try {
       status = await this.#client.startJudgingRun({ token: quote.token });
@@ -566,6 +638,8 @@ export class ReviewModel {
       }
     }
     this.#runId = null;
+    // The run's verdicts reach a changed decision only through the refresh.
+    await this.#refreshQueue();
     await this.load();
     this.#refreshOpen();
     if (status.state === "failed" || status.outcome === null) {
@@ -575,7 +649,7 @@ export class ReviewModel {
     }
     const ready = unjudged.filter((key) => {
       const now = this.#state.decisions.find((d) => d.decision_key === key);
-      return now !== undefined && now.evaluation !== "pending_evaluation";
+      return now !== undefined && !waitsForCheck(now);
     }).length;
     this.#checkText("done", checkResult(status.outcome.judged, ready));
   }
