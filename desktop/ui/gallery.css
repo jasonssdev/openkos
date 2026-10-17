@@ -1,0 +1,225 @@
+/* The gallery's own layout. Uses only the custom properties of tokens.css. */
+.gallery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-10) var(--space-8) var(--space-16);
+}
+
+.gallery-intro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: var(--measure);
+}
+
+.gallery-intro p {
+  color: var(--text-secondary);
+}
+
+.gallery-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.gallery-section__title {
+  font-size: var(--font-size-xl);
+  line-height: var(--line-height-xl);
+  font-weight: var(--weight-medium);
+}
+
+.gallery-section__note {
+  max-width: var(--measure);
+  color: var(--text-secondary);
+}
+
+.gallery-specimens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  border: var(--hairline) solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.gallery-specimens--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.gallery-specimen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.gallery-specimen--wide {
+  flex: 1 1 24rem;
+}
+
+.gallery-specimen__label {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+}
+
+.gallery-frame {
+  height: 42rem;
+  overflow: hidden;
+  border: var(--hairline) solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+}
+
+.gallery-swatch {
+  width: 9rem;
+  height: 4rem;
+  border: var(--hairline) solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.gallery-swatch--surface-0 {
+  background: var(--surface-0);
+}
+
+.gallery-swatch--surface-1 {
+  background: var(--surface-1);
+}
+
+.gallery-swatch--surface-2 {
+  background: var(--surface-2);
+}
+
+.gallery-swatch--surface-3 {
+  background: var(--surface-3);
+}
+
+.gallery-swatch--accent {
+  background: var(--accent);
+}
+
+.gallery-swatch--border-subtle {
+  background: var(--border-subtle);
+}
+
+.gallery-swatch--border-strong {
+  background: var(--border-strong);
+}
+
+.gallery-text--primary {
+  color: var(--text-primary);
+}
+
+.gallery-text--secondary {
+  color: var(--text-secondary);
+}
+
+.gallery-text--tertiary {
+  color: var(--text-tertiary);
+}
+
+.gallery-text--accent {
+  color: var(--accent-text);
+}
+
+.gallery-type--xs {
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+}
+
+.gallery-type--sm {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.gallery-type--md {
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-md);
+}
+
+.gallery-type--lg {
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-lg);
+}
+
+.gallery-type--xl {
+  font-size: var(--font-size-xl);
+  line-height: var(--line-height-xl);
+}
+
+.gallery-type--2xl {
+  font-size: var(--font-size-2xl);
+  line-height: var(--line-height-2xl);
+}
+
+.gallery-type--medium {
+  font-weight: var(--weight-medium);
+}
+
+.gallery-type--mono {
+  font-family: var(--font-mono);
+}
+
+/* The mock compositions: a decision's detail pane and the status view. */
+.mock-decision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  max-width: 52rem;
+  padding: var(--space-10) var(--space-8);
+}
+
+.mock-decision__eyebrow {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.mock-decision__question {
+  font-size: var(--font-size-2xl);
+  line-height: var(--line-height-2xl);
+  font-weight: var(--weight-medium);
+}
+
+.mock-decision__lead {
+  max-width: var(--measure);
+  color: var(--text-secondary);
+}
+
+.mock-list-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0 var(--space-3) var(--space-4);
+}
+
+.mock-list-header__title {
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-lg);
+  font-weight: var(--weight-medium);
+}
+
+.mock-list-header__meta {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.mock-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: var(--space-4);
+}
+
+.mock-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
