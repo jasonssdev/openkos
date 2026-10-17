@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0074: Undoing a reconcile removes what reconcile wrote, keyed by the pair"
 description: openkos.api undoes a reconcile with a preview and an apply keyed by the sorted pair, removing the resolution edges as unrelate removes an edge, withdrawing a supersede's out-of-date mark as unrelate withdraws it, and removing the reconciliation notes reconcile appended when they keep the shape it wrote; a declined contradiction is reopened the same way, keyed by the pair and the merged-body discriminator.
-status: Proposed
+status: Accepted
 date: 2026-10-17
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0074: Undoing a reconcile removes what reconcile wrote, keyed by the pair
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-17
 
 ## Context

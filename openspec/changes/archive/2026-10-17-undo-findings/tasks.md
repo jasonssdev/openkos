@@ -25,7 +25,7 @@ Authored changed lines are additions plus deletions; the generated
 | S1 | Plan: proposal, design, delta specs, tasks, ADR-0074 Proposed | ~500 (docs) | none |
 | S2 | Reopen a decline: list, preview, apply, routes, client | ~700 | S1 |
 | S3 | Undo a reconcile: note inverse, list, preview, apply, routes, client, wording | ~900 | S2 |
-| S4 | CHANGELOG, spec merge, ADR-0074 Accepted, archive | docs | S3 |
+| S4 | CHANGELOG, spec merge, ADR-0074 Accepted, archive | docs | S3 (S2, S3 and S4 shipped together in #1524) |
 
 Delivery: stacked to `main`, each slice branched from `main` after the previous
 one is squash-merged; generated snapshots are regenerated, never hand-merged.
@@ -88,11 +88,11 @@ one is squash-merged; generated snapshots are regenerated, never hand-merged.
 
 ## S4 Archive
 
-- [ ] S4.1 CHANGELOG entry.
-- [ ] S4.2 Merge the deltas into `openspec/specs/`, name-match every heading,
+- [x] S4.1 CHANGELOG entry.
+- [x] S4.2 Merge the deltas into `openspec/specs/`, name-match every heading,
   check each requirement against shipped code.
-- [ ] S4.3 ADR-0074 Accepted in all three places.
-- [ ] S4.4 Move the change to `openspec/changes/archive/<date>-undo-findings/`
+- [x] S4.3 ADR-0074 Accepted in all three places.
+- [x] S4.4 Move the change to `openspec/changes/archive/<date>-undo-findings/`
   with `archive-report.md`; verify the original folder is gone.
 - [ ] S4.5 Comment on #1497 with what shipped; close it if no engine work
   remains (the screen adopts the operations in its own change).

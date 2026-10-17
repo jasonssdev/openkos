@@ -125,7 +125,7 @@ NOT refresh a derived index.
 - WHEN `preview_unreconcile` is called with them
 - THEN it returns `NotUndoable("not_reconciled")` and nothing is written
 
-#### Scenario: A page edited after the preview is stale
+#### Scenario: A page edited after the unreconcile preview is stale
 
 - GIVEN an unreconcile preview, and one of the pages edited afterwards
 - WHEN `apply_unreconcile` is called with the preview's version
@@ -142,7 +142,7 @@ The names this change adds (`declined_contradictions`, `DeclinedContradiction`,
 `not_reconciled` on `NotUndoable` MUST be classified as additive by the surface
 snapshot's classifier, and `API_VERSION` MUST stay 1.
 
-#### Scenario: The surface diff is additive
+#### Scenario: The findings-undo surface diff is additive
 
 - GIVEN the regenerated surface snapshot
 - WHEN the classifier compares it with the previous one

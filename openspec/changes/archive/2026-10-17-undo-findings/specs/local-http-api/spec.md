@@ -50,7 +50,7 @@ to the uniform error body as follows:
 - WHEN the reopen or the unreconcile preview route is called with them
 - THEN the response is 409 with `not_declined` or `not_reconciled`
 
-#### Scenario: An altered version is stale
+#### Scenario: An altered unreconcile version is stale
 
 - GIVEN an unreconcile preview whose `content_digest` is changed by the client
 - WHEN the apply route is called with it
