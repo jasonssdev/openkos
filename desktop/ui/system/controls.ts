@@ -1,6 +1,6 @@
 // Controls of the design system (desktop/DESIGN.md): plain functions returning
 // native elements, styled by the ui- classes of system.css. No decision lives here.
-import { el } from "../components.ts";
+import { el } from "./dom.ts";
 
 export type ButtonVariant = "primary" | "secondary" | "quiet" | "destructive";
 
@@ -141,4 +141,69 @@ export function textField(options: TextFieldOptions): HTMLElement {
   const label = el("label", { class: options.hideLabel ? "ui-visually-hidden" : "ui-field__label" }, options.label);
   label.htmlFor = options.id;
   return el("div", { class: `ui-field${options.type === "search" ? " ui-field--search" : ""}` }, label, input, hint, error);
+}
+
+export interface ChoiceItem {
+  value: string;
+  label: string;
+  checked: boolean;
+}
+
+export interface ChoiceListOptions {
+  legend: string;
+  type: "checkbox" | "radio";
+  name: string;
+  items: ChoiceItem[];
+  onChange: (value: string) => void;
+}
+
+/** A labelled group of native checkboxes or radios; each keeps focus across a redraw. */
+export function choiceList(options: ChoiceListOptions): HTMLFieldSetElement {
+  const group = el("fieldset", { class: "ui-choices" }, el("legend", { class: "ui-choices__legend" }, options.legend));
+  for (const item of options.items) {
+    const input = el("input", { class: "ui-choice__input", attrs: { type: options.type, name: options.name, value: item.value } });
+    input.checked = item.checked;
+    input.dataset["focus"] = `${options.name}:${item.value}`;
+    input.addEventListener("change", () => options.onChange(item.value));
+    group.append(el("label", { class: "ui-choice" }, input, item.label));
+  }
+  return group;
+}
+
+export interface AnswerOption {
+  label: string;
+  /** What choosing it does, one line, shown under it. */
+  does: string;
+  onChoose: () => unknown;
+  /** Answers to a question share one weight; "Decide later" is quiet. */
+  variant?: ButtonVariant;
+  focusKey?: string;
+  disabled?: boolean;
+  /** Why it is unavailable, shown and tied to the button. */
+  reason?: string | null;
+}
+
+let answers = 0;
+
+/** The answers to a question: each a button with what it does under it. */
+export function answerList(label: string, options: AnswerOption[]): HTMLUListElement {
+  const list = el("ul", { class: "ui-answers", attrs: { "aria-label": label } });
+  for (const option of options) {
+    const reasonId = option.reason ? `ui-answer-reason-${++answers}` : undefined;
+    list.append(
+      el(
+        "li",
+        { class: "ui-answer" },
+        uiButton(option.label, option.onChoose, {
+          variant: option.variant ?? "secondary",
+          ...(option.focusKey ? { focusKey: option.focusKey } : {}),
+          disabled: option.disabled ?? false,
+          ...(reasonId ? { describedBy: reasonId } : {}),
+        }),
+        el("p", { class: "ui-answer__does" }, option.does),
+        reasonId ? el("p", { class: "ui-answer__reason", attrs: { id: reasonId } }, option.reason as string) : null,
+      ),
+    );
+  }
+  return list;
 }

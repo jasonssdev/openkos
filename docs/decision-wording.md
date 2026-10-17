@@ -241,8 +241,8 @@ Every message says whether anything changed, and offers the one action that help
 | A check is already running | `run_active` | "A check is already running." | **OK** (a check started elsewhere has no id the app can show) |
 | The pages changed under the person | `stale`, `write_drift` | "These pages changed while you were looking. Here is the current version." | reload |
 | A page in the decision is gone | `member_missing` | "One of these pages no longer exists, so there's nothing to decide." | **OK** (removes it from view) |
-| The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to check pages." | **Try again** (**Start it** arrives with guided setup) |
-| The AI model isn't installed | `backend_model_not_found` | "The AI model isn't installed. OpenKOS needs it to check pages." | **OK** |
+| The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it." | **Try again** (the app does not start Ollama; setup, from **Check setup** on Status, offers **Get Ollama** and **Check again**) |
+| The AI model isn't installed | `backend_model_not_found` | "The AI model isn't installed. OpenKOS needs it to check pages. Check setup, on Status, can download it." | **OK** (setup downloads the models) |
 | Saving the choice failed | `record_failed` | "Your choice couldn't be saved. Nothing was changed." | **Try again** |
 | The marked pages don't fit the group | `invalid_selection` | "Something about your choice didn't match these pages. Please choose again." | reload **(H)** |
 | Only part of a group was combined | `merge_group_interrupted` | "Only some of these were combined. Nothing else changed, and each combine can be split again." | reload **(H)** |
@@ -346,6 +346,8 @@ The words around the decisions, outside the decision screens.
 - **The engine's badge**, at the foot of the sidebar, a symbol and a word: "Engine starting", "Engine running", "Engine restarting", "Engine not running" (it could not be started), "Engine stopped", "No library open" (before a library is chosen; Status then says "No library is open yet."), "Engine state unknown".
 - **Check setup.** While the AI model is not ready, Status says "Some setup steps are left." under its title, with **Check setup**, which opens setup. Otherwise Status shows neither.
 - **Status disclosures.** What is rarely needed waits behind a disclosure named for what it holds: "Show details" for the engine's own report when it failed or restarted, "Show the folder" for where the files live.
+- **Status words.** The library's card is **Your library**; its counts are **To review**, **Pages** and **Files you added**, and a status that cannot be read says "Your library's status could not be read." The engine's words (workspace, concept, source) never appear.
+- **To review, as a list.** Each row names what it is about: an identity by its pages' titles ("Marguerite Osei · M. Osei"), with its question under it; a connection by its sentence; a how-quickly suggestion by its question; an item the app cannot act on by its plain sentence, with "This can't be settled in the app yet." under it. A badge says **Changed** only on a changed decision. With nothing open beside the list: "Nothing open. Choose something from the list to see its pages and decide."; with nothing to review: "Nothing to review right now. When OpenKOS finds pages that may be the same thing, or a connection to confirm, they wait here." The pages you combined are one row, "Pages you combined", with how many ("1 page", "{n} pages"). A confirmation closes with **Close**.
 
 ## Open questions
 

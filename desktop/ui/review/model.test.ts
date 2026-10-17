@@ -317,6 +317,26 @@ describe("loading To review", () => {
   });
 });
 
+describe("what the detail shows", () => {
+  it("shows the combined pages in place of a decision, and a decision in place of them", async () => {
+    const { model, client } = await opened([PAIR], "pair");
+    model.showCombined();
+    expect(model.state.combinedOpen).toBe(true);
+    expect(model.state.open).toBeNull();
+    model.open("pair");
+    expect(model.state.combinedOpen).toBe(false);
+    expect(model.state.open?.key).toBe("pair");
+    expect(client.previewDecision).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing when a decision is closed", async () => {
+    const { model } = await opened([PAIR], "pair");
+    model.close();
+    expect(model.state.open).toBeNull();
+    expect(model.state.combinedOpen).toBe(false);
+  });
+});
+
 describe("one decision", () => {
   it("decides later without sending anything", async () => {
     const { model, client } = await opened([PAIR], "pair");
@@ -651,7 +671,7 @@ describe("the check", () => {
     client.quoteJudging.mockRejectedValueOnce(apiError("backend_unavailable", 503));
     await model.startCheck();
     expect(model.state.check?.problem).toEqual({
-      message: "The AI model isn't running. OpenKOS needs it to check pages.",
+      message: "The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it.",
       action: "try_again",
     });
     await model.resolveCheckProblem();
@@ -666,7 +686,7 @@ describe("the check", () => {
       run("failed", { error: { code: "backend_unavailable", retryable: true, message: "x" } }),
     );
     await model.agreeCheck();
-    expect(model.state.check?.problem?.message).toBe("The AI model isn't running. OpenKOS needs it to check pages.");
+    expect(model.state.check?.problem?.message).toBe("The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it.");
     // Listed on load, again before the quote, and again after the run.
     expect(client.decisions).toHaveBeenCalledTimes(3);
   });

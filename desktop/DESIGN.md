@@ -4,7 +4,7 @@ How the desktop app looks and why. [`docs/brand.md`](../docs/brand.md) owns the 
 
 ## See it
 
-The gallery shows every component in every state, and two compositions on made-up data: To review as list and detail (a mock), and Status (the app's real status screen, `ui/status.ts`):
+The gallery shows every component in every state, and the app's real To review and Status screens (`ui/review/render.ts`, `ui/status.ts`) on made-up data:
 
 ```sh
 pnpm --dir desktop install
@@ -83,8 +83,8 @@ Brand Indigo itself is 3.87:1 on Ink, so it is used as a fill (with white text) 
 
 ## Borders, elevation, focus, motion
 
-- Hairlines (`--hairline`, 1 px, `border-subtle`) separate regions; `border-strong` marks the edge of a control that needs one (inputs, secondary buttons).
-- Elevation is a surface step. `--shadow-overlay` is for dialogs only; `--shadow-raised` is barely there.
+- Hairlines (`--hairline`, 1 px, `border-subtle`) separate regions (the sidebar, a list pane); `border-strong` marks the edge of a control that needs one (inputs, secondary buttons). Cards, empty states and choices have no border.
+- Elevation is a surface step: a card is `surface-1` on the canvas. `--shadow-overlay` is for dialogs only; `--shadow-raised` is barely there.
 - Focus: a 2 px `focus-ring` outline, 2 px out, on every control; headings that take focus programmatically show it only for keyboard focus.
 - Motion: 120 ms color and background transitions, the spinner, and the skeleton's pulse. Nothing moves position. With reduced motion, transitions are instant, the pulse stops and the spinner slows.
 
@@ -99,15 +99,15 @@ Brand Indigo itself is 3.87:1 on Ink, so it is used as a fill (with white text) 
 
 ## The app
 
-`ui/index.html` loads `tokens.css`, `system.css` and `style.css`, and `ui/main.ts` draws the app shell into it: the sidebar holds the lockup, the navigation (**Ask**, listed as "Coming soon" and not offered until it exists; **To review**, with a count of what its list shows, or what the status counted before the list is read; **Status**) and the engine's badge at its foot. The main region shows one view at a time.
+`ui/index.html` loads `tokens.css` and `system.css`, and `ui/main.ts` draws the app shell into it: the sidebar holds the lockup, the navigation (**Ask**, listed as "Coming soon" and not offered until it exists; **To review**, with a count of what its list shows, or what the status counted before the list is read; **Status**) and the engine's badge at its foot. The main region shows one view at a time. Every screen is drawn from the system; there are no other styles.
 
-- **Status** (`ui/status.ts`) is on the system: a page header; an Engine card with the engine's state in words and any detail behind "Show details"; a Workspace card with the counts first, the folder behind "Show the folder", a skeleton while it waits for the engine and an error callout when the status cannot be read.
+- **Status** (`ui/status.ts`): a page header; an Engine card with the engine's state in words and any detail behind "Show details"; a Your library card with the counts first, the folder behind "Show the folder", a skeleton while it waits for the engine and an error callout when the status cannot be read, and "Check setup" while the AI models are not ready.
 - **Welcome** (`ui/setup/`) replaces everything when no library is chosen yet, with the navigation held back: a page header asking for a folder, one primary ("Create a new library") and one secondary ("Open an existing library"), and a refusal as an error callout with its report behind "Show details".
 - **Setup** (`ui/setup/`) opens on its own, once per session, when the library's AI models are not ready, and from Status's "Check setup" while they are not: one card for the step in hand (install Ollama, then download the models, each model a row with its own download, progress and stop), an info callout when the memory is below the floor, and "You're ready" at the end. It is not in the navigation.
-- **To review** (`ui/review/`) still draws with `ui/components.ts` and `style.css`. It is mounted in the shell under `ui-legacy`, which keeps the system's resets off it, until it moves onto the system.
+- **To review** (`ui/review/`) is a list and a detail (`splitView`). The list pane holds the title, **Check all** when something waits for a check, one row per decision (what it is about, the question as its meta, a Changed badge only when it changed), and one row for the pages you combined. The detail shows one thing at a time: the open decision (the question, its pages compared side by side, the answers, each with what it does), the check, a split, or the combined pages; with nothing open, an empty state says what to do. The model's reason waits behind "Why the AI model thinks so". A decision the app cannot act on shows its plain sentence and "This can't be settled in the app yet."; its answers appear once the wording gives them, with no other change to the screen.
 
 ## Components
 
-All in [`ui/system/`](ui/system/), each a function returning an element: `appShell`, `splitView`, `navItem` (with count), `lockup`/`isotype`, `pageHeader`, `listRow`/`uiList`, `uiCard`, `uiButton` (primary, secondary, quiet, destructive; `sm`/`md`; disabled; loading), `badge`, `callout`, `openDialog`/`dialogPanel` (modal, labelled, Escape, focus kept and returned, the rest inert), `segmented` (a radio group with arrow keys), `compare`, `emptyState`, `spinner`, `skeleton`, `progressBar`, `textField`, `facts`, `disclosure` (a native `details`/`summary` for secondary content, closed unless asked; `ui-pre` sets a detail block inside one). A `navItem` can be listed but not offered (`disabled` with a `hint`): it stays focusable with `aria-disabled`, and choosing it does nothing. Their classes are prefixed `ui-` so they never collide with the screens' older classes in `style.css`. The `button`, `notice` and `card` of `ui/components.ts` still serve To review.
+All in [`ui/system/`](ui/system/), each a function returning an element: `appShell`, `splitView`, `navItem` (with count), `lockup`/`isotype`, `pageHeader`, `listRow`/`uiList`, `uiCard`, `uiButton` (primary, secondary, quiet, destructive; `sm`/`md`; disabled; loading), `badge`, `callout`, `openDialog`/`dialogPanel` (modal, labelled, Escape, focus kept and returned, the rest inert), `segmented` (a radio group with arrow keys), `answerList` (the answers to a question, each with what it does and, when unavailable, why), `choiceList` (native checkboxes or radios in a labelled group), `compare`, `emptyState`, `spinner`, `skeleton`, `progressBar`, `textField`, `facts`, `disclosure` (a native `details`/`summary` for secondary content, closed unless asked; `ui-pre` sets a detail block inside one). A `navItem` can be listed but not offered (`disabled` with a `hint`): it stays focusable with `aria-disabled`, and choosing it does nothing. `el` and `redraw` (`ui/system/dom.ts`) are the two primitives under them: an element whose children are text, and a redraw that keeps focus on the same control. Every class is prefixed `ui-`; the layout classes a screen composes (`ui-pane`, `ui-detail`, `ui-question`, `ui-lead`, `ui-stack`, `ui-line`) are in `system.css` too.
 
 Component behavior is tested in jsdom (a dev dependency; `// @vitest-environment jsdom` per file), so the view models keep running in plain Node. Components may be built ahead of the screens that use them and reviewed in the gallery first ([ADR-0069](../docs/adr/0069-the-desktop-components-are-a-design-system-built-ahead-of-screens-and-tested-in-jsdom.md), extending ADR-0066).

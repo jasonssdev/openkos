@@ -18,9 +18,9 @@ DOM, which are unit-tested; render functions draw from their state (ADR-0066).
 
 ### Requirement: To Review Lists Every Open Decision In Plain Words
 
-The desktop app MUST have a "To review" view, reached from the status page and
-back with one control each, that lists every decision `GET /v1/decisions`
-returns. Each entry MUST be worded from `docs/decision-wording.md` using the
+The desktop app MUST have a "To review" view, reached from the sidebar with one
+control, that lists every decision `GET /v1/decisions` returns beside the one
+the person opens. Each entry MUST be worded from `docs/decision-wording.md` using the
 pages' titles read through `GET /v1/pages`, never a Concept ID, a command
 (`resolves_via`) or an engine word the brief's rule 1 lists. A decision the app
 cannot act on (`contradiction`, `revision`, `watch_refusal`, or one whose

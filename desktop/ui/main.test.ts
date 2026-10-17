@@ -40,7 +40,8 @@ describe("the app", () => {
     const review = document.getElementById("review")?.parentElement as HTMLElement;
     expect(review.hidden).toBe(false);
     expect(review.closest("main")).not.toBeNull();
-    expect(text(".ui-legacy > p")).toBe("Waiting for OpenKOS to start…");
+    expect(review.querySelector(".ui-loading")?.textContent).toBe("Waiting for OpenKOS to start…");
+    expect(document.querySelector(".ui-legacy")).toBeNull();
     expect(navButtons()[1]?.getAttribute("aria-current")).toBe("page");
     (navButtons()[2] as HTMLButtonElement).click();
     expect(review.hidden).toBe(true);

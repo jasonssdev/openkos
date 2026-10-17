@@ -1,8 +1,29 @@
-// Draws the review screen from the model's state and wires each control to a
-// transition (ADR-0066). It decides nothing: what to ask, offer and say comes
-// from model.ts and wording.ts. Every value is written as text.
-import { button, card, choiceGroup, el, heading, notice, redraw, type Tone } from "../components.ts";
-import { offersCheckAll, type ReviewModel, type ReviewState } from "./model.ts";
+// Draws the review screen from the model's state with the design system's
+// components (ADR-0066, ADR-0069): what waits, as a list on the left, and the
+// open decision, check or split on the right. It decides nothing: what to ask,
+// offer and say comes from model.ts and wording.ts, and every value is written
+// as text. Anything secondary waits behind a disclosure (desktop/DESIGN.md).
+import {
+  answerList,
+  badge,
+  callout,
+  choiceList,
+  compare,
+  disclosure,
+  el,
+  emptyState,
+  facts,
+  listRow,
+  redraw,
+  skeleton,
+  spinner,
+  splitView,
+  uiButton,
+  uiCard,
+  uiList,
+  type AnswerOption,
+} from "../system/index.ts";
+import { offersCheckAll, type Notice, type ReviewModel, type ReviewState } from "./model.ts";
 import {
   CANNOT_ACT,
   COMBINED_HEADING,
@@ -28,146 +49,149 @@ const ACTION_LABELS: Record<Problem["action"], string> = {
   requote: "Look again",
 };
 
-function problemNotice(problem: Problem, resolve: () => unknown, focusKey: string): HTMLElement {
-  return notice("error", problem.message, button(ACTION_LABELS[problem.action], resolve, { variant: "primary", focusKey }));
+const CHECK_ALL_DOES =
+  "Let the AI model compare the pages it hasn't checked yet, and the ones that changed. You'll still decide each one.";
+
+const UNREADABLE = "A page that couldn't be read";
+
+const TONE: Record<Notice["tone"], "info" | "success" | "warning" | "error"> = {
+  info: "info",
+  done: "success",
+  warning: "warning",
+  error: "error",
+};
+
+/** A heading; the one marked `focus` takes focus when its view opens. */
+function heading(level: 1 | 2 | 3, text: string, className: string, focus: boolean): HTMLHeadingElement {
+  const node = el(`h${level}`, { class: className, attrs: { tabindex: "-1" } }, text);
+  if (focus) node.dataset["view"] = "heading";
+  return node;
 }
 
-function busy(text: string): HTMLElement {
-  return el("p", { class: "busy" }, text);
-}
-
-function pageCard(page: PageView): HTMLElement {
-  return card(
-    el("h3", {}, page.title),
-    page.kind ? el("p", { class: "muted" }, page.kind.charAt(0).toUpperCase() + page.kind.slice(1)) : null,
-    page.excerpt ? el("p", {}, page.excerpt) : null,
-    page.whoCanSee
-      ? el("p", { class: "muted" }, el("span", { class: "label" }, page.whoCanSee.label), ` — ${page.whoCanSee.meaning}`)
-      : null,
-    page.sources.length > 0 ? el("ul", { class: "sources" }, ...page.sources.map((line) => el("li", {}, line))) : null,
-  );
-}
-
-function optionRow(option: Option, onChoose: () => unknown, index: number, unavailable: string | null): HTMLElement {
-  const reasonId = unavailable ? `option-reason-${index}` : undefined;
-  return el(
-    "li",
-    { class: "option" },
-    button(option.label, onChoose, {
-      variant: option.choice === "later" ? "quiet" : "secondary",
-      focusKey: `option:${index}`,
-      disabled: unavailable !== null,
-      ...(reasonId ? { describedBy: reasonId } : {}),
-    }),
-    el("p", { class: "muted" }, option.does),
-    unavailable ? el("p", { class: "reason", attrs: { id: reasonId! } }, unavailable) : null,
-  );
+function problemCallout(problem: Problem, resolve: () => unknown, focusKey: string): HTMLElement {
+  return callout("error", problem.message, {
+    actions: [uiButton(ACTION_LABELS[problem.action], resolve, { variant: "primary", focusKey })],
+  });
 }
 
 // -- the list ---------------------------------------------------------------------- //
 
-function drawList(model: ReviewModel, state: ReviewState): HTMLElement[] {
-  const parts: HTMLElement[] = [heading(1, "To review")];
-  if (state.notice) parts.push(notice(state.notice.tone, state.notice.text));
-  if (state.listProblem) {
-    parts.push(problemNotice(state.listProblem, () => model.load(), "list-problem"));
-    return parts;
-  }
-  if (!state.loaded) {
-    parts.push(busy("Looking for things to review…"));
-    return parts;
-  }
-  if (offersCheckAll(state.decisions)) {
-    parts.push(
-      el(
-        "div",
-        { class: "actions" },
-        button("Check all", () => model.startCheck(), { variant: "secondary", focusKey: "check-all" }),
-        el("p", { class: "muted" }, "Let the AI model compare the pages it hasn't checked yet, and the ones that changed. You'll still decide each one."),
-      ),
-    );
-  }
-  if (state.decisions.length === 0) {
-    parts.push(el("p", {}, "Nothing to review right now."));
-  } else {
-    const list = el("ul", { class: "entries" });
-    for (const decision of state.decisions) {
-      const entry = listEntry(decision, state.pages);
-      const open = button("", () => model.open(decision.decision_key), { focusKey: `entry:${decision.decision_key}` });
-      open.classList.add("entry");
-      open.append(
-        ...[
-          el("span", { class: "entry__question" }, entry.question),
-          el("span", { class: "entry__pages muted" }, entry.pages),
-          entry.changed ? el("span", { class: "tag tag--warning" }, "! Changed") : null,
-          entry.canAct ? null : el("span", { class: "tag" }, "i Can't be settled here yet"),
-        ].filter((node) => node !== null),
-      );
-      list.append(el("li", {}, open));
-    }
-    parts.push(list);
-  }
-  if (state.combined.length > 0) parts.push(drawCombined(model, state));
-  return parts;
+/** True when the detail pane shows something with its own heading to focus. */
+function detailOwnsFocus(state: ReviewState): boolean {
+  return state.split !== null || state.check !== null || state.open !== null || state.combinedOpen;
 }
 
-function drawCombined(model: ReviewModel, state: ReviewState): HTMLElement {
-  const section = el("section", { attrs: { "aria-labelledby": "combined-heading" } });
-  section.append(el("h2", { attrs: { id: "combined-heading" } }, COMBINED_HEADING));
-  for (const page of state.combined) {
-    section.append(el("h3", {}, page.title));
-    section.append(
-      el(
-        "ul",
-        { class: "history" },
-        ...page.lines.map((line) =>
-          el(
-            "li",
-            {},
-            el("span", {}, line.text),
-            button("Split again", () => model.openSplit(page.survivor, line.absorbed), {
-              focusKey: `split:${page.survivor}:${line.absorbed}`,
-            }),
-          ),
-        ),
-      ),
+function drawList(model: ReviewModel, state: ReviewState): HTMLElement {
+  const actions: HTMLElement[] = [];
+  const checkAll = state.loaded && state.listProblem === null && offersCheckAll(state.decisions);
+  if (checkAll) {
+    actions.push(uiButton("Check all", () => model.startCheck(), { size: "sm", focusKey: "check-all" }));
+  }
+  const pane = el(
+    "div",
+    { class: "ui-pane" },
+    el(
+      "header",
+      { class: "ui-pane__header" },
+      heading(1, "To review", "ui-pane__title", !detailOwnsFocus(state)),
+      ...actions,
+    ),
+    checkAll ? el("p", { class: "ui-pane__hint" }, CHECK_ALL_DOES) : null,
+  );
+  if (state.listProblem) {
+    pane.append(problemCallout(state.listProblem, () => model.load(), "list-problem"));
+    return pane;
+  }
+  if (!state.loaded) {
+    pane.append(skeleton(4, "Looking for things to review…"));
+    return pane;
+  }
+  if (state.decisions.length > 0) {
+    const rows = state.decisions.map((decision) => {
+      const entry = listEntry(decision, state.pages);
+      return listRow({
+        title: entry.title,
+        ...(entry.meta ? { meta: entry.meta } : {}),
+        ...(entry.changed ? { trailing: badge("warning", "Changed") } : {}),
+        selected: state.open?.key === decision.decision_key,
+        focusKey: `entry:${decision.decision_key}`,
+        onSelect: () => model.open(decision.decision_key),
+      });
+    });
+    pane.append(uiList("Decisions", rows));
+  }
+  if (state.combined.length > 0) {
+    const n = state.combined.length;
+    pane.append(
+      uiList("Undo", [
+        listRow({
+          title: COMBINED_HEADING,
+          meta: n === 1 ? "1 page" : `${n} pages`,
+          selected: state.combinedOpen,
+          focusKey: "combined",
+          onSelect: () => model.showCombined(),
+        }),
+      ]),
     );
   }
-  return section;
+  return pane;
 }
 
 // -- one decision ------------------------------------------------------------------ //
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function pageCard(page: PageView): HTMLElement {
+  const meta = [page.kind ? capitalized(page.kind) : null, page.whoCanSee?.label ?? null].filter(Boolean).join(" · ");
+  return uiCard(
+    {
+      title: page.title,
+      ...(meta ? { meta } : {}),
+      ...(page.sources.length > 0 ? { footer: el("ul", { class: "ui-plain-list" }, ...page.sources.map((line) => el("li", {}, line))) } : {}),
+    },
+    page.excerpt ? el("p", {}, page.excerpt) : null,
+  );
+}
+
+function drawPages(pages: PageView[]): HTMLElement | null {
+  if (pages.length === 0) return null;
+  const cards = pages.map(pageCard);
+  if (cards.length === 2) return compare(pages.map((p) => p.title).join(" and "), cards[0]!, cards[1]!);
+  return el("div", { class: "ui-compare", attrs: { role: "group", "aria-label": "The pages" } }, ...cards);
+}
 
 function drawSelection(model: ReviewModel, state: ReviewState): HTMLElement[] {
   const open = state.open!;
   const decision = open.decision;
   if (decision.kind !== "identity" || !decision.actions.includes("merge_group")) return [];
-  const title = (id: string) => state.pages.get(id)?.title || "A page that couldn't be read";
+  const title = (id: string) => state.pages.get(id)?.title || UNREADABLE;
   const parts: HTMLElement[] = [];
   const shape = identityShape(decision);
   if (shape === "group") {
     const members = decision.detail && "member_ids" in decision.detail ? decision.detail.member_ids : decision.targets;
     parts.push(
-      choiceGroup(
-        "Mark the pages that are the same",
-        "checkbox",
-        "marked",
-        members.map((id) => ({ value: id, label: title(id), checked: open.selection.marked.includes(id) })),
-        (id) => model.toggleMark(id),
-      ),
+      choiceList({
+        legend: "Mark the pages that are the same",
+        type: "checkbox",
+        name: "marked",
+        items: members.map((id) => ({ value: id, label: title(id), checked: open.selection.marked.includes(id) })),
+        onChange: (id) => model.toggleMark(id),
+      }),
     );
   }
   const names = model.namesFor();
   const askName = shape === "group" ? names.length >= 1 : open.selection.okfType !== null && names.length > 1;
   if (askName) {
     parts.push(
-      choiceGroup(
-        "Which one should the combined page keep its name from?",
-        "radio",
-        "name",
-        names.map((id) => ({ value: id, label: title(id), checked: open.selection.name === id })),
-        (id) => model.chooseName(id),
-      ),
+      choiceList({
+        legend: "Which one should the combined page keep its name from?",
+        type: "radio",
+        name: "name",
+        items: names.map((id) => ({ value: id, label: title(id), checked: open.selection.name === id })),
+        onChange: (id) => model.chooseName(id),
+      }),
     );
   }
   return parts;
@@ -180,177 +204,259 @@ function unavailableReason(model: ReviewModel, state: ReviewState, option: Optio
   return model.canCombineMarked() ? null : "Choose which one keeps its name";
 }
 
-function drawDecision(model: ReviewModel, state: ReviewState): HTMLElement[] {
+function answersFor(model: ReviewModel, state: ReviewState, options: Option[]): HTMLElement {
+  const items: AnswerOption[] = options.map((option, index) => {
+    const reason = unavailableReason(model, state, option);
+    return {
+      label: option.label,
+      does: option.does,
+      onChoose: () => model.choose(option),
+      variant: option.choice === "later" ? "quiet" : "secondary",
+      focusKey: `option:${index}`,
+      disabled: reason !== null,
+      reason,
+    };
+  });
+  return answerList("Your answer", items);
+}
+
+function drawStep(model: ReviewModel, state: ReviewState, options: Option[]): HTMLElement[] {
   const open = state.open!;
-  const view = describeDecision(open.decision, state.pages);
-  const parts: HTMLElement[] = [
-    el("div", { class: "actions" }, button("Back to To review", () => model.close(), { variant: "quiet", focusKey: "back" })),
-  ];
-  if (open.changed) parts.push(notice("warning", open.changed));
-  const section = el("section", { class: "decision", attrs: { "aria-labelledby": "question" } });
-  if (view.lead) section.append(el("p", { class: "lead" }, view.lead));
-  section.append(heading(2, view.question, "question"));
-  if (view.statement) section.append(el("p", { class: "statement" }, view.statement));
-  if (view.facts.length > 0) {
-    section.append(el("dl", {}, ...view.facts.flatMap(([term, value]) => [el("dt", {}, term), el("dd", {}, value)])));
-  }
-  if (view.pages.length > 0) section.append(el("div", { class: "pages" }, ...view.pages.map(pageCard)));
-  if (view.reason) {
-    section.append(el("figure", { class: "reason-block" }, el("figcaption", {}, "Why the AI model thinks so"), el("blockquote", {}, view.reason)));
-  }
-  parts.push(section);
-  if (view.cannotAct) {
-    parts.push(notice("info", CANNOT_ACT));
-    return parts;
-  }
-  if (open.problem) {
-    parts.push(problemNotice(open.problem, () => model.resolveProblem(), "problem"));
-  }
   const step = open.step;
   switch (step.name) {
     case "choosing": {
-      parts.push(...drawSelection(model, state));
-      const kindChosen = open.selection.okfType;
-      const options = view.options.map((option, index) =>
-        optionRow(option, () => model.choose(option), index, unavailableReason(model, state, option)),
-      );
-      parts.push(el("ul", { class: "options", attrs: { "aria-label": "Your options" } }, ...options));
-      if (kindChosen !== null && model.namesForKind().length > 1) {
-        const option = view.options.find((o) => o.okfType === kindChosen);
-        if (option) {
-          parts.push(
-            el(
-              "div",
-              { class: "actions" },
-              button(`Continue as ${typeNoun(kindChosen).withArticle}`, () => model.choose(option), {
-                variant: "primary",
-                focusKey: "continue",
-                disabled: open.selection.name === null,
-              }),
-            ),
-          );
-        }
+      const parts = [...drawSelection(model, state), answersFor(model, state, options)];
+      const kind = open.selection.okfType;
+      const option = kind === null ? undefined : options.find((o) => o.okfType === kind);
+      if (kind !== null && option && model.namesForKind().length > 1) {
+        parts.push(
+          el(
+            "div",
+            { class: "ui-actions" },
+            uiButton(`Continue as ${typeNoun(kind).withArticle}`, () => model.choose(option), {
+              variant: "primary",
+              focusKey: "continue",
+              disabled: open.selection.name === null,
+            }),
+          ),
+        );
       }
-      break;
+      return parts;
     }
     case "previewing":
-      parts.push(busy("Getting this ready…"));
-      break;
+      return [spinner("Getting this ready…")];
     case "preview":
     case "applying": {
       const applying = step.name === "applying";
-      parts.push(
-        el("h3", {}, "What will happen"),
-        ...step.lines.map((line) => el("p", {}, line)),
+      return [
         el(
-          "div",
-          { class: "actions" },
-          button("Confirm", () => model.confirm(), { variant: "primary", focusKey: "confirm", disabled: applying }),
-          button("Choose again", () => model.back(), { focusKey: "choose-again", disabled: applying }),
+          "section",
+          { class: "ui-stack", attrs: { "aria-labelledby": "what-will-happen" } },
+          el("h3", { class: "ui-subtitle", attrs: { id: "what-will-happen" } }, "What will happen"),
+          ...step.lines.map((line) => el("p", {}, line)),
+          el(
+            "div",
+            { class: "ui-actions" },
+            uiButton("Confirm", () => model.confirm(), {
+              variant: "primary",
+              focusKey: "confirm",
+              loading: applying,
+              loadingLabel: "Saving your choice…",
+            }),
+            uiButton("Choose again", () => model.back(), { variant: "quiet", focusKey: "choose-again", disabled: applying }),
+          ),
         ),
-      );
-      if (applying) parts.push(busy("Saving your choice…"));
-      break;
+      ];
     }
-    case "done": {
-      const actions = [button("Back to To review", () => model.close(), { variant: "primary", focusKey: "done-back" })];
-      if (step.undo) actions.unshift(button("Undo", () => model.undo(), { focusKey: "undo" }));
-      parts.push(notice("done", step.lines.join(" "), ...actions));
-      break;
+    case "done":
+    case "undoing": {
+      const undoing = step.name === "undoing";
+      const actions: HTMLElement[] = [];
+      if (undoing || step.undo) {
+        actions.push(uiButton("Undo", () => model.undo(), { focusKey: "undo", loading: undoing, loadingLabel: "Undoing…" }));
+      }
+      actions.push(uiButton("Close", () => model.close(), { variant: "quiet", focusKey: "done-close", disabled: undoing }));
+      return [callout("success", step.lines.join(" "), { actions })];
     }
-    case "undoing":
-      parts.push(notice("done", step.lines.join(" ")), busy("Undoing…"));
-      break;
   }
+}
+
+function drawDecision(model: ReviewModel, state: ReviewState): HTMLElement[] {
+  const open = state.open!;
+  const view = describeDecision(open.decision, state.pages);
+  const parts: HTMLElement[] = [];
+  if (open.changed) parts.push(callout("warning", open.changed));
+  parts.push(
+    el(
+      "header",
+      { class: "ui-question-header" },
+      view.lead ? el("p", { class: "ui-lead" }, view.lead) : null,
+      heading(2, view.question, "ui-question", true),
+    ),
+  );
+  if (view.statement) parts.push(el("p", { class: "ui-statement" }, view.statement));
+  if (view.facts.length > 0) parts.push(facts(view.facts));
+  const pages = drawPages(view.pages);
+  if (pages) parts.push(pages);
+  if (view.reason) {
+    parts.push(disclosure({ summary: "Why the AI model thinks so", focusKey: "reason" }, el("blockquote", { class: "ui-quote" }, view.reason)));
+  }
+  if (view.cannotAct) {
+    parts.push(callout("info", CANNOT_ACT));
+    return parts;
+  }
+  if (open.problem) parts.push(problemCallout(open.problem, () => model.resolveProblem(), "problem"));
+  parts.push(...drawStep(model, state, view.options));
   return parts;
 }
 
-// -- the check and split again ----------------------------------------------------------- //
+// -- the check, split again, and the combined pages ------------------------------------ //
 
 function drawCheck(model: ReviewModel, state: ReviewState): HTMLElement[] {
   const check = state.check!;
-  const parts: HTMLElement[] = [];
   switch (check.phase) {
     case "quoting":
-      parts.push(heading(2, "Check with the AI model"), busy("Getting ready to check…"));
-      break;
+      return [heading(2, "Check with the AI model", "ui-question", true), spinner("Getting ready to check…")];
     case "consent": {
       const consent = check.consent!;
-      parts.push(heading(2, consent.heading));
-      if (check.text) parts.push(notice("warning", check.text));
-      parts.push(...consent.lines.map((line) => el("p", {}, line)));
-      const actions = el("div", { class: "actions" });
-      if (consent.agree) actions.append(button(consent.agree, () => model.agreeCheck(), { variant: "primary", focusKey: "agree" }));
-      actions.append(button(consent.decline, () => model.closeCheck(), { focusKey: "decline" }));
-      parts.push(actions);
-      break;
+      const actions: HTMLElement[] = [];
+      if (consent.agree) actions.push(uiButton(consent.agree, () => model.agreeCheck(), { variant: "primary", focusKey: "agree" }));
+      actions.push(uiButton(consent.decline, () => model.closeCheck(), { variant: consent.agree ? "quiet" : "primary", focusKey: "decline" }));
+      return [
+        heading(2, consent.heading, "ui-question", true),
+        check.text ? callout("warning", check.text) : null,
+        ...consent.lines.map((line) => el("p", {}, line)),
+        el("div", { class: "ui-actions" }, ...actions),
+      ].filter((node): node is HTMLElement => node !== null);
     }
     case "running":
     case "stopping":
-      parts.push(
-        heading(2, "Checking"),
+      return [
+        heading(2, "Checking", "ui-question", true),
         el("p", {}, check.text ?? ""),
         el(
           "div",
-          { class: "actions" },
-          button("Stop", () => model.stopCheck(), { focusKey: "stop", disabled: check.phase === "stopping" }),
+          { class: "ui-actions" },
+          uiButton("Stop", () => model.stopCheck(), { focusKey: "stop", disabled: check.phase === "stopping" }),
         ),
-      );
-      break;
+      ];
     case "done":
-      parts.push(
-        heading(2, "Checked"),
-        notice("done", check.text ?? "", button("OK", () => model.closeCheck(), { variant: "primary", focusKey: "ok" })),
-      );
-      break;
+      return [
+        heading(2, "Checked", "ui-question", true),
+        callout("success", check.text ?? "", {
+          actions: [uiButton("OK", () => model.closeCheck(), { variant: "primary", focusKey: "ok" })],
+        }),
+      ];
     case "problem":
-      parts.push(
-        heading(2, "Check with the AI model"),
-        problemNotice(check.problem!, () => model.resolveCheckProblem(), "check-problem"),
-        el("div", { class: "actions" }, button("Close", () => model.closeCheck(), { variant: "quiet", focusKey: "close" })),
-      );
-      break;
+      return [
+        heading(2, "Check with the AI model", "ui-question", true),
+        problemCallout(check.problem!, () => model.resolveCheckProblem(), "check-problem"),
+        el("div", { class: "ui-actions" }, uiButton("Close", () => model.closeCheck(), { variant: "quiet", focusKey: "close" })),
+      ];
   }
-  return parts;
 }
 
 function drawSplit(model: ReviewModel, state: ReviewState): HTMLElement[] {
   const split = state.split!;
-  const parts: HTMLElement[] = [heading(2, "Split again")];
+  const parts: HTMLElement[] = [heading(2, "Split again", "ui-question", true)];
   switch (split.phase) {
     case "previewing":
-      parts.push(busy("Getting this ready…"));
+      parts.push(spinner("Getting this ready…"));
       break;
     case "confirm":
-    case "applying":
+    case "applying": {
+      const applying = split.phase === "applying";
       parts.push(
         el("p", {}, split.text ?? ""),
         el(
           "div",
-          { class: "actions" },
-          button(split.phase === "confirm" ? "Split again" : "Splitting…", () => model.confirmSplit(), {
+          { class: "ui-actions" },
+          uiButton("Split again", () => model.confirmSplit(), {
             variant: "primary",
             focusKey: "split-confirm",
-            disabled: split.phase === "applying",
+            loading: applying,
+            loadingLabel: "Splitting…",
           }),
-          button("Cancel", () => model.closeSplit(), { focusKey: "split-cancel", disabled: split.phase === "applying" }),
+          uiButton("Cancel", () => model.closeSplit(), { variant: "quiet", focusKey: "split-cancel", disabled: applying }),
         ),
       );
       break;
+    }
     case "done":
-      parts.push(notice("done", split.text ?? "", button("OK", () => model.closeSplit(), { variant: "primary", focusKey: "split-ok" })));
+      parts.push(
+        callout("success", split.text ?? "", {
+          actions: [uiButton("OK", () => model.closeSplit(), { variant: "primary", focusKey: "split-ok" })],
+        }),
+      );
       break;
     case "problem":
-      parts.push(problemNotice(split.problem!, () => model.resolveSplitProblem(), "split-problem"));
+      parts.push(problemCallout(split.problem!, () => model.resolveSplitProblem(), "split-problem"));
       break;
   }
   return parts;
+}
+
+function drawCombined(model: ReviewModel, state: ReviewState): HTMLElement[] {
+  const parts: HTMLElement[] = [heading(2, COMBINED_HEADING, "ui-question", true)];
+  for (const page of state.combined) {
+    parts.push(
+      el(
+        "section",
+        { class: "ui-stack" },
+        el("h3", { class: "ui-subtitle" }, page.title || UNREADABLE),
+        el(
+          "ul",
+          { class: "ui-plain-list" },
+          ...page.lines.map((line) =>
+            el(
+              "li",
+              { class: "ui-line" },
+              el("span", {}, line.text),
+              uiButton("Split again", () => model.openSplit(page.survivor, line.absorbed), {
+                size: "sm",
+                focusKey: `split:${page.survivor}:${line.absorbed}`,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  return parts;
+}
+
+function drawNothingOpen(state: ReviewState): HTMLElement[] {
+  const parts: HTMLElement[] = [];
+  if (state.notice) parts.push(callout(TONE[state.notice.tone], state.notice.text));
+  if (!state.loaded || state.listProblem) return parts;
+  parts.push(
+    state.decisions.length === 0
+      ? emptyState({
+          title: "Nothing to review right now",
+          text: "When OpenKOS finds pages that may be the same thing, or a connection to confirm, they wait here.",
+        })
+      : emptyState({ title: "Nothing open", text: "Choose something from the list to see its pages and decide." }),
+  );
+  return parts;
+}
+
+function drawDetail(model: ReviewModel, state: ReviewState): HTMLElement {
+  const parts = state.split
+    ? drawSplit(model, state)
+    : state.check
+      ? drawCheck(model, state)
+      : state.open
+        ? drawDecision(model, state)
+        : state.combinedOpen
+          ? drawCombined(model, state)
+          : drawNothingOpen(state);
+  return el("div", { class: "ui-detail" }, ...parts);
 }
 
 // -- the screen -------------------------------------------------------------------------- //
 
 /** What the live regions should say for this state, if anything. */
-function announcement(state: ReviewState): { tone: Tone; text: string } | null {
+function announcement(state: ReviewState): Notice | null {
   const problem = state.split?.problem ?? state.check?.problem ?? state.open?.problem ?? state.listProblem;
   if (problem) return { tone: "error", text: problem.message };
   if (state.split?.text && state.split.phase === "done") return { tone: "done", text: state.split.text };
@@ -363,21 +469,15 @@ function viewKey(state: ReviewState): string {
   if (state.split) return `split:${state.split.survivor}:${state.split.absorbed}`;
   if (state.check) return "check";
   if (state.open) return `decision:${state.open.key}`;
+  if (state.combinedOpen) return "combined";
   return "list";
 }
 
 /** Redraws the review screen into `root`, keeping focus, and updates the live regions. */
 export function renderReview(root: HTMLElement, live: LiveRegions, model: ReviewModel, state: ReviewState): void {
-  redraw(root, viewKey(state), () => {
-    const parts = state.split
-      ? drawSplit(model, state)
-      : state.check
-        ? drawCheck(model, state)
-        : state.open
-          ? drawDecision(model, state)
-          : drawList(model, state);
-    root.replaceChildren(...parts);
-  });
+  redraw(root, viewKey(state), () =>
+    root.replaceChildren(splitView(drawList(model, state), drawDetail(model, state), { list: "To review", detail: "Decision" })),
+  );
   const said = announcement(state);
   const politeText = said && said.tone !== "error" ? said.text : "";
   const alertText = said?.tone === "error" ? said.text : "";

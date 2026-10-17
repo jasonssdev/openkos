@@ -1,6 +1,6 @@
 // The design system's dialog (desktop/DESIGN.md): modal, labelled by its
 // title, closed by Escape, with focus kept inside and returned on close.
-import { type Child, el } from "../components.ts";
+import { type Child, el } from "./dom.ts";
 import { uiButton } from "./controls.ts";
 
 export interface DialogOptions {

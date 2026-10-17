@@ -136,6 +136,8 @@ export interface ReviewState {
   split: SplitState | null;
   /** Every combined page, newest combine first, with its history. */
   combined: CombinedPage[];
+  /** The detail shows the combined pages, in place of a decision. */
+  combinedOpen: boolean;
   notice: Notice | null;
 }
 
@@ -177,6 +179,7 @@ export class ReviewModel {
     check: null,
     split: null,
     combined: [],
+    combinedOpen: false,
     notice: null,
   };
   readonly #listeners = new Set<(state: ReviewState) => void>();
@@ -280,6 +283,7 @@ export class ReviewModel {
     this.#lastOp = null;
     this.#set({
       notice: null,
+      combinedOpen: false,
       open: {
         key,
         decision,
@@ -292,7 +296,12 @@ export class ReviewModel {
   }
 
   close(): void {
-    this.#set({ open: null });
+    this.#set({ open: null, combinedOpen: false });
+  }
+
+  /** Shows every combined page, each with Split again, in place of a decision. */
+  showCombined(): void {
+    this.#set({ open: null, notice: null, combinedOpen: true });
   }
 
   toggleMark(id: string): void {

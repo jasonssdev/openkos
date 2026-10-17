@@ -378,22 +378,38 @@ describe("decisions the app cannot act on", () => {
     expect(view.cannotAct).toBe("This can't be settled in the app yet.");
     expect(JSON.stringify(view)).not.toContain("openkos");
   });
+
+  it("offers no action the brief has not worded, even when the engine lists one", () => {
+    const decision = { ...identity(), kind: "contradiction", actions: ["decline", "skip"], detail: null } as unknown as Decision;
+    const view = describeDecision(decision, pages);
+    expect(view.options).toEqual([]);
+    expect(view.cannotAct).toBe("This can't be settled in the app yet.");
+  });
 });
 
 describe("listEntry", () => {
-  it("summarises a decision by its question and its pages' titles", () => {
+  it("names a pair by its pages' titles, with the question as its meta", () => {
     expect(listEntry(identity(), pagesOf(A, B))).toEqual({
-      question: "Are these the same person?",
-      pages: "Marguerite Osei · M. Osei",
+      title: "Marguerite Osei · M. Osei",
+      meta: "Are these the same person?",
       changed: false,
       canAct: true,
     });
   });
 
-  it("marks a changed decision and one the app cannot act on", () => {
+  it("names a connection by its sentence and a setting by its question", () => {
+    expect(listEntry(relation("part_of"), pagesOf(A, ORG))).toMatchObject({ title: "Marguerite Osei is part of Acme.", meta: null });
+    expect(listEntry(TIER, pagesOf())).toMatchObject({ title: "How quickly do facts about people go out of date?", meta: null });
+  });
+
+  it("marks a changed decision, and one the app cannot act on says so", () => {
     const entry = listEntry({ ...identity(), kind: "revision", actions: [], fresh: false }, pagesOf(A, B));
-    expect(entry.changed).toBe(true);
-    expect(entry.canAct).toBe(false);
+    expect(entry).toEqual({
+      title: "A newer file may replace an older one.",
+      meta: "This can't be settled in the app yet.",
+      changed: true,
+      canAct: false,
+    });
   });
 });
 
@@ -574,8 +590,8 @@ describe("problemFor", () => {
     ["stale", "These pages changed while you were looking. Here is the current version.", "reload"],
     ["write_drift", "These pages changed while you were looking. Here is the current version.", "reload"],
     ["member_missing", "One of these pages no longer exists, so there's nothing to decide.", "ok"],
-    ["backend_unavailable", "The AI model isn't running. OpenKOS needs it to check pages.", "try_again"],
-    ["backend_model_not_found", "The AI model isn't installed. OpenKOS needs it to check pages.", "ok"],
+    ["backend_unavailable", "The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it.", "try_again"],
+    ["backend_model_not_found", "The AI model isn't installed. OpenKOS needs it to check pages. Check setup, on Status, can download it.", "ok"],
     ["record_failed", "Your choice couldn't be saved. Nothing was changed.", "try_again"],
     ["invalid_selection", "Something about your choice didn't match these pages. Please choose again.", "reload"],
     [

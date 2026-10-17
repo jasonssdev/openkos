@@ -2,4 +2,5 @@
 export * from "./controls.ts";
 export * from "./dialog.ts";
 export * from "./display.ts";
+export * from "./dom.ts";
 export * from "./shell.ts";

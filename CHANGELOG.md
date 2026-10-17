@@ -42,6 +42,8 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- The desktop app's To review is rebuilt on its design system as a list and a detail: what waits is listed on the left by what each is about, with a Changed badge only on a changed decision and one row for the pages you combined, and the one you open is shown on the right, its pages side by side, the AI model's reason behind "Why the AI model thinks so", and each answer with what it does. The check, Split again and the combined pages open in the same place, and every earlier behaviour is kept. Status names your library, its pages and the files you added instead of the engine's words. The screens' older styles are gone, and cards and empty states drop their borders for a lighter look (#1477).
+
 - **Python 3.14 is now the only supported interpreter.** `requires-python` is `>=3.14`, and development, CI and release all run 3.14 (ADR-0054). Users on Python 3.12 or 3.13 stay on 0.5.5, the last release that installs there, and must move to Python 3.14 to upgrade.
 
 ## [0.5.5] - 2026-10-14

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { segmented, textField, uiButton } from "./controls.ts";
+import { answerList, choiceList, segmented, textField, uiButton } from "./controls.ts";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -136,5 +136,66 @@ describe("textField", () => {
     expect(input.getAttribute("aria-invalid")).toBe("true");
     const described = (input.getAttribute("aria-describedby") ?? "").split(" ").map((id) => field.querySelector(`#${id}`)?.textContent);
     expect(described).toEqual(["As it appears on the page.", "✕ A name is needed."]);
+  });
+});
+
+describe("choiceList", () => {
+  const items = [
+    { value: "a", label: "Marguerite Osei", checked: true },
+    { value: "b", label: "M. Osei", checked: false },
+  ];
+
+  it("is a labelled group of native checkboxes that reports the one changed", () => {
+    const onChange = vi.fn();
+    const group = choiceList({ legend: "Mark the pages that are the same", type: "checkbox", name: "marked", items, onChange });
+    document.body.append(group);
+    expect(group.tagName).toBe("FIELDSET");
+    expect(group.querySelector("legend")?.textContent).toBe("Mark the pages that are the same");
+    const inputs = Array.from(group.querySelectorAll("input"));
+    expect(inputs.map((i) => [i.type, i.name, i.checked, i.closest("label")?.textContent])).toEqual([
+      ["checkbox", "marked", true, "Marguerite Osei"],
+      ["checkbox", "marked", false, "M. Osei"],
+    ]);
+    inputs[1]?.click();
+    expect(onChange).toHaveBeenCalledWith("b");
+  });
+
+  it("gives each choice a focus key, so a redraw keeps focus on it", () => {
+    const group = choiceList({ legend: "Name", type: "radio", name: "name", items, onChange: () => {} });
+    const inputs = Array.from(group.querySelectorAll("input"));
+    expect(inputs.map((i) => [i.type, i.dataset["focus"]])).toEqual([
+      ["radio", "name:a"],
+      ["radio", "name:b"],
+    ]);
+  });
+});
+
+describe("answerList", () => {
+  it("lists each answer as a button with what it does under it", () => {
+    const same = vi.fn();
+    const list = answerList("Your answer", [
+      { label: "Same thing", does: "Next, you choose what it is.", onChoose: same, focusKey: "a:0" },
+      { label: "Decide later", does: "Nothing changes.", onChoose: () => {}, variant: "quiet" },
+    ]);
+    expect(list.getAttribute("aria-label")).toBe("Your answer");
+    const items = Array.from(list.querySelectorAll("li"));
+    expect(items.map((li) => [li.querySelector("button")?.textContent, li.querySelector("p")?.textContent])).toEqual([
+      ["Same thing", "Next, you choose what it is."],
+      ["Decide later", "Nothing changes."],
+    ]);
+    expect(items[0]?.querySelector("button")?.classList).toContain("ui-button--secondary");
+    expect(items[1]?.querySelector("button")?.classList).toContain("ui-button--quiet");
+    expect(items[0]?.querySelector("button")?.dataset["focus"]).toBe("a:0");
+    items[0]?.querySelector("button")?.click();
+    expect(same).toHaveBeenCalledOnce();
+  });
+
+  it("says why an answer is unavailable, tied to its button", () => {
+    const list = answerList("Your answer", [
+      { label: "Combine the ones I marked", does: "We'll make one page.", onChoose: () => {}, disabled: true, reason: "Mark at least two pages" },
+    ]);
+    const button = list.querySelector("button") as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(list.querySelector(`#${button.getAttribute("aria-describedby")}`)?.textContent).toBe("Mark at least two pages");
   });
 });

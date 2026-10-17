@@ -11,13 +11,12 @@ import {
   type EngineState,
   type Invoke,
 } from "../client/index.ts";
-import { el, redraw } from "./components.ts";
 import { ReviewModel } from "./review/model.ts";
 import { renderReview } from "./review/render.ts";
 import { SetupModel, WelcomeModel } from "./setup/model.ts";
 import { renderSetup, renderWelcome } from "./setup/render.ts";
 import { renderStatus, type StatusScreen } from "./status.ts";
-import { appShell, badge, navItem } from "./system/index.ts";
+import { appShell, badge, el, navItem, redraw, spinner } from "./system/index.ts";
 import { describeEngine, engineBadge, navEntries, openDecisions, reviewCount, statusFailure } from "./view.ts";
 
 declare global {
@@ -43,11 +42,10 @@ let view: View = "status";
 const live = { status: element("review-live-status"), alert: element("review-live-alert") };
 const engineFooter = el("div");
 const statusRoot = el("div", { class: "ui-view", attrs: { "data-screen": "status" } });
-// The review screen keeps its own styles (style.css) until it moves onto the
-// design system; ui-legacy keeps the system's resets off it.
-const reviewWaiting = el("p", {}, "Waiting for OpenKOS to start…");
-const reviewRoot = el("div", { attrs: { id: "review" } });
-const reviewView = el("div", { class: "ui-view ui-legacy", attrs: { "data-screen": "review" } }, reviewWaiting, reviewRoot);
+// To review fills the main region with its list and detail panes.
+const reviewWaiting = el("div", { class: "ui-view" }, spinner("Waiting for OpenKOS to start…"));
+const reviewRoot = el("div", { class: "ui-fill", attrs: { id: "review" } });
+const reviewView = el("div", { class: "ui-fill", attrs: { "data-screen": "review" } }, reviewWaiting, reviewRoot);
 reviewView.hidden = true;
 const setupRoot = el("div", { class: "ui-view", attrs: { "data-screen": "setup" } });
 setupRoot.hidden = true;
