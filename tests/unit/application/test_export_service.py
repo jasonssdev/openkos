@@ -9,6 +9,7 @@ import pytest
 from openkos.application import export_service
 from openkos.model import okf
 from openkos.sensitivity import ExportReason
+from tests.unit.snapshot_support import snapshot
 
 _TODAY = date(2026, 10, 5)
 
@@ -110,11 +111,7 @@ def _plan(bundle: Path, **flags: bool) -> export_service.ExportPlan:
 
 
 def _tree(root: Path) -> dict[str, bytes]:
-    return {
-        p.relative_to(root).as_posix(): p.read_bytes()
-        for p in sorted(root.rglob("*"))
-        if p.is_file()
-    }
+    return snapshot(root)
 
 
 # --- plan_export ---------------------------------------------------------------

@@ -20,6 +20,7 @@ from openkos.model import okf
 from openkos.resolution.candidates import CandidateGroup, Tier
 from openkos.state import derived
 from openkos.state import pending_queue as pq
+from tests.unit.snapshot_support import snapshot as snapshot
 
 A, B, C, D = (f"concepts/{name}" for name in "abcd")
 
@@ -70,11 +71,6 @@ def group_of(*ids: str) -> CandidateGroup:
 
 def selection_of(survivor: str, *marked: str) -> GroupSelection:
     return GroupSelection(survivor_id=survivor, member_ids=marked)
-
-
-def snapshot(root: Path) -> dict[Path, bytes]:
-    """Every file under `root` and its bytes."""
-    return {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
 
 
 def _digests(

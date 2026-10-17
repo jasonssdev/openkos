@@ -414,9 +414,9 @@ def test_a_member_vanishing_as_the_section_opens_is_member_missing(
     assert outcome == NotApplied(Action.MERGE_GROUP, "member_missing")
     assert observer.missing == [(A, C)]
     assert recorder.commits == []
-    gone = seed.layout.bundle_dir / f"{C}.md"
+    gone = f"bundle/{C}.md"
     after = snapshot(seed.root)
-    assert not gone.exists()
+    assert not (seed.root / gone).exists()
     assert after == {p: b for p, b in before.items() if p != gone}
 
 
@@ -436,7 +436,7 @@ def test_a_first_step_target_edited_after_the_token_check_is_drift(
     assert _absorbed_in_order(seed, A) == []
     # Only the edit the test itself made differs from the snapshot.
     changed = {p for p, b in snapshot(seed.root).items() if before.get(p) != b}
-    assert changed == {seed.layout.bundle_dir / f"{A}.md"}
+    assert changed == {f"bundle/{A}.md"}
 
 
 # -- 2.1.6 the lock ---------------------------------------------------------- #

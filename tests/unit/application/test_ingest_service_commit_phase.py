@@ -24,6 +24,7 @@ from openkos.cli.main import app
 from openkos.llm.base import EMBED_DIM, Message
 from openkos.state import reindex as state_reindex
 from openkos.state import vectorstore
+from tests.unit.snapshot_support import snapshot
 
 _NOTES = "Some raw notes about self-control.\n"
 
@@ -97,11 +98,7 @@ def _source(tmp_path: Path, name: str = "notes.txt", text: str = _NOTES) -> Path
 
 
 def _snapshot(root: Path) -> dict[str, bytes]:
-    return {
-        str(p.relative_to(root)): p.read_bytes()
-        for p in sorted(root.rglob("*"))
-        if p.is_file() and ".openkos" not in p.parts
-    }
+    return snapshot(root, skip_parts=(".openkos",))
 
 
 _AUTO = svc.IngestPolicy(skip_confirmation=True)
