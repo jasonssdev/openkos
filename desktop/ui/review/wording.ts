@@ -108,7 +108,7 @@ export function whoCanSee(level: Page["sensitivity"]): { label: string; meaning:
 
 const UNREADABLE_PAGE = "A page that couldn't be read";
 
-function titleOf(pages: Pages, id: string): string {
+export function titleOf(pages: Pages, id: string): string {
   return pages.get(id)?.title || UNREADABLE_PAGE;
 }
 
@@ -920,8 +920,11 @@ export const COMBINED_HEADING = "Pages you combined";
 
 // -- undoing ------------------------------------------------------------------ //
 
-/** What an Undo other than Split again did, in the past tense. */
-export function undoneLine(undo: Exclude<Undo, { kind: "split" }>): string {
+/**
+ * What an Undo other than Split again did, in the past tense.
+ * `withdraws`: the undo also took a page's out-of-date mark away.
+ */
+export function undoneLine(undo: Exclude<Undo, { kind: "split" }>, withdraws = false): string {
   switch (undo.kind) {
     case "reopen":
       return "Undone. We'll ask you about these again.";
@@ -931,8 +934,19 @@ export function undoneLine(undo: Exclude<Undo, { kind: "split" }>): string {
       const many = typeNoun(undo.typeName).many;
       return `Undone. ${many.charAt(0).toUpperCase()}${many.slice(1)} are treated as before.`;
     }
+    case "reopen_contradiction":
+      return POINT_OUT_AGAIN;
+    case "unreconcile": {
+      const again = undo.revision ? ASK_AGAIN : POINT_OUT_AGAIN;
+      if (undo.outOfDate === null) return again;
+      if (withdraws) return `Undone. '${undo.outOfDate}' is no longer marked out of date. ${again.slice("Undone. ".length)}`;
+      return `${again} '${undo.outOfDate}' stays out of date, because another page replaces it.`;
+    }
   }
 }
+
+const POINT_OUT_AGAIN = "Undone. We'll point this out again the next time your pages are checked.";
+const ASK_AGAIN = "Undone. We'll ask about these again the next time your pages are checked.";
 
 // -- problems ----------------------------------------------------------------- //
 
@@ -983,6 +997,8 @@ const PROBLEMS: Record<string, Problem> = {
   not_kept_distinct: { message: "These pages aren't kept separate any more.", action: "ok" },
   not_related: { message: "These pages aren't connected any more.", action: "ok" },
   tier_unchanged: { message: "This setting is already as it was.", action: "ok" },
+  not_declined: { message: "This has already been undone.", action: "ok" },
+  not_reconciled: { message: "These pages aren't settled that way any more.", action: "ok" },
   already_reconciled: {
     message: "You've already settled how these pages relate, in another way. Nothing was changed.",
     action: "reload",

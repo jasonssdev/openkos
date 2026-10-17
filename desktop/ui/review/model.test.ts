@@ -131,6 +131,29 @@ const CONTRADICTION: Decision = {
   },
 };
 
+const REVISION: Decision = {
+  decision_key: "r1",
+  kind: "revision",
+  targets: ["people/a", "people/b"],
+  fresh: true,
+  evaluation: "not_applicable",
+  actions: ["revise", "reconcile", "skip"],
+  withheld: [],
+  resolves_via: "openkos reconcile --from-findings",
+  detail: null,
+  finding: {
+    first_id: "people/a",
+    second_id: "people/b",
+    change: "refines",
+    later_id: "people/a",
+    first_date: "2026-09-14",
+    second_date: "2026-03-02",
+    first_quote: "Lives in Accra.",
+    second_quote: "Lives in Kumasi.",
+    rationale: "Moved.",
+  },
+};
+
 const REFUSED_FILE: Decision = {
   decision_key: "w1",
   kind: "watch_refusal",
@@ -258,6 +281,39 @@ function fake(decisions: Decision[] = [PAIR], extra: ModelOptions = {}) {
     })),
     applyTierChange: vi.fn(async (body: Schemas["TierChangeApplyRequest"]) => ({
       changed: { type_name: body.version.type_name, tier: body.version.tier, commit_sha: "c" },
+      warnings: [],
+    })),
+    previewReopenContradiction: vi.fn(async (body: Schemas["ContradictionReopenPreviewRequest"]) => ({
+      first_id: body.first_id,
+      second_id: body.second_id,
+      merged_absorbed_id: body.merged_absorbed_id ?? null,
+      version: {
+        first_id: body.first_id,
+        second_id: body.second_id,
+        merged_absorbed_id: body.merged_absorbed_id ?? null,
+        content_digest: "d1",
+      },
+    })),
+    applyReopenContradiction: vi.fn(async (body: Schemas["ContradictionReopenApplyRequest"]) => ({
+      reopened: { ...body.version, commit_sha: "c" },
+      warnings: [],
+    })),
+    previewUnreconcile: vi.fn(async (body: Schemas["UnreconcilePreviewRequest"]): Promise<Schemas["UnreconcilePreview"]> => ({
+      ...body,
+      holder_id: null,
+      target_id: null,
+      relation_type: "reconciled_with",
+      pages_changed: [body.first_id, body.second_id],
+      withdraws_deprecation: false,
+      version: { ...body, content_digest: "ur1" },
+    })),
+    applyUnreconcile: vi.fn(async (body: Schemas["UnreconcileApplyRequest"]) => ({
+      unreconciled: {
+        first_id: body.version.first_id,
+        second_id: body.version.second_id,
+        relation_type: "reconciled_with" as const,
+        commit_sha: "c",
+      },
       warnings: [],
     })),
     previewUnmerge: vi.fn(async (body: Schemas["UnmergePreviewRequest"]) => unmergePreview(body.absorbed_id)),
@@ -1202,20 +1258,153 @@ describe("a disagreement or a newer decision", () => {
     });
     await model.confirm();
     expect(client.applyDecision).toHaveBeenCalledWith("c1", { action: "supersede", version: FINDING_VERSION });
-    expect(model.state.open?.step).toEqual({ name: "done", lines: ["Marked 'M. Osei' as out of date."], undo: null });
+    expect(model.state.open?.step).toEqual({
+      name: "done",
+      lines: ["Marked 'M. Osei' as out of date."],
+      undo: { kind: "unreconcile", first: "people/a", second: "people/b", revision: false, outOfDate: "M. Osei" },
+    });
     expect(client.decisions).toHaveBeenCalledTimes(2);
   });
 
-  it("confirms a decline and a reconcile with no Undo", async () => {
-    for (const [action, line] of [
-      ["decline", "Left as they are."],
-      ["reconcile", "Noted that both are right."],
+  it("offers Undo after a decline, reopening exactly that pair", async () => {
+    const { model, client } = await opened([CONTRADICTION], "c1");
+    await model.choose(choose("decline"));
+    await model.confirm();
+    expect(model.state.open?.step).toEqual({
+      name: "done",
+      lines: ["Left as they are."],
+      undo: { kind: "reopen_contradiction", first: "people/a", second: "people/b", absorbed: null },
+    });
+    await model.undo();
+    expect(client.previewReopenContradiction).toHaveBeenCalledWith({
+      first_id: "people/a",
+      second_id: "people/b",
+      merged_absorbed_id: null,
+    });
+    expect(client.applyReopenContradiction).toHaveBeenCalledWith({
+      version: { first_id: "people/a", second_id: "people/b", merged_absorbed_id: null, content_digest: "d1" },
+    });
+    expect(client.refreshQueue).not.toHaveBeenCalled();
+    expect(model.state.open?.step).toEqual({
+      name: "done",
+      lines: ["Undone. We'll point this out again the next time your pages are checked."],
+      undo: null,
+    });
+  });
+
+  it("carries the combined page's id when the disagreement was found inside one", async () => {
+    const { model, client } = await opened([CONTRADICTION], "c1");
+    await model.choose(choose("decline"));
+    client.applyDecision.mockClear();
+    client.previewFinding.mockResolvedValueOnce({
+      ...findingPreview("c1", "decline"),
+      plan: { kind: "decline", first_id: "people/a", second_id: "people/b", merged_absorbed_id: "people/z" },
+    });
+    await model.choose(choose("decline"));
+    await model.confirm();
+    await model.undo();
+    expect(client.previewReopenContradiction).toHaveBeenCalledWith({
+      first_id: "people/a",
+      second_id: "people/b",
+      merged_absorbed_id: "people/z",
+    });
+  });
+
+  it("offers Undo after a reconcile, unreconciling exactly that pair", async () => {
+    const { model, client } = await opened([CONTRADICTION], "c1");
+    await model.choose(choose("reconcile"));
+    await model.confirm();
+    expect(model.state.open?.step).toEqual({
+      name: "done",
+      lines: ["Noted that both are right."],
+      undo: { kind: "unreconcile", first: "people/a", second: "people/b", revision: false, outOfDate: null },
+    });
+    await model.undo();
+    expect(client.previewUnreconcile).toHaveBeenCalledWith({ first_id: "people/a", second_id: "people/b" });
+    expect(client.applyUnreconcile).toHaveBeenCalledWith({
+      version: { first_id: "people/a", second_id: "people/b", content_digest: "ur1" },
+    });
+    expect(model.state.open?.step).toEqual({
+      name: "done",
+      lines: ["Undone. We'll point this out again the next time your pages are checked."],
+      undo: null,
+    });
+  });
+
+  it("says the page is no longer out of date when nothing else replaces it", async () => {
+    const { model, client } = await opened([CONTRADICTION], "c1");
+    await model.choose(choose("supersede"));
+    await model.confirm();
+    expect(model.state.open?.step).toMatchObject({
+      undo: { kind: "unreconcile", first: "people/a", second: "people/b", revision: false, outOfDate: "M. Osei" },
+    });
+    client.previewUnreconcile.mockResolvedValueOnce({
+      first_id: "people/a",
+      second_id: "people/b",
+      holder_id: "people/a",
+      target_id: "people/b",
+      relation_type: "supersedes",
+      pages_changed: [],
+      withdraws_deprecation: true,
+      version: { first_id: "people/a", second_id: "people/b", content_digest: "ur2" },
+    });
+    await model.undo();
+    expect(model.state.open?.step).toMatchObject({
+      lines: ["Undone. 'M. Osei' is no longer marked out of date. We'll point this out again the next time your pages are checked."],
+    });
+  });
+
+  it("says the page stays out of date when another page still replaces it", async () => {
+    const { model, client } = await opened([CONTRADICTION], "c1");
+    await model.choose(choose("supersede"));
+    await model.confirm();
+    await model.undo();
+    expect(client.applyUnreconcile).toHaveBeenCalledTimes(1);
+    expect(model.state.open?.step).toMatchObject({
+      lines: [
+        "Undone. We'll point this out again the next time your pages are checked. 'M. Osei' stays out of date, because another page replaces it.",
+      ],
+    });
+  });
+
+  it("words a revision's undo as asking again", async () => {
+    const { model } = await opened([REVISION], "r1");
+    await model.choose(choose("reconcile"));
+    await model.confirm();
+    expect(model.state.open?.step).toMatchObject({ undo: { kind: "unreconcile", revision: true } });
+    await model.undo();
+    expect(model.state.open?.step).toMatchObject({
+      lines: ["Undone. We'll ask about these again the next time your pages are checked."],
+    });
+  });
+
+  it("words a refused finding undo and takes the Undo away", async () => {
+    for (const [action, code, message] of [
+      ["decline", "not_declined", "This has already been undone."],
+      ["reconcile", "not_reconciled", "These pages aren't settled that way any more."],
     ] as const) {
-      const { model } = await opened([CONTRADICTION], "c1");
+      const { model, client } = await opened([CONTRADICTION], "c1");
       await model.choose(choose(action));
       await model.confirm();
-      expect(model.state.open?.step).toEqual({ name: "done", lines: [line], undo: null });
+      client.previewReopenContradiction.mockRejectedValueOnce(apiError(code));
+      client.previewUnreconcile.mockRejectedValueOnce(apiError(code));
+      await model.undo();
+      expect(client.applyReopenContradiction).not.toHaveBeenCalled();
+      expect(client.applyUnreconcile).not.toHaveBeenCalled();
+      expect(model.state.open?.problem).toEqual({ message, action: "ok" });
+      expect(model.state.open?.step).toMatchObject({ name: "done", undo: null });
     }
+  });
+
+  it("never applies a stale finding undo again blindly", async () => {
+    const { model, client } = await opened([CONTRADICTION], "c1");
+    await model.choose(choose("reconcile"));
+    await model.confirm();
+    client.applyUnreconcile.mockRejectedValueOnce(apiError("stale"));
+    await model.undo();
+    expect(model.state.open?.problem?.action).toBe("reload");
+    await model.resolveProblem();
+    expect(client.applyUnreconcile).toHaveBeenCalledTimes(1);
   });
 
   it("re-previews a stale finding with the finding preview, never applying it", async () => {
