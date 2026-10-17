@@ -33,7 +33,7 @@ from openkos.application import (
     lock_wait,
     unmerge_service,
 )
-from openkos.llm.base import LLMBackend
+from openkos.llm.base import Embedder, LLMBackend
 from openkos.llm.ollama import OllamaClient
 from openkos.llm.openai_compatible import OpenAICompatibleClient
 from openkos.vcs.autocommit import (
@@ -205,6 +205,11 @@ def default_chat_client(cfg: config.Config, task: str | None) -> LLMBackend:
     is read from `OPENKOS_OPENAI_API_KEY` by the shared resolver and from
     nowhere else."""
     return backends.chat_client(cfg, factories=_backend_factories(), task=task)
+
+
+def default_embedder(cfg: config.Config) -> Embedder:
+    """The embedding client under `cfg`, as the CLI's `query` would build it."""
+    return backends.embed_client(cfg, factories=_backend_factories())
 
 
 def judging_ports(

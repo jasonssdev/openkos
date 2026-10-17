@@ -62,11 +62,13 @@ def test_the_version_is_an_int_that_does_not_come_from_the_package_version() -> 
 
 
 def test_the_docstring_states_the_owner_local_boundary() -> None:
-    doc = openkos.api.__doc__ or ""
+    doc = " ".join((openkos.api.__doc__ or "").split())
 
     assert "owner-local" in doc
     assert "no sensitivity disclosure gate" in doc
     assert "ADR-0058" in doc
+    assert "except the answer `ask` returns" in doc
+    assert "ADR-0068" in doc
     assert "cooperative" in doc
     assert "API_VERSION" in doc
     assert "does not refresh the derived stores" in doc

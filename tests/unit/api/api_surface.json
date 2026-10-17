@@ -37,6 +37,110 @@
       "kind": "dataclass",
       "members": {}
     },
+    "Answer": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "question"
+        },
+        {
+          "annotation": "Literal['answered', 'no_match', 'no_answer_in_context', 'withheld']",
+          "default": false,
+          "name": "outcome"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "answer"
+        },
+        {
+          "annotation": "Literal['none', 'empty_query', 'zero_hits', 'all_unreadable', 'insufficient_context']",
+          "default": false,
+          "name": "no_match_cause"
+        },
+        {
+          "annotation": "tuple[AnswerCitation, ...]",
+          "default": false,
+          "name": "citations"
+        },
+        {
+          "annotation": "tuple[OmittedConcept, ...]",
+          "default": false,
+          "name": "omitted"
+        },
+        {
+          "annotation": "Literal['reported', 'none', 'absent', 'unparsed']",
+          "default": false,
+          "name": "attribution"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "withheld"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "sufficiency_checked"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "sufficiency_degraded"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "lexical_unavailable"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "dense_unavailable"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "stale_indexes"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "AnswerCitation": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "title"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "excerpted"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "confidential"
+        },
+        {
+          "annotation": "Literal['superseded', 'refined'] | None",
+          "default": false,
+          "name": "history"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "Applied": {
       "fields": [
         {
@@ -77,6 +181,36 @@
     "ApplyOutcome": {
       "kind": "alias",
       "value": "Applied | NotApplied | Stale"
+    },
+    "AskProgress": {
+      "fields": [
+        {
+          "annotation": "Literal['retrieving', 'assembling', 'checking', 'synthesizing']",
+          "default": false,
+          "name": "phase"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "completed"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "total"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "BackendEmbeddingDimensionMismatch": {
+      "bases": [
+        "BackendError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
     },
     "BackendError": {
       "bases": [
@@ -980,6 +1114,28 @@
           "annotation": "str | None",
           "default": true,
           "name": "absorbed_into"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "OmittedConcept": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "title"
+        },
+        {
+          "annotation": "Literal['context_budget', 'context_budget_earlier_version']",
+          "default": false,
+          "name": "reason"
         }
       ],
       "frozen": true,
@@ -2252,6 +2408,48 @@
         }
       ],
       "returns": "Unrelated | NotUndoable | UndoStale"
+    },
+    "ask": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "question"
+        },
+        {
+          "annotation": "int",
+          "default": "8",
+          "kind": "KEYWORD_ONLY",
+          "name": "limit"
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "kind": "KEYWORD_ONLY",
+          "name": "include_deprecated"
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "kind": "KEYWORD_ONLY",
+          "name": "include_confidential"
+        },
+        {
+          "annotation": "Callable[[AskProgress], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "progress"
+        }
+      ],
+      "returns": "Answer"
     },
     "kept_distinct": {
       "kind": "function",
