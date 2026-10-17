@@ -49,6 +49,7 @@ const ACTION_LABELS: Record<Problem["action"], string> = {
   reload: "Show the current version",
   ok: "OK",
   requote: "Look again",
+  set_up: "Open setup",
 };
 
 const CHECK_ALL_DOES =

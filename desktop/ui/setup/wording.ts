@@ -38,6 +38,9 @@ export const WORDS = {
   continueDownload: "Continue download",
   stop: "Stop",
   notPullable: "This AI model can't be downloaded from here.",
+  moreSummary: "One more AI model",
+  moreText:
+    "This one lets OpenKOS check whether pages are the same or disagree. It's a large download, so it's up to you.",
   readyTitle: "You're ready.",
   readyText: "OpenKOS works offline from now on.",
   startUsing: "Start using OpenKOS",

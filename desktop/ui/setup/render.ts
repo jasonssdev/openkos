@@ -22,6 +22,7 @@ import {
   type WelcomeModel,
   type WelcomeState,
   modelRows,
+  optionalRows,
   setupStep,
 } from "./model.ts";
 import { WORDS, memoryNote, movedLibrary, pullProgress, runtimeStep } from "./wording.ts";
@@ -84,15 +85,21 @@ export interface SetupOptions {
 /** Redraws guided setup into `root`, keeping focus on the same control. */
 export function renderSetup(root: HTMLElement, model: SetupModel, state: SetupState, options: SetupOptions): void {
   const step = setupStep(state);
-  redraw(root, `setup:${step}`, () => root.replaceChildren(...setup(model, state, step, options)));
+  redraw(root, `setup:${step}`, () => root.replaceChildren(...setup(root, model, state, step, options)));
 }
 
-function setup(model: SetupModel, state: SetupState, step: ReturnType<typeof setupStep>, options: SetupOptions): HTMLElement[] {
+function setup(root: HTMLElement, model: SetupModel, state: SetupState, step: ReturnType<typeof setupStep>, options: SetupOptions): HTMLElement[] {
   const note = state.readiness ? memoryNote(state.readiness.memory) : null;
   const memory = note ? callout("info", note) : null;
   if (step === "ready") {
     const start = uiButton(WORDS.startUsing, options.onDone, { variant: "primary", focusKey: "setup:start" });
-    return [pageHeader({ title: WORDS.readyTitle, description: WORDS.readyText }), ...(memory ? [memory] : []), el("div", { class: "ui-actions" }, start)];
+    const more = moreModels(root, model, state);
+    return [
+      pageHeader({ title: WORDS.readyTitle, description: WORDS.readyText }),
+      ...(memory ? [memory] : []),
+      el("div", { class: "ui-actions" }, start),
+      ...(more ? [more] : []),
+    ];
   }
   const header = pageHeader({ title: WORDS.setupTitle, description: WORDS.setupLead });
   const failed = state.failed
@@ -106,6 +113,31 @@ function setup(model: SetupModel, state: SetupState, step: ReturnType<typeof set
   if (step === "runtime") body.push(runtimeCard(model, state));
   if (step === "models") body.push(modelsCard(model, state));
   return [header, ...[failed, memory, ...body].filter((node): node is HTMLElement => node !== null)];
+}
+
+// Whether the person opened the optional models, kept across redraws.
+const moreOpened = new WeakMap<HTMLElement, boolean>();
+
+/** The optional models, held back until asked for; open while one downloads. */
+function moreModels(root: HTMLElement, model: SetupModel, state: SetupState): HTMLElement | null {
+  const rows = optionalRows(state);
+  if (rows.length === 0) return null;
+  const busy = state.pull !== null;
+  const list = el(
+    "dl",
+    { class: "ui-facts", attrs: { "aria-label": WORDS.moreSummary } },
+    ...rows.flatMap((row) => [el("dt", {}, el("code", {}, row.tag)), el("dd", {}, ...modelStatus(model, row, false, busy))]),
+  );
+  return disclosure(
+    {
+      summary: WORDS.moreSummary,
+      open: busy || (moreOpened.get(root) ?? false),
+      onToggle: (open) => moreOpened.set(root, open),
+      focusKey: "setup:more",
+    },
+    el("p", {}, WORDS.moreText),
+    list,
+  );
 }
 
 function runtimeCard(model: SetupModel, state: SetupState): HTMLElement {

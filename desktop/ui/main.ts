@@ -348,7 +348,13 @@ function startReview(state: Extract<EngineState, { state: "ready" }>): void {
   labels.setClient(createClient(state));
   add.setClient(createClient(state));
   void search.setClient(createClient(state));
-  review = new ReviewModel(createClient(state));
+  review = new ReviewModel(createClient(state), {
+    // The check named an AI model that isn't installed; setup reads again and offers it.
+    openSetup: () => {
+      void setup?.load();
+      show("setup");
+    },
+  });
   const model = review;
   const stopDrawing = model.subscribe((next) => renderReview(reviewRoot, live, model, next, reviewExtras));
   const stopCounting = model.subscribe(() => paintNav());
