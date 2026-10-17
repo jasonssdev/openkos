@@ -10,7 +10,7 @@ from fastapi.security import HTTPBearer
 
 from openkos import api
 from openkos.localapi import _errors
-from openkos.localapi._errors import ErrorBody, invoke
+from openkos.localapi._errors import ApiProblem, ErrorBody, invoke
 from openkos.localapi._models import (
     ApplyRequest,
     ApplyResponse,
@@ -186,6 +186,24 @@ def make_router() -> APIRouter:
         return MergeHistory(
             merges=list(invoke(lambda: api.merge_history(workspace, concept_id)))
         )
+
+    @router.get("/pages", responses=_errors_of(404))
+    def page(
+        concept_id: str,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.Page:
+        # A Concept ID contains `/`, so it travels as a query parameter. An
+        # unknown page is `not_found`, like an unknown run id, and the fixed
+        # message never echoes the id.
+        found = invoke(lambda: api.read_page(workspace, concept_id))
+        if found is None:
+            raise ApiProblem(
+                404,
+                ErrorBody(
+                    code=_errors.NOT_FOUND, retryable=False, message="no such page"
+                ),
+            )
+        return found
 
     @router.post("/unmerge/preview", responses=_errors_of(409, 413))
     def unmerge_preview(

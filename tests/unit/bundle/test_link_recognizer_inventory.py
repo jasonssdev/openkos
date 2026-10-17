@@ -137,6 +137,7 @@ EXEMPT: dict[str, str] = {
     "bundle/index.py:_LABEL_UNSAFE_CHARS_RE": "a character class that REFUSES link delimiters in a label; reads no destination",
     "source_title.py:_FORBIDDEN_IN_TITLE": "a character class that REFUSES link delimiters in a title; reads no destination",
     "resolution/reconciliation.py:_LINK_TARGET_RE": "compares the raw text of a Related bullet's target to deduplicate; resolves nothing",
+    "application/concept_read.py:_LINK": "reduces a link to its label for a plain-text excerpt; resolves no destination",
 }
 
 

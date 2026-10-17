@@ -166,6 +166,7 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
     stopJudgingRun: (runId: string) =>
       call("post", "/v1/judging/runs/{run_id}/stop", { params: { run_id: runId } }),
     mergeHistory: (conceptId: string) => call("get", "/v1/merges", { query: { concept_id: conceptId } }),
+    readPage: (conceptId: string) => call("get", "/v1/pages", { query: { concept_id: conceptId } }),
     previewUnmerge: (body: Schemas["UnmergePreviewRequest"]) => call("post", "/v1/unmerge/preview", { body }),
     applyUnmerge: (body: Schemas["UnmergeApplyRequest"]) => call("post", "/v1/unmerge/apply", { body }),
   };

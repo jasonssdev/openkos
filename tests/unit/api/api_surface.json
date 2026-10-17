@@ -948,6 +948,65 @@
       "kind": "exception",
       "members": {}
     },
+    "Page": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "title"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "okf_type"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "excerpt"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "sensitivity"
+        },
+        {
+          "annotation": "tuple[PageSource, ...]",
+          "default": false,
+          "name": "sources"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "PageSource": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "source_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "file_name"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "added_at"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "PendingReport": {
       "fields": [
         {
@@ -1961,6 +2020,24 @@
         }
       ],
       "returns": "JudgingQuote"
+    },
+    "read_page": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "concept_id"
+        }
+      ],
+      "returns": "Page | None"
     },
     "refresh_decision_queue": {
       "kind": "function",

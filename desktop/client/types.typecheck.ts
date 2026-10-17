@@ -26,6 +26,7 @@ export type Checks = [
   Assert<Equal<Returns<"judgingRun">, Schemas["RunStatus"]>>,
   Assert<Equal<Returns<"stopJudgingRun">, Schemas["RunStatus"]>>,
   Assert<Equal<Returns<"mergeHistory">, Schemas["MergeHistory"]>>,
+  Assert<Equal<Returns<"readPage">, Schemas["Page"]>>,
   Assert<Equal<Takes<"previewUnmerge", 0>, Schemas["UnmergePreviewRequest"]>>,
   Assert<Equal<Returns<"previewUnmerge">, Schemas["UnmergePreview"]>>,
   Assert<Equal<Takes<"applyUnmerge", 0>, Schemas["UnmergeApplyRequest"]>>,
