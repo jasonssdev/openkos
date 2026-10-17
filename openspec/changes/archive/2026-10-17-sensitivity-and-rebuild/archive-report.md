@@ -9,8 +9,8 @@
 
 | Slice | PR | Content |
 |-------|----|---------|
-| 1 sensitivity, engine and API | #1527 | `application/sensitivity_service.py`, the CLI's shared log line and commit message, `api._sensitivity` and nine public names, two routes, two client methods |
-| 2 search, engine and API | the second PR | `vectorstore.read_stored_model_tag`, `ReindexPorts.commit_section`, `model_settings.remote_host`, `application/search_rebuild.py`, `api._search` and ten public names, the rebuild registry, four routes, four client methods |
+| 1 sensitivity, engine and API | #1527 (squash `74358852`) | `application/sensitivity_service.py`, the CLI's shared log line and commit message, `api._sensitivity` and nine public names, two routes, two client methods |
+| 2 search, engine and API | #1531 (squash `2002a3bd`) | `vectorstore.read_stored_model_tag`, `ReindexPorts.commit_section`, `model_settings.remote_host`, `application/search_rebuild.py`, `api._search` and ten public names, the rebuild registry, four routes, four client methods |
 | 3 screens, wording, archive | the PR that closes #1517 and #1518 | `desktop/ui/label/`, `desktop/ui/search/`, the label choice on To review page cards, Keep only on this Mac beside Ask citations, the rebuild section in Settings, Ask and Status, `docs/decision-wording.md`, this archive |
 
 - **Shipped surface** (additive, `API_VERSION` 1): `PageSensitivity`, `RaisedPage`, `SensitivityPreview`, `SensitivityVersion`, `SensitivityChanged`, `SensitivityRefused`, `SensitivityStale`, `preview_sensitivity`, `apply_sensitivity`; `SearchIndex`, `RebuildPhase`, `RebuildProgress`, `RebuildObserver`, `RebuildOutcome`, `RebuildRefused`, `RebuildStopped`, `SearchUnavailable`, `search_index`, `rebuild_search`. HTTP: `POST /v1/pages/sensitivity/{preview,apply}`, `GET /v1/search`, `POST /v1/search/rebuilds`, `GET /v1/search/rebuilds/{id}`, `POST /v1/search/rebuilds/{id}/stop`; codes `page_not_found` (404), `sensitivity_unchanged` (409), `rebuild_active` (409), `remote_not_allowed` (422), `search_unavailable` (500).
