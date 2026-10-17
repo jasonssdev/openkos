@@ -186,3 +186,98 @@ def test_an_unknown_field_beside_the_echoed_version_is_422(
     response = _post(client, f"{_REOPEN}/apply", {"version": version, "x": 1})
 
     assert response.status_code == 422
+
+
+# -- a reconcile ------------------------------------------------------------------ #
+
+
+@pytest.mark.parametrize(
+    ("action", "relation_type"),
+    [("reconcile", "reconciled_with"), ("supersede_reversed", "supersedes")],
+)
+def test_a_reconcile_is_listed_and_undone_over_http(
+    client: TestClient, root: Path, action: str, relation_type: str
+) -> None:
+    _settle(client, action)
+    before = support.snapshot(root)
+    listed = client.get("/v1/reconciled", headers=AUTH)
+    preview = _post(client, "/v1/unreconcile/preview", {"first_id": B, "second_id": A})
+    assert support.snapshot(root) == before
+
+    assert listed.status_code == 200, listed.text
+    (pair,) = listed.json()["pairs"]
+    assert (pair["first_id"], pair["second_id"], pair["relation_type"]) == (
+        A,
+        B,
+        relation_type,
+    )
+    assert preview.status_code == 200, preview.text
+    assert TypeAdapter(api.UnreconcilePreview).validate_python(
+        preview.json()
+    ) == api.preview_unreconcile(api.Workspace.open(root), A, B)
+
+    applied = _post(
+        client, "/v1/unreconcile/apply", {"version": preview.json()["version"]}
+    )
+
+    assert applied.status_code == 200, applied.text
+    undone = TypeAdapter(api.Unreconciled).validate_python(
+        applied.json()["unreconciled"]
+    )
+    assert (undone.first_id, undone.second_id, undone.relation_type) == (
+        A,
+        B,
+        relation_type,
+    )
+    assert undone.commit_sha is not None
+    assert applied.json()["warnings"] == []
+    assert client.get("/v1/reconciled", headers=AUTH).json() == {"pairs": []}
+
+
+def test_a_pair_never_reconciled_is_409_not_reconciled(
+    client: TestClient, root: Path
+) -> None:
+    response = _post(client, "/v1/unreconcile/preview", {"first_id": A, "second_id": B})
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "not_reconciled",
+        "retryable": False,
+        "message": (
+            "these concepts hold no reconcile resolution, or a concept no longer exists"
+        ),
+    }
+
+
+def test_an_altered_unreconcile_version_is_409_stale(
+    client: TestClient, root: Path
+) -> None:
+    _settle(client, "reconcile")
+    version = _post(
+        client, "/v1/unreconcile/preview", {"first_id": A, "second_id": B}
+    ).json()["version"]
+    before = support.snapshot(root)
+
+    response = _post(
+        client,
+        "/v1/unreconcile/apply",
+        {"version": {**version, "content_digest": "0" * 64}},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "stale"
+    assert support.snapshot(root) == before
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"first_id": A},
+        {"first_id": A, "second_id": B, "merged_absorbed_id": None},
+        {"first_id": [A], "second_id": B},
+    ],
+)
+def test_an_invalid_unreconcile_preview_body_is_422(
+    client: TestClient, root: Path, body: dict[str, Any]
+) -> None:
+    assert _post(client, "/v1/unreconcile/preview", body).status_code == 422

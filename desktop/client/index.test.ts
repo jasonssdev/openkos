@@ -257,6 +257,21 @@ describe("the requests", () => {
       "/v1/contradictions/reopen/apply",
       { version: { first_id: "a", second_id: "b", merged_absorbed_id: null, content_digest: "d" } },
     ],
+    ["reconciledPairs", (c) => c.reconciledPairs(), "GET", "/v1/reconciled", null],
+    [
+      "previewUnreconcile",
+      (c) => c.previewUnreconcile({ first_id: "a", second_id: "b" }),
+      "POST",
+      "/v1/unreconcile/preview",
+      { first_id: "a", second_id: "b" },
+    ],
+    [
+      "applyUnreconcile",
+      (c) => c.applyUnreconcile({ version: { first_id: "a", second_id: "b", content_digest: "d" } }),
+      "POST",
+      "/v1/unreconcile/apply",
+      { version: { first_id: "a", second_id: "b", content_digest: "d" } },
+    ],
     [
       "previewSensitivity",
       (c) => c.previewSensitivity({ concept_id: "concepts/a", level: "confidential" }),

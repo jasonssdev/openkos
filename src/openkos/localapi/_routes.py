@@ -44,6 +44,7 @@ from openkos.localapi._models import (
     QuoteRequest,
     RebuildRequest,
     RebuildStatus,
+    ReconciledPairList,
     RefreshRequest,
     RefusedFileQuoteRequest,
     ReopenApplyRequest,
@@ -60,6 +61,9 @@ from openkos.localapi._models import (
     UnmergeApplyRequest,
     UnmergePreviewRequest,
     UnmergeResponse,
+    UnreconcileApplyRequest,
+    UnreconcilePreviewRequest,
+    UnreconcileResponse,
     UnrelateApplyRequest,
     UnrelatePreviewRequest,
     UnrelateResponse,
@@ -413,6 +417,46 @@ def make_router() -> APIRouter:
         )
         if isinstance(result, api.ContradictionReopened):
             return ContradictionReopenResponse(reopened=result, warnings=warnings)
+        raise _errors.outcome_problem(result)
+
+    @router.get("/reconciled")
+    def reconciled_pairs(
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> ReconciledPairList:
+        return ReconciledPairList(
+            pairs=list(invoke(lambda: api.reconciled_pairs(workspace)))
+        )
+
+    @router.post("/unreconcile/preview", responses=_errors_of(409, 413))
+    def unreconcile_preview(
+        body: UnreconcilePreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.UnreconcilePreview:
+        result = invoke(
+            lambda: api.preview_unreconcile(workspace, body.first_id, body.second_id)
+        )
+        if isinstance(result, api.UnreconcilePreview):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post(
+        "/unreconcile/apply", responses=_errors_of(409, 413, 503, retry_after=True)
+    )
+    def unreconcile_apply(
+        body: UnreconcileApplyRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> UnreconcileResponse:
+        warnings: list[str] = []
+        result = invoke(
+            lambda: api.apply_unreconcile(
+                workspace,
+                body.version,
+                wait_seconds=_wait(body.wait_seconds),
+                on_warning=warnings.append,
+            )
+        )
+        if isinstance(result, api.Unreconciled):
+            return UnreconcileResponse(unreconciled=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
     @router.post("/unrelate/preview", responses=_errors_of(409, 413))

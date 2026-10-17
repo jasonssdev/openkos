@@ -125,6 +125,35 @@ def _append_reconciliation_note(body: str, note: str) -> str:
     return new_body
 
 
+def _note_block_re(counterpart_id: str) -> re.Pattern[str]:
+    """One `## Reconciliation` note anchored on `counterpart_id`, in exactly the
+    shape `_reconciliation_note` builds: the heading line, the anchor (any role)
+    and one non-empty sentence line, starting a line of its own."""
+    return re.compile(
+        r"(?m)^## Reconciliation\n<!-- okos:reconcile target="
+        + re.escape(counterpart_id)
+        + r" role=\w+ -->\n[^\n]+(?:\n|\Z)"
+    )
+
+
+def remove_reconciliation_note(body: str, counterpart_id: str) -> tuple[str, bool]:
+    """The inverse of `_append_reconciliation_note`: `body` with every note
+    anchored on `counterpart_id` removed, together with the blank line that
+    separated it, and whether one was. A note whose heading or sentence line was
+    edited away from the shape `reconcile` writes is left as it is."""
+    pattern = _note_block_re(counterpart_id)
+    removed = False
+    while (match := pattern.search(body)) is not None:
+        before = body[: match.start()].rstrip("\n")
+        after = body[match.end() :].lstrip("\n")
+        if after:
+            body = f"{before}\n\n{after}" if before else after
+        else:
+            body = f"{before}\n" if before else ""
+        removed = True
+    return body, removed
+
+
 def _add_relation_if_absent(
     relations: list[okf.Relation], new_relation: okf.Relation
 ) -> tuple[list[okf.Relation], bool]:
@@ -164,7 +193,7 @@ DIRECTED_ROLES: dict[str, tuple[ReconcileRole, ReconcileRole]] = {
 (design Decision 4)."""
 
 
-def _existing_reconciliation_state(
+def existing_reconciliation_state(
     *,
     relations_a: list[okf.Relation],
     relations_b: list[okf.Relation],
@@ -585,7 +614,7 @@ def prepare_pair(
         # to frontmatter (the note-append gate below is anchor-keyed on
         # `target` alone and blind to `role`, so it cannot itself repair a
         # mismatched note on a later run).
-        existing_mode, existing_holder = _existing_reconciliation_state(
+        existing_mode, existing_holder = existing_reconciliation_state(
             relations_a=relations_a,
             relations_b=relations_b,
             canonical_a=canonical_a,

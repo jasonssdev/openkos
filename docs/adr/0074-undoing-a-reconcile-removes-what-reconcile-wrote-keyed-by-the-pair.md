@@ -64,9 +64,10 @@ supersedes it.
 
 - The app can offer Undo on every contradiction and revision confirmation, and
   the "edit the pages or revert with git" advice has an app equivalent.
-- After an undo with nothing in between, both pages return to their earlier
-  bytes, so a persisted contradiction verdict is fresh again and the finding
-  comes back on the next check without a model call. Like every ADR-0067 undo,
+- After an undo with nothing in between, pages in the engine's form return to
+  their earlier bytes, so a persisted contradiction verdict is fresh again and
+  the finding comes back on the next check without a model call. A hand-written
+  page keeps its values but is re-serialised, as every engine write does. Like every ADR-0067 undo,
   it does not come back at once: no queue row is proposed.
 - The engine gains a write the CLI does not have. `reconcile`'s refusal text is
   unchanged; a CLI verb can reuse the same service later.

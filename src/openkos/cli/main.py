@@ -9834,7 +9834,7 @@ def reconcile(
     (refuse, exit 1, zero writes) -- a reconciliation is either a reversal
     or a refinement, never both.
 
-    Before building any new edge, `_existing_reconciliation_state` gathers
+    Before building any new edge, `reconcile_service.existing_reconciliation_state` gathers
     the pair's EXISTING reconciliation edges (any `RESOLUTION_RELATION_
     TYPES` member already linking `id_a`/`id_b`, in either direction) and
     classifies them as `"none"`, `"symmetric"`, `"directional"` (with a

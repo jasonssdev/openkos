@@ -461,6 +461,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/reconciled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reconciled Pairs */
+        get: operations["reconciled_pairs_v1_reconciled_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/reopen/apply": {
         parameters: {
             query?: never;
@@ -761,6 +778,40 @@ export interface paths {
         put?: never;
         /** Unmerge Preview */
         post: operations["unmerge_preview_v1_unmerge_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/unreconcile/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unreconcile Apply */
+        post: operations["unreconcile_apply_v1_unreconcile_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/unreconcile/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unreconcile Preview */
+        post: operations["unreconcile_preview_v1_unreconcile_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2283,6 +2334,35 @@ export interface components {
             target_id: string | null;
         };
         /**
+         * ReconciledPair
+         * @description Two pages a reconcile settled, and how. `holder_id` replaces or updates
+         *     `target_id`; both are `None` for `reconciled_with`.
+         */
+        ReconciledPair: {
+            /** First Id */
+            first_id: string;
+            /** Holder Id */
+            holder_id: string | null;
+            /**
+             * Relation Type
+             * @enum {string}
+             */
+            relation_type: "reconciled_with" | "supersedes" | "revises";
+            /** Second Id */
+            second_id: string;
+            /** Target Id */
+            target_id: string | null;
+        };
+        /**
+         * ReconciledPairList
+         * @description Every pair a reconcile settled, by pair, in an envelope that leaves room
+         *     for additive fields.
+         */
+        ReconciledPairList: {
+            /** Pairs */
+            pairs: components["schemas"]["ReconciledPair"][];
+        };
+        /**
          * RefreshRequest
          * @description How long a queue refresh waits for the workspace lock.
          */
@@ -2891,6 +2971,103 @@ export interface components {
             restored_ids: string[];
             /** Survivor Id */
             survivor_id: string;
+        };
+        /**
+         * UnreconcileApplyRequest
+         * @description The version the unreconcile preview issued (echoed unchanged) and how long
+         *     to wait for the workspace lock; a client can shorten the wait only.
+         */
+        UnreconcileApplyRequest: {
+            version: components["schemas"]["UnreconcileVersion"];
+            /**
+             * Wait Seconds
+             * @default 5
+             */
+            wait_seconds?: number;
+        };
+        /**
+         * UnreconcilePreview
+         * @description Undoing how a reconcile recorded `first_id` and `second_id`: its edges
+         *     and the notes it added go. `withdraws_deprecation`: the replaced page stops
+         *     being marked out of date, because nothing else replaces it.
+         *     `pages_changed`: the pages whose files change.
+         */
+        UnreconcilePreview: {
+            /** First Id */
+            first_id: string;
+            /** Holder Id */
+            holder_id: string | null;
+            /** Pages Changed */
+            pages_changed: string[];
+            /**
+             * Relation Type
+             * @enum {string}
+             */
+            relation_type: "reconciled_with" | "supersedes" | "revises";
+            /** Second Id */
+            second_id: string;
+            /** Target Id */
+            target_id: string | null;
+            version: components["schemas"]["UnreconcileVersion"];
+            /** Withdraws Deprecation */
+            withdraws_deprecation: boolean;
+        };
+        /**
+         * UnreconcilePreviewRequest
+         * @description The two pages whose reconcile to undo, in either order.
+         */
+        UnreconcilePreviewRequest: {
+            /** First Id */
+            first_id: string;
+            /** Second Id */
+            second_id: string;
+        };
+        /**
+         * UnreconcileResponse
+         * @description What was undone, and the warnings the apply raised along the way.
+         */
+        UnreconcileResponse: {
+            unreconciled: components["schemas"]["Unreconciled"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * UnreconcileVersion
+         * @description The version a stateless caller undoes a reconcile against: echo it
+         *     unchanged. `content_digest` covers the pair, the resolution, both pages and
+         *     whether the out-of-date mark is withdrawn.
+         */
+        UnreconcileVersion: {
+            /** Content Digest */
+            content_digest: string;
+            /** First Id */
+            first_id: string;
+            /** Second Id */
+            second_id: string;
+        };
+        /**
+         * Unreconciled
+         * @description The reconcile was undone. `commit_sha` is `None` when its commit could not
+         *     be made (the writes themselves landed); `committed_confidential` is true when
+         *     the commit holds a concept explicitly marked confidential.
+         */
+        Unreconciled: {
+            /** Commit Sha */
+            commit_sha: string | null;
+            /**
+             * Committed Confidential
+             * @default false
+             */
+            committed_confidential?: boolean;
+            /** First Id */
+            first_id: string;
+            /**
+             * Relation Type
+             * @enum {string}
+             */
+            relation_type: "reconciled_with" | "supersedes" | "revises";
+            /** Second Id */
+            second_id: string;
         };
         /**
          * UnrelateApplyRequest
@@ -5052,6 +5229,62 @@ export interface operations {
             };
         };
     };
+    reconciled_pairs_v1_reconciled_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciledPairList"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     reopen_apply_v1_reopen_apply_post: {
         parameters: {
             query?: never;
@@ -6337,6 +6570,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnmergePreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    unreconcile_apply_v1_unreconcile_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnreconcileApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreconcileResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    /** @description Seconds to wait before retrying a busy workspace. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    unreconcile_preview_v1_unreconcile_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnreconcilePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreconcilePreview"];
                 };
             };
             /** @description Unauthorized */

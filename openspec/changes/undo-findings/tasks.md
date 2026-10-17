@@ -61,21 +61,30 @@ one is squash-merged; generated snapshots are regenerated, never hand-merged.
 
 ## S3 Undo a reconcile (P2, P3, H1)
 
-- [ ] S3.1 RED: `reconcile_service.remove_reconciliation_note` (last note,
+- [x] S3.1 RED: `reconcile_service.remove_reconciliation_note` (last note,
   middle note, another counterpart's note kept, an edited note left, absent).
-- [ ] S3.2 RED: application tests over pages written by `reconcile_service`:
+- [x] S3.2 RED: application tests over pages written by `reconcile_service`:
   each mode and direction, byte restoration, a bystander still superseding, a
   human-authored status, an edited note, `mixed`, refusals, stale on an edited
   page and on a bystander flipping the withdrawal, lock, commit paths, the list.
-- [ ] S3.3 GREEN: `remove_reconciliation_note`, the public classifier name,
+- [x] S3.3 GREEN: `remove_reconciliation_note`, the public classifier name,
   `undo_service` unreconcile (D2, D4, D5), `WriteFailed` operation
   `unreconcile`.
-- [ ] S3.4 Facade, routes, `not_reconciled` row, snapshots, client, tests.
+- [x] S3.4 Facade, routes, `not_reconciled` row, snapshots, client, tests.
   Facade tests over choices made through `preview_finding` / `apply_decision`.
-- [ ] S3.5 `docs/decision-wording.md`: Undo on the contradiction and revision
+- [x] S3.5 `docs/decision-wording.md`: Undo on the contradiction and revision
   confirmations, the two refusals.
-- [ ] S3.6 Mutation-check the note shape, the edge filter, the withdrawal line
-  and the digest.
+- [x] S3.6 Mutation-check the note shape, the edge filter, the withdrawal line
+  and the digest. Twenty-one mutations; survivors led to three tests (a heading
+  mid-line, a counterpart's edge to a third page, a page with another page's
+  bytes) and to two removals: the resolution and pair digest lines (covered by
+  the pages' ids and bytes) and a local pair check (replaced by
+  `reconcile_service.resolve_pair`).
+- [x] S3.7 Smoke on a scratch copy of a real workspace: a CLI `reconcile
+  --winner` and a `reconcile --revision`, each undone through the API, left
+  both pages byte-identical to before the reconcile (`git diff --stat` empty);
+  a merged-body decline (pair named twice, as the engine records it) was
+  reopened, and a replayed version answered `not_declined`.
 
 ## S4 Archive
 

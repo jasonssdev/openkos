@@ -2477,6 +2477,38 @@
       "kind": "dataclass",
       "members": {}
     },
+    "ReconciledPair": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "Literal['reconciled_with', 'supersedes', 'revises']",
+          "default": false,
+          "name": "relation_type"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "holder_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "target_id"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "Refused": {
       "bases": [
         "WriteRefused"
@@ -3297,6 +3329,107 @@
       "kind": "dataclass",
       "members": {}
     },
+    "UnreconcilePreview": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "Literal['reconciled_with', 'supersedes', 'revises']",
+          "default": false,
+          "name": "relation_type"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "holder_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "target_id"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "withdraws_deprecation"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "pages_changed"
+        },
+        {
+          "annotation": "UnreconcileVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "UnreconcileVersion": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "Unreconciled": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "Literal['reconciled_with', 'supersedes', 'revises']",
+          "default": false,
+          "name": "relation_type"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "commit_sha"
+        },
+        {
+          "annotation": "bool",
+          "default": true,
+          "name": "committed_confidential"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "UnrelatePreview": {
       "fields": [
         {
@@ -3805,6 +3938,36 @@
       ],
       "returns": "Unmerged | NotUnmergeable | UnmergeStale"
     },
+    "apply_unreconcile": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "UnreconcileVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "Unreconciled | NotUndoable | UndoStale"
+    },
     "apply_unrelate": {
       "kind": "function",
       "parameters": [
@@ -4165,6 +4328,30 @@
       ],
       "returns": "UnmergePreview | NotUnmergeable"
     },
+    "preview_unreconcile": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "second_id"
+        }
+      ],
+      "returns": "UnreconcilePreview | NotUndoable"
+    },
     "preview_unrelate": {
       "kind": "function",
       "parameters": [
@@ -4362,6 +4549,18 @@
         }
       ],
       "returns": "RebuildOutcome | RebuildRefused | RebuildStopped"
+    },
+    "reconciled_pairs": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "tuple[ReconciledPair, ...]"
     },
     "refresh_decision_queue": {
       "kind": "function",

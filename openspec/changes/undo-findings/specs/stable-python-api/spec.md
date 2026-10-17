@@ -87,6 +87,8 @@ write the inverse of the reconcile:
 - on each page, the `## Reconciliation` note anchored on the other page removed
   when it has the shape `reconcile` writes (heading, anchor, one sentence); a
   note edited around its anchor MUST be left unchanged;
+- on a page rewritten for the undo, a `relations` list left empty dropped, as
+  `unrelate` drops it;
 - one `log.md` line;
 
 then commit only the pages it changed and `log.md` in one commit, and return
@@ -96,7 +98,8 @@ NOT refresh a derived index.
 
 #### Scenario: A supersede made through the app is undone
 
-- GIVEN a contradiction settled with `supersede` through `apply_decision`
+- GIVEN two pages in the form the engine writes them (`status: stable`), and
+  a contradiction between them settled with `supersede` through `apply_decision`
 - WHEN `preview_unreconcile` then `apply_unreconcile` are called with its pair
 - THEN neither page holds a `supersedes` edge or a reconciliation note, the
   superseded page is no longer marked deprecated, both pages' bytes are the ones

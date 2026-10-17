@@ -20,15 +20,23 @@ from openkos.api import (
     DeclinedContradiction,
     FindingPreview,
     NotUndoable,
+    ReconciledPair,
     UndoStale,
+    Unreconciled,
+    UnreconcilePreview,
+    UnreconcileVersion,
     Workspace,
     WorkspaceBusyError,
     apply_decision,
     apply_reopen_contradiction,
+    apply_unreconcile,
     declined_contradictions,
     preview_finding,
     preview_reopen_contradiction,
+    preview_unreconcile,
+    reconciled_pairs,
 )
+from openkos.model import okf
 from tests.unit.api import support
 from tests.unit.api.test_decisions_apply import _git, _head_files
 from tests.unit.api.test_findings_api import (
@@ -161,3 +169,123 @@ def test_a_commit_that_cannot_be_made_is_warned_once(declined: Path) -> None:
     assert reopened.commit_sha is None
     assert len(warnings) == 1
     assert declined_contradictions(Workspace.open(declined)) == ()
+
+
+# -- a reconcile ------------------------------------------------------------------ #
+
+
+def _front(root: Path, concept_id: str) -> dict[str, object]:
+    path = root / "bundle" / f"{concept_id}.md"
+    return dict(okf.load_frontmatter(path.read_text(encoding="utf-8"))[0])
+
+
+def _body(root: Path, concept_id: str) -> str:
+    path = root / "bundle" / f"{concept_id}.md"
+    return okf.load_frontmatter(path.read_text(encoding="utf-8"))[1]
+
+
+def _unreconcile_preview(root: Path) -> UnreconcilePreview:
+    preview = preview_unreconcile(Workspace.open(root), B, A)
+    assert isinstance(preview, UnreconcilePreview), preview
+    return preview
+
+
+def test_a_reconciled_pair_is_listed_and_previewed_without_the_lock(
+    root: Path,
+) -> None:
+    _settle(root, Action.SUPERSEDE)
+    before = support.snapshot(root)
+
+    with lock.workspace_lock(root):
+        listed = reconciled_pairs(Workspace.open(root))
+        preview = _unreconcile_preview(root)
+
+    assert listed == (ReconciledPair(A, B, "supersedes", A, B),)
+    assert (preview.first_id, preview.second_id) == (A, B)
+    assert (preview.relation_type, preview.holder_id, preview.target_id) == (
+        "supersedes",
+        A,
+        B,
+    )
+    assert preview.withdraws_deprecation is True
+    assert preview.pages_changed == (A, B)
+    assert type(preview.version) is UnreconcileVersion
+    assert (preview.version.first_id, preview.version.second_id) == (A, B)
+    assert support.snapshot(root) == before
+
+
+@pytest.mark.parametrize(
+    "action", [Action.RECONCILE, Action.SUPERSEDE, Action.SUPERSEDE_REVERSED]
+)
+def test_a_settled_contradiction_is_undone_in_one_commit(
+    root: Path, action: Action
+) -> None:
+    pages = {cid: (_front(root, cid), _body(root, cid)) for cid in PAIR}
+    _settle(root, action)
+    preview = _unreconcile_preview(root)
+    head = _git(root, "rev-parse", "HEAD")
+
+    undone = apply_unreconcile(Workspace.open(root), preview.version)
+
+    assert isinstance(undone, Unreconciled)
+    assert (undone.first_id, undone.second_id) == (A, B)
+    assert undone.relation_type == preview.relation_type
+    assert undone.commit_sha is not None
+    assert undone.committed_confidential is False
+    assert _git(root, "rev-parse", "HEAD~1") == head
+    assert _git(root, "log", "-1", "--format=%s") == (
+        f"openkos: unreconcile {A} <-> {B}"
+    )
+    assert _head_files(root) == [f"bundle/{A}.md", f"bundle/{B}.md", "bundle/log.md"]
+    for cid in PAIR:
+        front, body = pages[cid]
+        assert _body(root, cid) == body
+        assert {k: v for k, v in _front(root, cid).items() if k != "status"} == front
+        assert _front(root, cid).get("status") in (None, "stable")
+    assert reconciled_pairs(Workspace.open(root)) == ()
+
+
+def test_a_pair_never_reconciled_is_not_undoable(root: Path) -> None:
+    assert preview_unreconcile(Workspace.open(root), A, B) == NotUndoable(
+        "not_reconciled"
+    )
+
+
+def test_an_altered_unreconcile_version_is_stale_and_writes_nothing(
+    root: Path,
+) -> None:
+    _settle(root, Action.RECONCILE)
+    preview = _unreconcile_preview(root)
+    altered = dataclasses.replace(preview.version, content_digest="0" * 64)
+    before = support.snapshot(root)
+
+    assert apply_unreconcile(Workspace.open(root), altered) == UndoStale()
+    assert support.snapshot(root) == before
+
+
+def test_a_confidential_page_reports_its_unreconcile_commit(root: Path) -> None:
+    _settle(root, Action.RECONCILE)
+    page = root / "bundle" / f"{A}.md"
+    page.write_text(
+        page.read_text(encoding="utf-8").replace(
+            "---\n", "---\nsensitivity: confidential\n", 1
+        ),
+        "utf-8",
+    )
+    _git(root, "commit", "-qam", "mark confidential")
+
+    undone = apply_unreconcile(Workspace.open(root), _unreconcile_preview(root).version)
+
+    assert isinstance(undone, Unreconciled)
+    assert undone.committed_confidential is True
+
+
+def test_an_unreconcile_on_a_held_lock_raises_busy(root: Path) -> None:
+    _settle(root, Action.RECONCILE)
+    preview = _unreconcile_preview(root)
+    before = support.snapshot(root)
+
+    with lock.workspace_lock(root), pytest.raises(WorkspaceBusyError):
+        apply_unreconcile(Workspace.open(root), preview.version)
+
+    assert support.snapshot(root) == before
