@@ -72,8 +72,11 @@ _snapshot = snapshot
 _INVALID = NotApplied(Action.MERGE_GROUP, "invalid_selection")
 
 
-def test_the_new_action_is_the_last_wire_name() -> None:
-    assert list(Action)[-1] is Action.MERGE_GROUP
+def test_the_group_action_follows_the_decision_actions_it_joined() -> None:
+    """Added after `set_tier`; the finding actions that came later follow it, so
+    every earlier wire name keeps its position."""
+    actions = list(Action)
+    assert actions[actions.index(Action.SET_TIER) + 1] is Action.MERGE_GROUP
     assert Action.MERGE_GROUP.value == "merge_group"
 
 

@@ -33,6 +33,8 @@ export const ERROR_CODES = [
   "member_missing",
   "record_failed",
   "invalid_selection",
+  "wrong_preview",
+  "already_reconciled",
   "workspace_busy",
   "workspace_lock_unavailable",
   "write_drift",

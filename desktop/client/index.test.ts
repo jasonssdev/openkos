@@ -262,6 +262,8 @@ describe("the failures", () => {
   it.each([
     [413, "request_too_large"],
     [422, "invalid_selection"],
+    [422, "wrong_preview"],
+    [409, "already_reconciled"],
     [500, "merge_group_interrupted"],
     [500, "unmerge_interrupted"],
     [409, "survivor_missing"],

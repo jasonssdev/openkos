@@ -32,11 +32,15 @@ from openkos import config
 from openkos.application import (
     catalog_delta,
     commit_phase,
+    contradictions_service,
     curate_queue,
     duplicates_service,
     merge_service,
     pending_queue_report,
+    queue_producers,
     queue_resolution,
+    reconcile_service,
+    revisions,
 )
 from openkos.application import drift as application_drift
 from openkos.application import lifecycle as application_lifecycle
@@ -52,6 +56,7 @@ from openkos.graph.base import Edge
 from openkos.model import okf
 from openkos.model import types as model_types
 from openkos.model.relations import ASYMMETRIC_RELATION_TYPES, validate_relation_type
+from openkos.resolution import decision_revision
 from openkos.resolution.adjudication import Verdict
 from openkos.resolution.candidates import CandidateGroup, Tier
 from openkos.resolution.edge_typing import EdgeSuggestion
@@ -68,6 +73,28 @@ class Action(StrEnum):
     RELATE_REVERSED = "relate_reversed"
     SET_TIER = "set_tier"
     MERGE_GROUP = "merge_group"
+    DECLINE = "decline"
+    RECONCILE = "reconcile"
+    SUPERSEDE = "supersede"
+    SUPERSEDE_REVERSED = "supersede_reversed"
+    REVISE = "revise"
+    REVISE_REVERSED = "revise_reversed"
+
+
+FINDING_ACTIONS: frozenset[Action] = frozenset(
+    {
+        Action.DECLINE,
+        Action.RECONCILE,
+        Action.SUPERSEDE,
+        Action.SUPERSEDE_REVERSED,
+        Action.REVISE,
+        Action.REVISE_REVERSED,
+    }
+)
+"""The actions a contradiction or a revision takes, previewed by
+`preview_finding` and committed through the CLI's own reconcile and decline
+writes (ADR-0072). `supersede` and `revise` make the item's first target the
+holder of the edge; their `_reversed` forms the second."""
 
 
 @dataclass(frozen=True)
@@ -152,6 +179,8 @@ class NotApplied:
         "not_mergeable",
         "not_offered",
         "invalid_selection",
+        "already_reconciled",
+        "wrong_preview",
     ]
     detail: str | None = None
 
@@ -575,6 +604,8 @@ def version_of(
         | RelateDecisionPreview
         | TierDecisionPreview
         | KeepDistinctDecisionPreview
+        | ReconcileDecisionPreview
+        | DeclineDecisionPreview
     ),
     *,
     layout: config.WorkspaceLayout,
@@ -594,6 +625,10 @@ def version_of(
         lines = _tier_content_lines(preview)
     elif isinstance(preview, KeepDistinctDecisionPreview):
         lines = _keep_distinct_content_lines(layout, preview.member_ids)
+    elif isinstance(preview, ReconcileDecisionPreview):
+        lines = _reconcile_content_lines(preview)
+    elif isinstance(preview, DeclineDecisionPreview):
+        lines = _decline_content_lines(layout, preview)
     else:
         lines = _merge_content_lines(layout, preview.prepared)
     return DecisionVersion(
@@ -1445,6 +1480,253 @@ def commit_tier_decision(
     return Applied(preview.decision_key, Action.SET_TIER, commit_sha)
 
 
+# -- findings: reconcile and decline (ADR-0072) ------------------------------ #
+
+
+@dataclass(frozen=True)
+class ReconcileDecisionPreview:
+    """What committing one reconcile, supersede or revise would write, planned
+    by `reconcile_service.prepare_pair` without writing. `holder_id` and
+    `target_id` are `None` for the symmetric `reconciled_with`."""
+
+    decision_key: str
+    first_id: str
+    second_id: str
+    relation_type: Literal["reconciled_with", "supersedes", "revises"]
+    holder_id: str | None
+    target_id: str | None
+    deprecates_id: str | None
+    """The page a `supersedes` lists as deprecated; `None` otherwise."""
+    pages_changed: tuple[str, ...]
+    """The pages whose file changes (an edge added or a note appended)."""
+    prepared: reconcile_service.PreparedPair
+
+
+@dataclass(frozen=True)
+class DeclineDecisionPreview:
+    """Recording a contradiction as declined: the sorted pair and the
+    merged-body discriminator the decision record is keyed on."""
+
+    decision_key: str
+    pair_ids: tuple[str, str]
+    merged_absorbed_id: str | None
+
+
+FindingPreviewBody = ReconcileDecisionPreview | DeclineDecisionPreview
+
+_HOLDS_FIRST = {Action.SUPERSEDE, Action.REVISE}
+_HOLDS_SECOND = {Action.SUPERSEDE_REVERSED, Action.REVISE_REVERSED}
+
+
+def _finding_pair(row: curate_queue.OpenRow) -> tuple[str, str, str | None] | None:
+    """`(first, second, merged absorbed id)` of a finding row: a contradiction's
+    stored pair, a revision's sorted pair (its targets)."""
+    if row.item.kind == "contradiction":
+        fields = contradiction_fields(row.payload)
+        return None if fields is None else (fields[0], fields[1], fields[2])
+    proposed = decision_revision.proposed_revision(row.payload)
+    if proposed is None:
+        return None
+    return proposed.pair_ids[0], proposed.pair_ids[1], None
+
+
+def _reconcile_ports(
+    ports: DecisionPorts, now: datetime, commits: list[str | None]
+) -> reconcile_service.ReconcilePorts:
+    def autocommit(root: Path, paths: Sequence[str], message: str) -> None:
+        commits.append(ports.autocommit(root, paths, message))
+
+    return reconcile_service.ReconcilePorts(
+        autocommit=autocommit,
+        clock=lambda: now,
+        commit_section=ports.commit_section,
+    )
+
+
+def _preview_reconcile(
+    layout: config.WorkspaceLayout,
+    decision_key: str,
+    first: str,
+    second: str,
+    action: Action,
+    ports: reconcile_service.ReconcilePorts,
+) -> ReconcileDecisionPreview | NotApplied:
+    try:
+        path_a, canonical_a = application_lifecycle.resolve_concept_path(
+            layout.bundle_dir, first
+        )
+        path_b, canonical_b = application_lifecycle.resolve_concept_path(
+            layout.bundle_dir, second
+        )
+    except OSError, ValueError:
+        return NotApplied(action, "member_missing")
+    holder = (
+        canonical_a
+        if action in _HOLDS_FIRST
+        else canonical_b
+        if action in _HOLDS_SECOND
+        else None
+    )
+    target = (
+        None
+        if holder is None
+        else canonical_b
+        if holder == canonical_a
+        else canonical_a
+    )
+    edge: Literal["supersedes", "revises"] = (
+        "revises" if action in (Action.REVISE, Action.REVISE_REVERSED) else "supersedes"
+    )
+    pair = reconcile_service.PairRequest(
+        path_a=path_a,
+        canonical_a=canonical_a,
+        path_b=path_b,
+        canonical_b=canonical_b,
+        holder_canonical=holder,
+        target_canonical=target,
+        edge_type=edge,
+    )
+    try:
+        prepared = reconcile_service.prepare_pair(layout, pair, ports)
+    except reconcile_service.ReconcileConflict:
+        return NotApplied(action, "already_reconciled")
+    preview = prepared.preview
+    changed = (
+        (canonical_a,) if preview.edge_added_a or preview.note_added_a else ()
+    ) + ((canonical_b,) if preview.edge_added_b or preview.note_added_b else ())
+    return ReconcileDecisionPreview(
+        decision_key=decision_key,
+        first_id=canonical_a,
+        second_id=canonical_b,
+        relation_type="reconciled_with" if holder is None else edge,
+        holder_id=holder,
+        target_id=target,
+        deprecates_id=target if holder is not None and edge == "supersedes" else None,
+        pages_changed=changed,
+        prepared=prepared,
+    )
+
+
+def _build_finding(
+    layout: config.WorkspaceLayout,
+    row: curate_queue.OpenRow,
+    action: Action,
+    ports: reconcile_service.ReconcilePorts,
+) -> FindingPreviewBody | NotApplied:
+    """The preview for a finding `action` over the open `row`, from the row's
+    own payload. A page the action names that is gone is `member_missing`."""
+    pair = _finding_pair(row)
+    if pair is None:
+        return NotApplied(action, "not_offered")
+    first, second, absorbed = pair
+    if action is Action.DECLINE:
+        present = (first,) if absorbed is not None else (first, second)
+        if not _all_present(layout, present):
+            return NotApplied(action, "member_missing")
+        return DeclineDecisionPreview(
+            row.item.decision_key,
+            contradictions_service.sorted_decision_pair((first, second)),
+            absorbed,
+        )
+    return _preview_reconcile(
+        layout, row.item.decision_key, first, second, action, ports
+    )
+
+
+def _reconcile_content_lines(preview: ReconcileDecisionPreview) -> list[str]:
+    """The two pages' bytes the plan was built from, plus the planned edge and
+    holder: the action is not part of the token, so this line is what keeps a
+    version for one direction from applying as another. The planned bytes are
+    not hashed: they carry today's date in the reconciliation note."""
+    prepared = preview.prepared
+    return sorted(
+        [
+            f"write\t{preview.first_id}.md\t{_sha256(prepared.bytes_a)}",
+            f"write\t{preview.second_id}.md\t{_sha256(prepared.bytes_b)}",
+            f"plan\t{preview.relation_type}\t{preview.holder_id or '-'}"
+            f"\t{preview.target_id or '-'}",
+        ]
+    )
+
+
+def _decline_content_lines(
+    layout: config.WorkspaceLayout, preview: DeclineDecisionPreview
+) -> list[str]:
+    return [
+        f"decline\t{preview.pair_ids[0]}\t{preview.pair_ids[1]}"
+        f"\t{preview.merged_absorbed_id or '-'}",
+        *_keep_distinct_content_lines(layout, preview.pair_ids),
+    ]
+
+
+def commit_reconcile_decision(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    preview: ReconcileDecisionPreview,
+    action: Action,
+    *,
+    ports: DecisionPorts,
+    expected: DecisionVersion,
+    commits: list[str | None],
+    reconcile_ports: reconcile_service.ReconcilePorts,
+) -> ApplyOutcome:
+    """Commit a reconcile planned from current bytes against a version token,
+    through `reconcile_service.commit_pair`, the transaction `reconcile` runs.
+
+    A moved version is `Stale("content_changed")` before the section; inside it
+    the row is re-read (`row_resolved`, `row_superseded`, `row_inputs_changed`)
+    before the drift guard and the writes. The commit holds the two pages and
+    `log.md`, and the write core resolves the contradiction and revision rows."""
+    refreshed = version_of(preview, layout=layout, payload_digest=None)
+    if refreshed.content_digest != expected.content_digest:
+        return Stale(expected.decision_key, "content_changed")
+    result = reconcile_service.commit_pair(
+        root,
+        preview.prepared,
+        ports=reconcile_ports,
+        guard=lambda: _stale_row(layout, expected) or _stale_inputs(layout, expected),
+    )
+    if isinstance(result, Stale):
+        return result
+    return Applied(expected.decision_key, action, commits[-1] if commits else None)
+
+
+def commit_decline_decision(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    preview: DeclineDecisionPreview,
+    *,
+    ports: DecisionPorts,
+    expected: DecisionVersion,
+    now: datetime,
+) -> ApplyOutcome:
+    """Record the contradiction decline through the writer `contradictions
+    --decline` uses, inside one commit section, and commit only its sidecar.
+    A record failure is `NotApplied("record_failed")`, as for keep-distinct."""
+    refreshed = version_of(preview, layout=layout, payload_digest=None)
+    if refreshed.content_digest != expected.content_digest:
+        return Stale(expected.decision_key, "content_changed")
+    first, second = preview.pair_ids
+    with ports.commit_section():
+        if stale := _stale_row(layout, expected) or _stale_inputs(layout, expected):
+            return stale
+        try:
+            rel_path = contradictions_service.apply_contradiction_decision(
+                layout,
+                preview.pair_ids,
+                preview.merged_absorbed_id,
+                target_state="declined",
+                on_warning=ports.on_warning,
+                clock=lambda: now,
+            )
+            commit_sha = ports.autocommit(
+                root, [rel_path], f"openkos: decline contradiction {first}/{second}"
+            )
+        except (OSError, ValueError) as exc:
+            return NotApplied(Action.DECLINE, "record_failed", str(exc))
+    return Applied(expected.decision_key, Action.DECLINE, commit_sha)
+
+
 # -- the list -------------------------------------------------------------- #
 
 DecisionKind = Literal[
@@ -1469,6 +1751,7 @@ class WithheldAction:
         "cross_type",
         "more_than_two_members",
         "no_valid_suggestion",
+        "merged_content",
     ]
 
 
@@ -1504,7 +1787,9 @@ class DecisionItem:
     payload_digest: str
 
 
-_ACTIONABLE_KINDS = frozenset({"identity", "relation_type", "volatility"})
+_ACTIONABLE_KINDS = frozenset(
+    {"identity", "relation_type", "volatility", "contradiction", "revision"}
+)
 
 _CONTRADICTION_RESOLVES = (
     "openkos contradictions --decline, openkos reconcile or openkos unmerge"
@@ -1525,6 +1810,41 @@ def _inputs_fresh(layout: config.WorkspaceLayout, row: curate_queue.OpenRow) -> 
         )
     if kind == "volatility":
         return curate_queue.volatility_row_is_fresh(layout, row)
+    if kind == "contradiction":
+        return _contradiction_fresh(layout, row)
+    if kind == "revision":
+        return (
+            revisions.recorded_inputs_fresh(
+                layout,
+                (row.item.targets[0], row.item.targets[1]),
+                [(entry.input_ref, entry.digest) for entry in row.inputs],
+            )
+            if len(row.item.targets) >= 2
+            else False
+        )
+    return True
+
+
+def _contradiction_fresh(
+    layout: config.WorkspaceLayout, row: curate_queue.OpenRow
+) -> bool:
+    """The contradiction reader's rule (`state.findings`, Decision 2): stale
+    when any recorded input that names a readable concept hashes differently
+    now; an input the engine cannot read (a merged-body snapshot label) counts
+    as unchanged. The pages the row names must also exist: both of a typed
+    edge's, the survivor of a merged-body row."""
+    fields = contradiction_fields(row.payload)
+    if fields is None:
+        return False
+    first, second, absorbed, _rationale, _claims = fields
+    present = (first,) if absorbed is not None else (first, second)
+    if not _all_present(layout, present):
+        return False
+    current = application_pending.current_finding_digest(layout.bundle_dir)
+    for entry in row.inputs:
+        now = current(entry.input_ref)
+        if now is not None and now != entry.digest:
+            return False
     return True
 
 
@@ -1556,6 +1876,107 @@ def relation_fields(
     except ValueError:
         return None
     return (fields[0], fields[1], fields[2], fields[3], suggested, fields[5])
+
+
+def contradiction_fields(
+    payload: Mapping[str, object],
+) -> tuple[str, str, str | None, str, tuple[str, ...]] | None:
+    """`(first, second, merged absorbed id, rationale, conflicting claims)` of a
+    contradiction row, or `None` when it does not name a pair. The pair is in
+    the stored order (the decline sidecar's owner first). A merged-body
+    finding is stored with the survivor as both members and the absorbed page
+    as the discriminator, so its first and second are the same page. The
+    confidence is deliberately not read."""
+    pair = payload.get("pair_ids")
+    absorbed = payload.get("merged_absorbed_id")
+    if not (
+        isinstance(pair, list)
+        and len(pair) == 2
+        and all(isinstance(member, str) and member for member in pair)
+        and (absorbed is None or (isinstance(absorbed, str) and absorbed))
+        and (pair[0] != pair[1] or absorbed is not None)
+    ):
+        return None
+    rationale = payload.get("rationale")
+    claims = payload.get("conflicting_claims")
+    return (
+        str(pair[0]),
+        str(pair[1]),
+        absorbed,
+        rationale if isinstance(rationale, str) else "",
+        tuple(str(c) for c in claims if isinstance(c, str))
+        if isinstance(claims, list)
+        else (),
+    )
+
+
+_REFUSAL_REASONS: Mapping[
+    str, Literal["changed_after_import", "exceeds_pass_budget"]
+] = MappingProxyType(
+    {
+        queue_producers.REASON_SOURCE_CHANGED: "changed_after_import",
+        queue_producers.REASON_EXCEEDS_BUDGET: "exceeds_pass_budget",
+    }
+)
+
+
+def refused_file_fields(
+    payload: Mapping[str, object],
+) -> tuple[str, Literal["changed_after_import", "exceeds_pass_budget"]] | None:
+    """`(inbox path, reason code)` of a watch refusal row, or `None` when the
+    row does not carry a known reason."""
+    inbox_path, reason = payload.get("inbox_path"), payload.get("reason")
+    if not isinstance(inbox_path, str) or not inbox_path:
+        return None
+    code = _REFUSAL_REASONS.get(reason) if isinstance(reason, str) else None
+    return None if code is None else (inbox_path, code)
+
+
+def revision_fields(
+    payload: Mapping[str, object],
+) -> (
+    tuple[
+        str,
+        str,
+        Literal["reverses", "refines"],
+        str | None,
+        str,
+        str,
+        str,
+        str | None,
+        str | None,
+    ]
+    | None
+):
+    """`(first, second, change, later id, rationale, first quote, second quote,
+    first date, second date)` of a revision row, or `None` when it is not a
+    readable reversal or refinement. The later id comes from the stored dates
+    (ADR-0025); the confidence is deliberately not read."""
+    proposed = decision_revision.proposed_revision(payload)
+    quotes, dates = payload.get("quotes"), payload.get("dates")
+    if (
+        proposed is None
+        or not isinstance(quotes, list)
+        or len(quotes) != 2
+        or not all(isinstance(q, str) for q in quotes)
+        or not isinstance(dates, list)
+    ):
+        return None
+    rationale = payload.get("rationale")
+    first_date, second_date = (d if isinstance(d, str) else None for d in dates)
+    return (
+        proposed.pair_ids[0],
+        proposed.pair_ids[1],
+        "reverses"
+        if proposed.verdict is decision_revision.RevisionVerdictValue.REVERSES
+        else "refines",
+        proposed.later_id,
+        rationale if isinstance(rationale, str) else "",
+        str(quotes[0]),
+        str(quotes[1]),
+        first_date,
+        second_date,
+    )
 
 
 def _tier_fields(payload: Mapping[str, object]) -> tuple[str, str] | None:
@@ -1693,7 +2114,66 @@ def _actions_of(
                 (WithheldAction(Action.SET_TIER, "no_valid_suggestion"),),
             )
         return "not_applicable", (Action.SET_TIER, Action.SKIP), ()
+    if kind == "contradiction":
+        return "not_applicable", *_contradiction_actions(row)
+    if kind == "revision":
+        return "not_applicable", *_revision_actions(row)
     return "not_applicable", (), ()
+
+
+_UNREADABLE_FINDING = (WithheldAction(Action.RECONCILE, "no_valid_suggestion"),)
+
+
+def _contradiction_actions(
+    row: curate_queue.OpenRow,
+) -> tuple[tuple[Action, ...], tuple[WithheldAction, ...]]:
+    """A typed edge takes the three resolutions `reconcile` writes and a
+    decline; a merged-body finding names a page that was absorbed, so only its
+    decline (and Split again, elsewhere) can settle it."""
+    fields = contradiction_fields(row.payload)
+    if fields is None:
+        return (), _UNREADABLE_FINDING
+    if fields[2] is not None:
+        return (
+            (Action.DECLINE, Action.SKIP),
+            (WithheldAction(Action.RECONCILE, "merged_content"),),
+        )
+    return (
+        Action.DECLINE,
+        Action.RECONCILE,
+        Action.SUPERSEDE,
+        Action.SUPERSEDE_REVERSED,
+        Action.SKIP,
+    ), ()
+
+
+def _revision_actions(
+    row: curate_queue.OpenRow,
+) -> tuple[tuple[Action, ...], tuple[WithheldAction, ...]]:
+    """What `reconcile --from-findings` offers: with a date order, the one
+    write its verdict names, held by the later Decision; without one, the four
+    choices of its combined prompt. `reconcile` ("both still stand") is the one
+    way a revision is answered no. Direction comes from the dates only
+    (ADR-0025)."""
+    proposed = decision_revision.proposed_revision(row.payload)
+    if proposed is None or tuple(row.item.targets[:2]) != proposed.pair_ids:
+        return (), _UNREADABLE_FINDING
+    if proposed.later_id is None:
+        directed: tuple[Action, ...] = (
+            Action.SUPERSEDE,
+            Action.SUPERSEDE_REVERSED,
+            Action.REVISE,
+            Action.REVISE_REVERSED,
+        )
+    else:
+        first_holds = proposed.later_id == proposed.pair_ids[0]
+        if proposed.relation_type == "supersedes":
+            directed = (
+                (Action.SUPERSEDE,) if first_holds else (Action.SUPERSEDE_REVERSED,)
+            )
+        else:
+            directed = (Action.REVISE,) if first_holds else (Action.REVISE_REVERSED,)
+    return (*directed, Action.RECONCILE, Action.SKIP), ()
 
 
 def _configured_inbox(layout: config.WorkspaceLayout) -> Path | None:
@@ -1903,6 +2383,8 @@ def preview_decision(
         return refusal
     if action is Action.SKIP:
         return skip_decision(decision_key)
+    if action in FINDING_ACTIONS:
+        return NotApplied(action, "wrong_preview")
     # Every commit refuses a row whose inputs changed (`_stale_inputs`), so a
     # plan for one could never be applied: the preview says so, with the same
     # reason, rather than hand out a version that is Stale on arrival.
@@ -1914,6 +2396,58 @@ def preview_decision(
     if isinstance(built, NotApplied):
         return built
     return DecisionPreview(
+        built,
+        version_of(built, layout=layout, payload_digest=row.item.payload_digest),
+    )
+
+
+@dataclass(frozen=True)
+class FindingDecisionPreview:
+    """What a finding action would do, and the version to commit it against
+    with `apply_decision`."""
+
+    preview: FindingPreviewBody
+    version: DecisionVersion
+
+
+def preview_finding(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    decision_key: str,
+    action: Action,
+    *,
+    now: datetime | None = None,
+) -> FindingDecisionPreview | NotApplied | Stale:
+    """What a contradiction or revision `action` would do to the open decision
+    `decision_key`, with the version `apply_decision` commits it against
+    (ADR-0072). Writes nothing, takes no lock, calls no model.
+
+    The same refusals as `preview_decision`, plus: an action the item offers
+    that `preview_decision` previews is `NotApplied("wrong_preview")`, a page
+    the action names that is gone is `NotApplied("member_missing")`, and a pair
+    already reconciled another way is `NotApplied("already_reconciled")`. A row
+    whose inputs changed is `Stale("row_inputs_changed")`, as its apply would
+    be."""
+    row = curate_queue.open_row_by_key(layout, decision_key)
+    if row is None:
+        return _no_open_row(layout, decision_key)
+    item = _item_of(layout, row, None)
+    if (refusal := _refusal(item, action)) is not None:
+        return refusal
+    if action is Action.SKIP:
+        return skip_decision(decision_key)
+    if action not in FINDING_ACTIONS:
+        return NotApplied(action, "wrong_preview")
+    if item.fresh is False:
+        return Stale(decision_key, "row_inputs_changed")
+    ports = reconcile_service.ReconcilePorts(
+        autocommit=lambda *_args: None,
+        clock=lambda: now or datetime.now(UTC),
+    )
+    built = _build_finding(layout, row, action, ports)
+    if isinstance(built, NotApplied):
+        return built
+    return FindingDecisionPreview(
         built,
         version_of(built, layout=layout, payload_digest=row.item.payload_digest),
     )
@@ -1952,6 +2486,8 @@ def apply_decision(
         return skip_decision(version.decision_key)
     if version.selection is not None and action is not Action.MERGE_GROUP:
         return NotApplied(action, "invalid_selection")
+    if action in FINDING_ACTIONS:
+        return _apply_finding(root, layout, row, version, action, policy, ports)
     built = _build_preview(root, layout, row, action, policy, version.selection)
     if isinstance(built, NotApplied):
         return built
@@ -1991,6 +2527,39 @@ def apply_decision(
         )
     return commit_keep_distinct_decision(
         root, layout, built, ports=ports, observer=observer, expected=version
+    )
+
+
+def _apply_finding(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    row: curate_queue.OpenRow,
+    version: DecisionVersion,
+    action: Action,
+    policy: DecisionPolicy,
+    ports: DecisionPorts,
+) -> ApplyOutcome:
+    """A finding action re-planned from current bytes and committed against
+    `version` through the CLI's own write (ADR-0072)."""
+    now = policy.now or datetime.now(UTC)
+    commits: list[str | None] = []
+    reconcile_ports = _reconcile_ports(ports, now, commits)
+    built = _build_finding(layout, row, action, reconcile_ports)
+    if isinstance(built, NotApplied):
+        return built
+    if isinstance(built, DeclineDecisionPreview):
+        return commit_decline_decision(
+            root, layout, built, ports=ports, expected=version, now=now
+        )
+    return commit_reconcile_decision(
+        root,
+        layout,
+        built,
+        action,
+        ports=ports,
+        expected=version,
+        commits=commits,
+        reconcile_ports=reconcile_ports,
     )
 
 

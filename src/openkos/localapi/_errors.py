@@ -46,6 +46,8 @@ NOT_MERGEABLE: Final = "not_mergeable"
 MEMBER_MISSING: Final = "member_missing"
 RECORD_FAILED: Final = "record_failed"
 INVALID_SELECTION: Final = "invalid_selection"
+WRONG_PREVIEW: Final = "wrong_preview"
+ALREADY_RECONCILED: Final = "already_reconciled"
 WORKSPACE_BUSY: Final = "workspace_busy"
 WORKSPACE_LOCK_UNAVAILABLE: Final = "workspace_lock_unavailable"
 WRITE_DRIFT: Final = "write_drift"
@@ -239,6 +241,18 @@ _NOT_APPLIED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
         INVALID_SELECTION,
         False,
         "the selection does not name a survivor and the members to combine with it",
+    ),
+    "wrong_preview": (
+        422,
+        WRONG_PREVIEW,
+        False,
+        "this action is previewed by the other preview route",
+    ),
+    "already_reconciled": (
+        409,
+        ALREADY_RECONCILED,
+        False,
+        "these concepts are already reconciled another way",
     ),
 }
 
