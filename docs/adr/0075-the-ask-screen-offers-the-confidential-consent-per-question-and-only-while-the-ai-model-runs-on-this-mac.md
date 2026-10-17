@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0075: The Ask screen offers the confidential consent per question, and only while the AI model runs on this Mac"
 description: A withheld answer carries a Show this answer button that asks the same question again with include_confidential, after reading the model settings and finding the AI model local; there is no standing setting, and with a cloud model the consent is never offered.
-status: Proposed
+status: Accepted
 date: 2026-10-17
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0075: The Ask screen offers the confidential consent per question, and only while the AI model runs on this Mac
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-17
 
 ## Context

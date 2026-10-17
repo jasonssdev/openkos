@@ -54,9 +54,53 @@ function apiError(code: string, status = 422): ApiError {
   return new ApiError({ status, code, retryable: false, message: "engine text", retryAfterSeconds: null });
 }
 
-function setup(over: { settings?: Settings; keySet?: boolean | Error; library?: WorkspaceChoice } = {}) {
+type Pair = Schemas["ReconciledPair"];
+type Declined = Schemas["DeclinedContradiction"];
+
+const TITLES: Record<string, string> = { "a/old": "Old plan", "a/new": "New plan", "b/x": "Tea", "b/y": "Coffee", "c/whole": "Whole" };
+
+const SUPERSEDES: Pair = { first_id: "a/old", second_id: "a/new", relation_type: "supersedes", holder_id: "a/new", target_id: "a/old" };
+const BOTH_RIGHT: Pair = { first_id: "b/x", second_id: "b/y", relation_type: "reconciled_with", holder_id: null, target_id: null };
+const REVISES: Pair = { first_id: "a/old", second_id: "a/new", relation_type: "revises", holder_id: "a/new", target_id: "a/old" };
+const LEFT: Declined = { first_id: "b/x", second_id: "b/y", merged_absorbed_id: null, decided_at: "2026-10-01T00:00:00Z" };
+const INSIDE: Declined = { first_id: "c/whole", second_id: "b/y", merged_absorbed_id: "b/x", decided_at: "2026-10-02T00:00:00Z" };
+
+function setup(
+  over: { settings?: Settings; keySet?: boolean | Error; library?: WorkspaceChoice; pairs?: Pair[]; declined?: Declined[] } = {},
+) {
   let current = over.settings ?? LOCAL;
+  let pairs = over.pairs ?? [];
+  let declined = over.declined ?? [];
+  const version = (n: string) => ({ n }) as never;
   const api = {
+    reconciledPairs: vi.fn(async () => ({ pairs })),
+    declinedContradictions: vi.fn(async () => ({ contradictions: declined })),
+    readPage: vi.fn(async (id: string) => {
+      if (!(id in TITLES)) throw apiError("not_found", 404);
+      return { concept_id: id, title: TITLES[id] as string, excerpt: "", okf_type: null, sensitivity: "private", sources: [] } as Schemas["Page"];
+    }),
+    previewUnreconcile: vi.fn(async (body: Schemas["UnreconcilePreviewRequest"]) => ({
+      ...body,
+      holder_id: null,
+      pages_changed: [],
+      relation_type: "supersedes" as const,
+      target_id: null,
+      version: version("u"),
+      withdraws_deprecation: true,
+    })),
+    applyUnreconcile: vi.fn(async (_body: Schemas["UnreconcileApplyRequest"]) => {
+      pairs = [];
+      return {} as Schemas["UnreconcileResponse"];
+    }),
+    previewReopenContradiction: vi.fn(async (body: Schemas["ContradictionReopenPreviewRequest"]) => ({
+      ...body,
+      merged_absorbed_id: body.merged_absorbed_id ?? null,
+      version: version("r"),
+    })),
+    applyReopenContradiction: vi.fn(async (_body: Schemas["ContradictionReopenApplyRequest"]) => {
+      declined = [];
+      return {} as Schemas["ContradictionReopenResponse"];
+    }),
     modelSettings: vi.fn(async () => current),
     previewModelSettings: vi.fn(async (body: Schemas["ModelSettingsPreviewRequest"]): Promise<Preview> => {
       const proposed: Settings =
@@ -457,6 +501,115 @@ describe("the library", () => {
     await model.connect(api);
 
     expect(model.state.librarySwitching).toBe(false);
+  });
+});
+
+describe("decisions you can undo", () => {
+  it("lists the pairs you settled and the disagreements you left, named by their pages", async () => {
+    const { model } = await connected({ pairs: [SUPERSEDES, BOTH_RIGHT], declined: [LEFT, INSIDE] });
+
+    expect(model.state.settled.map((r) => r.text)).toEqual(["'Old plan' and 'New plan'", "'Tea' and 'Coffee'"]);
+    // Found inside a combined page, a disagreement is named by that page alone.
+    expect(model.state.declined.map((r) => r.text)).toEqual(["'Tea' and 'Coffee'", "'Whole'"]);
+  });
+
+  it("names a page that cannot be read without failing the list", async () => {
+    const { model } = await connected({ pairs: [{ ...BOTH_RIGHT, second_id: "gone/page" }] });
+
+    expect(model.state.settled.map((r) => r.text)).toEqual(["'Tea' and 'A page that couldn't be read'"]);
+  });
+
+  it("keeps the settings when a list cannot be read, and shows it empty", async () => {
+    const { model, api } = setup({ pairs: [BOTH_RIGHT] });
+    api.reconciledPairs.mockRejectedValueOnce(new Error("down"));
+    await model.connect(api);
+
+    expect(model.state.phase).toBe("ready");
+    expect(model.state.settled).toEqual([]);
+  });
+
+  it("undoes a settled pair from the preview it was shown, and says what came undone", async () => {
+    const { model, api } = await connected({ pairs: [SUPERSEDES] });
+
+    await model.undo("settled", (model.state.settled[0] as { key: string }).key);
+
+    expect(api.previewUnreconcile).toHaveBeenCalledWith({ first_id: "a/old", second_id: "a/new" });
+    expect(api.applyUnreconcile).toHaveBeenCalledWith({ version: { n: "u" } });
+    expect(model.state.note).toBe(
+      "Undone. 'Old plan' is no longer marked out of date. We'll point this out again the next time your pages are checked.",
+    );
+    expect(model.state.settled).toEqual([]);
+    expect(model.state.undoing).toBeNull();
+  });
+
+  it("says a page stays out of date when another page still replaces it", async () => {
+    const { model, api } = await connected({ pairs: [SUPERSEDES] });
+    api.previewUnreconcile.mockResolvedValueOnce({ ...(await api.previewUnreconcile({ first_id: "a/old", second_id: "a/new" })), withdraws_deprecation: false });
+
+    await model.undo("settled", (model.state.settled[0] as { key: string }).key);
+
+    expect(model.state.note).toContain("'Old plan' stays out of date, because another page replaces it.");
+  });
+
+  it("asks again about a newer decision when a revision is undone", async () => {
+    const { model } = await connected({ pairs: [REVISES] });
+
+    await model.undo("settled", (model.state.settled[0] as { key: string }).key);
+
+    expect(model.state.note).toBe("Undone. We'll ask about these again the next time your pages are checked.");
+  });
+
+  it("names no page for a pair that was both right", async () => {
+    const { model } = await connected({ pairs: [BOTH_RIGHT] });
+
+    await model.undo("settled", (model.state.settled[0] as { key: string }).key);
+
+    expect(model.state.note).toBe("Undone. We'll point this out again the next time your pages are checked.");
+  });
+
+  it("points a disagreement out again, keeping the combined page it was found in", async () => {
+    const { model, api } = await connected({ declined: [INSIDE] });
+
+    await model.undo("declined", (model.state.declined[0] as { key: string }).key);
+
+    expect(api.previewReopenContradiction).toHaveBeenCalledWith({ first_id: "c/whole", second_id: "b/y", merged_absorbed_id: "b/x" });
+    expect(api.applyReopenContradiction).toHaveBeenCalledWith({ version: { n: "r" } });
+    expect(model.state.note).toBe("Undone. We'll point this out again the next time your pages are checked.");
+    expect(model.state.declined).toEqual([]);
+  });
+
+  it("words an undo that is already done, and reads the lists again", async () => {
+    const { model, api } = await connected({ declined: [LEFT] });
+    api.previewReopenContradiction.mockRejectedValueOnce(apiError("not_declined", 409));
+    api.declinedContradictions.mockClear();
+
+    await model.undo("declined", (model.state.declined[0] as { key: string }).key);
+
+    expect(model.state.problem).toBe("This has already been undone.");
+    expect(model.state.note).toBeNull();
+    expect(api.applyReopenContradiction).not.toHaveBeenCalled();
+    expect(api.declinedContradictions).toHaveBeenCalledTimes(1);
+  });
+
+  it("words a pair that is no longer settled that way, and one that changed meanwhile", async () => {
+    const { model, api } = await connected({ pairs: [BOTH_RIGHT] });
+    const key = (model.state.settled[0] as { key: string }).key;
+    api.previewUnreconcile.mockRejectedValueOnce(apiError("not_reconciled", 409));
+    await model.undo("settled", key);
+    expect(model.state.problem).toBe("These pages aren't settled that way any more.");
+
+    api.applyUnreconcile.mockRejectedValueOnce(apiError("stale", 409));
+    await model.undo("settled", key);
+    expect(model.state.problem).toBe("These pages changed while you were looking. Here is the current version.");
+  });
+
+  it("does not undo twice at once, or an unknown row", async () => {
+    const { model, api } = await connected({ declined: [LEFT] });
+    const key = (model.state.declined[0] as { key: string }).key;
+
+    await Promise.all([model.undo("declined", key), model.undo("declined", key), model.undo("declined", "nope")]);
+
+    expect(api.previewReopenContradiction).toHaveBeenCalledTimes(1);
   });
 });
 

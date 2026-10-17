@@ -11,6 +11,8 @@ import {
   type Schemas,
   type WorkspaceChoice,
 } from "../../client/index.ts";
+import type { Undo } from "../review/model.ts";
+import { problemFor, titleOf, undoneLine } from "../review/wording.ts";
 import { type Refusal, welcomeRefusal } from "../setup/wording.ts";
 import { WORDS, cloudWarning, keyAfterSaveFailure, keyFailure, saveFailure, savedNote } from "./wording.ts";
 
@@ -29,7 +31,23 @@ export interface SettingsApi {
   modelSettings(): Promise<Settings>;
   previewModelSettings(body: Schemas["ModelSettingsPreviewRequest"]): Promise<Preview>;
   applyModelSettings(body: Schemas["ModelSettingsApplyRequest"]): Promise<Schemas["ModelSettingsResponse"]>;
+  reconciledPairs(): Promise<Schemas["ReconciledPairList"]>;
+  declinedContradictions(): Promise<Schemas["DeclinedContradictionList"]>;
+  readPage(conceptId: string): Promise<Schemas["Page"]>;
+  previewUnreconcile(body: Schemas["UnreconcilePreviewRequest"]): Promise<Schemas["UnreconcilePreview"]>;
+  applyUnreconcile(body: Schemas["UnreconcileApplyRequest"]): Promise<unknown>;
+  previewReopenContradiction(body: Schemas["ContradictionReopenPreviewRequest"]): Promise<Schemas["ContradictionReopenPreview"]>;
+  applyReopenContradiction(body: Schemas["ContradictionReopenApplyRequest"]): Promise<unknown>;
 }
+
+/** An earlier decision that can be undone from here: named by its pages. */
+export interface UndoRow {
+  key: string;
+  text: string;
+  undo: Exclude<Undo, { kind: "split" }>;
+}
+
+export type UndoList = "settled" | "declined";
 
 /** The shell's own commands, which work whether or not the engine runs. */
 export interface SettingsPorts {
@@ -75,6 +93,12 @@ export interface SettingsState {
   libraryProblem: Refusal | null;
   /** A library was chosen; the app is starting it. */
   librarySwitching: boolean;
+  /** Pairs settled as "both right" or "one replaces the other", each with its Undo. */
+  settled: UndoRow[];
+  /** Disagreements left as they are, each with its way to point it out again. */
+  declined: UndoRow[];
+  /** The key of the row being undone. */
+  undoing: string | null;
 }
 
 /** A cloud model is on: the shell shows it while it lasts. */
@@ -102,6 +126,9 @@ export class SettingsModel {
     libraryBusy: null,
     libraryProblem: null,
     librarySwitching: false,
+    settled: [],
+    declined: [],
+    undoing: null,
   };
 
   readonly #ports: SettingsPorts;
@@ -151,6 +178,60 @@ export class SettingsModel {
       ...(library.status === "fulfilled" ? { library: library.value } : {}),
       librarySwitching: false,
     });
+    await this.#loadUndoLists(api);
+  }
+
+  /** A list that cannot be read is shown empty; the settings above it stay. */
+  async #loadUndoLists(api: SettingsApi): Promise<void> {
+    const [pairs, declined] = await Promise.allSettled([api.reconciledPairs(), api.declinedContradictions()]);
+    const rows = {
+      pairs: pairs.status === "fulfilled" ? (pairs.value.pairs ?? []) : [],
+      declined: declined.status === "fulfilled" ? (declined.value.contradictions ?? []) : [],
+    };
+    const ids = [...new Set([...rows.pairs.flatMap(pairIds), ...rows.declined.flatMap(pairIds)])];
+    const read = await Promise.all(ids.map((id) => api.readPage(id).catch(() => null)));
+    const pages = new Map<string, Schemas["Page"]>();
+    for (const page of read) if (page !== null) pages.set(page.concept_id, page);
+    if (api !== this.#api) return;
+    this.#set({
+      settled: rows.pairs.map((pair) => settledRow(pair, pages)),
+      declined: rows.declined.map((item) => declinedRow(item, pages)),
+    });
+  }
+
+  /** Undo one row after its own preview, then read the lists again. */
+  async undo(list: UndoList, key: string): Promise<void> {
+    const api = this.#api;
+    const row = this.state[list].find((r) => r.key === key);
+    if (api === null || row === undefined || this.state.undoing !== null) return;
+    this.#set({ undoing: key, note: null, problem: null });
+    let sent = false;
+    let withdraws = false;
+    try {
+      let run: () => Promise<unknown>;
+      if (row.undo.kind === "unreconcile") {
+        const { version, withdraws_deprecation } = await api.previewUnreconcile({ first_id: row.undo.first, second_id: row.undo.second });
+        run = () => api.applyUnreconcile({ version });
+        withdraws = withdraws_deprecation;
+      } else if (row.undo.kind === "reopen_contradiction") {
+        const { version } = await api.previewReopenContradiction({
+          first_id: row.undo.first,
+          second_id: row.undo.second,
+          merged_absorbed_id: row.undo.absorbed,
+        });
+        run = () => api.applyReopenContradiction({ version });
+      } else {
+        return;
+      }
+      sent = true;
+      await retryWhileBusy(run);
+    } catch (error) {
+      this.#set({ undoing: null, problem: problemFor(error, sent ? "after" : "before").message });
+      await this.#loadUndoLists(api);
+      return;
+    }
+    this.#set({ undoing: null, note: undoneLine(row.undo, withdraws) });
+    await this.#loadUndoLists(api);
   }
 
   edit(): void {
@@ -322,6 +403,33 @@ export class SettingsModel {
       this.#set({ libraryBusy: null, libraryProblem: welcomeRefusal(action, error, path ?? "") });
     }
   }
+}
+
+function pairIds(pair: { first_id: string; second_id: string }): string[] {
+  return [pair.first_id, pair.second_id];
+}
+
+function settledRow(pair: Schemas["ReconciledPair"], pages: ReadonlyMap<string, Schemas["Page"]>): UndoRow {
+  // `target_id` is the page a reconcile marked out of date.
+  const outOfDate = pair.relation_type === "supersedes" && pair.target_id !== null ? titleOf(pages, pair.target_id) : null;
+  return {
+    key: `${pair.first_id}|${pair.second_id}`,
+    text: `'${titleOf(pages, pair.first_id)}' and '${titleOf(pages, pair.second_id)}'`,
+    undo: { kind: "unreconcile", first: pair.first_id, second: pair.second_id, revision: pair.relation_type === "revises", outOfDate },
+  };
+}
+
+function declinedRow(item: Schemas["DeclinedContradiction"], pages: ReadonlyMap<string, Schemas["Page"]>): UndoRow {
+  // Found inside a combined page, it is named by that page alone.
+  const text =
+    item.merged_absorbed_id === null
+      ? `'${titleOf(pages, item.first_id)}' and '${titleOf(pages, item.second_id)}'`
+      : `'${titleOf(pages, item.first_id)}'`;
+  return {
+    key: `${item.first_id}|${item.second_id}|${item.merged_absorbed_id ?? ""}`,
+    text,
+    undo: { kind: "reopen_contradiction", first: item.first_id, second: item.second_id, absorbed: item.merged_absorbed_id },
+  };
 }
 
 /** A cloud service the person has not been warned about yet. */

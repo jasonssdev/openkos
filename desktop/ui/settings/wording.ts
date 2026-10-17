@@ -48,6 +48,12 @@ export const WORDS = {
 
   cloudOn: "Cloud AI model on",
 
+  settledTitle: "Pages you settled",
+  declinedTitle: "Disagreements you left as they are",
+  undo: "Undo",
+  pointOutAgain: "Point this out again",
+  undoing: "Undoing…",
+
   libraryTitle: "Library",
   libraryText: "Your library is the folder where OpenKOS keeps everything.",
   folder: "Folder",
