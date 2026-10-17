@@ -53,8 +53,8 @@ screen says "Search needs to be rebuilt" and the app has no way to do it. Only
 
 ### Out of scope
 
-- A page view of its own. A small page panel opened from where a page is shown
-  is enough for the label.
+- A page view of its own. The label is offered where a page is already shown:
+  its card in To review and its title under an Ask answer.
 - A forced rebuild (`reindex --force`). The incremental rebuild already
   re-embeds every page when the AI model for search changed.
 - Refreshing the derived stores after a sensitivity change. The API refreshes

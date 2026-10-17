@@ -109,3 +109,17 @@ describe("the status screen", () => {
     expect(onCheckSetup).toHaveBeenCalledOnce();
   });
 });
+
+describe("search on the status screen", () => {
+  it("shows the screen's search section in the library's card once it is read", () => {
+    const search = document.createElement("section");
+    search.textContent = "Rebuild search";
+    const root = document.createElement("div");
+    document.body.replaceChildren(root);
+    renderStatus(root, { engine: { text: "x" }, workspace: { kind: "read", status: STATUS } }, { expanded: new Set(), onToggle: vi.fn(), search });
+    expect(root.querySelectorAll(".ui-card")[1]?.querySelector("section")?.textContent).toBe("Rebuild search");
+    const waiting = document.createElement("div");
+    renderStatus(waiting, { engine: { text: "x" }, workspace: { kind: "waiting" } }, { expanded: new Set(), onToggle: vi.fn(), search });
+    expect(waiting.querySelector("section")).toBeNull();
+  });
+});

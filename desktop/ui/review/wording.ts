@@ -180,6 +180,8 @@ const CHECK_AGAIN: Option = {
 export const CANNOT_ACT = "This can't be settled in the app yet.";
 
 export interface PageView {
+  /** The page's id and level, for who can see it; `null` for a page that couldn't be read. */
+  ref: { conceptId: string; title: string; level: Page["sensitivity"] } | null;
   title: string;
   /** What the page is about, with its article: "a person". */
   kind: string;
@@ -217,9 +219,10 @@ export interface DecisionView {
 function pageView(pages: Pages, id: string, now: Date): PageView {
   const page = pages.get(id);
   if (page === undefined) {
-    return { title: UNREADABLE_PAGE, kind: "", excerpt: "", whoCanSee: null, sources: [] };
+    return { ref: null, title: UNREADABLE_PAGE, kind: "", excerpt: "", whoCanSee: null, sources: [] };
   }
   return {
+    ref: { conceptId: page.concept_id, title: page.title || UNREADABLE_PAGE, level: page.sensitivity },
     title: page.title || UNREADABLE_PAGE,
     kind: typeNoun(page.okf_type).withArticle,
     excerpt: page.excerpt,

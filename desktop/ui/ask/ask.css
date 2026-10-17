@@ -13,3 +13,10 @@
   color: var(--text-primary);
   max-width: var(--measure);
 }
+
+.ask-from__page {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}

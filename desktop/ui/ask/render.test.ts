@@ -188,3 +188,36 @@ describe("the ask screen", () => {
     expect(document.activeElement).toBe(askButton(root));
   });
 });
+
+describe("the pages an answer came from, and search", () => {
+  it("lists each page it came from with the screen's action beside it", () => {
+    const a = {
+      ...actions(),
+      citationAction: vi.fn((citation: Schemas["AnswerCitation"]) => {
+        const node = document.createElement("span");
+        node.textContent = `act:${citation.concept_id}`;
+        return node;
+      }),
+    };
+    const root = draw(state({ turns: [turn(1, { kind: "answer", answer: ANSWER })], shown: 1 }), a);
+    const footer = root.querySelector(".ui-card__footer") as HTMLElement;
+    expect(footer.querySelector("p")?.textContent).toBe("From:");
+    expect(Array.from(footer.querySelectorAll("li"), (li) => li.textContent)).toEqual([
+      "Mariaact:people/maria",
+      "The allotmentact:places/allotment",
+    ]);
+  });
+
+  it("places the screen's search note under an answer", () => {
+    const a = {
+      ...actions(),
+      afterAnswer: vi.fn((answer: Answer) => {
+        const node = document.createElement("section");
+        node.textContent = `search:${answer.stale_indexes.join(",")}`;
+        return node;
+      }),
+    };
+    const root = draw(state({ turns: [turn(1, { kind: "answer", answer: { ...ANSWER, stale_indexes: ["fts"] } })], shown: 1 }), a);
+    expect(root.querySelector("section")?.textContent).toBe("search:fts");
+  });
+});

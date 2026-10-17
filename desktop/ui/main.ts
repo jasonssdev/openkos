@@ -16,6 +16,8 @@ import {
 } from "../client/index.ts";
 import { AskModel } from "./ask/model.ts";
 import { renderAsk } from "./ask/render.ts";
+import { LabelModel } from "./label/model.ts";
+import { keepHereAction, labelChoice } from "./label/render.ts";
 import { ReviewModel } from "./review/model.ts";
 import { renderReview } from "./review/render.ts";
 import { SettingsModel, cloudOn } from "./settings/model.ts";
@@ -23,8 +25,10 @@ import { renderSettings } from "./settings/render.ts";
 import { WORDS as SETTINGS_WORDS } from "./settings/wording.ts";
 import { SetupModel, WelcomeModel } from "./setup/model.ts";
 import { renderSetup, renderWelcome } from "./setup/render.ts";
+import { SearchModel } from "./search/model.ts";
+import { rebuildSection } from "./search/render.ts";
 import { renderStatus, type StatusScreen } from "./status.ts";
-import { appShell, badge, el, navItem, redraw, spinner, uiButton } from "./system/index.ts";
+import { appShell, badge, el, navItem, openDialog, redraw, spinner, uiButton } from "./system/index.ts";
 import { describeEngine, engineBadge, navEntries, openDecisions, reviewCount, statusFailure } from "./view.ts";
 
 declare global {
@@ -64,7 +68,10 @@ const setupRoot = el("div", { class: "ui-view", attrs: { "data-screen": "setup" 
 setupRoot.hidden = true;
 const welcomeRoot = el("div", { class: "ui-view", attrs: { "data-screen": "welcome" } });
 welcomeRoot.hidden = true;
-const settingsRoot = el("div", { class: "ui-view", attrs: { "data-screen": "settings" } });
+// Settings, and under it rebuilding search while search is behind.
+const settingsScreen = el("div", { class: "ui-view" });
+const settingsSearch = el("div", { class: "ui-view" });
+const settingsRoot = el("div", { attrs: { "data-screen": "settings" } }, settingsScreen, settingsSearch);
 settingsRoot.hidden = true;
 
 const shell = appShell({ nav: [], current: view, onNavigate: (id) => navigate(id), footer });
@@ -82,11 +89,41 @@ let welcome: WelcomeModel | null = null;
 let setupOffered = false;
 // One for the whole session: the shell's commands work with no engine running.
 const settings = new SettingsModel({ keys: createApiKeys(invoke), workspaces: createWorkspaces(invoke) });
+let settingsNote: string | null = null;
 settings.subscribe((next) => {
-  renderSettings(settingsRoot, settings, next);
+  renderSettings(settingsScreen, settings, next);
   paintSettingsEntry();
+  // A saved change may have changed the AI model for search: read search again.
+  if (next.note !== settingsNote) {
+    settingsNote = next.note;
+    void search.load();
+  }
 });
-renderSettings(settingsRoot, settings, settings.state);
+renderSettings(settingsScreen, settings, settings.state);
+
+/** Asks the person in a dialog that starts on its safe answer; resolves `true` to go ahead. */
+function askFirst(question: { title: string; description?: string; lines?: string[]; confirm: string; cancel: string }): Promise<boolean> {
+  return new Promise((resolve) =>
+    openDialog({
+      title: question.title,
+      ...(question.description ? { description: question.description } : {}),
+      body: (question.lines ?? []).map((line) => el("p", {}, line)),
+      confirmLabel: question.confirm,
+      cancelLabel: question.cancel,
+      destructive: true,
+      onConfirm: () => resolve(true),
+      onCancel: () => resolve(false),
+    }),
+  );
+}
+
+// Who can see a page, and rebuilding search: one model each for the session.
+const labels = new LabelModel({
+  cloudHost: () => (cloudOn(settings.state) ? (settings.state.settings?.remote_hosts[0] ?? null) : null),
+  confirm: askFirst,
+});
+const search = new SearchModel({ confirm: askFirst });
+const searchActions = { rebuild: () => search.rebuild(), stop: () => search.stop() };
 
 let statusOpen: number | undefined;
 let screen: StatusScreen = { engine: describeEngine({ state: "starting", attempt: 1 }), workspace: { kind: "waiting" } };
@@ -96,13 +133,14 @@ const expanded = new Set<string>();
 function paintStatus(force = false): void {
   // The engine is polled every second; redraw only on a change, so an open
   // disclosure and the focused control are left alone.
-  const key = JSON.stringify(screen);
+  const key = JSON.stringify([screen, search.state]);
   if (!force && key === drawnScreen) return;
   drawnScreen = key;
   renderStatus(statusRoot, screen, {
     expanded,
     onToggle: (name, open) => void (open ? expanded.add(name) : expanded.delete(name)),
     onCheckSetup: () => show("setup"),
+    search: rebuildSection(search.state, searchActions),
   });
 }
 
@@ -116,9 +154,49 @@ function paintAsk(): void {
     show: (id) => ask.show(id),
     expanded: askExpanded,
     onToggle: (name, open) => void (open ? askExpanded.add(name) : askExpanded.delete(name)),
+    citationAction: (citation) =>
+      // A named page is never marked Only on this Mac unless the person agreed
+      // to see such pages; its other level is not known here, and Undo puts
+      // back the level the engine read.
+      keepHereAction(
+        { conceptId: citation.concept_id, title: citation.title, level: citation.confidential ? "confidential" : "private" },
+        labels,
+        labels.state,
+      ),
+    // Under an answer whose search may have been behind, the way to bring it up to date.
+    afterAnswer: (answer) =>
+      answer.stale_indexes.length > 0 || answer.lexical_unavailable || answer.dense_unavailable || search.state.job !== null
+        ? rebuildSection(search.state, searchActions)
+        : null,
   });
 }
 ask.subscribe(() => paintAsk());
+
+function paintSettingsSearch(): void {
+  redraw(settingsSearch, "settings-search", () =>
+    settingsSearch.replaceChildren(...[rebuildSection(search.state, searchActions)].filter((n) => n !== null)),
+  );
+}
+
+function paintReview(): void {
+  const model = review;
+  if (model !== null) renderReview(reviewRoot, live, model, model.state, reviewExtras);
+}
+
+const reviewExtras = {
+  pageAction: (page: { conceptId: string; title: string; level: "public" | "private" | "confidential" }) =>
+    labelChoice(page, labels, labels.state),
+};
+
+labels.subscribe(() => {
+  paintAsk();
+  paintReview();
+});
+search.subscribe(() => {
+  paintAsk();
+  paintSettingsSearch();
+  paintStatus();
+});
 
 function paintNav(): void {
   const count = reviewCount(review?.state ?? null, statusOpen);
@@ -170,6 +248,7 @@ function show(next: View): void {
     if (review !== null) void review.visit();
   } else {
     if (next === "settings") void settings.load();
+    if (next === "settings" || next === "status") void search.load();
     const root = { ask: askRoot, status: statusRoot, setup: setupRoot, welcome: welcomeRoot, settings: settingsRoot }[next];
     root.querySelector<HTMLElement>('[data-view="heading"]')?.focus();
   }
@@ -228,16 +307,18 @@ function stopSetup(): void {
 function startReview(state: Extract<EngineState, { state: "ready" }>): void {
   unsubscribe?.();
   ask.setClient(createClient(state));
+  labels.setClient(createClient(state));
+  void search.setClient(createClient(state));
   review = new ReviewModel(createClient(state));
   const model = review;
-  const stopDrawing = model.subscribe((next) => renderReview(reviewRoot, live, model, next));
+  const stopDrawing = model.subscribe((next) => renderReview(reviewRoot, live, model, next, reviewExtras));
   const stopCounting = model.subscribe(() => paintNav());
   unsubscribe = () => {
     stopDrawing();
     stopCounting();
   };
   reviewWaiting.hidden = true;
-  renderReview(reviewRoot, live, model, model.state);
+  renderReview(reviewRoot, live, model, model.state, reviewExtras);
   if (view === "review") void model.visit();
 }
 
@@ -246,6 +327,8 @@ function stopReview(): void {
   unsubscribe = null;
   review = null;
   ask.setClient(null);
+  labels.setClient(null);
+  void search.setClient(null);
   reviewWaiting.hidden = false;
   reviewRoot.replaceChildren();
   paintNav();

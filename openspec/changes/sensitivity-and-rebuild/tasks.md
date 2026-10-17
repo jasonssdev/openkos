@@ -17,9 +17,9 @@
 
 ## 3. Screens (PR 3)
 
-- [ ] 3.1 Wording in `docs/decision-wording.md`.
-- [ ] 3.2 The page panel and the label choice, with Undo; Ask citations and To review page cards.
-- [ ] 3.3 The rebuild component in Settings, Ask and Status.
+- [x] 3.1 Wording in `docs/decision-wording.md`.
+- [x] 3.2 `desktop/ui/label/`: the label choice on To review page cards and Keep only on this Mac beside Ask citations, with Undo.
+- [x] 3.3 `desktop/ui/search/`: the rebuild section in Settings, Ask and Status.
 
 ## 4. Close (PR 3)
 
