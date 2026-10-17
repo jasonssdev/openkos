@@ -145,6 +145,7 @@ export const CANNOT_ACT = "This can't be settled in the app yet.";
 
 export interface PageView {
   title: string;
+  /** What the page is about, with its article: "a person". */
   kind: string;
   excerpt: string;
   whoCanSee: { label: string; meaning: string } | null;
@@ -174,7 +175,7 @@ function pageView(pages: Pages, id: string, now: Date): PageView {
   }
   return {
     title: page.title || UNREADABLE_PAGE,
-    kind: typeNoun(page.okf_type).one,
+    kind: typeNoun(page.okf_type).withArticle,
     excerpt: page.excerpt,
     whoCanSee: whoCanSee(page.sensitivity),
     sources: page.sources.map((s) => sourceLine(s, now)),

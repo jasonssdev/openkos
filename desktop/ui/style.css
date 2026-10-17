@@ -8,20 +8,39 @@ body {
   line-height: 1.5;
 }
 
-main {
+header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
   max-width: 44rem;
-  margin: var(--space-8) auto;
+  margin: var(--space-6) auto 0;
   padding: 0 var(--space-6);
 }
 
-h1 {
+.wordmark {
+  margin: 0;
   font-family: var(--font-mono);
   font-weight: var(--weight-medium);
   text-transform: lowercase;
 }
 
+nav {
+  display: flex;
+  gap: var(--space-2);
+}
+
+main {
+  max-width: 44rem;
+  margin: var(--space-6) auto var(--space-8);
+  padding: 0 var(--space-6);
+}
+
+h1,
 h2 {
   font-weight: var(--weight-medium);
+}
+
+#status-view h2 {
   color: var(--text-muted);
 }
 
@@ -50,5 +69,251 @@ dt {
 
 dd {
   margin: 0;
+}
+
+#workspace-facts dd {
   font-family: var(--font-mono);
+}
+
+/* Focus is always visible, on every control. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+h1:focus,
+h2:focus {
+  outline: none;
+}
+
+h1:focus-visible,
+h2:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/* Buttons */
+.button,
+.nav__item {
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--color-paper);
+  font-weight: var(--weight-medium);
+}
+
+.button--quiet {
+  border-color: transparent;
+  text-decoration: underline;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.nav__item[aria-current="page"] {
+  border-color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+/* Notices: the tone is a color, a symbol and a word. */
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.notice .actions {
+  flex-basis: 100%;
+  margin: var(--space-2) 0 0;
+}
+
+.notice__symbol,
+.notice__word {
+  font-weight: var(--weight-medium);
+}
+
+.notice--info {
+  border-left-color: var(--state-info);
+}
+
+.notice--done {
+  border-left-color: var(--state-success);
+}
+
+.notice--warning {
+  border-left-color: var(--state-warning);
+}
+
+.notice--error {
+  border-left-color: var(--state-error);
+}
+
+/* To review */
+.entries,
+.options,
+.history,
+.sources {
+  list-style: none;
+  padding: 0;
+}
+
+.entries li + li,
+.options li + li {
+  margin-top: var(--space-3);
+}
+
+.entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  width: 100%;
+  text-align: left;
+}
+
+.entry__question {
+  font-weight: var(--weight-medium);
+}
+
+.tag {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.tag--warning {
+  color: var(--state-warning);
+}
+
+.history li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+/* One decision */
+.lead {
+  color: var(--text-muted);
+  margin-bottom: 0;
+}
+
+.statement {
+  font-size: 1.15rem;
+  font-weight: var(--weight-medium);
+}
+
+.pages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-4);
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+.card h3 {
+  margin: 0 0 var(--space-1);
+  font-weight: var(--weight-medium);
+}
+
+.card p {
+  margin: var(--space-1) 0;
+}
+
+.label {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.sources {
+  margin: var(--space-2) 0 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.reason-block {
+  margin: var(--space-4) 0;
+}
+
+.reason-block figcaption {
+  font-weight: var(--weight-medium);
+}
+
+.reason-block blockquote {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--border);
+}
+
+.option p {
+  margin: var(--space-1) 0 0;
+}
+
+.reason {
+  margin: var(--space-1) 0 0;
+  color: var(--state-warning);
+}
+
+.choices {
+  margin: var(--space-4) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.choices legend {
+  font-weight: var(--weight-medium);
+  padding: 0 var(--space-1);
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+
+.busy {
+  color: var(--text-muted);
 }
