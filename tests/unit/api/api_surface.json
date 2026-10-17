@@ -288,6 +288,38 @@
       "kind": "alias",
       "value": "Callable[[str], ChatClient]"
     },
+    "ContradictionDetail": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "merged_absorbed_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "rationale"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "conflicting_claims"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "Decision": {
       "fields": [
         {
@@ -334,6 +366,11 @@
           "annotation": "IdentityDetail | RelationDetail | TierDetail | None",
           "default": false,
           "name": "detail"
+        },
+        {
+          "annotation": "ContradictionDetail | RevisionDetail | RefusedFileDetail | None",
+          "default": true,
+          "name": "finding"
         }
       ],
       "frozen": true,
@@ -404,6 +441,33 @@
         }
       }
     },
+    "DeclinePlan": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "merged_absorbed_id"
+        },
+        {
+          "annotation": "Literal['decline']",
+          "default": true,
+          "name": "kind"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "DriftDetected": {
       "bases": [
         "WriteRefused"
@@ -415,6 +479,33 @@
     "Evaluation": {
       "kind": "alias",
       "value": "Literal['judged_same', 'judged_different', 'judged_uncertain', 'pending_evaluation', 'not_applicable']"
+    },
+    "FindingPreview": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "decision_key"
+        },
+        {
+          "annotation": "Action",
+          "default": false,
+          "name": "action"
+        },
+        {
+          "annotation": "ReconcilePlan | DeclinePlan",
+          "default": false,
+          "name": "plan"
+        },
+        {
+          "annotation": "DecisionVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
     },
     "GroupSelection": {
       "fields": [
@@ -1616,12 +1707,76 @@
         }
       }
     },
+    "ReconcilePlan": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "Literal['reconciled_with', 'supersedes', 'revises']",
+          "default": false,
+          "name": "relation_type"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "holder_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "target_id"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "deprecates_id"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "pages_changed"
+        },
+        {
+          "annotation": "Literal['reconcile']",
+          "default": true,
+          "name": "kind"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "Refused": {
       "bases": [
         "WriteRefused"
       ],
       "fields": {},
       "kind": "exception",
+      "members": {}
+    },
+    "RefusedFileDetail": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "file_name"
+        },
+        {
+          "annotation": "Literal['changed_after_import', 'exceeds_pass_budget']",
+          "default": false,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
       "members": {}
     },
     "RelatePlan": {
@@ -1733,6 +1888,58 @@
           "annotation": "str | None",
           "default": false,
           "name": "commit_sha"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "RevisionDetail": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_id"
+        },
+        {
+          "annotation": "Literal['reverses', 'refines']",
+          "default": false,
+          "name": "change"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "later_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "rationale"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "first_quote"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "second_quote"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "first_date"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "second_date"
         }
       ],
       "frozen": true,
@@ -2770,6 +2977,30 @@
         }
       ],
       "returns": "DecisionPreview | NotApplied | Stale"
+    },
+    "preview_finding": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "decision_key"
+        },
+        {
+          "annotation": "Action",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "action"
+        }
+      ],
+      "returns": "FindingPreview | NotApplied | Stale"
     },
     "preview_reopen": {
       "kind": "function",

@@ -12,7 +12,9 @@ detail of a finding row: `ContradictionDetail` (`first_id`, `second_id`,
 `first_quote`, `second_quote`, `first_date`, `second_date`) for a revision, and
 `RefusedFileDetail` (`file_name`, the path relative to the inbox, and `reason`
 `"changed_after_import"` or `"exceeds_pass_budget"`) for a refused file. `first_id`
-and `second_id` are the decision's first two targets. The model's confidence MUST
+and `second_id` are the stored pair: two pages for a typed edge, and the
+surviving page twice for a contradiction found inside a combined page, whose
+absorbed page is `merged_absorbed_id`. The model's confidence MUST
 NOT be exposed. A payload that cannot be read into its detail MUST leave
 `finding` `None`, and the decision MUST still be listed.
 

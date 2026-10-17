@@ -159,6 +159,8 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
     decisions: () => call("get", "/v1/decisions"),
     previewDecision: (decisionKey: string, body: Schemas["PreviewRequest"]) =>
       call("post", "/v1/decisions/{decision_key}/preview", { params: { decision_key: decisionKey }, body }),
+    previewFinding: (decisionKey: string, body: Schemas["FindingPreviewRequest"]) =>
+      call("post", "/v1/decisions/{decision_key}/preview-finding", { params: { decision_key: decisionKey }, body }),
     applyDecision: (decisionKey: string, body: Schemas["ApplyRequest"]) =>
       call("post", "/v1/decisions/{decision_key}/apply", { params: { decision_key: decisionKey }, body }),
     refreshQueue: (body?: Schemas["RefreshRequest"]) =>

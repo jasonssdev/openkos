@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0072: Contradictions and revisions are previewed as findings and applied as decisions"
 description: openkos.api settles contradiction and revision rows with the reconcile and decline writes the CLI uses, previewed by a second function and route (preview_finding) whose plan union is its own, and applied by the existing apply_decision against the same DecisionVersion; watch refusals stay without an action until ingest reaches the API.
-status: Proposed
+status: Accepted
 date: 2026-10-17
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0072: Contradictions and revisions are previewed as findings and applied as decisions
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-17
 
 ## Context

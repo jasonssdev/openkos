@@ -70,6 +70,47 @@ class TierDetail:
 
 
 @dataclass(frozen=True)
+class ContradictionDetail:
+    """A contradiction: two pages that say incompatible things. A merged-body
+    one (`merged_absorbed_id` set) was found inside a combined page, between
+    the page and the one it absorbed."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    rationale: str
+    conflicting_claims: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RevisionDetail:
+    """A revision: a later Decision that reverses or refines an earlier one.
+    `later_id` is `None` when the dates do not order the pair; it never comes
+    from the model."""
+
+    first_id: str
+    second_id: str
+    change: Literal["reverses", "refines"]
+    later_id: str | None
+    rationale: str
+    first_quote: str
+    second_quote: str
+    first_date: str | None
+    second_date: str | None
+
+
+@dataclass(frozen=True)
+class RefusedFileDetail:
+    """A file the inbox watch did not add: `file_name` is its path relative to
+    the inbox. `changed_after_import`: a file of that name was already added
+    with different contents. `exceeds_pass_budget`: it is larger than one
+    unattended pass may add."""
+
+    file_name: str
+    reason: Literal["changed_after_import", "exceeds_pass_budget"]
+
+
+@dataclass(frozen=True)
 class Decision:
     """One open decision, as data a client can render."""
 
@@ -82,6 +123,9 @@ class Decision:
     withheld: tuple[WithheldAction, ...]
     resolves_via: str
     detail: IdentityDetail | RelationDetail | TierDetail | None
+    finding: ContradictionDetail | RevisionDetail | RefusedFileDetail | None = None
+    """The detail of a contradiction, a revision or a refused file; `None`
+    for the other kinds, and for a payload that cannot be read."""
 
 
 def _detail(
@@ -112,6 +156,21 @@ def _detail(
     return None
 
 
+def _finding(
+    item: curate_decisions.DecisionItem,
+) -> ContradictionDetail | RevisionDetail | RefusedFileDetail | None:
+    if item.kind == "contradiction":
+        contradiction = curate_decisions.contradiction_fields(item.payload)
+        return None if contradiction is None else ContradictionDetail(*contradiction)
+    if item.kind == "revision":
+        revision = curate_decisions.revision_fields(item.payload)
+        return None if revision is None else RevisionDetail(*revision)
+    if item.kind == "watch_refusal":
+        refused = curate_decisions.refused_file_fields(item.payload)
+        return None if refused is None else RefusedFileDetail(*refused)
+    return None
+
+
 def list_decisions(workspace: Workspace) -> tuple[Decision, ...]:
     """Every open decision. Takes no lock, builds no client, makes no model
     call and writes nothing; an absent queue lists nothing."""
@@ -126,6 +185,7 @@ def list_decisions(workspace: Workspace) -> tuple[Decision, ...]:
             withheld=item.withheld,
             resolves_via=item.resolves_via,
             detail=_detail(item),
+            finding=_finding(item),
         )
         for item in curate_decisions.list_open_decisions(workspace._layout)
     )
@@ -221,6 +281,45 @@ class DecisionPreview:
 ApplyOutcome = Applied | NotApplied | Stale
 
 
+@dataclass(frozen=True)
+class ReconcilePlan:
+    """Recording how two pages relate, as `reconcile` writes it: both stand
+    (`reconciled_with`, no holder), one replaces the other (`supersedes`, the
+    target listed as deprecated), or one refines the other (`revises`, both
+    stay current)."""
+
+    first_id: str
+    second_id: str
+    relation_type: Literal["reconciled_with", "supersedes", "revises"]
+    holder_id: str | None
+    target_id: str | None
+    deprecates_id: str | None
+    pages_changed: tuple[str, ...]
+    """The pages whose file changes: an edge added or a note appended."""
+    kind: Literal["reconcile"] = "reconcile"
+
+
+@dataclass(frozen=True)
+class DeclinePlan:
+    """Recording that a contradiction was looked at and left as it is."""
+
+    first_id: str
+    second_id: str
+    merged_absorbed_id: str | None
+    kind: Literal["decline"] = "decline"
+
+
+@dataclass(frozen=True)
+class FindingPreview:
+    """What a contradiction or revision action would do, and the version
+    `apply_decision` applies it against."""
+
+    decision_key: str
+    action: Action
+    plan: ReconcilePlan | DeclinePlan
+    version: DecisionVersion
+
+
 def _plan_of(
     body: curate_decisions.DecisionPreviewBody,
 ) -> MergePlan | RelatePlan | TierPlan | KeepDistinctPlan:
@@ -312,6 +411,47 @@ def preview_decision(
     )
 
 
+def _finding_plan(
+    body: curate_decisions.FindingPreviewBody,
+) -> ReconcilePlan | DeclinePlan:
+    if isinstance(body, curate_decisions.DeclineDecisionPreview):
+        return DeclinePlan(*body.pair_ids, body.merged_absorbed_id)
+    return ReconcilePlan(
+        first_id=body.first_id,
+        second_id=body.second_id,
+        relation_type=body.relation_type,
+        holder_id=body.holder_id,
+        target_id=body.target_id,
+        deprecates_id=body.deprecates_id,
+        pages_changed=body.pages_changed,
+    )
+
+
+def preview_finding(
+    workspace: Workspace, decision_key: str, action: Action
+) -> FindingPreview | NotApplied | Stale:
+    """What a contradiction or revision `action` would do to the open decision
+    `decision_key`, with the version `apply_decision` applies it against.
+
+    Writes nothing, takes no lock, builds no client and makes no model call.
+    The decision kinds' own actions are previewed by `preview_decision`; given
+    one, this returns `NotApplied("wrong_preview")`, as `preview_decision` does
+    given a finding action. A pair already reconciled another way is
+    `NotApplied("already_reconciled")`; the other refusals are
+    `preview_decision`'s."""
+    result = curate_decisions.preview_finding(
+        workspace.root, workspace._layout, decision_key, action
+    )
+    if isinstance(result, NotApplied | Stale):
+        return result
+    return FindingPreview(
+        decision_key=decision_key,
+        action=action,
+        plan=_finding_plan(result.preview),
+        version=result.version,
+    )
+
+
 def apply_decision(
     workspace: Workspace,
     version: DecisionVersion,
@@ -322,7 +462,8 @@ def apply_decision(
 ) -> ApplyOutcome:
     """Apply `action` to the one decision `version` was issued for.
 
-    A decision that changed since the preview is the returned `Stale`, and one
+    `version` may come from `preview_decision` or from `preview_finding`. A
+    decision that changed since the preview is the returned `Stale`, and one
     that is gone or does not take the action the returned `NotApplied`; none of
     these writes anything. Otherwise the decision's own files are written and
     committed to the workspace's git repository, only the paths it wrote. A
