@@ -7,10 +7,10 @@ shell, reaches the engine. It exposes exactly the operations of the stable
 Python API (`openkos.api`, ADR-0060) and nothing else: workspace status, the
 pending report, the open decisions with preview and apply, judging quote and
 run, the model-free queue refresh, guided setup's readiness read and model
-pull, and asking a question. It is a thin adapter: it holds one workspace
+pull, asking a question, and adding source files. It is a thin adapter: it holds one workspace
 handle opened at launch, calls the v1 functions, and owns only transport,
 serialization, error mapping and the in-memory job registries (judging, the
-model pull and the ask). It adds
+model pull, the ask and the ingest run). It adds
 no engine capability, no stored state and no new operation.
 
 The security shape follows ADR-0058: the server binds `127.0.0.1` on an
@@ -404,6 +404,11 @@ operations MUST be reachable as follows, and the server MUST call the matching
 | `POST /v1/setup/pulls/{id}/stop` | the pull job's cooperative stop |
 | `POST /v1/ask` | `ask`, as a job (see the ask job requirement) |
 | `GET /v1/ask/{id}` | the ask job's state |
+| `POST /v1/ingest/quote` | `quote_ingest` |
+| `POST /v1/decisions/{key}/ingest-quote` | `quote_refused_file` |
+| `POST /v1/ingest/runs` | `run_ingest`, as a job (see the ingest job requirement) |
+| `GET /v1/ingest/runs/{id}` | the ingest job's state |
+| `POST /v1/ingest/runs/{id}/stop` | the ingest job's cooperative stop |
 | `GET /v1/settings/model` | `model_settings` |
 | `POST /v1/settings/model/preview` | `preview_model_settings` |
 | `POST /v1/settings/model/apply` | `apply_model_settings` |
@@ -417,6 +422,9 @@ take the workspace lock or call a model, as the corresponding Python reads do
 not. A Concept ID contains `/`, so the unmerge, history, page, reopen and
 unrelate routes carry it in a query parameter or the body, never in a path
 segment.
+The ingest quote reads the chosen files and the workspace and builds the
+extraction client to read its model and locality; it makes no model call and
+writes nothing.
 The setup readiness `GET` talks to the configured model runtime to read its
 version and installed models; that is not a model call, and it writes nothing.
 
@@ -464,7 +472,7 @@ version and installed models; that is not a model call, and it writes nothing.
 
 - GIVEN the application's route table
 - WHEN every operation route is mapped to an `openkos.api` function
-- THEN each maps to one, and none exists for ingest or doctor
+- THEN each maps to one, and none exists for doctor
 
 #### Scenario: Merge history maps to the history read
 
@@ -669,7 +677,7 @@ mapping MUST be evaluated subclass-first and MUST be:
 | Invalid request body or parameter | 422 | `invalid_request` | false |
 | Path key differs from `version.decision_key` | 422 | `key_mismatch` | false |
 | `Stale` outcome (any reason, `unknown_key` included) | 409 | `stale` | false |
-| `QuoteStale` outcome | 409 | `quote_stale` | false |
+| `QuoteStale` or `IngestQuoteStale` outcome | 409 | `quote_stale` | false |
 | `NotApplied("not_offered")` | 422 | `action_not_offered` | false |
 | `NotApplied("skipped")` | 422 | `skip_not_applicable` | false |
 | `NotApplied("invalid_selection")` | 422 | `invalid_selection` | false |
@@ -688,6 +696,7 @@ mapping MUST be evaluated subclass-first and MUST be:
 | `RunRefused` outcome | 422 | `run_refused` | false |
 | A judging run already active | 409 | `run_active` | true |
 | A model pull already active | 409 | `pull_active` | true |
+| An ingest run already active | 409 | `ingest_active` | true |
 | `PullRefused("not_configured")` | 422 | `model_not_configured` | false |
 | `PullRefused("backend_cannot_pull")` | 422 | `pull_not_supported` | false |
 | `DriftDetected` | 409 | `write_drift` | true |
@@ -700,6 +709,7 @@ mapping MUST be evaluated subclass-first and MUST be:
 | Queue unavailable | 503 | `queue_unavailable` | false |
 | Queue refresh refused | 503 | `queue_refresh_refused` | false |
 | `JudgingRefused` | 503 | `judging_refused` | false |
+| `IngestRefused` | 503 | `ingest_refused` | false |
 | Workspace not found | 500 | `workspace_not_found` | false |
 | Workspace unreadable | 500 | `workspace_unreadable` | false |
 | `BackendUnavailable` | 503 | `backend_unavailable` | true |
@@ -1328,7 +1338,7 @@ the same grace as a judging run.
 - WHEN the pull is started
 - THEN the response is 202 with `state` `running` before the stream ends
 
-#### Scenario: Poll to completion
+#### Scenario: Poll a pull to completion
 
 - GIVEN a started pull
 - WHEN the runtime finishes the stream and the job is polled
@@ -1483,3 +1493,94 @@ response or error message MUST carry an API key.
 - GIVEN a preview body whose `base_url` is not an http(s) URL
 - WHEN it is sent
 - THEN the response is 422 with code `invalid_base_url`
+
+### Requirement: Adding Files Runs As A Single Pollable Job
+
+`POST /v1/ingest/quote` with `{paths, include_confidential}` (`paths` a list of
+1 to 500 strings of at most 4096 characters; an unknown key, an empty list or a
+wrong type is 422 `invalid_request` before the operation runs) MUST return 200
+with the `IngestQuote` `openkos.api.quote_ingest` returned, token included.
+`POST /v1/decisions/{key}/ingest-quote` with `{include_confidential}` MUST
+return 200 with the quote `openkos.api.quote_refused_file` returned for that
+refused-file decision, and 409 `stale` for a `Stale` result; a key of another
+kind is 422 `invalid_request`. The adapter MUST NOT read, stat or resolve a path
+itself: every path check is the API's, reported per file in the quote.
+
+Starting a run (`POST /v1/ingest/runs` with the echoed token) MUST NOT block for
+the run: it MUST return 202 with the job and a `Location` header naming it once
+the run is admitted (the service's first stop check, after its stale and
+refusal checks and before any model call) or has already finished. An
+`IngestQuoteStale` result MUST answer the start with 409 `quote_stale`, its
+message naming the moved fields; a missing or null token MUST answer 422
+`run_refused`; neither leaves a job. At most one ingest run MAY be active in
+the server process: a start while one is active MUST return 409 with code
+`ingest_active` and `retryable` true and start nothing. The job resource MUST be
+`{run_id, state, index, total, phase, calls, outcome, warnings, error}`, where
+`state` is
+`running`, `stopping`, `finished` or `failed`; `index`, `total` and `phase` are
+the latest progress (null before the first event); `calls` is the chat calls
+spent so far; `outcome` is the run's outcome when it returned (state
+`finished`, whatever its status, `busy` and `stopped` included); and `error` is
+an error body when the run raised after admission (state `failed`, no outcome),
+with the fixed message of its row, never the exception's text.
+`GET /v1/ingest/runs/{id}` MUST return the job with 200 for any known run.
+`POST /v1/ingest/runs/{id}/stop` MUST set the cooperative stop and return the
+job with `state` `stopping`; it takes effect before the next file. Stopping a
+finished or failed run MUST return it unchanged. An unknown id MUST return 404.
+`IngestRefused` MUST map to 503 `ingest_refused`, not retryable. A workspace
+that stays busy MUST be reported by the outcome's status, never by a failed
+poll. The registry is in memory; the newest 16 finished or failed runs stay
+retrievable, and server shutdown sets every stop and waits at most the same
+grace as a judging run.
+
+#### Scenario: An ingest start returns at once
+
+- GIVEN a quote's token and a model call that blocks
+- WHEN the run is started
+- THEN the response is 202 with `state` `running` and a `Location` header
+  before the model call returns
+
+#### Scenario: Poll an ingest to completion
+
+- GIVEN a started run of one file
+- WHEN the job is polled until it is `finished`
+- THEN the outcome lists the file as `added` with its Source id
+
+#### Scenario: A second ingest while one runs is refused
+
+- GIVEN an active ingest run
+- WHEN another is started
+- THEN the response is 409 with code `ingest_active`, `retryable` true, and the
+  first run is unaffected
+
+#### Scenario: A stale ingest token answers the start
+
+- GIVEN a quote and the file edited afterwards
+- WHEN the run is started with its token
+- THEN the response is 409 `quote_stale`, no job exists and no model call was
+  made
+
+#### Scenario: A quote is not read by the adapter
+
+- GIVEN a quote request naming a path inside the workspace's `.openkos/`
+- WHEN it is posted
+- THEN the response is 200 and the file is `refused` with `inside_workspace`
+
+#### Scenario: A refused file is quoted through its decision
+
+- GIVEN an open `watch_refusal` decision whose file is in the inbox
+- WHEN `POST /v1/decisions/{key}/ingest-quote` is posted
+- THEN the response is 200 with a quote naming that file, and once its token
+  has run the same request is 409 `stale`
+
+#### Scenario: An empty path list is rejected before the operation
+
+- GIVEN a quote request with `paths` `[]`
+- WHEN it is posted
+- THEN the response is 422 `invalid_request` and nothing ran
+
+#### Scenario: A busy workspace is an outcome
+
+- GIVEN the workspace lock held by another process
+- WHEN a run is started and polled
+- THEN the job is `finished` with outcome status `busy`

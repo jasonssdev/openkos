@@ -46,6 +46,9 @@ operations MUST be reachable as follows, and the server MUST call the matching
 | `POST /v1/ingest/runs` | `run_ingest`, as a job (see the ingest job requirement) |
 | `GET /v1/ingest/runs/{id}` | the ingest job's state |
 | `POST /v1/ingest/runs/{id}/stop` | the ingest job's cooperative stop |
+| `GET /v1/settings/model` | `model_settings` |
+| `POST /v1/settings/model/preview` | `preview_model_settings` |
+| `POST /v1/settings/model/apply` | `apply_model_settings` |
 
 The health route is authenticated like every other route. Every successful
 response MUST be JSON. A request body that is not valid for its operation (an
@@ -144,63 +147,6 @@ version and installed models; that is not a model call, and it writes nothing.
   workspace is unchanged
 
 (Previously: no route existed for ingest, and the route-table scenario said so.)
-
-### Requirement: A Model Pull Runs As A Single Pollable Job
-
-Starting a pull (`POST /v1/setup/pulls` with `{"model": <tag>}`) MUST NOT block
-for the download: it MUST return 202 with the job once the pull is admitted
-(the service's first stop check) or has already finished, and a `Location`
-header naming the job. At most one pull MAY be active in the server process: a
-start while one is active MUST return 409 `pull_active` and start nothing. A
-`PullRefused` result, or an exception raised before admission (an unreachable
-runtime), MUST answer the start request itself with its row of the error table
-and leave no job. The job resource MUST be `{pull_id, model, state, phase,
-completed_bytes, total_bytes, outcome, error}`, where `state` is `running`,
-`stopping`, `finished` or `failed`; `phase`, `completed_bytes` and
-`total_bytes` are the latest progress (null before the first event, bytes 0);
-`outcome` is the pull outcome when the pull returned (state `finished`); and
-`error` is an error body when the pull raised after admission (state `failed`,
-no outcome), with the fixed message of its row, never the exception's text.
-`GET /v1/setup/pulls/{id}` MUST return the job with 200 for any known pull.
-`POST /v1/setup/pulls/{id}/stop` MUST set the cooperative stop and return the
-job with `state` `stopping`; stopping a finished or failed pull MUST return it
-unchanged. An unknown id MUST return 404. Neither the start nor a poll takes the
-workspace lock. The registry is in memory; the newest 16 finished or failed
-pulls stay retrievable, and server shutdown sets every stop and waits at most
-the same grace as a judging run.
-
-#### Scenario: Start returns before the download finishes
-
-- GIVEN a configured, uninstalled model and a runtime that streams slowly
-- WHEN the pull is started
-- THEN the response is 202 with `state` `running` before the stream ends
-
-#### Scenario: Poll a pull to completion
-
-- GIVEN a started pull
-- WHEN the runtime finishes the stream and the job is polled
-- THEN the job is `finished` with outcome status `completed`
-
-#### Scenario: Stop a pull
-
-- GIVEN a running pull
-- WHEN stop is posted and the job is polled after the next line
-- THEN the job is `finished` with outcome status `stopped`
-
-#### Scenario: A second pull is refused while one is active
-
-- GIVEN a running pull
-- WHEN another pull is started
-- THEN the response is 409 with code `pull_active` and `retryable` true
-
-#### Scenario: An unreachable runtime answers the start
-
-- GIVEN a runtime that refuses connections
-- WHEN a pull is started
-- THEN the response is 503 with code `backend_unavailable` and no job exists
-
-(Previously: its first polling scenario was named "Poll to completion", the
-name of the judging job's scenario too.)
 
 ### Requirement: Outcomes And Errors Map To Status Codes With A Uniform Body
 
@@ -425,6 +371,63 @@ again.
 
 (Previously: the table had no ingest rows.)
 
+### Requirement: A Model Pull Runs As A Single Pollable Job
+
+Starting a pull (`POST /v1/setup/pulls` with `{"model": <tag>}`) MUST NOT block
+for the download: it MUST return 202 with the job once the pull is admitted
+(the service's first stop check) or has already finished, and a `Location`
+header naming the job. At most one pull MAY be active in the server process: a
+start while one is active MUST return 409 `pull_active` and start nothing. A
+`PullRefused` result, or an exception raised before admission (an unreachable
+runtime), MUST answer the start request itself with its row of the error table
+and leave no job. The job resource MUST be `{pull_id, model, state, phase,
+completed_bytes, total_bytes, outcome, error}`, where `state` is `running`,
+`stopping`, `finished` or `failed`; `phase`, `completed_bytes` and
+`total_bytes` are the latest progress (null before the first event, bytes 0);
+`outcome` is the pull outcome when the pull returned (state `finished`); and
+`error` is an error body when the pull raised after admission (state `failed`,
+no outcome), with the fixed message of its row, never the exception's text.
+`GET /v1/setup/pulls/{id}` MUST return the job with 200 for any known pull.
+`POST /v1/setup/pulls/{id}/stop` MUST set the cooperative stop and return the
+job with `state` `stopping`; stopping a finished or failed pull MUST return it
+unchanged. An unknown id MUST return 404. Neither the start nor a poll takes the
+workspace lock. The registry is in memory; the newest 16 finished or failed
+pulls stay retrievable, and server shutdown sets every stop and waits at most
+the same grace as a judging run.
+
+#### Scenario: Start returns before the download finishes
+
+- GIVEN a configured, uninstalled model and a runtime that streams slowly
+- WHEN the pull is started
+- THEN the response is 202 with `state` `running` before the stream ends
+
+#### Scenario: Poll a pull to completion
+
+- GIVEN a started pull
+- WHEN the runtime finishes the stream and the job is polled
+- THEN the job is `finished` with outcome status `completed`
+
+#### Scenario: Stop a pull
+
+- GIVEN a running pull
+- WHEN stop is posted and the job is polled after the next line
+- THEN the job is `finished` with outcome status `stopped`
+
+#### Scenario: A second pull is refused while one is active
+
+- GIVEN a running pull
+- WHEN another pull is started
+- THEN the response is 409 with code `pull_active` and `retryable` true
+
+#### Scenario: An unreachable runtime answers the start
+
+- GIVEN a runtime that refuses connections
+- WHEN a pull is started
+- THEN the response is 503 with code `backend_unavailable` and no job exists
+
+(Previously: its first polling scenario was named "Poll to completion", the
+name of the judging job's scenario too.)
+
 ## ADDED Requirements
 
 ### Requirement: Adding Files Runs As A Single Pollable Job
@@ -448,7 +451,8 @@ message naming the moved fields; a missing or null token MUST answer 422
 `run_refused`; neither leaves a job. At most one ingest run MAY be active in
 the server process: a start while one is active MUST return 409 with code
 `ingest_active` and `retryable` true and start nothing. The job resource MUST be
-`{run_id, state, index, total, phase, calls, outcome, error}`, where `state` is
+`{run_id, state, index, total, phase, calls, outcome, warnings, error}`, where
+`state` is
 `running`, `stopping`, `finished` or `failed`; `index`, `total` and `phase` are
 the latest progress (null before the first event); `calls` is the chat calls
 spent so far; `outcome` is the run's outcome when it returned (state

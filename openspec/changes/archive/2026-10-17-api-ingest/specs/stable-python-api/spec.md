@@ -14,8 +14,8 @@ content. The API MUST NOT send content to any model backend other than the
 configured one, and only through the judging run, `ask` and an ingest run (the
 added files' text to the extraction model, then the derived refresh to the
 embedding model). The only other process it invokes is the local git
-auto-commit for a decision, an unmerge, an undo or an added file, which never
-pushes. The docstring MUST also state that cancellation is cooperative (a stop
+auto-commit for a decision, an unmerge, an undo, a settings change or an
+added file, which never pushes. The docstring MUST also state that cancellation is cooperative (a stop
 waits for the chunk, or when adding files the file, in flight), that v1 apply
 does not reconcile merged bodies and does not refresh the derived stores, and
 that `API_VERSION`, not the package version, is the compatibility promise.
@@ -91,9 +91,10 @@ file. A file whose commit cannot take the workspace lock within
 `not_reached`. A refusal the service raises at run time MUST be that file's
 result and the run MUST go on. After a run that wrote, the derived stores MUST
 be refreshed once; a refresh failure MUST leave them reported stale and MUST
-NOT fail the run. `progress`, when given, MUST hear each file's `reading`,
-`extracting` and `writing` phases and one final `refreshing`; an exception from
-it MUST be recorded on the outcome and MUST NOT end the run.
+NOT fail the run. `progress`, when given, MUST hear each file's `reading`
+phase, `extracting` when its model wait starts, `writing` once it is written,
+and `refreshing` once when the run refreshes the derived stores; an exception
+from it MUST be recorded on the outcome and MUST NOT end the run.
 
 `quote_refused_file(workspace, decision_key, *, include_confidential=False)`
 MUST quote, as `quote_ingest` does, the file an open `watch_refusal` decision
