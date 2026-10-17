@@ -592,6 +592,18 @@ describe("undoing", () => {
     expect(undoneLine({ kind: "unrelate", source: "a", relationType: "part_of", target: "b" })).toBe(
       "Undone. That connection is removed.",
     );
+    expect(undoneLine({ kind: "reopen_contradiction", first: "a", second: "b", absorbed: null })).toBe(
+      "Undone. We'll point this out again the next time your pages are checked.",
+    );
+    expect(undoneLine({ kind: "unreconcile", first: "a", second: "b", revision: true, outOfDate: null })).toBe(
+      "Undone. We'll ask about these again the next time your pages are checked.",
+    );
+    expect(undoneLine({ kind: "unreconcile", first: "a", second: "b", revision: false, outOfDate: "T" }, true)).toBe(
+      "Undone. 'T' is no longer marked out of date. We'll point this out again the next time your pages are checked.",
+    );
+    expect(undoneLine({ kind: "unreconcile", first: "a", second: "b", revision: false, outOfDate: "T" }, false)).toBe(
+      "Undone. We'll point this out again the next time your pages are checked. 'T' stays out of date, because another page replaces it.",
+    );
     expect(undoneLine({ kind: "tier", typeName: "Person", tier: null })).toBe("Undone. People are treated as before.");
     expect(undoneLine({ kind: "tier", typeName: "Concept", tier: "slow" })).toBe("Undone. Ideas are treated as before.");
   });
@@ -628,6 +640,8 @@ describe("problemFor", () => {
     ["not_kept_distinct", "These pages aren't kept separate any more.", "ok"],
     ["not_related", "These pages aren't connected any more.", "ok"],
     ["tier_unchanged", "This setting is already as it was.", "ok"],
+    ["not_declined", "This has already been undone.", "ok"],
+    ["not_reconciled", "These pages aren't settled that way any more.", "ok"],
   ] as const)("words %s", (code, message, action) => {
     expect(problemFor(api(code), "before")).toEqual({ message, action });
   });
@@ -671,8 +685,11 @@ describe("no engine words reach the screen", () => {
       undoneLine({ kind: "reopen", members: [] }),
       undoneLine({ kind: "unrelate", source: "a", relationType: "part_of", target: "b" }),
       undoneLine({ kind: "tier", typeName: "Person", tier: null }),
+      undoneLine({ kind: "reopen_contradiction", first: "a", second: "b", absorbed: null }),
+      undoneLine({ kind: "unreconcile", first: "a", second: "b", revision: false, outOfDate: "T" }, true),
+      undoneLine({ kind: "unreconcile", first: "a", second: "b", revision: true, outOfDate: "T" }, false),
       COMBINED_HEADING,
-      ...["workspace_busy", "stale", "write_failed", "quote_stale", "not_kept_distinct", "not_related", "tier_unchanged"].map((code) =>
+      ...["workspace_busy", "stale", "write_failed", "quote_stale", "not_kept_distinct", "not_related", "tier_unchanged", "not_declined", "not_reconciled"].map((code) =>
         problemFor(new ApiError({ status: 409, code, retryable: false, message: "m", retryAfterSeconds: null }), "after"),
       ),
     ].map((value) => JSON.stringify(value).replaceAll(/"(choice|okfType)":"[^"]*"/g, ""));
