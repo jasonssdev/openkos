@@ -259,8 +259,10 @@ The shell MUST expose four commands to the web view:
   anything but Finder's `.DS_Store`. It MUST then run the located engine's
   `init` with that folder as its working directory and an empty, non-terminal
   stdin, so `init` writes its recommended models without prompting, killing it
-  after a bounded time. Only when `init` succeeds and `openkos.yaml` exists MUST
-  it remember the folder and request a restart.
+  after a bounded time; an `init` killed at that bound MUST refuse with
+  `init_timed_out`, any other failure with `init_failed`. Only when `init`
+  succeeds and `openkos.yaml` exists MUST it remember the folder and request a
+  restart.
 - `pick_workspace_folder` MUST show the system's folder picker from the shell
   and answer the chosen path, or null when cancelled. The web view MUST NOT be
   granted the dialog plugin's own permissions.
@@ -269,7 +271,8 @@ When `OPENKOS_WORKSPACE` is set, `open_workspace` and `create_workspace` MUST
 refuse with `set_by_environment` before writing anything. A refusal MUST answer
 a `reason` (`set_by_environment`, `invalid_path`, `not_a_folder`,
 `not_a_workspace`, `already_a_workspace`, `folder_not_empty`,
-`engine_not_located`, `init_failed` or `store_failed`) and an English `detail`;
+`engine_not_located`, `init_failed`, `init_timed_out` or `store_failed`) and an
+English `detail`;
 a refused command MUST NOT change the remembered choice or restart the engine.
 
 #### Scenario: A first-run user creates a workspace
@@ -299,6 +302,24 @@ a refused command MUST NOT change the remembered choice or restart the engine.
 - WHEN `workspace_choice_status` is called
 - THEN `source` is `environment`
 - AND `open_workspace` and `create_workspace` answer `set_by_environment`
+
+### Requirement: The Shell Opens The Model Runtime's Download Page
+
+The shell MUST expose one command, `open_runtime_download`, taking no argument,
+that opens Ollama's official download page (ADR-0057), the address the engine's
+setup readiness reports as `download_url`, in the system's default browser. The
+address MUST be fixed in the shell, so the web view cannot open any other. The
+shell MUST run the operating system's own opener with the address as a single
+argument and no shell in between; it MUST NOT add the opener plugin or grant the
+web view a permission to open URLs. When the opener fails, the command MUST
+refuse with an English detail.
+
+#### Scenario: The page asks for the download page
+
+- GIVEN setup reports that Ollama does not answer
+- WHEN the page calls `open_runtime_download`
+- THEN the default browser opens `https://ollama.com/download`
+- AND the web view stays on the app
 
 ### Requirement: The Remote Backend's Key Is Kept By The Shell
 

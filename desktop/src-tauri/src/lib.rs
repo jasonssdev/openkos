@@ -11,6 +11,7 @@
 //! directory. A workspace is created by the engine's own `init` (#1487).
 
 pub mod apikey;
+pub mod browser;
 pub mod engine;
 pub mod locator;
 pub mod supervisor;
@@ -112,13 +113,19 @@ async fn pick_workspace_folder(app: tauri::AppHandle) -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
+/// Open Ollama's official download page in the system browser. The page
+/// cannot name another address: the shell opens only this fixed one.
+#[tauri::command]
+async fn open_runtime_download() -> Result<(), String> {
+    browser::open_runtime_download()
+}
+
 /// Run the engine's `init` in `folder`, with no terminal, so it writes the
 /// recommended defaults without prompting.
 fn run_engine_init(folder: &Path) -> Result<(), WorkspaceCommandError> {
     let command = locator::init_from_process(folder)
         .map_err(|error| WorkspaceCommandError::new("engine_not_located", error.to_string()))?;
-    engine::run_once(&command, INIT_TIMEOUT)
-        .map_err(|error| WorkspaceCommandError::new("init_failed", error.detail()))
+    engine::run_once(&command, INIT_TIMEOUT).map_err(|error| workspace::init_refusal(&error))
 }
 
 /// Start the engine, then the shell; stop the engine when the shell exits.
@@ -154,7 +161,8 @@ pub fn run() {
             workspace_choice_status,
             open_workspace,
             create_workspace,
-            pick_workspace_folder
+            pick_workspace_folder,
+            open_runtime_download
         ])
         .build(tauri::generate_context!())
         .expect("the desktop shell could not be built");

@@ -14,6 +14,8 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
+use crate::engine::RunError;
+
 /// The file `init` writes last, so its presence means a complete workspace.
 pub const WORKSPACE_MARKER: &str = "openkos.yaml";
 
@@ -161,6 +163,15 @@ impl fmt::Display for WorkspaceCommandError {
 }
 
 type CommandResult<T> = Result<T, WorkspaceCommandError>;
+
+/// The refusal for an `init` run that failed: one that ran out of time has its
+/// own reason, so the page can say so plainly.
+pub fn init_refusal(error: &RunError) -> WorkspaceCommandError {
+    match error {
+        RunError::TimedOut { .. } => WorkspaceCommandError::new("init_timed_out", error.detail()),
+        _ => WorkspaceCommandError::new("init_failed", error.detail()),
+    }
+}
 
 /// Runs the engine's `init` in a folder.
 pub type Init<'a> = &'a dyn Fn(&Path) -> CommandResult<()>;
@@ -594,5 +605,18 @@ mod tests {
             .expect_err("no marker");
         assert_eq!(err.reason, "init_failed");
         assert_eq!(ws.remembered(), None);
+    }
+
+    #[test]
+    fn an_init_that_ran_out_of_time_has_its_own_reason() {
+        let timed_out = RunError::TimedOut {
+            waited: std::time::Duration::from_secs(180),
+            stderr: "still syncing".to_owned(),
+        };
+        let refusal = init_refusal(&timed_out);
+        assert_eq!(refusal.reason, "init_timed_out");
+        assert!(refusal.detail.contains("still syncing"));
+        let spawn = RunError::Spawn(std::io::Error::other("no such file"));
+        assert_eq!(init_refusal(&spawn).reason, "init_failed");
     }
 }
