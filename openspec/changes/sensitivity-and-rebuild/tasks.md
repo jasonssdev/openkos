@@ -2,10 +2,10 @@
 
 ## 1. Sensitivity (PR 1)
 
-- [ ] 1.1 `application/sensitivity_service.py`: preview, apply, the shared log line and commit message; the CLI uses the shared helpers.
-- [ ] 1.2 `api/_sensitivity.py` and the public names; regenerate `api_surface.json`.
-- [ ] 1.3 Routes `POST /v1/pages/sensitivity/{preview,apply}`, request models and error rows; regenerate `openapi.json`.
-- [ ] 1.4 `desktop/client`: `previewSensitivity`, `applySensitivity`, the two codes; regenerate `schema.d.ts`.
+- [x] 1.1 `application/sensitivity_service.py`: preview, apply, the shared log line and commit message; the CLI uses the shared helpers.
+- [x] 1.2 `api/_sensitivity.py` and the public names; regenerate `api_surface.json`.
+- [x] 1.3 Routes `POST /v1/pages/sensitivity/{preview,apply}`, request models and error rows; regenerate `openapi.json`.
+- [x] 1.4 `desktop/client`: `previewSensitivity`, `applySensitivity`, the two codes; regenerate `schema.d.ts`.
 
 ## 2. Search (PR 2)
 
