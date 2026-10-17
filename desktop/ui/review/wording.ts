@@ -116,8 +116,12 @@ function quoted(titles: string[]): string {
 
 // -- options ------------------------------------------------------------------ //
 
-/** What a person can choose: an action the engine offers, the check, checking a changed decision again, or later. */
-export type Choice = Action | "check" | "recheck" | "later";
+/**
+ * What a person can choose: an action the engine offers, the check, checking a
+ * changed decision again, later, or "same", the answer to an identity question
+ * that asks a second one (which pages, or what it is) before anything is previewed.
+ */
+export type Choice = Action | "check" | "recheck" | "later" | "same";
 
 export interface Option {
   choice: Choice;
@@ -175,6 +179,8 @@ export interface DecisionView {
   reason: string | null;
   pages: PageView[];
   options: Option[];
+  /** The question asked after "Same thing", for a group or pages of different kinds. */
+  next: { lead: string; question: string; options: Option[] } | null;
   changed: string | null;
   cannotAct: string | null;
 }
@@ -231,6 +237,11 @@ function identityNoun(decision: Decision): Noun {
   return typeNoun(detail && "okf_type" in detail ? detail.okf_type : null);
 }
 
+/** What the "same?" question is about: the pages' kind, or a thing when the kinds differ. */
+function questionNoun(decision: Decision): Noun {
+  return identityShape(decision) === "kinds" ? typeNoun(null) : identityNoun(decision);
+}
+
 function evaluationLead(decision: Decision, noun: Noun): string | null {
   switch (decision.evaluation) {
     case "judged_same":
@@ -246,44 +257,51 @@ function evaluationLead(decision: Decision, noun: Noun): string | null {
   }
 }
 
-function identityView(decision: Decision, pages: Pages): Pick<DecisionView, "question" | "lead" | "options"> {
-  const noun = identityNoun(decision);
+/** Above the question asked after "Same thing". */
+export const SAID_SAME = "You said these are the same.";
+
+/**
+ * An identity question asks "Are these the same?" first, with both answers
+ * worded alike (#1475). For a pair, "Same thing" is the combine. For a group,
+ * or pages of different kinds, it asks the second question, which pages or what
+ * it is, and only that is previewed; the person always chooses, never the app.
+ */
+function identityView(decision: Decision, pages: Pages): Pick<DecisionView, "question" | "lead" | "options" | "next"> {
+  const noun = questionNoun(decision);
   const shape = identityShape(decision);
   const offers = (action: Action) => decision.actions.includes(action);
   const options: Option[] = [];
-  let question = `Are these the same ${noun.one}?`;
+  let next: DecisionView["next"] = null;
   if (decision.evaluation === "pending_evaluation") options.push(CHECK_THESE);
   if (offers("merge")) {
-    options.push({ choice: "merge", label: "Combine them", does: "We'll make one page with everything from both." });
-  }
-  if (offers("merge_group") && shape === "kinds") {
-    question = `What is ${titleOf(pages, members(decision)[0] ?? "")}?`;
-    for (const okfType of kindsAmong(decision, pages)) {
-      const kind = typeNoun(okfType);
-      options.push({
-        choice: "merge_group",
-        label: `It's ${kind.withArticle}`,
-        does: `We'll keep one page, as ${kind.withArticle}.`,
-        okfType,
-      });
-    }
+    options.push({ choice: "merge", label: "Same thing", does: "We'll make one page with everything from both." });
   } else if (offers("merge_group")) {
-    question = "Which of these are the same?";
+    const kinds = shape === "kinds";
     options.push({
-      choice: "merge_group",
-      label: "Combine the ones I marked",
-      does: "We'll make one page from the pages you marked.",
+      choice: "same",
+      label: "Same thing",
+      does: kinds ? "Next, you'll choose what it is." : "Next, you'll mark which ones are the same.",
     });
+    const then: Option[] = kinds
+      ? kindsAmong(decision, pages).map((okfType) => {
+          const kind = typeNoun(okfType);
+          return { choice: "merge_group", label: `It's ${kind.withArticle}`, does: `We'll keep one page, as ${kind.withArticle}.`, okfType };
+        })
+      : [{ choice: "merge_group", label: "Combine the ones I marked", does: "We'll make one page from the pages you marked." }];
+    next = {
+      lead: SAID_SAME,
+      question: kinds ? `What is ${titleOf(pages, members(decision)[0] ?? "")}?` : "Which of these are the same?",
+      options: [...then, DECIDE_LATER],
+    };
   }
   if (offers("keep_distinct")) {
-    const grouped = offers("merge_group");
     options.push({
       choice: "keep_distinct",
-      label: grouped ? (shape === "kinds" ? "They're different things" : "Keep all separate") : "Keep separate",
-      does: grouped && shape !== "kinds" ? "We won't suggest combining any of these again." : "We won't suggest combining these again.",
+      label: "Different things",
+      does: shape === "group" && offers("merge_group") ? "We won't suggest combining any of these again." : "We won't suggest combining these again.",
     });
   }
-  return { question, lead: evaluationLead(decision, noun), options };
+  return { question: `Are these the same ${noun.one}?`, lead: evaluationLead(decision, noun), options, next };
 }
 
 // -- connections -------------------------------------------------------------- //
@@ -387,7 +405,7 @@ function reasonOf(decision: Decision): string | null {
   return detail && "rationale" in detail ? modelReason(detail.rationale) : null;
 }
 
-type KindView = Partial<Pick<DecisionView, "question" | "lead" | "statement" | "facts" | "options">>;
+type KindView = Partial<Pick<DecisionView, "question" | "lead" | "statement" | "facts" | "options" | "next">>;
 
 /**
  * What each kind asks and offers. A kind maps to null while the brief words no
@@ -416,6 +434,7 @@ export function describeDecision(decision: Decision, pages: Pages, now: Date = n
     reason: reasonOf(decision),
     pages: (decision.kind === "identity" ? members(decision) : decision.targets).map((id) => pageView(pages, id, now)),
     options: [],
+    next: null,
     changed: decision.fresh === false ? CHANGED_CHECK : null,
     cannotAct: null,
   };
@@ -423,8 +442,8 @@ export function describeDecision(decision: Decision, pages: Pages, now: Date = n
   const view: DecisionView = settle === null ? { ...base, question: listedOnly(decision, pages) } : { ...base, ...settle(decision, pages) };
   // A changed decision's own actions would be refused as stale: it is checked
   // again first, and decided once it is current (#1475).
-  if (decision.fresh === false && settle !== null) return { ...view, options: [CHECK_AGAIN, DECIDE_LATER] };
-  if (view.options.length === 0) return { ...view, options: [], cannotAct: CANNOT_ACT };
+  if (decision.fresh === false && settle !== null) return { ...view, options: [CHECK_AGAIN, DECIDE_LATER], next: null };
+  if (view.options.length === 0) return { ...view, options: [], next: null, cannotAct: CANNOT_ACT };
   return { ...view, options: [...view.options, DECIDE_LATER] };
 }
 

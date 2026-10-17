@@ -26,6 +26,7 @@ const PAGES: Record<string, Page> = {
   "people/a": page("people/a", "Marguerite Osei"),
   "people/b": page("people/b", "M. Osei"),
   "people/c": page("people/c", "Maggie Osei"),
+  "concepts/idea": page("concepts/idea", "Osei method", "Concept"),
 };
 
 function identity(key: string, members: string[], over: Partial<Decision> = {}): Decision {
@@ -48,6 +49,10 @@ const CHANGED = identity("changed", ["people/a", "people/c"], { fresh: false });
 const GROUP = identity("group", ["people/a", "people/b", "people/c"], {
   actions: ["merge_group", "keep_distinct", "skip"],
   withheld: [{ action: "merge", reason: "more_than_two_members" }],
+});
+const KINDS = identity("kinds", ["people/a", "concepts/idea"], {
+  actions: ["merge_group", "keep_distinct", "skip"],
+  withheld: [{ action: "merge", reason: "cross_type" }],
 });
 const UNJUDGED = identity("unjudged", ["people/b", "people/c"], {
   evaluation: "pending_evaluation",
@@ -175,6 +180,8 @@ const answers = (root: HTMLElement) =>
 async function click(scope: HTMLElement, name: string): Promise<void> {
   const button = buttonNamed(scope, name);
   if (!button) throw new Error(`no button "${name}"`);
+  // As a person does: focus lands on the button they press.
+  button.focus();
   button.click();
   await settle();
 }
@@ -264,10 +271,10 @@ describe("one decision", () => {
   it("offers every answer with what it does, and previews before it applies", async () => {
     const { root, model, client } = await loaded([PAIR]);
     model.open("pair");
-    expect(answers(root).map(([label]) => label)).toEqual(["Combine them", "Keep separate", "Decide later"]);
+    expect(answers(root).map(([label]) => label)).toEqual(["Same thing", "Different things", "Decide later"]);
     const variants = Array.from(detail(root).querySelectorAll(".ui-answer button"), (b) => b.className.match(/ui-button--(\w+)/)?.[1]);
     expect(variants).toEqual(["secondary", "secondary", "quiet"]);
-    await click(detail(root), "Combine them");
+    await click(detail(root), "Same thing");
     expect(client.applyDecision).not.toHaveBeenCalled();
     expect(detail(root).querySelector(".ui-subtitle")?.textContent).toBe("What will happen");
     const confirm = buttonNamed(detail(root), "Confirm") as HTMLButtonElement;
@@ -306,9 +313,17 @@ describe("one decision", () => {
     expect(detail(root).textContent).not.toContain("openkos");
   });
 
-  it("marks a group's pages with checkboxes and says why combining waits", async () => {
+  it("asks a group whether they are the same before it asks which, with no marks shown", async () => {
     const { root, model } = await loaded([GROUP]);
     model.open("group");
+    expect(detail(root).querySelector("h2")?.textContent).toBe("Are these the same person?");
+    expect(answers(root).map(([label]) => label)).toEqual(["Same thing", "Different things", "Decide later"]);
+    expect(detail(root).querySelector("fieldset")).toBeNull();
+    await click(detail(root), "Same thing");
+    const question = detail(root).querySelector("h2") as HTMLElement;
+    expect(question.textContent).toBe("Which of these are the same?");
+    expect(document.activeElement).toBe(question);
+    expect(detail(root).querySelector(".ui-lead")?.textContent).toBe("You said these are the same.");
     const marks = detail(root).querySelector("fieldset") as HTMLFieldSetElement;
     expect(marks.querySelector("legend")?.textContent).toBe("Mark the pages that are the same");
     expect(Array.from(marks.querySelectorAll("input"), (i) => [i.type, i.checked])).toEqual([
@@ -319,6 +334,25 @@ describe("one decision", () => {
     const combine = buttonNamed(detail(root), "Combine the ones I marked") as HTMLButtonElement;
     expect(combine.disabled).toBe(true);
     expect(detail(root).querySelector(`#${combine.getAttribute("aria-describedby")}`)?.textContent).toBe("Mark at least two pages");
+    await click(detail(root), "Back");
+    expect(detail(root).querySelector("h2")?.textContent).toBe("Are these the same person?");
+  });
+
+  it("asks whether pages of two kinds are the same before it asks what it is", async () => {
+    const { root, model, client } = await loaded([KINDS]);
+    model.open("kinds");
+    expect(detail(root).querySelector("h2")?.textContent).toBe("Are these the same thing?");
+    expect(answers(root).map(([label]) => label)).toEqual(["Same thing", "Different things", "Decide later"]);
+    await click(detail(root), "Same thing");
+    expect(detail(root).querySelector("h2")?.textContent).toBe("What is Marguerite Osei?");
+    expect(document.activeElement).toBe(detail(root).querySelector("h2"));
+    expect(answers(root).map(([label]) => label)).toEqual(["It's a person", "It's an idea", "Decide later"]);
+    expect(client.previewDecision).not.toHaveBeenCalled();
+    await click(detail(root), "It's an idea");
+    expect(client.previewDecision).toHaveBeenCalledWith("kinds", {
+      action: "merge_group",
+      selection: { survivor_id: "concepts/idea", member_ids: ["people/a", "concepts/idea"] },
+    });
   });
 
   it("writes every value as text", async () => {
@@ -333,7 +367,7 @@ describe("one decision", () => {
   it("announces a confirmation politely", async () => {
     const { root, model, live } = await loaded([PAIR]);
     model.open("pair");
-    await click(detail(root), "Keep separate");
+    await click(detail(root), "Different things");
     await click(detail(root), "Confirm");
     expect(live.status.textContent).toBe("Kept separate.");
     expect(live.alert.textContent).toBe("");

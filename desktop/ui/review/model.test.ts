@@ -409,10 +409,64 @@ describe("one decision", () => {
   });
 });
 
-describe("marking a group", () => {
-  it("marks nothing for the person and refuses fewer than two", async () => {
+const SAME = { choice: "same", label: "Same thing", does: "" } as const;
+
+describe("asking whether they are the same, first", () => {
+  it("previews nothing of a group before Same thing, and only the answer after it", async () => {
     const { model, client } = await opened([GROUP], "group");
-    expect(model.state.open?.selection).toEqual({ marked: [], name: null, okfType: null });
+    expect(model.state.open?.selection).toEqual({ same: false, marked: [], name: null, okfType: null });
+    model.toggleMark("people/a");
+    model.toggleMark("people/c");
+    model.chooseName("people/c");
+    await model.choose({ choice: "merge_group", label: "", does: "" });
+    expect(client.previewDecision).not.toHaveBeenCalled();
+    await model.choose(SAME);
+    expect(model.state.open?.selection.same).toBe(true);
+    expect(model.state.open?.step).toEqual({ name: "choosing" });
+    expect(client.previewDecision).not.toHaveBeenCalled();
+    expect(client.applyDecision).not.toHaveBeenCalled();
+  });
+
+  it("previews nothing of different kinds before Same thing", async () => {
+    const { model, client } = await opened([KINDS], "kinds");
+    await model.choose({ choice: "merge_group", label: "", does: "", okfType: "Person" });
+    expect(client.previewDecision).not.toHaveBeenCalled();
+    expect(model.state.open?.selection).toMatchObject({ same: false, okfType: null, name: null });
+  });
+
+  it("previews keeping them separate without asking anything else", async () => {
+    const { model, client } = await opened([KINDS], "kinds");
+    await model.choose({ choice: "keep_distinct", label: "", does: "" });
+    expect(client.previewDecision).toHaveBeenCalledWith("kinds", { action: "keep_distinct" });
+  });
+
+  it("goes back to the first question, forgetting the answers after it", async () => {
+    const { model } = await opened([GROUP], "group");
+    await model.choose(SAME);
+    model.toggleMark("people/a");
+    model.askAgain();
+    expect(model.state.open?.selection).toEqual({ same: false, marked: [], name: null, okfType: null });
+    expect(model.state.open?.step).toEqual({ name: "choosing" });
+  });
+
+  it("keeps Same thing for a pair the combine itself", async () => {
+    const { model, client } = await opened([PAIR], "pair");
+    await model.choose(SAME);
+    expect(client.previewDecision).not.toHaveBeenCalled();
+    expect(model.state.open?.selection.same).toBe(false);
+  });
+});
+
+describe("marking a group", () => {
+  async function marking() {
+    const f = await opened([GROUP], "group");
+    await f.model.choose(SAME);
+    return f;
+  }
+
+  it("marks nothing for the person and refuses fewer than two", async () => {
+    const { model, client } = await marking();
+    expect(model.state.open?.selection).toEqual({ same: true, marked: [], name: null, okfType: null });
     model.toggleMark("people/a");
     model.chooseName("people/a");
     expect(model.state.open?.selection.name).toBe("people/a");
@@ -422,7 +476,7 @@ describe("marking a group", () => {
   });
 
   it("asks for the name among the marked pages only", async () => {
-    const { model } = await opened([GROUP], "group");
+    const { model } = await marking();
     model.toggleMark("people/a");
     model.toggleMark("people/c");
     expect(model.canCombineMarked()).toBe(false);
@@ -433,16 +487,16 @@ describe("marking a group", () => {
   });
 
   it("clears the name when its page is unmarked", async () => {
-    const { model } = await opened([GROUP], "group");
+    const { model } = await marking();
     model.toggleMark("people/a");
     model.toggleMark("people/c");
     model.chooseName("people/c");
     model.toggleMark("people/c");
-    expect(model.state.open?.selection).toEqual({ marked: ["people/a"], name: null, okfType: null });
+    expect(model.state.open?.selection).toEqual({ same: true, marked: ["people/a"], name: null, okfType: null });
   });
 
   it("sends the marked pages and the chosen name", async () => {
-    const { model, client } = await opened([GROUP], "group");
+    const { model, client } = await marking();
     model.toggleMark("people/a");
     model.toggleMark("people/c");
     model.chooseName("people/c");
@@ -455,8 +509,14 @@ describe("marking a group", () => {
 });
 
 describe("choosing what something is", () => {
+  async function choosing() {
+    const f = await opened([KINDS], "kinds");
+    await f.model.choose(SAME);
+    return f;
+  }
+
   it("takes the name from the only page of the chosen kind", async () => {
-    const { model, client } = await opened([KINDS], "kinds");
+    const { model, client } = await choosing();
     expect(model.state.open?.selection.marked).toEqual(["people/a", "orgs/acme", "orgs/acme2"]);
     await model.choose({ choice: "merge_group", label: "", does: "", okfType: "Person" });
     expect(client.previewDecision).toHaveBeenCalledWith("kinds", {
@@ -466,7 +526,7 @@ describe("choosing what something is", () => {
   });
 
   it("asks which keeps its name when two pages share the kind", async () => {
-    const { model, client } = await opened([KINDS], "kinds");
+    const { model, client } = await choosing();
     await model.choose({ choice: "merge_group", label: "", does: "", okfType: "Organization" });
     expect(client.previewDecision).not.toHaveBeenCalled();
     expect(model.namesForKind()).toEqual(["orgs/acme", "orgs/acme2"]);
@@ -582,6 +642,7 @@ describe("stale, busy and refused", () => {
 
   it("explains an interrupted group and reloads", async () => {
     const { model, client } = await opened([GROUP], "group");
+    await model.choose(SAME);
     model.toggleMark("people/a");
     model.toggleMark("people/b");
     model.chooseName("people/a");

@@ -123,7 +123,7 @@ function drawList(model: ReviewModel, state: ReviewState): HTMLElement {
   if (state.combined.length > 0) {
     const n = state.combined.length;
     pane.append(
-      uiList("Undo", [
+      uiList(COMBINED_HEADING, [
         listRow({
           title: COMBINED_HEADING,
           meta: n === 1 ? "1 page" : `${n} pages`,
@@ -165,7 +165,8 @@ function drawPages(pages: PageView[]): HTMLElement | null {
 function drawSelection(model: ReviewModel, state: ReviewState): HTMLElement[] {
   const open = state.open!;
   const decision = open.decision;
-  if (decision.kind !== "identity" || !decision.actions.includes("merge_group")) return [];
+  // Which pages, and which name, are asked only after "Same thing".
+  if (decision.kind !== "identity" || !decision.actions.includes("merge_group") || !open.selection.same) return [];
   const title = (id: string) => state.pages.get(id)?.title || UNREADABLE;
   const parts: HTMLElement[] = [];
   const shape = identityShape(decision);
@@ -226,6 +227,9 @@ function drawStep(model: ReviewModel, state: ReviewState, options: Option[]): HT
   switch (step.name) {
     case "choosing": {
       const parts = [...drawSelection(model, state), answersFor(model, state, options)];
+      if (open.selection.same) {
+        parts.push(el("div", { class: "ui-actions" }, uiButton("Back", () => model.askAgain(), { variant: "quiet", focusKey: "ask-again" })));
+      }
       const kind = open.selection.okfType;
       const option = kind === null ? undefined : options.find((o) => o.okfType === kind);
       if (kind !== null && option && model.namesForKind().length > 1) {
@@ -284,14 +288,16 @@ function drawStep(model: ReviewModel, state: ReviewState, options: Option[]): HT
 function drawDecision(model: ReviewModel, state: ReviewState): HTMLElement[] {
   const open = state.open!;
   const view = describeDecision(open.decision, state.pages);
+  // After "Same thing", the second question takes the first one's place.
+  const asked = open.selection.same && view.next ? view.next : view;
   const parts: HTMLElement[] = [];
   if (open.changed) parts.push(callout("warning", open.changed));
   parts.push(
     el(
       "header",
       { class: "ui-question-header" },
-      view.lead ? el("p", { class: "ui-lead" }, view.lead) : null,
-      heading(2, view.question, "ui-question", true),
+      asked.lead ? el("p", { class: "ui-lead" }, asked.lead) : null,
+      heading(2, asked.question, "ui-question", true),
     ),
   );
   if (view.statement) parts.push(el("p", { class: "ui-statement" }, view.statement));
@@ -306,7 +312,7 @@ function drawDecision(model: ReviewModel, state: ReviewState): HTMLElement[] {
     return parts;
   }
   if (open.problem) parts.push(problemCallout(open.problem, () => model.resolveProblem(), "problem"));
-  parts.push(...drawStep(model, state, view.options));
+  parts.push(...drawStep(model, state, asked.options));
   return parts;
 }
 
@@ -468,7 +474,8 @@ function announcement(state: ReviewState): Notice | null {
 function viewKey(state: ReviewState): string {
   if (state.split) return `split:${state.split.survivor}:${state.split.absorbed}`;
   if (state.check) return "check";
-  if (state.open) return `decision:${state.open.key}`;
+  // Answering "Same thing" asks a new question: focus moves to it.
+  if (state.open) return `decision:${state.open.key}:${state.open.selection.same ? "then" : "first"}`;
   if (state.combinedOpen) return "combined";
   return "list";
 }
