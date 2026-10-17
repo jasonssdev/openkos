@@ -77,6 +77,7 @@ class WriteFailed(Refused):
             "reopen",
             "unrelate",
             "model_settings",
+            "set_sensitivity",
         ],
         subjects: tuple[str, ...],
         error: str,

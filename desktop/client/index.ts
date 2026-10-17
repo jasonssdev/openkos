@@ -186,6 +186,10 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
     mergeHistory: (conceptId: string) => call("get", "/v1/merges", { query: { concept_id: conceptId } }),
     mergedConcepts: () => call("get", "/v1/merged"),
     readPage: (conceptId: string) => call("get", "/v1/pages", { query: { concept_id: conceptId } }),
+    previewSensitivity: (body: Schemas["SensitivityPreviewRequest"]) =>
+      call("post", "/v1/pages/sensitivity/preview", { body }),
+    applySensitivity: (body: Schemas["SensitivityApplyRequest"]) =>
+      call("post", "/v1/pages/sensitivity/apply", { body }),
     previewUnmerge: (body: Schemas["UnmergePreviewRequest"]) => call("post", "/v1/unmerge/preview", { body }),
     applyUnmerge: (body: Schemas["UnmergeApplyRequest"]) => call("post", "/v1/unmerge/apply", { body }),
     keptDistinct: () => call("get", "/v1/kept-distinct"),

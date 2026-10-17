@@ -3124,6 +3124,45 @@
         "title": "QuoteToken",
         "type": "object"
       },
+      "RaisedPage": {
+        "description": "A page raised with the one changed, because it was made from it.",
+        "properties": {
+          "after": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "After",
+            "type": "string"
+          },
+          "before": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Before",
+            "type": "string"
+          },
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concept_id",
+          "title",
+          "before",
+          "after"
+        ],
+        "title": "RaisedPage",
+        "type": "object"
+      },
       "ReconcilePlan": {
         "description": "Recording how two pages relate, as `reconcile` writes it: both stand\n(`reconciled_with`, no holder), one replaces the other (`supersedes`, the\ntarget listed as deprecated), or one refines the other (`revises`, both\nstay current).",
         "properties": {
@@ -3699,6 +3738,226 @@
           "download_url"
         ],
         "title": "RuntimeReadiness",
+        "type": "object"
+      },
+      "SensitivityApplyRequest": {
+        "description": "The version the sensitivity preview issued (echoed unchanged) and how\nlong to wait for the workspace lock; a client can shorten the wait only.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/SensitivityVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "SensitivityApplyRequest",
+        "type": "object"
+      },
+      "SensitivityChanged": {
+        "additionalProperties": false,
+        "description": "The level was set. `previous` is the stored value it replaced (`None`\nwhen there was none). `commit_sha` is `None` when the commit could not be\nmade (the write itself landed). `committed_confidential`: the commit holds\na page explicitly marked confidential.",
+        "properties": {
+          "also_raised": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Also Raised",
+            "type": "array"
+          },
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "committed_confidential": {
+            "default": false,
+            "title": "Committed Confidential",
+            "type": "boolean"
+          },
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "previous": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous"
+          }
+        },
+        "required": [
+          "concept_id",
+          "level",
+          "previous",
+          "also_raised",
+          "commit_sha"
+        ],
+        "title": "SensitivityChanged",
+        "type": "object"
+      },
+      "SensitivityPreview": {
+        "description": "Setting `concept_id` to `level`. `current` is the page's level now,\nranked fail-closed (missing is `private`, unrecognised `confidential`).\n`direction` compares the stored value with `level`; `same` rewrites a\nmissing or unrecognised value as the level it already reads as.\n`also_raised` is the pages raised with it: only a raise of a page of type\n`Source` has any, and a lowering never lowers another page.",
+        "properties": {
+          "also_raised": {
+            "items": {
+              "$ref": "#/components/schemas/RaisedPage"
+            },
+            "title": "Also Raised",
+            "type": "array"
+          },
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "current": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Current",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "raise",
+              "same",
+              "lower"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/SensitivityVersion"
+          }
+        },
+        "required": [
+          "concept_id",
+          "title",
+          "current",
+          "level",
+          "direction",
+          "also_raised",
+          "version"
+        ],
+        "title": "SensitivityPreview",
+        "type": "object"
+      },
+      "SensitivityPreviewRequest": {
+        "additionalProperties": false,
+        "description": "The page, by its Concept ID, and who may see it.",
+        "properties": {
+          "concept_id": {
+            "maxLength": 1024,
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concept_id",
+          "level"
+        ],
+        "title": "SensitivityPreviewRequest",
+        "type": "object"
+      },
+      "SensitivityResponse": {
+        "additionalProperties": false,
+        "description": "What was set, and the warnings the apply raised along the way.",
+        "properties": {
+          "changed": {
+            "$ref": "#/components/schemas/SensitivityChanged"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "changed",
+          "warnings"
+        ],
+        "title": "SensitivityResponse",
+        "type": "object"
+      },
+      "SensitivityVersion": {
+        "description": "The version a stateless caller applies against: echo it unchanged.\n`content_digest` covers the page, the level and, for a raise of a source\nfile's page, every page that could be derived from it.",
+        "properties": {
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concept_id",
+          "level",
+          "content_digest"
+        ],
+        "title": "SensitivityVersion",
         "type": "object"
       },
       "SettingChange": {
@@ -6419,6 +6678,230 @@
           }
         ],
         "summary": "Page"
+      }
+    },
+    "/v1/pages/sensitivity/apply": {
+      "post": {
+        "operationId": "sensitivity_apply_v1_pages_sensitivity_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SensitivityApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SensitivityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Sensitivity Apply"
+      }
+    },
+    "/v1/pages/sensitivity/preview": {
+      "post": {
+        "operationId": "sensitivity_preview_v1_pages_sensitivity_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SensitivityPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SensitivityPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Sensitivity Preview"
       }
     },
     "/v1/pending": {

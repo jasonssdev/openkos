@@ -343,6 +343,32 @@ class TierChangeResponse(BaseModel):
     warnings: list[str]
 
 
+class SensitivityPreviewRequest(BaseModel):
+    """The page, by its Concept ID, and who may see it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    concept_id: Annotated[str, Field(max_length=1024)]
+    level: api.PageSensitivity
+
+
+class SensitivityApplyRequest(_EchoRequest):
+    """The version the sensitivity preview issued (echoed unchanged) and how
+    long to wait for the workspace lock; a client can shorten the wait only."""
+
+    version: api.SensitivityVersion
+    wait_seconds: float = Field(default=WRITE_WAIT_SECONDS, ge=0, le=WRITE_WAIT_SECONDS)
+
+
+class SensitivityResponse(BaseModel):
+    """What was set, and the warnings the apply raised along the way."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    changed: api.SensitivityChanged
+    warnings: list[str]
+
+
 class ModelSettingsPreviewRequest(BaseModel):
     """The model setup asked for. A `null` URL removes its line, so the
     backend's own default applies. There is no field for a key: the engine

@@ -37,6 +37,8 @@ EXPECTED_ROUTES = {
     ("POST", "/v1/unrelate/apply"),
     ("POST", "/v1/tiers/preview"),
     ("POST", "/v1/tiers/apply"),
+    ("POST", "/v1/pages/sensitivity/preview"),
+    ("POST", "/v1/pages/sensitivity/apply"),
     ("GET", "/v1/settings/model"),
     ("POST", "/v1/settings/model/preview"),
     ("POST", "/v1/settings/model/apply"),
@@ -240,6 +242,8 @@ _BODY_ROUTES = [
     "/v1/decisions/watch_refusal:abc/ingest-quote",
     "/v1/ingest/runs",
     "/v1/setup/pulls",
+    "/v1/pages/sensitivity/preview",
+    "/v1/pages/sensitivity/apply",
 ]
 
 

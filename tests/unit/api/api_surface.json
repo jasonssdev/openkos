@@ -1821,6 +1821,10 @@
       "kind": "dataclass",
       "members": {}
     },
+    "PageSensitivity": {
+      "kind": "alias",
+      "value": "Literal['public', 'private', 'confidential']"
+    },
     "PageSource": {
       "fields": [
         {
@@ -2185,6 +2189,33 @@
         }
       }
     },
+    "RaisedPage": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "title"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "before"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "after"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "ReconcilePlan": {
       "fields": [
         {
@@ -2471,6 +2502,131 @@
           "annotation": "str | None",
           "default": false,
           "name": "download_url"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "SensitivityChanged": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "level"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "previous"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "also_raised"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "commit_sha"
+        },
+        {
+          "annotation": "bool",
+          "default": true,
+          "name": "committed_confidential"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "SensitivityPreview": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "title"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "current"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "level"
+        },
+        {
+          "annotation": "Literal['raise', 'same', 'lower']",
+          "default": false,
+          "name": "direction"
+        },
+        {
+          "annotation": "tuple[RaisedPage, ...]",
+          "default": false,
+          "name": "also_raised"
+        },
+        {
+          "annotation": "SensitivityVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "SensitivityRefused": {
+      "fields": [
+        {
+          "annotation": "Literal['not_found', 'unchanged']",
+          "default": false,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "SensitivityStale": {
+      "fields": [
+        {
+          "annotation": "Literal['content_changed']",
+          "default": true,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "SensitivityVersion": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "level"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
         }
       ],
       "frozen": true,
@@ -3280,6 +3436,36 @@
       ],
       "returns": "Reopened | NotUndoable | UndoStale"
     },
+    "apply_sensitivity": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "SensitivityVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "SensitivityChanged | SensitivityRefused | SensitivityStale"
+    },
     "apply_tier_change": {
       "kind": "function",
       "parameters": [
@@ -3579,6 +3765,30 @@
         }
       ],
       "returns": "ReopenPreview | NotUndoable"
+    },
+    "preview_sensitivity": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "concept_id"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "level"
+        }
+      ],
+      "returns": "SensitivityPreview | SensitivityRefused"
     },
     "preview_tier_change": {
       "kind": "function",
