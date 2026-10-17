@@ -46,6 +46,7 @@ relocation block states why the aliases were removed).
 """
 
 import contextlib
+import functools
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -69,7 +70,12 @@ from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
 from openkos.application import suggest_volatility_service as volatility_service
 from openkos.application.lock_wait import CommitSection
-from openkos.application.write_gate import DriftDetected, Refused, WriteFailed
+from openkos.application.write_gate import (
+    DriftDetected,
+    MergeGroupInterrupted,
+    Refused,
+    WriteFailed,
+)
 from openkos.cli import observability, output
 from openkos.graph.base import Edge
 from openkos.graph.sqlite_graph import build_graph
@@ -1552,6 +1558,279 @@ def _commit_identity_merge(
     return True
 
 
+# -- the group walk (#1438, ADR-0063) ---------------------------------------- #
+
+_LATER: Final = "later"
+_DISTINCT: Final = "distinct"
+
+
+def _member_label(bundle_dir: Path, concept_id: str) -> tuple[str, str | None]:
+    """`(title, declared type)` of one member, read through the OKF adapter;
+    the Concept ID and `None` stand in for what cannot be read."""
+    path = okf.concept_path_for(concept_id, bundle_dir)
+    try:
+        metadata, _body = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return concept_id, None
+    title, declared = metadata.get("title"), metadata.get("type")
+    return (
+        title if isinstance(title, str) and title.strip() else concept_id,
+        declared if isinstance(declared, str) and declared.strip() else None,
+    )
+
+
+def _ask_numbers(
+    prompt_text: str,
+    *,
+    allowed: Sequence[int],
+    minimum: int,
+    maximum: int | None = None,
+    words: Mapping[str, str],
+    expected: str,
+) -> tuple[int, ...] | str:
+    """A validating loop over member numbers: returns the distinct numbers
+    named (ascending), or the value of one of `words`. Enter is `s`. A number
+    outside `allowed`, fewer than `minimum` or more than `maximum` distinct
+    numbers, or any other token is re-asked, never read as a decision."""
+    while True:
+        answer = typer.prompt(prompt_text, default="s", show_default=False)
+        token = answer.strip().lower()
+        if token in words or token == "":
+            return words[token or "s"]
+        parts = token.replace(",", " ").split()
+        if all(part.isdigit() for part in parts):
+            numbers = {int(part) for part in parts}
+            if numbers <= set(allowed) and minimum <= len(numbers) <= (
+                maximum or len(numbers)
+            ):
+                return tuple(sorted(numbers))
+        typer.echo(
+            f"Unrecognized answer '{answer.strip()}' -- expected {expected}. "
+            "Asking again."
+        )
+
+
+_TYPE_NOTES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "same_type": "",
+        "recorded": " -- its type is recorded as type_alternative",
+        "discarded": (
+            " -- its type is discarded (the survivor already records a "
+            "type_alternative)"
+        ),
+        "unknown": " -- its type cannot be read",
+    }
+)
+
+
+def _group_selection(
+    ctx: CurateContext, group: CandidateGroup
+) -> curate_decisions.GroupSelection | str:
+    """Ask which members are the same, what a cross-type thing is and which
+    member keeps its name; return the selection, or `_LATER` / `_DISTINCT`.
+    The engine never answers any of the three for the person."""
+    members = tuple(sorted(group.member_ids))
+    labels = [_member_label(ctx.layout.bundle_dir, m) for m in members]
+    output.section_break()
+    typer.echo(f"[{group.okf_type}] {len(members)} members judged the same:")
+    for number, (member_id, (title, declared)) in enumerate(
+        zip(members, labels, strict=True), start=1
+    ):
+        typer.echo(f"  {number}. {member_id} -- {title} ({declared or 'no type'})")
+    later_or_distinct = {
+        "s": _LATER,
+        "skip": _LATER,
+        "d": _DISTINCT,
+        "distinct": _DISTINCT,
+    }
+    marked: tuple[int, ...] = tuple(range(1, len(members) + 1))
+    if len(members) > 2:
+        answer = _ask_numbers(
+            "Which of these are the same? Numbers (e.g. 1 3), [a]ll, "
+            "[d]istinct (keep all separate) or [s]kip",
+            allowed=marked,
+            minimum=2,
+            words={**later_or_distinct, "a": "all", "all": "all"},
+            expected="two or more numbers, a, d or s (Enter = s)",
+        )
+        if isinstance(answer, str) and answer != "all":
+            return answer
+        if not isinstance(answer, str):
+            marked = answer
+    candidates = marked
+    kinds = sorted({labels[n - 1][1] for n in marked} - {None}, key=str)
+    if len(kinds) > 1:
+        options = "  ".join(f"{i}) {kind}" for i, kind in enumerate(kinds, start=1))
+        kind_answer = _ask_numbers(
+            f"What is {labels[marked[0] - 1][0]}? {options}, "
+            "[d]istinct (different things) or [s]kip",
+            allowed=range(1, len(kinds) + 1),
+            minimum=1,
+            maximum=1,
+            words=later_or_distinct,
+            expected="one type number, d or s (Enter = s)",
+        )
+        if isinstance(kind_answer, str):
+            return kind_answer
+        chosen = kinds[kind_answer[0] - 1]
+        candidates = tuple(n for n in marked if labels[n - 1][1] == chosen)
+    survivor_number = candidates[0]
+    if len(candidates) > 1:
+        listed = ", ".join(str(n) for n in candidates[:-1])
+        name_answer = _ask_numbers(
+            f"Which one keeps its name? {listed} or {candidates[-1]}, or [s]kip",
+            allowed=candidates,
+            minimum=1,
+            maximum=1,
+            words={"s": _LATER, "skip": _LATER},
+            expected="one of the numbers offered, or s (Enter = s)",
+        )
+        if isinstance(name_answer, str):
+            return name_answer
+        survivor_number = name_answer[0]
+    return curate_decisions.GroupSelection(
+        survivor_id=members[survivor_number - 1],
+        member_ids=tuple(members[n - 1] for n in marked),
+    )
+
+
+def _offers_group(ctx: CurateContext, decision_key: str) -> bool:
+    """Whether the group's open row offers `merge_group` -- a SAME judgment
+    the row itself carries. Read before any prompt, so no question promises a
+    write the surface would refuse."""
+    return any(
+        item.decision_key == decision_key
+        and curate_decisions.Action.MERGE_GROUP in item.actions
+        for item in curate_decisions.list_open_decisions(ctx.layout)
+    )
+
+
+def _interrupted_line(exc: MergeGroupInterrupted) -> str:
+    kept = ", ".join(absorbed for _survivor, absorbed in exc.completed)
+    survivor = exc.completed[0][0] if exc.completed else exc.subjects[0]
+    return (
+        f"openkos curate: Identity: stopped combining into {survivor} after "
+        f"merging {kept} -- failed while merging {exc.failed_absorbed_id} "
+        f"({exc.error}); the merges written are kept, each reversible with "
+        "`openkos unmerge`."
+    )
+
+
+def _walk_identity_group(
+    ctx: CurateContext, group: CandidateGroup, *, fallback: Callable[[], None]
+) -> tuple[Literal["applied", "skipped"], str | None]:
+    """Walk one judged-SAME group of more than two members, or one cross-type
+    pair, through the decision surface's group commit -- the path the app
+    uses (ADR-0063). Returns the count it adds to and, for `d`, the
+    `declined:` label.
+
+    A row that does not offer `merge_group` keeps the earlier skip line
+    (`fallback`), naming the manual route. A drift exits 3 and a write failure
+    exits 1, as for a pair; a group stopped after some merges names them."""
+    from openkos.cli import main as cli_main
+
+    decision_key = curate_decisions.identity_decision_key(group.member_ids)
+    if not _offers_group(ctx, decision_key):
+        fallback()
+        return "skipped", None
+    members_text = ", ".join(sorted(group.member_ids))
+    selection = _group_selection(ctx, group)
+    if selection == _DISTINCT:
+        curate_decisions.commit_keep_distinct(
+            ctx.root,
+            ctx.layout,
+            group.member_ids,
+            ports=_decision_ports(ctx),
+            observer=_CurateDecisionObserver(),
+        )
+        return "skipped", members_text
+    if not isinstance(selection, curate_decisions.GroupSelection):
+        curate_decisions.skip_decision(decision_key)
+        return "skipped", None
+    try:
+        previewed = curate_decisions.preview_decision(
+            ctx.root,
+            ctx.layout,
+            decision_key,
+            curate_decisions.Action.MERGE_GROUP,
+            selection=selection,
+        )
+    except WriteFailed as exc:
+        typer.echo(_merge_failed_line(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if not isinstance(previewed, curate_decisions.DecisionPreview) or not isinstance(
+        previewed.preview, curate_decisions.MergeGroupDecisionPreview
+    ):
+        return _group_not_combined(members_text, previewed), None
+    preview = previewed.preview
+    survivor_title, _ = _member_label(ctx.layout.bundle_dir, preview.survivor_id)
+    typer.echo(f"  combine into {preview.survivor_id} ({survivor_title}):")
+    for step in preview.steps:
+        typer.echo(
+            f"    merge {step.prepared.absorbed_canonical} "
+            f"({step.absorbed_type or 'no type'}) into {preview.survivor_id}"
+            f"{_TYPE_NOTES[step.type_outcome]}"
+        )
+    if preview.kept_distinct_ids:
+        typer.echo(f"  kept distinct: {', '.join(preview.kept_distinct_ids)}")
+    if preview.cross_source_same_pair:
+        typer.echo(cli_main._cross_source_walk_note(preview.selection.member_ids))
+    if preview.cross_type_concern is not None:
+        typer.echo(cli_main._cross_type_walk_note(preview.cross_type_concern))
+    consent = _ask(
+        f"Combine {len(preview.selection.member_ids)} member(s) into "
+        f"{preview.survivor_id}? [y]es / [s]kip",
+        {"y": True, "yes": True, "s": False, "skip": False, "n": False, "no": False},
+        default="s",
+        expected="y or s (Enter = s)",
+    )
+    if not consent:
+        curate_decisions.skip_decision(decision_key)
+        return "skipped", None
+    try:
+        outcome = curate_decisions.commit_merge_group_decision(
+            ctx.root,
+            ctx.layout,
+            preview,
+            ports=_decision_ports(ctx),
+            observer=_CurateDecisionObserver(),
+            surface="curate",
+            expected=previewed.version,
+        )
+    except DriftDetected as exc:
+        typer.echo(exc.message, err=True)
+        raise typer.Exit(code=3) from exc
+    except MergeGroupInterrupted as exc:
+        typer.echo(_interrupted_line(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    except WriteFailed as exc:
+        typer.echo(_merge_failed_line(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if not isinstance(outcome, curate_decisions.Applied):
+        return _group_not_combined(members_text, outcome), None
+    if outcome.commit_sha is not None:
+        cli_main._echo_commit_disclosure(outcome.commit_sha, prefix="  ")
+    return "applied", None
+
+
+def _group_not_combined(
+    members_text: str,
+    outcome: curate_decisions.NotApplied
+    | curate_decisions.Stale
+    | curate_decisions.DecisionPreview,
+) -> Literal["skipped"]:
+    """Count a refused or stale group as skipped and say why. A vanished member
+    is already announced by the observer, so it adds no second line."""
+    reason = getattr(outcome, "reason", "not_offered")
+    if reason != "member_missing":
+        typer.echo(
+            f"openkos curate: Identity: skipped {members_text} -- not combined "
+            f"({reason}).",
+            err=True,
+        )
+    return "skipped"
+
+
 def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     """The store partition + `adjudicate_candidates` over the fresh
     remainder + persist (#867, the verb's own serve contract via the same
@@ -1559,9 +1838,10 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     `_prepare_one_merge` / preview / `[y/N]` / `_reject_drifted_targets`
     / `merge_service.commit_merge` walk `adjudicate --apply` already performs (design
     D4/D6) -- reused verbatim rather than re-implemented, so the two write
-    paths can never drift apart. N>2 groups are never auto-merged
-    (`_echo_n_gt2_skip` prints the exact pairwise `openkos merge` commands,
-    spec: N>2 group prints pairwise commands, never auto-merges).
+    paths can never drift apart. A group of more than two members and a
+    cross-type pair are never auto-merged: `_walk_identity_group` asks the
+    person through the group decision the app makes (#1438), and keeps the
+    pairwise skip lines only where no open row offers it.
 
     A drift refusal (`_reject_drifted_targets`) raises `typer.Exit(code=3)`
     and is deliberately let propagate all the way out of `run_curate` --
@@ -1757,8 +2037,18 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             continue
         if len(group.member_ids) != 2:
             if len(group.member_ids) > 2:
-                cli_main._echo_n_gt2_skip(layout.bundle_dir, group)
-                skipped += 1
+                # #1438: the group decision the app makes, asked here.
+                counted, label = _walk_identity_group(
+                    ctx,
+                    group,
+                    fallback=functools.partial(
+                        cli_main._echo_n_gt2_skip, layout.bundle_dir, group
+                    ),
+                )
+                applied += counted == "applied"
+                skipped += counted == "skipped"
+                if label is not None:
+                    declined.append(label)
             continue
 
         # #776: the pair is ordered ONCE (richer body survives), displayed,
@@ -1769,22 +2059,28 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 layout.bundle_dir, group.member_ids
             )
         )
-        # #1258: the same refusal `adjudicate --apply` makes, through the
-        # same predicate and skip line. `curate` has no opt-in of its own:
-        # the manual `merge --include-cross-type` command the line names is
-        # the deliberate route.
+        # #1258: a cross-type pair is never merged by the richer-body rule.
+        # #1438: the person says what it is, through the group decision; a
+        # row that does not offer one keeps the skip line `adjudicate
+        # --apply` prints, naming the manual `merge --include-cross-type`.
         cross_type_reason = application_lifecycle.cross_type_concern(
             layout.bundle_dir, (survivor_id, absorbed_id)
         )
         if cross_type_reason is not None:
-            typer.echo(
-                cli_main._cross_type_skip_line(
-                    group.member_ids,
-                    (survivor_id, absorbed_id),
-                    cross_type_reason,
-                )
+            counted, label = _walk_identity_group(
+                ctx,
+                group,
+                fallback=functools.partial(
+                    typer.echo,
+                    cli_main._cross_type_skip_line(
+                        group.member_ids, (survivor_id, absorbed_id), cross_type_reason
+                    ),
+                ),
             )
-            skipped += 1
+            applied += counted == "applied"
+            skipped += counted == "skipped"
+            if label is not None:
+                declined.append(label)
             continue
         try:
             preview = curate_decisions.preview_merge(

@@ -1948,6 +1948,10 @@ def test_identity_partial_batch_model_not_found_still_walks_then_skips_later_sta
 
 # ---------------------------------------------------------------------------
 # 1.19 -- N>2 group prints pairwise commands, no merge
+#
+# With no pending-work queue there is no open row for the group decision to
+# commit against (#1438), so the walk keeps the manual route. The group walk
+# itself is `test_curate_group_walk.py`.
 # ---------------------------------------------------------------------------
 
 
@@ -6133,10 +6137,12 @@ def test_identity_walk_skips_a_cross_type_pair(
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1258 on the recommended path: curate's Identity walk refuses the
-    cross-type pair `adjudicate --apply` refuses, through the same skip
-    line -- a guard landing in one walk and forgotten in the other is
-    exactly #796's drift."""
+    """#1258 on the recommended path: curate's Identity walk never merges a
+    cross-type pair by the richer-body rule. With no pending-work queue
+    there is no row for the group decision (#1438, `test_curate_group_walk.py`)
+    to commit against, so it prints the skip line `adjudicate --apply` prints
+    -- a guard landing in one walk and forgotten in the other is exactly
+    #796's drift."""
     _stub_later_stages_empty(monkeypatch)
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_bodied_doc(
