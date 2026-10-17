@@ -29,6 +29,7 @@ from openkos.api._workspace import Workspace
 from openkos.application import (
     backends,
     curate_decisions,
+    ingest_consent,
     judging,
     lock_wait,
     model_settings,
@@ -299,4 +300,39 @@ def settings_ports(
         ),
         plan_commit=plan_commit,
         commit=commit,
+    )
+
+
+def ingest_ports(
+    workspace: Workspace,
+    *,
+    wait_seconds: float,
+    on_warning: Callable[[str], None] | None,
+) -> ingest_consent.IngestConsentPorts:
+    """The effects adding files reaches, bound to `workspace`: the extraction
+    client built from the configuration the service has just read, each
+    file's commit (a commit that cannot be made is a warning naming the
+    ingest), the lock taken only inside each file's commit phase, waiting at
+    most `wait_seconds`, and the incremental derived refresh with the API's own
+    embedding client. The refresh is read through the module attribute, so a
+    patch of `ingest_consent.refresh_derived_stores` intercepts it."""
+    warn = on_warning if on_warning is not None else _ignore
+
+    def autocommit(root: Path, paths: Sequence[str], message: str) -> str | None:
+        outcome = commit_paths(root, paths, message)
+        warning = skipped_warning(outcome, "the ingest")
+        if warning is not None:
+            warn(warning)
+        return outcome.sha
+
+    def refresh(root: Path) -> None:
+        ingest_consent.refresh_derived_stores(root, embed_client=default_embedder)
+
+    return ingest_consent.IngestConsentPorts(
+        chat_client=lambda cfg: default_chat_client(cfg, "extraction"),
+        autocommit=autocommit,
+        commit_section=lock_wait.locked_commit_section(
+            workspace.root, wait_seconds=wait_seconds
+        ),
+        refresh_derived=refresh,
     )

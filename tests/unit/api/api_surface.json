@@ -618,6 +618,311 @@
       "kind": "dataclass",
       "members": {}
     },
+    "IngestBinding": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "model"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "backend"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "is_local"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "include_confidential"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "settings_digest"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "IngestFileQuote": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "path"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "name"
+        },
+        {
+          "annotation": "int | None",
+          "default": false,
+          "name": "size"
+        },
+        {
+          "annotation": "Literal['extracts', 'source_only', 'unchanged', 'refused']",
+          "default": false,
+          "name": "status"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls"
+        },
+        {
+          "annotation": "Literal['not_text', 'blank', 'confidential_floor'] | None",
+          "default": true,
+          "name": "source_only"
+        },
+        {
+          "annotation": "Literal['not_absolute', 'not_found', 'not_a_file', 'inside_workspace', 'duplicate_name', 'changed_after_import', 'inconsistent_workspace', 'symlinked_destination', 'unreadable'] | None",
+          "default": true,
+          "name": "refusal"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "IngestFileResult": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "path"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "name"
+        },
+        {
+          "annotation": "Literal['added', 'updated', 'unchanged', 'refused', 'interrupted', 'busy', 'failed', 'not_reached']",
+          "default": false,
+          "name": "status"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "source_id"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "created"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "revised"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "extraction_degraded"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls"
+        },
+        {
+          "annotation": "Literal['not_absolute', 'not_found', 'not_a_file', 'inside_workspace', 'duplicate_name', 'changed_after_import', 'inconsistent_workspace', 'symlinked_destination', 'unreadable'] | None",
+          "default": true,
+          "name": "refusal"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "IngestProgress": {
+      "fields": [
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "index"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "total"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "path"
+        },
+        {
+          "annotation": "Literal['reading', 'extracting', 'writing', 'refreshing']",
+          "default": false,
+          "name": "phase"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "IngestQuote": {
+      "fields": [
+        {
+          "annotation": "tuple[IngestFileQuote, ...]",
+          "default": false,
+          "name": "files"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "model"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "backend"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "is_local"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "host"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "include_confidential"
+        },
+        {
+          "annotation": "IngestQuoteToken",
+          "default": false,
+          "name": "token"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "IngestQuoteStale": {
+      "fields": [
+        {
+          "annotation": "tuple[Literal['model', 'backend', 'locality', 'settings', 'files'], ...]",
+          "default": false,
+          "name": "changed"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "IngestQuoteToken": {
+      "fields": [
+        {
+          "annotation": "IngestBinding",
+          "default": false,
+          "name": "binding"
+        },
+        {
+          "annotation": "tuple[IngestTokenFile, ...]",
+          "default": false,
+          "name": "files"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "IngestRefused": {
+      "bases": [
+        "OpenKosError"
+      ],
+      "fields": {},
+      "kind": "exception",
+      "members": {}
+    },
+    "IngestRunOutcome": {
+      "fields": [
+        {
+          "annotation": "Literal['completed', 'stopped', 'busy']",
+          "default": false,
+          "name": "status"
+        },
+        {
+          "annotation": "tuple[IngestFileResult, ...]",
+          "default": false,
+          "name": "files"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls"
+        },
+        {
+          "annotation": "Literal['refreshed', 'not_needed', 'stale']",
+          "default": false,
+          "name": "indexes"
+        },
+        {
+          "annotation": "bool",
+          "default": true,
+          "name": "observer_failed"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "IngestRunResult": {
+      "kind": "alias",
+      "value": "IngestRunOutcome | IngestQuoteStale | RunRefused"
+    },
+    "IngestTokenFile": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "path"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "digest"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "JobSummary": {
       "fields": [
         {
@@ -3389,6 +3694,30 @@
       ],
       "returns": "PullOutcome | PullRefused"
     },
+    "quote_ingest": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "Sequence[str | os.PathLike[str]]",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "paths"
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "kind": "KEYWORD_ONLY",
+          "name": "include_confidential"
+        }
+      ],
+      "returns": "IngestQuote"
+    },
     "quote_judging": {
       "kind": "function",
       "parameters": [
@@ -3460,6 +3789,48 @@
         }
       ],
       "returns": "QueueRefresh"
+    },
+    "run_ingest": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "IngestQuoteToken | None",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "token"
+        },
+        {
+          "annotation": "StopToken | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "stop"
+        },
+        {
+          "annotation": "Callable[[IngestProgress], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "progress"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "IngestRunOutcome | IngestQuoteStale | RunRefused"
     },
     "run_judging": {
       "kind": "function",
