@@ -237,7 +237,7 @@ Adding the file clears the item. Once a file is renamed in the folder instead, O
   - Already added and unchanged (`unchanged`): "Already in your library. Nothing to do."
   - Not a text file (`not_text`): "We'll keep this file, but the AI model can't read it, so no pages will be made from it."
   - Empty (`blank`): "This file is empty. We'll keep it, but there is nothing to make pages from."
-  - Kept from the AI model by the library's setting (`confidential_floor`): "Your library keeps new files Only on this Mac, so the AI model won't read this one. We'll keep the file without making pages." The app does not offer to let the AI model read such a file (`include_confidential` is never sent), the same choice Ask makes.
+  - Kept from the AI model by the library's setting (`confidential_floor`): "Your library keeps new files Only on this Mac, so the AI model won't read this one. We'll keep the file without making pages." The app does not offer to let the AI model read such a file (`include_confidential` is never sent).
   - Not added, with the reason, below.
 - What leaves the Mac, in the same words as checking, and only when the AI model reads at least one file: "The AI model on this Mac will read {it / both / all of them / {k} of them} and make pages. Nothing leaves this Mac." When the backend is not local: "The text of {this file / these files} will be sent to {host} to make pages with {model}. The provider may charge you."
 - With a cloud model only: "At most {calls} requests to {model}, usually fewer." The quote's number is an upper bound, never an estimate, so the copy says "at most". On this Mac the file count is enough and the number is left out.
@@ -497,9 +497,9 @@ What the screen says instead of an answer, by `outcome`:
 | `no_match` (`zero_hits`) | "Nothing matched" | "Nothing in your library matches this question. Try asking with other words." |
 | `no_match` (`all_unreadable`) | "Nothing could be read" | "The pages that match this question couldn't be read." |
 | `no_answer_in_context` | "No answer in your pages" | "Your library has pages about this, but none of them answers the question." |
-| `withheld` | "This answer stays private" | "It drew on {n} pages marked Only on this Mac, so it isn't shown here, and neither are their names. This can't be changed in the app yet." |
+| `withheld` | "This answer stays private" | "It drew on {n} pages marked Only on this Mac, so it isn't shown here, and neither are their names. You can show it while your AI model runs on this Mac." |
 
-A withheld answer is a count, never a title: the API names no such page, and the app asks it with no consent (`include_confidential` is never sent). Where the person may agree to see these answers is open (#1507); until then the screen says it can't be changed in the app.
+A withheld answer is a count, never a title: the API names no such page. Under it, **Show this answer** asks the same question again with `include_confidential` (ADR-0075), in place of the withheld answer. It first reads the AI model settings; if the AI model is not on this Mac, or they cannot be read, nothing is sent and the card says "Your AI model isn't on this Mac, so these pages stay private." The consent is never standing and is never offered with a cloud AI model.
 
 **Notes,** small and under the answer, only when they apply:
 

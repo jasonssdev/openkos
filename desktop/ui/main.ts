@@ -156,6 +156,7 @@ function paintAsk(): void {
   renderAsk(askRoot, ask.state, {
     ask: (question) => ask.ask(question),
     retry: () => ask.retry(),
+    showPrivate: () => ask.showPrivate(),
     show: (id) => ask.show(id),
     expanded: askExpanded,
     onToggle: (name, open) => void (open ? askExpanded.add(name) : askExpanded.delete(name)),
