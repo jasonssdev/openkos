@@ -19,6 +19,7 @@ from openkos import config
 from openkos.application import ingest_service as svc
 from openkos.cli.main import app
 from openkos.llm.base import Message
+from tests.unit.snapshot_support import snapshot
 
 _NOTES = "Some raw notes about self-control.\n"
 
@@ -95,11 +96,7 @@ def _source(tmp_path: Path, name: str = "notes.txt", text: str = _NOTES) -> Path
 
 
 def _snapshot(root: Path) -> dict[str, bytes]:
-    return {
-        str(p.relative_to(root)): p.read_bytes()
-        for p in sorted(root.rglob("*"))
-        if p.is_file() and ".openkos" not in p.parts
-    }
+    return snapshot(root, skip_parts=(".openkos",))
 
 
 def test_ingests_against_an_explicit_root_without_reading_the_cwd(

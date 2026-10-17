@@ -1,4 +1,4 @@
-"""`support.snapshot` compares a workspace's content, not git's packing.
+"""The shared `snapshot` compares a workspace's content, not git's packing.
 
 A git commit may spawn a detached `git maintenance run --auto`, which packs
 loose objects and refs at an arbitrary later moment. A byte snapshot that walks
@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit.api import support
+from tests.unit import snapshot_support as support
+from tests.unit.api import support as api_support
+from tests.unit.application import group_support
 
 
 def _git(root: Path, *args: str) -> None:
@@ -87,3 +89,15 @@ def test_an_edited_working_file_is_still_seen(repo: Path) -> None:
     (repo / "bundle" / "a.md").write_text("changed\n")
 
     assert support.snapshot(repo) != before
+
+
+@pytest.mark.parametrize("helper", [api_support.snapshot, group_support.snapshot])
+def test_every_workspace_snapshot_shares_the_git_aware_walk(
+    repo: Path, helper: object
+) -> None:
+    before = helper(repo)  # type: ignore[operator]
+
+    _git(repo, "repack", "-a", "-d", "-q")
+    _git(repo, "gc", "-q")
+
+    assert helper(repo) == before  # type: ignore[operator]

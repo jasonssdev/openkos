@@ -60,6 +60,7 @@ from openkos.resolution.candidates import CandidateGroup, Tier
 from openkos.resolution.edge_typing import EdgeSuggestion
 from openkos.state import derived
 from openkos.state import pending_queue as pq
+from tests.unit.snapshot_support import snapshot
 
 # --------------------------------------------------------------------------- #
 # WriteFailed
@@ -595,10 +596,6 @@ def _must_preview(
     return preview
 
 
-def _snapshot(root: Path) -> dict[Path, bytes]:
-    return {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
-
-
 def _edit(layout: config.WorkspaceLayout, concept_id: str) -> None:
     path = layout.bundle_dir / f"{concept_id}.md"
     path.write_text(
@@ -660,11 +657,11 @@ def test_the_merge_preview_discloses_a_planned_reconciliation_without_a_model(
 
 def test_a_merge_preview_writes_nothing(tmp_path: Path) -> None:
     root, layout = _merge_workspace(tmp_path)
-    before = _snapshot(root)
+    before = snapshot(root)
 
     _must_preview(root, layout, reconcile=True)
 
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 @pytest.mark.parametrize(
@@ -674,12 +671,12 @@ def test_a_merge_without_a_same_judgment_is_returned_not_mergeable(
     tmp_path: Path, verdict: Verdict | None
 ) -> None:
     root, layout = _merge_workspace(tmp_path)
-    before = _snapshot(root)
+    before = snapshot(root)
 
     outcome = _merge_preview(root, layout, verdict=verdict)
 
     assert outcome == NotApplied(Action.MERGE, "not_mergeable")
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_member_that_no_longer_resolves_is_returned_member_missing(
@@ -996,7 +993,7 @@ def test_a_vanished_member_is_reported_inside_the_section_and_writes_nothing(
     root, layout = _merge_workspace(tmp_path)
     preview = _must_preview(root, layout)
     (layout.bundle_dir / f"{_ABSORBED}.md").unlink()
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _MergeRecorder()
     observer = _MergeObserver(recorder)
 
@@ -1012,14 +1009,14 @@ def test_a_vanished_member_is_reported_inside_the_section_and_writes_nothing(
     assert outcome == NotApplied(Action.MERGE, "member_missing")
     assert observer.missing == [(_SURVIVOR, _ABSORBED)]
     assert recorder.events == ["enter", "member_missing", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_drift_in_a_target_is_raised_naming_it_and_the_surface(tmp_path: Path) -> None:
     root, layout = _merge_workspace(tmp_path)
     preview = _must_preview(root, layout)
     _edit(layout, _SURVIVOR)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _MergeRecorder()
 
     with pytest.raises(write_gate.DriftDetected) as caught:
@@ -1028,7 +1025,7 @@ def test_drift_in_a_target_is_raised_naming_it_and_the_surface(tmp_path: Path) -
     assert _SURVIVOR in caught.value.message
     assert "openkos curate" in caught.value.message
     assert recorder.commits == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_the_surface_label_is_passed_through_not_hardcoded(tmp_path: Path) -> None:
@@ -1212,14 +1209,14 @@ def test_a_member_edited_after_the_token_is_stale_before_any_model_or_section(
     root, layout, proposal, version = _seeded(tmp_path)
     preview = _must_preview(root, layout, reconcile=True)
     _edit(layout, _SURVIVOR)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _MergeRecorder()
 
     outcome = _commit(root, layout, preview, recorder, expected=version)
 
     assert outcome == Stale(proposal.decision_key, "content_changed")
     assert recorder.events == []  # no reconcile call, no section, no commit
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_row_resolved_elsewhere_is_stale_and_writes_nothing(tmp_path: Path) -> None:
@@ -1233,14 +1230,14 @@ def test_a_row_resolved_elsewhere_is_stale_and_writes_nothing(tmp_path: Path) ->
         conn.commit()
     finally:
         conn.close()
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _MergeRecorder()
 
     outcome = _commit(root, layout, preview, recorder, expected=version)
 
     assert outcome == Stale(proposal.decision_key, "row_resolved")
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_superseded_row_is_stale_and_writes_nothing(tmp_path: Path) -> None:
@@ -1252,14 +1249,14 @@ def test_a_superseded_row_is_stale_and_writes_nothing(tmp_path: Path) -> None:
             json.dumps({"member_ids": ["different"]}), _digests(layout, *_PAIR)
         ),
     )
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _MergeRecorder()
 
     outcome = _commit(root, layout, preview, recorder, expected=version)
 
     assert outcome == Stale(proposal.decision_key, "row_superseded")
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_token_without_a_payload_digest_is_rejected_as_resolved(
@@ -1428,7 +1425,7 @@ def test_a_relate_preview_carries_the_plan_and_the_decision_key(
     tmp_path: Path,
 ) -> None:
     root, layout = _relate_workspace(tmp_path)
-    before = _snapshot(root)
+    before = snapshot(root)
 
     preview = _must_relate(root, layout)
 
@@ -1440,7 +1437,7 @@ def test_a_relate_preview_carries_the_plan_and_the_decision_key(
     assert preview.prepared.source_canonical == _SRC
     assert preview.prepared.target_canonical == _TGT
     assert preview.prepared.updated_relations_count == 1
-    assert _snapshot(root) == before  # a preview writes nothing
+    assert snapshot(root) == before  # a preview writes nothing
 
 
 def test_a_reversed_relate_preview_swaps_the_endpoints_and_keeps_the_key(
@@ -1788,8 +1785,8 @@ def test_an_endpoint_vanishing_is_reported_inside_the_section_and_writes_nothing
         on_enter=lambda: (layout.bundle_dir / f"{gone}.md").unlink()
     )
     observer = _RelateObserver(recorder)
-    before = _snapshot(layout.bundle_dir)
-    before.pop(layout.bundle_dir / f"{gone}.md")
+    before = snapshot(layout.bundle_dir)
+    before.pop(f"{gone}.md")
 
     outcome = curate_decisions.commit_relate_decision(
         root,
@@ -1804,7 +1801,7 @@ def test_an_endpoint_vanishing_is_reported_inside_the_section_and_writes_nothing
     assert recorder.events == ["enter", "endpoint_missing", "exit"]
     assert observer.missing == [(_SRC, _TGT)]
     assert recorder.commits == []
-    assert _snapshot(layout.bundle_dir) == before
+    assert snapshot(layout.bundle_dir) == before
 
 
 @pytest.mark.parametrize("edited", [_SRC, _TGT])
@@ -1815,7 +1812,7 @@ def test_drift_in_an_endpoint_is_raised_naming_it_and_the_surface(
     preview = _must_relate(root, layout, rel_type="supersedes")
     _edit(layout, edited)
     recorder = _RelateRecorder()
-    before = _snapshot(root)
+    before = snapshot(root)
 
     with pytest.raises(write_gate.DriftDetected) as caught:
         _commit_relate(root, layout, preview, recorder, surface="desktop")
@@ -1823,7 +1820,7 @@ def test_drift_in_an_endpoint_is_raised_naming_it_and_the_surface(
     assert edited in caught.value.message
     assert "openkos desktop" in caught.value.message
     assert recorder.commits == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def _refuse_log_recompose(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1840,7 +1837,7 @@ def test_a_log_recompose_failure_becomes_drift_and_writes_nothing(
     preview = _must_relate(root, layout)
     _refuse_log_recompose(monkeypatch)
     recorder = _RelateRecorder()
-    before = _snapshot(root)
+    before = snapshot(root)
 
     with pytest.raises(write_gate.DriftDetected) as caught:
         _commit_relate(root, layout, preview, recorder)
@@ -1848,7 +1845,7 @@ def test_a_log_recompose_failure_becomes_drift_and_writes_nothing(
     assert caught.value.message == "the log moved"
     assert isinstance(caught.value.__cause__, catalog_delta.CatalogRecomposeError)
     assert recorder.commits == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_the_log_recompose_is_told_which_surface_is_committing(
@@ -2026,14 +2023,14 @@ def test_an_endpoint_edited_after_the_relate_token_is_stale_before_the_section(
     root, layout, proposal, version = _relate_seeded(tmp_path)
     preview = _must_relate(root, layout)
     _edit(layout, _SRC)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _RelateRecorder()
 
     outcome = _commit_relate(root, layout, preview, recorder, expected=version)
 
     assert outcome == Stale(proposal.decision_key, "content_changed")
     assert recorder.events == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_relate_row_resolved_elsewhere_is_stale_and_writes_nothing(
@@ -2049,28 +2046,28 @@ def test_a_relate_row_resolved_elsewhere_is_stale_and_writes_nothing(
         conn.commit()
     finally:
         conn.close()
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _RelateRecorder()
 
     outcome = _commit_relate(root, layout, preview, recorder, expected=version)
 
     assert outcome == Stale(proposal.decision_key, "row_resolved")
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_superseded_relate_row_is_stale_and_writes_nothing(tmp_path: Path) -> None:
     root, layout, proposal, version = _relate_seeded(tmp_path)
     preview = _must_relate(root, layout)
     _enqueue(layout, _relation_proposal(layout, source=_TGT, target=_SRC))
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _RelateRecorder()
 
     outcome = _commit_relate(root, layout, preview, recorder, expected=version)
 
     assert outcome == Stale(proposal.decision_key, "row_superseded")
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_relate_token_without_a_payload_digest_is_rejected_as_resolved(
@@ -2165,11 +2162,11 @@ def test_a_tier_preview_carries_the_plan_and_the_decision_key(tmp_path: Path) ->
 
 def test_a_tier_preview_writes_nothing(tmp_path: Path) -> None:
     root, layout = _tier_workspace(tmp_path)
-    before = _snapshot(root)
+    before = snapshot(root)
 
     _must_tier(layout)
 
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 @pytest.mark.parametrize("error", [OSError, ValueError])
@@ -2376,7 +2373,7 @@ def test_a_config_commit_refusal_is_raised_with_its_text_and_writes_nothing(
 ) -> None:
     root, layout = _tier_workspace(tmp_path)
     preview = _must_tier(layout)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _TierRecorder(refusal="openkos curate: refusing to write -- dirty.")
 
     with pytest.raises(write_gate.Refused) as caught:
@@ -2384,7 +2381,7 @@ def test_a_config_commit_refusal_is_raised_with_its_text_and_writes_nothing(
 
     assert not isinstance(caught.value, write_gate.WriteFailed)
     assert caught.value.message == "openkos curate: refusing to write -- dirty."
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
     assert recorder.edit_commits == []
     assert recorder.events == ["enter", "plan", "exit"]
 
@@ -2395,7 +2392,7 @@ def test_drift_in_the_config_is_raised_naming_the_surface_before_the_plan(
     root, layout = _tier_workspace(tmp_path)
     preview = _must_tier(layout)
     _move_effective_tier(layout)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _TierRecorder()
 
     with pytest.raises(write_gate.DriftDetected) as caught:
@@ -2403,7 +2400,7 @@ def test_drift_in_the_config_is_raised_naming_the_surface_before_the_plan(
 
     assert "openkos.yaml" in caught.value.message
     assert "curate" in caught.value.message
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
     assert recorder.events == ["enter", "exit"]  # the plan port was never asked
 
 
@@ -2526,14 +2523,14 @@ def test_the_effective_tier_changed_elsewhere_is_stale_and_writes_nothing(
     root, layout, proposal, version = _tier_seeded(tmp_path)
     preview = _must_tier(layout)
     _move_effective_tier(layout)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _TierRecorder()
 
     outcome = _commit_tier(root, layout, preview, recorder, expected=version)
 
     assert outcome == Stale(proposal.decision_key, "content_changed")
     assert recorder.events == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_tier_row_resolved_elsewhere_is_stale_and_writes_nothing(
@@ -2549,28 +2546,28 @@ def test_a_tier_row_resolved_elsewhere_is_stale_and_writes_nothing(
         conn.commit()
     finally:
         conn.close()
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _TierRecorder()
 
     outcome = _commit_tier(root, layout, preview, recorder, expected=version)
 
     assert outcome == Stale(proposal.decision_key, "row_resolved")
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_superseded_tier_row_is_stale_and_writes_nothing(tmp_path: Path) -> None:
     root, layout, proposal, version = _tier_seeded(tmp_path)
     preview = _must_tier(layout)
     _enqueue(layout, _tier_proposal("fast"))
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _TierRecorder()
 
     outcome = _commit_tier(root, layout, preview, recorder, expected=version)
 
     assert outcome == Stale(proposal.decision_key, "row_superseded")
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_tier_token_without_a_payload_digest_is_rejected_as_resolved(
@@ -2580,14 +2577,14 @@ def test_a_tier_token_without_a_payload_digest_is_rejected_as_resolved(
     version = curate_decisions.version_of(
         _must_tier(layout), layout=layout, payload_digest=None
     )
-    before = _snapshot(root)
+    before = snapshot(root)
 
     outcome = _commit_tier(
         root, layout, _must_tier(layout), _TierRecorder(), expected=version
     )
 
     assert outcome == Stale(proposal.decision_key, "row_resolved")
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_move_after_the_tier_token_check_is_drift_never_stale(
@@ -2805,11 +2802,11 @@ def test_an_item_carries_the_handle_the_payload_and_where_it_resolves(
 
 def test_an_empty_queue_lists_nothing_and_creates_nothing(tmp_path: Path) -> None:
     root, layout = _merge_workspace(tmp_path)
-    before = _snapshot(root)
+    before = snapshot(root)
 
     assert _list(layout) == ()
 
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
     assert not layout.findings_db_path.exists()
 
 
@@ -2827,13 +2824,13 @@ def test_listing_writes_nothing_prints_nothing_and_needs_no_model(
         raise AssertionError("listing must not construct a model client")
 
     monkeypatch.setattr(backends, "chat_client", _no_client)
-    before = _snapshot(root)
+    before = snapshot(root)
     capsys.readouterr()
 
     items = _list(layout)
 
     assert len(items) == 3
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
@@ -2905,14 +2902,14 @@ def test_a_merge_on_an_uncertain_item_is_not_mergeable_and_writes_nothing(
     version = DecisionVersion(
         proposal.decision_key, pq.payload_digest_for(proposal), "x"
     )
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     outcome = _apply(root, layout, version, Action.MERGE, recorder)
 
     assert outcome == NotApplied(Action.MERGE, "not_mergeable")
     assert recorder.events == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_an_identity_judged_different_withholds_the_merge(tmp_path: Path) -> None:
@@ -3284,14 +3281,14 @@ def test_applying_a_key_that_never_existed_is_stale_as_unknown_and_writes_nothin
     fabricated = DecisionVersion(
         "identity:never-existed", version.payload_digest, version.content_digest
     )
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     outcome = _apply(root, layout, fabricated, Action.MERGE, recorder)
 
     assert outcome == Stale("identity:never-existed", "unknown_key")
     assert recorder.commits == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_queue_that_cannot_be_read_does_not_claim_the_key_never_existed(
@@ -3431,14 +3428,14 @@ def test_a_merge_on_an_unjudged_item_is_not_mergeable_and_writes_nothing(
     version = DecisionVersion(
         proposal.decision_key, pq.payload_digest_for(proposal), "x"
     )
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     outcome = _apply(root, layout, version, Action.MERGE, recorder)
 
     assert outcome == NotApplied(Action.MERGE, "not_mergeable")
     assert recorder.events == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 @pytest.mark.parametrize("withheld", ["different", "cross_type", "three_members"])
@@ -3481,14 +3478,14 @@ def test_an_action_outside_the_item_set_is_not_offered_and_writes_nothing(
     version = DecisionVersion(
         proposal.decision_key, pq.payload_digest_for(proposal), "x"
     )
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     outcome = _apply(root, layout, version, action, recorder)
 
     assert outcome == NotApplied(action, "not_offered")
     assert recorder.events == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_skip_writes_nothing_and_leaves_the_row_pending(tmp_path: Path) -> None:
@@ -3496,14 +3493,14 @@ def test_skip_writes_nothing_and_leaves_the_row_pending(tmp_path: Path) -> None:
     version = DecisionVersion(
         proposal.decision_key, pq.payload_digest_for(proposal), "x"
     )
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     outcome = _apply(root, layout, version, Action.SKIP, recorder)
 
     assert outcome == NotApplied(Action.SKIP, "skipped")
     assert recorder.events == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
     assert _row_resolution(layout, proposal)[0] == "pending"
 
 
@@ -3518,13 +3515,13 @@ def test_a_stale_token_writes_no_concept_no_queue_row_and_no_commit(
         root, layout, proposal.decision_key, Action.MERGE
     ).version
     _edit(layout, _SURVIVOR)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     outcome = _apply(root, layout, version, Action.MERGE, recorder)
 
     assert outcome == Stale(proposal.decision_key, "content_changed")
-    assert _snapshot(root) == before  # no concept, no findings.db row, no sidecar
+    assert snapshot(root) == before  # no concept, no findings.db row, no sidecar
     assert recorder.commits == []
     assert recorder.events == []
 
@@ -3544,14 +3541,14 @@ def test_a_row_resolved_since_the_token_is_stale_and_writes_nothing(
         conn.commit()
     finally:
         conn.close()
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     outcome = _apply(root, layout, version, Action.MERGE, recorder)
 
     assert outcome == Stale(proposal.decision_key, "row_resolved")
     assert recorder.commits == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_row_superseded_since_the_token_is_stale_and_writes_nothing(
@@ -3562,7 +3559,7 @@ def test_a_row_superseded_since_the_token_is_stale_and_writes_nothing(
         root, layout, proposal.decision_key, Action.MERGE
     ).version
     _enqueue(layout, _identity_row(layout, note=" revised"))
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     outcome = _apply(root, layout, version, Action.MERGE, recorder)
@@ -3570,13 +3567,13 @@ def test_a_row_superseded_since_the_token_is_stale_and_writes_nothing(
     assert outcome == Stale(proposal.decision_key, "row_superseded")
     assert recorder.commits == []
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_row_whose_inputs_changed_is_stale_and_writes_nothing(tmp_path: Path) -> None:
     root, layout, proposal = _identity_seeded(tmp_path)
     _edit(layout, _SURVIVOR)  # the row was computed against the unedited member
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     # The preview agrees with the commit (#1475): no plan for a row it refuses.
@@ -3592,7 +3589,7 @@ def test_a_row_whose_inputs_changed_is_stale_and_writes_nothing(tmp_path: Path) 
     assert preview == Stale(proposal.decision_key, "row_inputs_changed")
     assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
     assert recorder.commits == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_member_edited_after_a_keep_distinct_token_is_stale_before_the_section(
@@ -3603,14 +3600,14 @@ def test_a_member_edited_after_a_keep_distinct_token_is_stale_before_the_section
         root, layout, proposal.decision_key, Action.KEEP_DISTINCT
     ).version
     _edit(layout, _ABSORBED)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     outcome = _apply(root, layout, version, Action.KEEP_DISTINCT, recorder)
 
     assert outcome == Stale(proposal.decision_key, "content_changed")
     assert recorder.events == []
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_keep_distinct_token_for_a_row_with_stale_inputs_is_stale(
@@ -3618,7 +3615,7 @@ def test_a_keep_distinct_token_for_a_row_with_stale_inputs_is_stale(
 ) -> None:
     root, layout, proposal = _identity_seeded(tmp_path, verdict=None)
     _edit(layout, _ABSORBED)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _Recorder()
 
     preview = curate_decisions.preview_decision(
@@ -3637,7 +3634,7 @@ def test_a_keep_distinct_token_for_a_row_with_stale_inputs_is_stale(
     assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
     assert recorder.commits == []
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 # -- row_inputs_changed on every commit path -------------------------------- #
@@ -3649,7 +3646,7 @@ def test_a_merge_commit_with_a_token_for_a_row_with_stale_inputs_is_stale(
     root, layout, proposal = _identity_seeded(tmp_path)
     _edit(layout, _ABSORBED)
     version = _token(root, layout, proposal)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _MergeRecorder()
 
     outcome = _commit(
@@ -3658,7 +3655,7 @@ def test_a_merge_commit_with_a_token_for_a_row_with_stale_inputs_is_stale(
 
     assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_relate_commit_with_a_token_for_a_row_with_stale_inputs_is_stale(
@@ -3669,7 +3666,7 @@ def test_a_relate_commit_with_a_token_for_a_row_with_stale_inputs_is_stale(
     _enqueue(layout, proposal)
     _edit(layout, _TGT)
     version = _relate_token(root, layout, proposal)
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _RelateRecorder()
 
     outcome = _commit_relate(
@@ -3678,7 +3675,7 @@ def test_a_relate_commit_with_a_token_for_a_row_with_stale_inputs_is_stale(
 
     assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 def test_a_tier_commit_with_a_token_for_a_row_whose_default_moved_is_stale(
@@ -3693,14 +3690,14 @@ def test_a_tier_commit_with_a_token_for_a_row_whose_default_moved_is_stale(
         layout=layout,
         payload_digest=pq.payload_digest_for(proposal),
     )
-    before = _snapshot(root)
+    before = snapshot(root)
     recorder = _TierRecorder()
 
     outcome = _commit_tier(root, layout, _must_tier(layout), recorder, expected=version)
 
     assert outcome == Stale(proposal.decision_key, "row_inputs_changed")
     assert recorder.events == ["enter", "exit"]
-    assert _snapshot(root) == before
+    assert snapshot(root) == before
 
 
 # -- no judgment ------------------------------------------------------------- #
