@@ -72,23 +72,24 @@ Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../eva
 
 `kind: identity`. Actions `merge`, `merge_group`, `keep_distinct`, `skip`. Neither merge is offered unless the model has judged the group the same. `merge` combines a pair of the same kind; `merge_group` takes its place for more than two pages, or for pages of different kinds, and asks the person to choose which pages are the same and which one stays.
 
-**Question:** "Are these the same {person / place / …}?" with the two pages side by side. **(H)** that a person answers this question faster and more correctly than one about "duplicates".
+**Question:** "Are these the same {person / place / …}?" with the two pages side by side, and "Are these the same thing?" when the pages are of different kinds. It is always the first question, for a pair, a group and pages of different kinds alike, and its two answers, **Same thing** and **Different things**, are shown side by side with the same weight: the app does not lean towards either. What happens next (which pages, or what it is) is asked only after **Same thing**. **(H)** that a person answers this question faster and more correctly than one about "duplicates", and that asking it first keeps a newcomer out of a wrong combine.
 
 What the screen says above the question, by `evaluation`:
 
 | Evaluation | Line above the question | Options |
 | --- | --- | --- |
-| `judged_same` | "The AI model thinks these are the same {person}." | Combine them · Keep separate · Decide later |
-| `judged_different` | "The AI model thinks these are different {people}." | Keep separate · Decide later |
-| `judged_uncertain` | "The AI model couldn't tell." | Keep separate · Decide later |
-| `pending_evaluation` | "These haven't been checked yet." | Check these · Keep separate · Decide later |
+| `judged_same` | "The AI model thinks these are the same {person}." | Same thing · Different things · Decide later |
+| `judged_different` | "The AI model thinks these are different {people}." | Different things · Decide later |
+| `judged_uncertain` | "The AI model couldn't tell." | Different things · Decide later |
+| `pending_evaluation` | "These haven't been checked yet." | Check these · Different things · Decide later |
 
-A withheld combine is never shown as a disabled button with no reason. The line above the question is the reason. **(H)** that people accept "keep separate" being the only firm answer when the model is unsure, without feeling the app is broken.
+For pages of different kinds the line names a thing: "The AI model thinks these are the same thing." A withheld combine is never shown as a disabled button with no reason. The line above the question is the reason. **(H)** that people accept "different things" being the only firm answer when the model is unsure, without feeling the app is broken.
 
 **Options and what they do:**
 
-- **Combine them** — "We'll make one page with everything from both. The page keeps the name '{survivor title}'. {n} other pages that mention it will point to the combined page." Shown from the preview (`MergePlan`): the surviving title, the absorbed title and the number of files rewritten. With one such page the sentence reads "1 other page that mentions it will point to the combined page."; with none it is left out. Before the preview, the option shows only "We'll make one page with everything from both." When the plan reports that the pair came from different files, or a type concern, add one line: "These came from different files: check that they really are the same {person}." **(H)** that naming which title survives is enough, without explaining why.
-- **Keep separate** — "We won't suggest combining these again." Shown from `KeepDistinctPlan`.
+- **Same thing** (a pair) — "We'll make one page with everything from both." It previews the combine, and the preview says: "We'll make one page with everything from both. The page keeps the name '{survivor title}'. {n} other pages that mention it will point to the combined page." Shown from the preview (`MergePlan`): the surviving title, the absorbed title and the number of files rewritten. With one such page the sentence reads "1 other page that mentions it will point to the combined page."; with none it is left out. Before the preview, the option shows only "We'll make one page with everything from both." When the plan reports that the pair came from different files, or a type concern, add one line: "These came from different files: check that they really are the same {person}." **(H)** that naming which title survives is enough, without explaining why.
+- **Same thing** (a group, or pages of different kinds) — "Next, you'll mark which ones are the same." or "Next, you'll choose what it is." Nothing is previewed yet: the second question below takes the first one's place, under "You said these are the same.", with **Back** to answer the first one again.
+- **Different things** — "We won't suggest combining these again." (for a group: "…any of these again."). It previews keeping them separate, shown from `KeepDistinctPlan`.
 - **Decide later** — "Nothing changes. This stays in To review."
 - **Check these** (pending evaluation only) — opens the check consent below. "Checking doesn't change anything. You'll still decide."
 - **Check again** (changed decisions only, of every kind) — as above, under "A changed decision".
@@ -103,12 +104,12 @@ A withheld combine is never shown as a disabled button with no reason. The line 
 
 `merge_group`, offered in place of `merge` when the group has more than two pages (`more_than_two_members`). **(H)** for the whole subsection.
 
-The screen shows every page side by side, each with a mark the person can set or clear, and asks the question above them. The marked pages are the ones that are the same thing; a second question, "Which one should the combined page keep its name from?", is asked over the marked pages only. The app never picks the name for the person.
+The screen first asks "Are these the same {person}?" over every page, with **Same thing** and **Different things**. After **Same thing** it asks "Which of these are the same?" and shows each page with a mark the person can set or clear, none set. The marked pages are the ones that are the same thing; a second question, "Which one should the combined page keep its name from?", is asked over the marked pages only. The app never marks a page or picks the name for the person.
 
 **Options and what they do:**
 
 - **Combine the ones I marked** — "We'll make one page from the {n} pages you marked. It keeps the name '{survivor title}'. The pages you didn't mark stay as they are, and we won't suggest combining them with '{survivor title}' again." The button stays disabled, with the line "Mark at least two pages", until two are marked. Shown from the preview (`MergePlan` with its `steps` and `kept_distinct_ids`): the surviving title, the marked titles and the number of other pages that will point to the combined page. When every page is marked, the last sentence is left out.
-- **Keep all separate** — "We won't suggest combining any of these again." Shown from `KeepDistinctPlan`.
+- **Different things**, asked first — "We won't suggest combining any of these again." Shown from `KeepDistinctPlan`.
 - **Decide later** — "Nothing changes. This stays in To review."
 
 The "different files" line and the cross-type warning are shown as for a pair.
@@ -117,7 +118,7 @@ The "different files" line and the cross-type warning are shown as for a pair.
 
 `merge_group`, offered in place of `merge` when the pages are of different kinds (`cross_type`). **(H)** for the whole subsection.
 
-**Question:** "What is {title}?" with the pages side by side, each labelled by its kind in the type nouns above. **Options:** one per kind among the pages, worded as "It's a person", "It's an organization", and so on; **They're different things** (keep separate); **Decide later**.
+**Questions:** first "Are these the same thing?", with the pages side by side, each labelled by its kind in the type nouns above, and **Same thing** · **Different things** (keep separate) · **Decide later**. Only after **Same thing**: "What is {title}?", with one option per kind among the pages, worded as "It's a person", "It's an organization", and so on, and **Decide later**. A newcomer is never asked what something is before saying it is one thing.
 
 **What it does,** from the plan: "We'll keep one page, as a {person}, named '{survivor title}', and remember it was also described as {an organization}." When the plan says the other kind is not recorded because the page already notes one (`type_outcome: discarded`): "It was already noted as possibly something else, so we won't note {an organization}." The plan does not name the kind already noted, so the sentence does not either. When two pages share the chosen kind, the app first asks which of them keeps its name **(H)**. The "different files" line and the cross-type warning line are shown as for a pair: choosing what something is never happens without them. The app never chooses the kind for the person.
 

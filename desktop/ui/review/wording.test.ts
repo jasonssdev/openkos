@@ -142,18 +142,18 @@ describe("dates and sources", () => {
 describe("identity decisions", () => {
   const pages = pagesOf(A, B, C, ORG);
 
-  it("asks about a judged-same pair and offers to combine", () => {
+  it("asks whether a judged-same pair is the same, with both answers", () => {
     const view = describeDecision(identity(), pages);
     expect(view.question).toBe("Are these the same person?");
     expect(view.lead).toBe("The AI model thinks these are the same person.");
     expect(view.reason).toBe("“Same email.”");
-    expect(view.options.map((o) => [o.choice, o.label])).toEqual([
-      ["merge", "Combine them"],
-      ["keep_distinct", "Keep separate"],
-      ["later", "Decide later"],
+    expect(view.options.map((o) => [o.choice, o.label, o.does])).toEqual([
+      ["merge", "Same thing", "We'll make one page with everything from both."],
+      ["keep_distinct", "Different things", "We won't suggest combining these again."],
+      ["later", "Decide later", "Nothing changes. This stays in To review."],
     ]);
-    expect(view.options[1]?.does).toBe("We won't suggest combining these again.");
     expect(view.options[2]).toEqual(DECIDE_LATER);
+    expect(view.next).toBeNull();
   });
 
   it.each([
@@ -175,7 +175,7 @@ describe("identity decisions", () => {
     });
   });
 
-  it("asks which of a group are the same", () => {
+  it("asks a group whether they are the same first, and which ones only after", () => {
     const members = ["people/a", "people/b", "people/c"];
     const decision = identity(
       { actions: ["merge_group", "keep_distinct", "skip"], withheld: [{ action: "merge", reason: "more_than_two_members" }] },
@@ -183,29 +183,50 @@ describe("identity decisions", () => {
     );
     expect(identityShape(decision)).toBe("group");
     const view = describeDecision(decision, pages);
-    expect(view.question).toBe("Which of these are the same?");
-    expect(view.options.map((o) => [o.choice, o.label])).toEqual([
+    expect(view.question).toBe("Are these the same person?");
+    expect(view.options.map((o) => [o.choice, o.label, o.does])).toEqual([
+      ["same", "Same thing", "Next, you'll mark which ones are the same."],
+      ["keep_distinct", "Different things", "We won't suggest combining any of these again."],
+      ["later", "Decide later", "Nothing changes. This stays in To review."],
+    ]);
+    expect(view.next?.lead).toBe("You said these are the same.");
+    expect(view.next?.question).toBe("Which of these are the same?");
+    expect(view.next?.options.map((o) => [o.choice, o.label])).toEqual([
       ["merge_group", "Combine the ones I marked"],
-      ["keep_distinct", "Keep all separate"],
       ["later", "Decide later"],
     ]);
-    expect(view.options[1]?.does).toBe("We won't suggest combining any of these again.");
   });
 
-  it("asks what a thing of two kinds is, with one option per kind", () => {
+  it("asks whether things of two kinds are the same first, and what it is only after", () => {
     const decision = identity(
       { actions: ["merge_group", "keep_distinct", "skip"], withheld: [{ action: "merge", reason: "cross_type" }] },
       ["people/a", "orgs/acme"],
     );
     expect(identityShape(decision)).toBe("kinds");
     const view = describeDecision(decision, pages);
-    expect(view.question).toBe("What is Marguerite Osei?");
-    expect(view.options.map((o) => [o.choice, o.label, o.okfType])).toEqual([
+    expect(view.question).toBe("Are these the same thing?");
+    expect(view.lead).toBe("The AI model thinks these are the same thing.");
+    expect(view.options.map((o) => [o.choice, o.label, o.does])).toEqual([
+      ["same", "Same thing", "Next, you'll choose what it is."],
+      ["keep_distinct", "Different things", "We won't suggest combining these again."],
+      ["later", "Decide later", "Nothing changes. This stays in To review."],
+    ]);
+    expect(view.next?.question).toBe("What is Marguerite Osei?");
+    expect(view.next?.options.map((o) => [o.choice, o.label, o.okfType])).toEqual([
       ["merge_group", "It's a person", "Person"],
       ["merge_group", "It's an organization", "Organization"],
-      ["keep_distinct", "They're different things", undefined],
       ["later", "Decide later", undefined],
     ]);
+  });
+
+  it("asks nothing after the first question for a changed group", () => {
+    const decision = identity(
+      { fresh: false, actions: ["merge_group", "keep_distinct", "skip"], withheld: [{ action: "merge", reason: "cross_type" }] },
+      ["people/a", "orgs/acme"],
+    );
+    const view = describeDecision(decision, pages);
+    expect(view.options.map((o) => o.choice)).toEqual(["recheck", "later"]);
+    expect(view.next).toBeNull();
   });
 
   it("names a page it could not read without its id", () => {

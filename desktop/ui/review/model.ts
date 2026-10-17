@@ -72,6 +72,12 @@ export interface ModelOptions {
 export const POLL_MS = 1000;
 
 export interface Selection {
+  /**
+   * The person answered "Same thing" to a group or to pages of different kinds:
+   * the second question (which pages, or what it is) is asked, and only its
+   * answer is previewed.
+   */
+  same: boolean;
   /** The pages the person marked as the same thing, in member order. */
   marked: string[];
   /** The page whose name the combined page keeps; chosen by the person. */
@@ -166,6 +172,12 @@ function pageIds(decision: Decision): string[] {
 function members(decision: Decision): string[] {
   const detail = decision.detail;
   return detail && "member_ids" in detail ? detail.member_ids : decision.targets;
+}
+
+/** Before any answer: a group marks nothing for the person; any other decision is all of its pages. */
+function firstSelection(decision: Decision): Selection {
+  const shape = decision.kind === "identity" ? identityShape(decision) : "pair";
+  return { same: false, marked: shape === "group" ? [] : [...members(decision)], name: null, okfType: null };
 }
 
 export class ReviewModel {
@@ -279,7 +291,6 @@ export class ReviewModel {
   open(key: string): void {
     const decision = this.#state.decisions.find((d) => d.decision_key === key);
     if (decision === undefined) return;
-    const shape = decision.kind === "identity" ? identityShape(decision) : "pair";
     this.#lastOp = null;
     this.#set({
       notice: null,
@@ -287,7 +298,7 @@ export class ReviewModel {
       open: {
         key,
         decision,
-        selection: { marked: shape === "group" ? [] : [...members(decision)], name: null, okfType: null },
+        selection: firstSelection(decision),
         step: { name: "choosing" },
         changed: decision.fresh === false ? CHANGED_CHECK : null,
         problem: null,
@@ -297,6 +308,13 @@ export class ReviewModel {
 
   close(): void {
     this.#set({ open: null, combinedOpen: false });
+  }
+
+  /** Back to "Are these the same?", forgetting every answer given after it. */
+  askAgain(): void {
+    const open = this.#state.open;
+    if (open === null || open.step.name !== "choosing") return;
+    this.#setOpen({ selection: firstSelection(open.decision), problem: null });
   }
 
   /** Shows every combined page, each with Split again, in place of a decision. */
@@ -360,7 +378,15 @@ export class ReviewModel {
       case "recheck":
         await this.recheck();
         return;
+      case "same":
+        // Asks the second question; only a group or pages of different kinds have one.
+        if (open.decision.actions.includes("merge_group")) {
+          this.#setOpen({ selection: { ...open.selection, same: true }, problem: null });
+        }
+        return;
       case "merge_group":
+        // Which pages, or what it is, is asked only after "Same thing" (#1475).
+        if (!open.selection.same) return;
         if (option.okfType !== undefined && !this.#chooseKind(option.okfType)) return;
         if (!this.canCombineMarked()) return;
         await this.#preview("merge_group");
