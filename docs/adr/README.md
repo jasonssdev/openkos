@@ -106,3 +106,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0065](0065-the-desktop-web-view-is-typescript-built-with-vite-over-a-client-generated-from-the-openapi-snapshot.md) | The desktop web view is TypeScript built with Vite, over a client generated from the OpenAPI snapshot | Accepted | 2026-10-16 |
 | [0066](0066-the-desktop-screens-are-plain-dom-over-a-tested-view-model-with-no-ui-framework.md) | The desktop screens are plain DOM over a tested view model, with no UI framework | Accepted | 2026-10-16 |
 | [0067](0067-undoing-a-review-choice-is-a-two-phase-api-operation-keyed-by-what-the-choice-wrote.md) | Undoing a review choice is a two-phase API operation keyed by what the choice wrote | Accepted | 2026-10-16 |
+| [0068](0068-asking-through-the-api-applies-the-query-disclosure-rule-with-one-consent.md) | Asking through the API applies the query disclosure rule, with one consent | Proposed | 2026-10-16 |
