@@ -1,10 +1,11 @@
 // The app's shell: the shell process supervises the engine, and this page reads
-// its state, draws the app shell (sidebar and main), the status page, the
-// review screen, the welcome (no library yet), guided setup and settings, and
-// creates one client, one review model and one setup model per engine launch
-// (a restarted engine has a new port and token). Settings outlives a launch:
-// saving a key restarts the engine, and each launch is handed to it. Every value
-// is written with textContent, never as HTML, and nothing is logged.
+// its state, draws the app shell (sidebar and main), the status page, the Ask
+// screen, the review screen, the welcome (no library yet), guided setup and
+// settings, and creates one client, one review model and one setup model per
+// engine launch (a restarted engine has a new port and token). Settings and the
+// Ask model outlive a launch: saving a key restarts the engine, and each launch
+// is handed to them. Every value is written with textContent, never as HTML,
+// and nothing is logged.
 import {
   createApiKeys,
   createClient,
@@ -13,6 +14,8 @@ import {
   type EngineState,
   type Invoke,
 } from "../client/index.ts";
+import { AskModel } from "./ask/model.ts";
+import { renderAsk } from "./ask/render.ts";
 import { ReviewModel } from "./review/model.ts";
 import { renderReview } from "./review/render.ts";
 import { SettingsModel, cloudOn } from "./settings/model.ts";
@@ -41,7 +44,7 @@ function element<T extends HTMLElement>(id: string): T {
 
 const invoke: Invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 
-type View = "status" | "review" | "setup" | "welcome" | "settings";
+type View = "ask" | "status" | "review" | "setup" | "welcome" | "settings";
 let view: View = "status";
 
 const live = { status: element("review-live-status"), alert: element("review-live-alert") };
@@ -50,6 +53,8 @@ const cloudFooter = el("div");
 const settingsFooter = el("div");
 const footer = el("div", { class: "ui-sidebar__foot" }, cloudFooter, settingsFooter, engineFooter);
 const statusRoot = el("div", { class: "ui-view", attrs: { "data-screen": "status" } });
+const askRoot = el("div", { class: "ui-view", attrs: { "data-screen": "ask" } });
+askRoot.hidden = true;
 // To review fills the main region with its list and detail panes.
 const reviewWaiting = el("div", { class: "ui-view" }, spinner("Waiting for OpenKOS to start…"));
 const reviewRoot = el("div", { class: "ui-fill", attrs: { id: "review" } });
@@ -63,7 +68,7 @@ const settingsRoot = el("div", { class: "ui-view", attrs: { "data-screen": "sett
 settingsRoot.hidden = true;
 
 const shell = appShell({ nav: [], current: view, onNavigate: (id) => navigate(id), footer });
-shell.main.append(statusRoot, reviewView, setupRoot, welcomeRoot, settingsRoot);
+shell.main.append(askRoot, statusRoot, reviewView, setupRoot, welcomeRoot, settingsRoot);
 element("app").replaceChildren(shell.root);
 
 // One launch: its client's model, and whether its status was read.
@@ -101,6 +106,20 @@ function paintStatus(force = false): void {
   });
 }
 
+// Ask: one model for the session, so its history outlives an engine restart.
+const ask = new AskModel();
+const askExpanded = new Set<string>();
+function paintAsk(): void {
+  renderAsk(askRoot, ask.state, {
+    ask: (question) => ask.ask(question),
+    retry: () => ask.retry(),
+    show: (id) => ask.show(id),
+    expanded: askExpanded,
+    onToggle: (name, open) => void (open ? askExpanded.add(name) : askExpanded.delete(name)),
+  });
+}
+ask.subscribe(() => paintAsk());
+
 function paintNav(): void {
   const count = reviewCount(review?.state ?? null, statusOpen);
   redraw(shell.nav, "nav", () =>
@@ -129,12 +148,13 @@ function paintEngine(state: EngineState | null): void {
 }
 
 function navigate(id: string): void {
-  if (id === "status" || id === "review") show(id);
+  if (id === "ask" || id === "status" || id === "review") show(id);
 }
 
 function show(next: View): void {
   view = next;
   statusRoot.hidden = next !== "status";
+  askRoot.hidden = next !== "ask";
   reviewView.hidden = next !== "review";
   setupRoot.hidden = next !== "setup";
   welcomeRoot.hidden = next !== "welcome";
@@ -150,7 +170,7 @@ function show(next: View): void {
     if (review !== null) void review.visit();
   } else {
     if (next === "settings") void settings.load();
-    const root = { status: statusRoot, setup: setupRoot, welcome: welcomeRoot, settings: settingsRoot }[next];
+    const root = { ask: askRoot, status: statusRoot, setup: setupRoot, welcome: welcomeRoot, settings: settingsRoot }[next];
     root.querySelector<HTMLElement>('[data-view="heading"]')?.focus();
   }
 }
@@ -207,6 +227,7 @@ function stopSetup(): void {
 
 function startReview(state: Extract<EngineState, { state: "ready" }>): void {
   unsubscribe?.();
+  ask.setClient(createClient(state));
   review = new ReviewModel(createClient(state));
   const model = review;
   const stopDrawing = model.subscribe((next) => renderReview(reviewRoot, live, model, next));
@@ -224,6 +245,7 @@ function stopReview(): void {
   unsubscribe?.();
   unsubscribe = null;
   review = null;
+  ask.setClient(null);
   reviewWaiting.hidden = false;
   reviewRoot.replaceChildren();
   paintNav();
@@ -280,6 +302,7 @@ async function tick(): Promise<void> {
 
 paintEngine({ state: "starting", attempt: 1 });
 paintStatus(true);
+paintAsk();
 paintNav();
 paintSettingsEntry();
 void tick();

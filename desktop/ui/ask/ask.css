@@ -1,0 +1,15 @@
+/* The Ask screen's layout; everything else is the design system's (system.css). */
+.ask-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ask-form .ui-field {
+  max-width: none;
+}
+
+.ask-answer {
+  color: var(--text-primary);
+  max-width: var(--measure);
+}

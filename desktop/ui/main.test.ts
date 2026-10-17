@@ -27,10 +27,10 @@ beforeAll(async () => {
 afterAll(() => vi.useRealTimers());
 
 describe("the app", () => {
-  it("draws the shell with Ask not offered yet, Settings at the foot, and Status open", () => {
-    expect(navButtons().map((n) => n.textContent)).toEqual(["AskComing soon", "To review", "Status", "Settings"]);
+  it("draws the shell with Ask offered, Settings at the foot, and Status open", () => {
+    expect(navButtons().map((n) => n.textContent)).toEqual(["Ask", "To review", "Status", "Settings"]);
     expect(document.querySelector(".ui-sidebar__footer .ui-nav-item")?.textContent).toBe("Settings");
-    expect(navButtons()[0]?.getAttribute("aria-disabled")).toBe("true");
+    expect(navButtons()[0]?.hasAttribute("aria-disabled")).toBe(false);
     expect(navButtons()[2]?.getAttribute("aria-current")).toBe("page");
     expect(text("#engine-status")).toBe("The engine could not be started.");
     expect(text(".ui-sidebar__footer .ui-badge__word")).toBe("Engine not running");
@@ -49,8 +49,17 @@ describe("the app", () => {
     expect(document.activeElement?.textContent).toBe("Status");
   });
 
-  it("ignores Ask", () => {
+  it("opens Ask on its title, waiting for the engine, and back", () => {
     (navButtons()[0] as HTMLButtonElement).click();
+    const ask = document.querySelector('[data-view="ask"]') as HTMLElement;
+    expect(ask.hidden).toBe(false);
+    expect(ask.closest("main")).not.toBeNull();
+    expect(navButtons()[0]?.getAttribute("aria-current")).toBe("page");
+    expect(document.activeElement?.textContent).toBe("Ask");
+    expect(text("#ask-waiting")).toBe("Waiting for OpenKOS to start…");
+    expect((document.querySelector(".ask-form .ui-button--primary") as HTMLButtonElement).disabled).toBe(true);
+    (navButtons()[2] as HTMLButtonElement).click();
+    expect(ask.hidden).toBe(true);
     expect(navButtons()[2]?.getAttribute("aria-current")).toBe("page");
   });
 
@@ -59,5 +68,18 @@ describe("the app", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(text("#engine-status")).toBe("The shell could not report the engine's state.");
     expect(text(".ui-sidebar__footer .ui-badge__word")).toBe("Engine state unknown");
+  });
+
+  it("offers Ask once the engine is ready, and waits again when it stops", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 503 })));
+    invoke.mockResolvedValue({ state: "ready", attempt: 1, base_url: "http://127.0.0.1:4321/v1", token: "t".repeat(64), pid: 7 });
+    await vi.advanceTimersByTimeAsync(1000);
+    const button = () => document.querySelector(".ask-form .ui-button--primary") as HTMLButtonElement;
+    expect(button().disabled).toBe(false);
+    expect(document.getElementById("ask-waiting")).toBeNull();
+    invoke.mockResolvedValue({ state: "stopped" });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(button().disabled).toBe(true);
+    vi.unstubAllGlobals();
   });
 });

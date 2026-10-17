@@ -391,12 +391,56 @@ Nothing changed and no key typed simply closes the form.
 
 The words around the decisions, outside the decision screens.
 
-- **Sidebar.** **Ask**, **To review** and **Status**. Ask is listed before it exists, with "Coming soon" beside it, and choosing it does nothing. To review shows a count only when something waits. **Settings** sits at the foot of the sidebar, above the engine's badge, with **Cloud AI model on** above it while one is on.
+- **Sidebar.** **Ask**, **To review** and **Status**. To review shows a count only when something waits. **Settings** sits at the foot of the sidebar, above the engine's badge, with **Cloud AI model on** above it while one is on.
 - **The engine's badge**, at the foot of the sidebar, a symbol and a word: "Engine starting", "Engine running", "Engine restarting", "Engine not running" (it could not be started), "Engine stopped", "No library open" (before a library is chosen; Status then says "No library is open yet."), "Engine state unknown".
 - **Check setup.** While the AI model is not ready, Status says "Some setup steps are left." under its title, with **Check setup**, which opens setup. Otherwise Status shows neither.
 - **Status disclosures.** What is rarely needed waits behind a disclosure named for what it holds: "Show details" for the engine's own report when it failed or restarted, "Show the folder" for where the files live.
 - **Status words.** The library's card is **Your library**; its counts are **To review**, **Pages** and **Files you added**, and a status that cannot be read says "Your library's status could not be read." The engine's words (workspace, concept, source) never appear.
 - **To review, as a list.** Each row names what it is about: an identity by its pages' titles ("Marguerite Osei · M. Osei"), with its question under it; a connection by its sentence; a how-quickly suggestion by its question; an item the app cannot act on by its plain sentence, with "This can't be settled in the app yet." under it. A badge says **Changed** only on a changed decision. With nothing open beside the list: "Nothing open. Choose something from the list to see its pages and decide."; with nothing to review: "Nothing to review right now. When OpenKOS finds pages that may be the same thing, or a connection to confirm, they wait here." The pages you combined are one row, "Pages you combined", with how many ("1 page", "{n} pages"). A confirmation closes with **Close**.
+
+## Ask
+
+`openkos.api.ask` through the local API's ask job ([ADR-0068](adr/0068-asking-through-the-api-applies-the-query-disclosure-rule-with-one-consent.md)). Asking writes nothing, so no message about it says whether anything changed. **(H)** for the whole section.
+
+- **The screen.** Title "Ask"; under it "Ask about anything in your library. The answer comes from your pages and says which ones." The field is labelled "Your question", with "What would you like to know?" inside it. One button, **Ask**; while the engine starts it is unavailable, with "Waiting for OpenKOS to start…" beside it. A blank question gets "Type a question first." on the field.
+- **While it runs.** The button reads "Asking…", and the question shows with one line for the step the engine is on: "Looking through your pages…", "Gathering what's relevant…", "Checking your pages hold an answer…", "Writing the answer…". No counts and no time estimate.
+- **The answer** is shown as written, as text, with "From:" followed by the titles of the pages it drew on. When it points to no page: "This answer doesn't point to a particular page."
+
+What the screen says instead of an answer, by `outcome`:
+
+| Outcome | Line under the question | Sentence |
+| --- | --- | --- |
+| `no_match` (`zero_hits`) | "Nothing matched" | "Nothing in your library matches this question. Try asking with other words." |
+| `no_match` (`all_unreadable`) | "Nothing could be read" | "The pages that match this question couldn't be read." |
+| `no_answer_in_context` | "No answer in your pages" | "Your library has pages about this, but none of them answers the question." |
+| `withheld` | "This answer stays private" | "It drew on {n} pages marked Only on this Mac, so it isn't shown here, and neither are their names. This can't be changed in the app yet." |
+
+A withheld answer is a count, never a title: the API names no such page, and the app asks it with no consent (`include_confidential` is never sent). Where the person may agree to see these answers is open (#1507); until then the screen says it can't be changed in the app.
+
+**Notes,** small and under the answer, only when they apply:
+
+- A search that may miss something (`stale_indexes`): "Some recent changes to your library may not be searched yet, so this answer could miss them." When part of the search could not run (`lexical_unavailable`, `dense_unavailable`) this one takes its place: "The search was limited this time, so this answer could miss some pages." The app cannot bring the search up to date, so neither note offers an action.
+- Pages left out (`withheld` above zero on any other outcome): "{n} pages marked Only on this Mac were left out." ("1 page … was left out.")
+- An answer the engine could not check first (`sufficiency_degraded`): "This answer wasn't checked against your pages before it was written."
+
+**When asking fails:**
+
+| Situation | Code | Message | Action |
+| --- | --- | --- | --- |
+| Another question is being answered | `ask_active` | "OpenKOS is already answering another question. Wait a moment, then try again." | **Try again** |
+| The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to answer questions." | **Try again** |
+| The AI model isn't installed | `backend_model_not_found` | "The AI model isn't installed. OpenKOS needs it to answer questions." | none |
+| The answer was cut short | `generation_capped` | "The AI model stopped before the answer was finished. Try again, or ask a shorter question." | **Try again** |
+| The AI model failed | `backend_error` | "The AI model ran into a problem." | **Try again** |
+| The library can't be read | `workspace_unreadable` | "Your library couldn't be read." | **Try again** |
+| The library is gone | `workspace_not_found` | "Your library couldn't be found." | none |
+| The engine restarted mid-answer | `not_found` (on the poll) | "OpenKOS restarted while it was answering. Ask again." | **Try again** |
+| The question was refused | `invalid_request` | "This question couldn't be asked. Try writing it another way." | none |
+| The question is too long | `request_too_large` | "This question is too long. Try a shorter one." | none |
+| The engine does not answer | — | "OpenKOS isn't responding." | **Try again** |
+| Anything else | — | "Something went wrong." | **Try again** |
+
+**Earlier questions.** The session's last few questions wait behind "Earlier questions", each with one word for how it went: "Answered", "No answer", "Kept private", "Didn't finish". They are kept in memory only and are gone when the app closes.
 
 ## Open questions
 
