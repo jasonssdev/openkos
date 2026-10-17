@@ -7,11 +7,13 @@ import "./ask.css";
 import { callout, disclosure, el, listRow, pageHeader, redraw, spinner, textField, uiButton, uiCard, uiList } from "../system/index.ts";
 import type { Schemas } from "../../client/index.ts";
 import type { AskState, Turn } from "./model.ts";
-import { describeAnswer, phaseLine, turnMeta } from "./wording.ts";
+import { SHOW_PRIVATE, describeAnswer, phaseLine, turnMeta } from "./wording.ts";
 
 export interface AskActions {
   ask: (question: string) => unknown;
   retry: () => unknown;
+  /** Ask the shown, private answer again with the pages marked Only on this Mac. */
+  showPrivate: () => unknown;
   show: (id: number) => unknown;
   /** The disclosures the person opened; they stay open across redraws. */
   expanded: ReadonlySet<string>;
@@ -101,7 +103,13 @@ function turnCard(turn: Turn, actions: AskActions): HTMLElement {
     case "answer": {
       const told = describeAnswer(result.answer);
       const notes = told.notes.map((note) => el("p", { class: "ui-card__meta" }, note));
-      if (told.kind === "empty") return uiCard({ ...title, meta: told.title }, el("p", {}, told.text), ...notes);
+      if (told.kind === "empty") {
+        const show =
+          result.answer.outcome === "withheld"
+            ? [el("div", { class: "ui-actions" }, uiButton(SHOW_PRIVATE, actions.showPrivate, { focusKey: "ask-show-private" }))]
+            : [];
+        return uiCard({ ...title, meta: told.title }, el("p", {}, told.text), ...show, ...notes);
+      }
       const paragraphs = told.text
         .split(/\n\s*\n/)
         .map((text) => text.trim())

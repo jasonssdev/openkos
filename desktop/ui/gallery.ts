@@ -269,7 +269,7 @@ function askComposition(): HTMLElement {
       },
     ],
   };
-  renderAsk(view, state, { ask: noop, retry: noop, show: noop, expanded: new Set(), onToggle: noop });
+  renderAsk(view, state, { ask: noop, retry: noop, showPrivate: noop, show: noop, expanded: new Set(), onToggle: noop });
   shell.main.append(view);
   return frame(shell.root);
 }

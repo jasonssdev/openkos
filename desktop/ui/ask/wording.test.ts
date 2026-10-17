@@ -85,7 +85,7 @@ describe("describeAnswer", () => {
     expect(told).toEqual({
       kind: "empty",
       title: "This answer stays private",
-      text: "It drew on 2 pages marked Only on this Mac, so it isn't shown here, and neither are their names. This can't be changed in the app yet.",
+      text: "It drew on 2 pages marked Only on this Mac, so it isn't shown here, and neither are their names. You can show it while your AI model runs on this Mac.",
       notes: [],
     });
   });
@@ -94,7 +94,7 @@ describe("describeAnswer", () => {
     const told = describeAnswer(answer({ outcome: "withheld", answer: null, citations: [], withheld: 0 }));
     expect(told).toMatchObject({ kind: "empty", title: "This answer stays private" });
     expect(told.kind === "empty" && told.text).toBe(
-      "It drew on pages marked Only on this Mac, so it isn't shown here, and neither are their names. This can't be changed in the app yet.",
+      "It drew on pages marked Only on this Mac, so it isn't shown here, and neither are their names. You can show it while your AI model runs on this Mac.",
     );
   });
 
