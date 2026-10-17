@@ -1,4 +1,4 @@
-// The shell's own commands for the remote backend's API key (ADR-0069). The
+// The shell's own commands for the remote backend's API key (ADR-0070). The
 // shell keeps the key in the operating system's keychain and hands it to the
 // engine as `OPENKOS_OPENAI_API_KEY`; the local API never sees it. The page can
 // set the key, clear it and ask whether one is set. There is deliberately no

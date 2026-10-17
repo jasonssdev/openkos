@@ -1,4 +1,4 @@
-//! The remote backend's API key (ADR-0069).
+//! The remote backend's API key (ADR-0070).
 //!
 //! The engine reads the key of its opt-in `openai-compatible` backend only from
 //! the `OPENKOS_OPENAI_API_KEY` environment variable (ADR-0031). A person who

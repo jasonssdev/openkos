@@ -7,7 +7,7 @@
 //! behaviour of the product stays in the engine, behind its local API. The one
 //! thing the shell keeps itself is the remote backend's API key, in the
 //! operating system's keychain, handed to the engine as its environment
-//! (ADR-0069).
+//! (ADR-0070).
 
 pub mod apikey;
 pub mod engine;

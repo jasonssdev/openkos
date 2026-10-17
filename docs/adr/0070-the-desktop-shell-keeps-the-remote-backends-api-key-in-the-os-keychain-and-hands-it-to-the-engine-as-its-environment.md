@@ -1,6 +1,6 @@
 ---
 type: Decision
-title: "ADR-0069: The desktop shell keeps the remote backend's API key in the OS keychain and hands it to the engine as its environment"
+title: "ADR-0070: The desktop shell keeps the remote backend's API key in the OS keychain and hands it to the engine as its environment"
 description: The desktop shell stores the openai-compatible backend's API key in the operating system's keychain and sets it as OPENKOS_OPENAI_API_KEY on the engine process it supervises; the engine still reads only that variable, the web view can set, clear and test for the key but never read it, and the key never reaches the local API, the workspace or a log.
 status: Accepted
 date: 2026-10-16
@@ -14,7 +14,7 @@ timestamp: 2026-10-16T00:00:00Z
 sensitivity: public
 ---
 
-# ADR-0069: The desktop shell keeps the remote backend's API key in the OS keychain and hands it to the engine as its environment
+# ADR-0070: The desktop shell keeps the remote backend's API key in the OS keychain and hands it to the engine as its environment
 
 - **Status:** Accepted
 - **Date:** 2026-10-16
