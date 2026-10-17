@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-17
+
+The first release of MVP 6. `openkos.api` grows into the surface a desktop app needs: asking, adding files under a free quote, settling every decision the review queue holds, undoing each of them, changing the model settings, guided setup, a page's sensitivity and rebuilding search, all served by the local HTTP API and a typed TypeScript client. The desktop app itself (`desktop/`) is a developer build and is not part of the package. **Python 3.14 is now the only supported interpreter**; users on 3.12 or 3.13 stay on 0.5.5.
+
 ### Added
 
 - The desktop app has an Add files screen, second in the sidebar. **Choose files…** opens the system's file chooser (a new shell command, `pick_files`, several files at once), the screen quotes them for free and shows each file by name with a note only where the AI model cannot read it or the file cannot be added (and why, in plain words), where the AI model runs, and, for a cloud AI model, the most requests it can make. **Add {n} files** starts a run bound to the quote; the screen shows which file is being added and its step, **Stop** takes effect between files, and the result lists each file. A changed quote, files already being added, a busy library, a restarted engine and search left out of date are each worded with the one thing to do. A file the library keeps Only on this Mac stays kept from the AI model (the screen never asks to include it). In To review, a file the folder watch refused as too large offers **Add it**, which opens the same consent for that file; a file whose contents changed after it was added stays refused, with the rename guidance. The words are in `docs/decision-wording.md` ("Adding files", "A file that wasn't added").
@@ -3678,7 +3682,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jasonssdev/openkos/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/jasonssdev/openkos/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/jasonssdev/openkos/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/jasonssdev/openkos/compare/v0.5.2...v0.5.3
