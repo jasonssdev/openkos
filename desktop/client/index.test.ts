@@ -100,6 +100,13 @@ describe("the requests", () => {
       { action: "merge" },
     ],
     [
+      "previewFinding",
+      (c) => c.previewFinding("contradiction:k/1", { action: "supersede_reversed" }),
+      "POST",
+      "/v1/decisions/contradiction%3Ak%2F1/preview-finding",
+      { action: "supersede_reversed" },
+    ],
+    [
       "applyDecision",
       (c) => c.applyDecision("k1", { action: "merge", version: VERSION }),
       "POST",

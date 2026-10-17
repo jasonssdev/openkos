@@ -18,7 +18,7 @@ This brief settles how the desktop app words a pending decision for a person who
 
 The copy is **English first**. Spanish follows as a translation of this brief, written once the English wording has met a real reader; it is not a separate design.
 
-Each decision maps onto the curation surface of `openkos.api` ([ADR-0053](adr/0053-curation-decisions-are-a-two-phase-application-surface.md), [ADR-0060](adr/0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md)) and its judging service ([ADR-0059](adr/0059-judging-is-a-quote-bound-application-surface-that-persists-per-chunk-and-never-merges.md)). The engine terms appear here, in code, only so the app stage can find what each wording belongs to; none of them reaches the screen.
+Each decision maps onto the curation surface of `openkos.api` ([ADR-0053](adr/0053-curation-decisions-are-a-two-phase-application-surface.md), [ADR-0060](adr/0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md), [ADR-0072](adr/0072-contradictions-and-revisions-are-previewed-as-findings-and-applied-as-decisions.md)) and its judging service ([ADR-0059](adr/0059-judging-is-a-quote-bound-application-surface-that-persists-per-chunk-and-never-merges.md)). The engine terms appear here, in code, only so the app stage can find what each wording belongs to; none of them reaches the screen.
 
 Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../evals/desktop_app/PREREGISTRATION.md) checks the ones it reaches: the participant settles one decision and then says, in their own words, what it did, which is compared with the "what it does" line below. Hypotheses that session does not reach stay hypotheses until a later session does.
 
@@ -52,6 +52,10 @@ Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../eva
 | relation, edge | **connection** | (H) |
 | provenance, citations | **"From:"** followed by file names | (H) |
 | volatility tier | **how quickly it goes out of date** | (H) |
+| supersede, deprecated | **out of date** ("answers won't use it") | (H) |
+| reconcile | **both are right**, "checked against each other" | (H) |
+| decline (a contradiction) | **leave them as they are** | (H) |
+| contradiction, revision | never named: the question says what was found | |
 | query | **ask** | |
 | model | **AI model**, and where it runs: "on this Mac" or the provider's name | (H) |
 
@@ -157,9 +161,59 @@ The "different files" line and the cross-type warning are shown as for a pair.
 
 The screen shows the current setting and the suggestion, each by its plain line, and the model's reason. **Options:** **Use this** ("From now on, {kinds} are treated as changing {slowly}.") and **Decide later**. Bulk acceptance of all such suggestions is allowed. **Undo:** **Undo** on the confirmation puts back the setting the kind had before (`preview_tier_change` with the plan's `configured_tier`, then `apply_tier_change`; when the kind had no setting of its own, the engine's default applies again) and confirms "Undone. {Kinds} are treated as before." When the earlier setting is not one the app can name, the confirmation offers no Undo. Later, the same setting is changeable under the library's settings. The windows behind "now and then" and "often" are the engine's, named in its configuration, and are not repeated in copy.
 
-## Items the app lists but cannot act on
+## Two pages disagree — "Which is right?"
 
-Contradictions, revisions and refused files (`contradiction`, `revision`, `watch_refusal`) carry no actions. They are listed in To review with a plain sentence of what was found ("Two pages say different things about {subject}."; "A newer file may replace an older one."; "A file was not added.") and no command, followed by "This can't be settled in the app yet." The subject is the first page's title. A refused file carries no plain reason in the decision, so none is shown. The app does not invent actions the engine does not offer.
+`kind: contradiction`. Actions `decline`, `reconcile`, `supersede`, `supersede_reversed`, `skip`, previewed with `preview_finding` (a `ReconcilePlan` or a `DeclinePlan`) and applied with `apply_decision`, like every other decision. `finding` is a `ContradictionDetail`: the two pages, the claims the AI model saw as conflicting, and its reason. "First" and "second" below are the detail's `first_id` and `second_id`. **(H)** for the whole section.
+
+**Question:** "These pages say different things. Which is right?" with both pages side by side. Under "What doesn't match", the conflicting claims, each in quotation marks, as written; under "Why the AI model thinks so", the reason. Both are the model's words, never the app's.
+
+**Options and what they do:**
+
+- **'{first title}' is right** (`supersede`) — "We'll mark '{second title}' as out of date. It stays in your library, but answers won't use it." The page named comes from the plan's `deprecates_id`.
+- **'{second title}' is right** (`supersede_reversed`) — the same sentence, the other way round.
+- **Both are right** (`reconcile`) — "Both pages stay as they are, and each gets a short note that you checked them against each other."
+- **Leave them as they are** (`decline`) — "Nothing on either page changes. We won't point this out again."
+- **Decide later** — "Nothing changes. This stays in To review."
+
+**Found inside a combined page.** When the detail has a `merged_absorbed_id`, the disagreement is between a page and one that was combined into it, and only `decline` and `skip` are offered (`reconcile` is withheld as `merged_content`). The question reads: "Part of '{first title}' disagrees with what was combined into it." Options: **Leave it as it is** ("Nothing changes on the page. We won't point this out again.") and **Decide later**, with one line under them: "If combining them was a mistake, you can split it again under 'Pages you combined'."
+
+**Confirmations:** "Marked '{title}' as out of date." · "Noted that both are right." · "Left as they are." No Undo is offered yet (#1497); the confirmation does not mention one.
+
+## A newer decision — "Does this replace the earlier one?"
+
+`kind: revision`. The engine found a later decision that may reverse or refine an earlier one. `finding` is a `RevisionDetail`: the two pages, `change` (`reverses` or `refines`), `later_id` when the dates say which came later, the quote from each page and the AI model's reason. Previewed and applied as a contradiction is. **(H)** for the whole section.
+
+The pages are shown side by side, each with its quote in quotation marks and its date ("No date" when there is none), and the model's reason under "Why the AI model thinks so".
+
+**When the dates say which came later** (`later_id` set), one write is offered, the one the dates and the change name, held by the later page:
+
+| `change` | Question | Option | What it does |
+| --- | --- | --- | --- |
+| `reverses` | "Does '{later}' replace '{earlier}'?" | **Yes, it replaces it** (`supersede…`) | "We'll mark '{earlier}' as out of date. It stays in your library, but answers won't use it." |
+| `refines` | "Does '{later}' update '{earlier}'?" | **Yes, it updates it** (`revise…`) | "Both stay current, and '{later}' is noted as an update to '{earlier}'." |
+
+The action is `supersede` or `revise` when the later page is the first, and its `_reversed` form when it is the second; the app reads which one the decision offers, never decides the direction itself.
+
+**When the dates don't** (`later_id` is `None`), the line above the question says: "These have no dates we can compare, so we can't tell which came first." **Question:** "How do these two relate?" **Options:** "'{first}' replaces '{second}'" (`supersede`), "'{first}' updates '{second}'" (`revise`), "'{second}' replaces '{first}'" (`supersede_reversed`), "'{second}' updates '{first}'" (`revise_reversed`), each with the "what it does" line from the table.
+
+**Always offered:**
+
+- **Both still stand** (`reconcile`) — "Both pages stay current, and each gets a short note that you checked them against each other. We won't ask about these two again." This is how a revision is answered "no"; there is no other.
+- **Decide later** — "Nothing changes. This stays in To review."
+
+**Confirmations:** "Marked '{earlier}' as out of date." · "Noted that '{later}' updates '{earlier}'." · "Noted that both still stand." No Undo yet (#1497).
+
+## A file that wasn't added
+
+`kind: watch_refusal`. It carries no action: adding the file runs the AI model, which the app cannot yet ask you to agree to (#1496). It is listed with what happened and what you can do in your folder, never with a command. `finding` is a `RefusedFileDetail` with the file's name in your folder and a reason:
+
+| `reason` | What the screen says |
+| --- | --- |
+| `changed_after_import` | "'{file_name}' wasn't added. A file with this name is already in your library, with different contents. To add this one too, give it a new name in your folder." |
+| `exceeds_pass_budget` | "'{file_name}' wasn't added. It's too large to add automatically. To add it, split it into smaller files in your folder." |
+| no detail | "A file was not added." |
+
+Each is followed by "This can't be settled in the app yet." Once the file is renamed or split, OpenKOS adds it the next time it checks your folder, and the item leaves To review. **(H)** that the folder remedy is enough for a first-time reader.
 
 ## The check: agreeing to spend
 
@@ -200,6 +254,8 @@ Every message says whether anything changed, and offers the one action that help
 | The page was changed after it was combined | `survivor_edited` | "This page was changed after it was combined, so it can't be split here." | **OK** only: the app does not offer to split anyway (#1442) |
 | Only some of the later combines were split | `unmerge_interrupted` | "Only some of these were split. Each page that was split is back as it was." | reload **(H)** |
 | The pages changed and the question is gone | `stale`, then not listed | "These pages changed, and this question no longer applies." | back to To review |
+| Two pages were already settled another way | `already_reconciled` | "You've already settled how these pages relate, in another way. Nothing was changed." | reload |
+| The app asked the wrong way (a client defect) | `wrong_preview` | as "Any other failure, before a write" | **Try again** |
 | Any other failure, before a write | — | "Something went wrong. Nothing was changed." ("OpenKOS isn't responding. Nothing was changed." when the engine does not answer) | **Try again** |
 | Any other failure, after a write was sent | — | "Something went wrong. Look at To review to see what changed." ("OpenKOS stopped responding. …" when the engine does not answer) | reload |
 

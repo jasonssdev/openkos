@@ -437,6 +437,51 @@
         "title": "AskRequest",
         "type": "object"
       },
+      "ContradictionDetail": {
+        "additionalProperties": false,
+        "description": "A contradiction: two pages that say incompatible things. A merged-body\none (`merged_absorbed_id` set) was found inside a combined page, between\nthe page and the one it absorbed.",
+        "properties": {
+          "conflicting_claims": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conflicting Claims",
+            "type": "array"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "merged_absorbed_id",
+          "rationale",
+          "conflicting_claims"
+        ],
+        "title": "ContradictionDetail",
+        "type": "object"
+      },
       "Decision": {
         "additionalProperties": false,
         "description": "One open decision, as data a client can render.",
@@ -479,6 +524,23 @@
             ],
             "title": "Evaluation",
             "type": "string"
+          },
+          "finding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContradictionDetail"
+              },
+              {
+                "$ref": "#/components/schemas/RevisionDetail"
+              },
+              {
+                "$ref": "#/components/schemas/RefusedFileDetail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finding"
           },
           "fresh": {
             "anyOf": [
@@ -621,6 +683,44 @@
         "title": "DecisionVersion",
         "type": "object"
       },
+      "DeclinePlan": {
+        "description": "Recording that a contradiction was looked at and left as it is.",
+        "properties": {
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "decline",
+            "default": "decline",
+            "title": "Kind",
+            "type": "string"
+          },
+          "merged_absorbed_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Absorbed Id"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "merged_absorbed_id",
+          "kind"
+        ],
+        "title": "DeclinePlan",
+        "type": "object"
+      },
       "ErrorBody": {
         "additionalProperties": false,
         "description": "The one body shape of every non-2xx response.",
@@ -644,6 +744,65 @@
           "message"
         ],
         "title": "ErrorBody",
+        "type": "object"
+      },
+      "FindingPlan": {
+        "description": "The plan of a finding preview, a union discriminated on `kind`, kept apart\nfrom `PreviewPlan` so the decision preview's union does not change (ADR-0072).\nDefaulted fields are marked required in the response, as for `PreviewPlan`.",
+        "discriminator": {
+          "mapping": {
+            "decline": "#/components/schemas/DeclinePlan",
+            "reconcile": "#/components/schemas/ReconcilePlan"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ReconcilePlan"
+          },
+          {
+            "$ref": "#/components/schemas/DeclinePlan"
+          }
+        ],
+        "title": "FindingPlan"
+      },
+      "FindingPreview": {
+        "description": "`api.FindingPreview` with its plan declared as a discriminated union. A\nresponse model only, like `DecisionPreview`.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "decision_key": {
+            "title": "Decision Key",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/FindingPlan"
+          },
+          "version": {
+            "$ref": "#/components/schemas/DecisionVersion"
+          }
+        },
+        "required": [
+          "decision_key",
+          "action",
+          "plan",
+          "version"
+        ],
+        "title": "FindingPreview",
+        "type": "object"
+      },
+      "FindingPreviewRequest": {
+        "additionalProperties": false,
+        "description": "Which contradiction or revision action to preview for the decision named\nin the path.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "FindingPreviewRequest",
         "type": "object"
       },
       "GroupSelection": {
@@ -2169,6 +2328,86 @@
         "title": "QuoteToken",
         "type": "object"
       },
+      "ReconcilePlan": {
+        "description": "Recording how two pages relate, as `reconcile` writes it: both stand\n(`reconciled_with`, no holder), one replaces the other (`supersedes`, the\ntarget listed as deprecated), or one refines the other (`revises`, both\nstay current).",
+        "properties": {
+          "deprecates_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deprecates Id"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "holder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holder Id"
+          },
+          "kind": {
+            "const": "reconcile",
+            "default": "reconcile",
+            "title": "Kind",
+            "type": "string"
+          },
+          "pages_changed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pages Changed",
+            "type": "array"
+          },
+          "relation_type": {
+            "enum": [
+              "reconciled_with",
+              "supersedes",
+              "revises"
+            ],
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "relation_type",
+          "holder_id",
+          "target_id",
+          "deprecates_id",
+          "pages_changed",
+          "kind"
+        ],
+        "title": "ReconcilePlan",
+        "type": "object"
+      },
       "RefreshRequest": {
         "additionalProperties": false,
         "description": "How long a queue refresh waits for the workspace lock.",
@@ -2182,6 +2421,30 @@
           }
         },
         "title": "RefreshRequest",
+        "type": "object"
+      },
+      "RefusedFileDetail": {
+        "additionalProperties": false,
+        "description": "A file the inbox watch did not add: `file_name` is its path relative to\nthe inbox. `changed_after_import`: a file of that name was already added\nwith different contents. `exceeds_pass_budget`: it is larger than one\nunattended pass may add.",
+        "properties": {
+          "file_name": {
+            "title": "File Name",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "changed_after_import",
+              "exceeds_pass_budget"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_name",
+          "reason"
+        ],
+        "title": "RefusedFileDetail",
         "type": "object"
       },
       "RelatePlan": {
@@ -2386,6 +2649,86 @@
           "commit_sha"
         ],
         "title": "Reopened",
+        "type": "object"
+      },
+      "RevisionDetail": {
+        "additionalProperties": false,
+        "description": "A revision: a later Decision that reverses or refines an earlier one.\n`later_id` is `None` when the dates do not order the pair; it never comes\nfrom the model.",
+        "properties": {
+          "change": {
+            "enum": [
+              "reverses",
+              "refines"
+            ],
+            "title": "Change",
+            "type": "string"
+          },
+          "first_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Date"
+          },
+          "first_id": {
+            "title": "First Id",
+            "type": "string"
+          },
+          "first_quote": {
+            "title": "First Quote",
+            "type": "string"
+          },
+          "later_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Later Id"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "second_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Second Date"
+          },
+          "second_id": {
+            "title": "Second Id",
+            "type": "string"
+          },
+          "second_quote": {
+            "title": "Second Quote",
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_id",
+          "second_id",
+          "change",
+          "later_id",
+          "rationale",
+          "first_quote",
+          "second_quote",
+          "first_date",
+          "second_date"
+        ],
+        "title": "RevisionDetail",
         "type": "object"
       },
       "RunRequest": {
@@ -3919,6 +4262,110 @@
           }
         ],
         "summary": "Preview"
+      }
+    },
+    "/v1/decisions/{decision_key}/preview-finding": {
+      "post": {
+        "operationId": "preview_finding_v1_decisions__decision_key__preview_finding_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decision_key",
+            "required": true,
+            "schema": {
+              "title": "Decision Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FindingPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Preview Finding"
       }
     },
     "/v1/health": {

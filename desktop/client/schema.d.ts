@@ -87,6 +87,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/decisions/{decision_key}/preview-finding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Finding */
+        post: operations["preview_finding_v1_decisions__decision_key__preview_finding_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -675,6 +692,24 @@ export interface components {
             question: string;
         };
         /**
+         * ContradictionDetail
+         * @description A contradiction: two pages that say incompatible things. A merged-body
+         *     one (`merged_absorbed_id` set) was found inside a combined page, between
+         *     the page and the one it absorbed.
+         */
+        ContradictionDetail: {
+            /** Conflicting Claims */
+            conflicting_claims: string[];
+            /** First Id */
+            first_id: string;
+            /** Merged Absorbed Id */
+            merged_absorbed_id: string | null;
+            /** Rationale */
+            rationale: string;
+            /** Second Id */
+            second_id: string;
+        };
+        /**
          * Decision
          * @description One open decision, as data a client can render.
          */
@@ -690,6 +725,8 @@ export interface components {
              * @enum {string}
              */
             evaluation: "judged_same" | "judged_different" | "judged_uncertain" | "pending_evaluation" | "not_applicable";
+            /** Finding */
+            finding?: components["schemas"]["ContradictionDetail"] | components["schemas"]["RevisionDetail"] | components["schemas"]["RefusedFileDetail"] | null;
             /** Fresh */
             fresh: boolean | null;
             /**
@@ -746,6 +783,23 @@ export interface components {
             selection?: components["schemas"]["GroupSelection"] | null;
         };
         /**
+         * DeclinePlan
+         * @description Recording that a contradiction was looked at and left as it is.
+         */
+        DeclinePlan: {
+            /** First Id */
+            first_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "decline";
+            /** Merged Absorbed Id */
+            merged_absorbed_id: string | null;
+            /** Second Id */
+            second_id: string;
+        };
+        /**
          * ErrorBody
          * @description The one body shape of every non-2xx response.
          */
@@ -756,6 +810,33 @@ export interface components {
             message: string;
             /** Retryable */
             retryable: boolean;
+        };
+        /**
+         * FindingPlan
+         * @description The plan of a finding preview, a union discriminated on `kind`, kept apart
+         *     from `PreviewPlan` so the decision preview's union does not change (ADR-0072).
+         *     Defaulted fields are marked required in the response, as for `PreviewPlan`.
+         */
+        FindingPlan: components["schemas"]["ReconcilePlan"] | components["schemas"]["DeclinePlan"];
+        /**
+         * FindingPreview
+         * @description `api.FindingPreview` with its plan declared as a discriminated union. A
+         *     response model only, like `DecisionPreview`.
+         */
+        FindingPreview: {
+            action: components["schemas"]["Action"];
+            /** Decision Key */
+            decision_key: string;
+            plan: components["schemas"]["FindingPlan"];
+            version: components["schemas"]["DecisionVersion"];
+        };
+        /**
+         * FindingPreviewRequest
+         * @description Which contradiction or revision action to preview for the decision named
+         *     in the path.
+         */
+        FindingPreviewRequest: {
+            action: components["schemas"]["Action"];
         };
         /**
          * GroupSelection
@@ -1382,6 +1463,37 @@ export interface components {
             work: components["schemas"]["WorkItem"][];
         };
         /**
+         * ReconcilePlan
+         * @description Recording how two pages relate, as `reconcile` writes it: both stand
+         *     (`reconciled_with`, no holder), one replaces the other (`supersedes`, the
+         *     target listed as deprecated), or one refines the other (`revises`, both
+         *     stay current).
+         */
+        ReconcilePlan: {
+            /** Deprecates Id */
+            deprecates_id: string | null;
+            /** First Id */
+            first_id: string;
+            /** Holder Id */
+            holder_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "reconcile";
+            /** Pages Changed */
+            pages_changed: string[];
+            /**
+             * Relation Type
+             * @enum {string}
+             */
+            relation_type: "reconciled_with" | "supersedes" | "revises";
+            /** Second Id */
+            second_id: string;
+            /** Target Id */
+            target_id: string | null;
+        };
+        /**
          * RefreshRequest
          * @description How long a queue refresh waits for the workspace lock.
          */
@@ -1391,6 +1503,22 @@ export interface components {
              * @default 5
              */
             wait_seconds?: number;
+        };
+        /**
+         * RefusedFileDetail
+         * @description A file the inbox watch did not add: `file_name` is its path relative to
+         *     the inbox. `changed_after_import`: a file of that name was already added
+         *     with different contents. `exceeds_pass_budget`: it is larger than one
+         *     unattended pass may add.
+         */
+        RefusedFileDetail: {
+            /** File Name */
+            file_name: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "changed_after_import" | "exceeds_pass_budget";
         };
         /**
          * RelatePlan
@@ -1489,6 +1617,35 @@ export interface components {
             commit_sha: string | null;
             /** Member Ids */
             member_ids: string[];
+        };
+        /**
+         * RevisionDetail
+         * @description A revision: a later Decision that reverses or refines an earlier one.
+         *     `later_id` is `None` when the dates do not order the pair; it never comes
+         *     from the model.
+         */
+        RevisionDetail: {
+            /**
+             * Change
+             * @enum {string}
+             */
+            change: "reverses" | "refines";
+            /** First Date */
+            first_date: string | null;
+            /** First Id */
+            first_id: string;
+            /** First Quote */
+            first_quote: string;
+            /** Later Id */
+            later_id: string | null;
+            /** Rationale */
+            rationale: string;
+            /** Second Date */
+            second_date: string | null;
+            /** Second Id */
+            second_id: string;
+            /** Second Quote */
+            second_quote: string;
         };
         /**
          * RunRequest
@@ -2267,6 +2424,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DecisionPreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    preview_finding_v1_decisions__decision_key__preview_finding_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FindingPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FindingPreview"];
                 };
             };
             /** @description Unauthorized */

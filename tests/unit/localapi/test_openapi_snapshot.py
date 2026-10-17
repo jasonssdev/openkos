@@ -140,6 +140,7 @@ _ROUTE_ERRORS: dict[tuple[str, str], set[str]] = {
     ("get", "/v1/pending"): {"503"},
     ("get", "/v1/decisions"): set(),
     ("post", "/v1/decisions/{decision_key}/preview"): {"409", "413"},
+    ("post", "/v1/decisions/{decision_key}/preview-finding"): {"409", "413"},
     ("post", "/v1/decisions/{decision_key}/apply"): {"409", "413", "503"},
     ("post", "/v1/queue/refresh"): {"413", "503"},
     ("get", "/v1/merges"): set(),
@@ -245,3 +246,26 @@ def test_the_group_selection_is_one_component_the_preview_request_names() -> Non
     version = schemas["DecisionVersion"]
     assert "selection" in version["properties"]
     assert "selection" not in version["required"]
+
+
+def test_the_finding_plan_is_its_own_union_and_the_decision_plan_is_unchanged() -> None:
+    """ADR-0072: the finding preview's plan is a second discriminated union, so
+    the decision preview's union, which a client switches over exhaustively,
+    keeps exactly its four members."""
+    schemas = _schemas()
+    finding = schemas["FindingPlan"]
+    decision = schemas["PreviewPlan"]
+
+    assert finding["discriminator"] == {
+        "propertyName": "kind",
+        "mapping": {
+            "decline": "#/components/schemas/DeclinePlan",
+            "reconcile": "#/components/schemas/ReconcilePlan",
+        },
+    }
+    assert sorted(decision["discriminator"]["mapping"]) == [  # type: ignore[index]
+        "keep_distinct",
+        "merge",
+        "relate",
+        "set_tier",
+    ]

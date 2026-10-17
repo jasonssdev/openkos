@@ -19,3 +19,17 @@ export function describePlan(plan: Schemas["DecisionPreview"]["plan"]): string {
     }
   }
 }
+
+// The finding preview's plan is its own union (ADR-0072), narrowed the same way.
+export function describeFindingPlan(plan: Schemas["FindingPreview"]["plan"]): string {
+  switch (plan.kind) {
+    case "reconcile":
+      return plan.relation_type;
+    case "decline":
+      return plan.first_id;
+    default: {
+      const unreachable: never = plan;
+      return unreachable;
+    }
+  }
+}

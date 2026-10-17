@@ -169,8 +169,9 @@ the write cores the CLI uses, never a second implementation:
 The preview MUST plan without writing, take no lock and call no model; its
 version MUST cover the bytes of every page the action rests on and the planned
 edge and holder, so a version issued for one direction never applies as
-another. A page the action names that no longer exists MUST be the not-applied
-result `member_missing`. A pair already reconciled in a different way MUST be
+another. A page the action names that no longer exists makes the row stale, so
+the preview MUST return Stale `row_inputs_changed`; an apply that finds it gone
+MUST return the not-applied result `member_missing` and write nothing. A pair already reconciled in a different way MUST be
 the not-applied result `already_reconciled`, at preview and at apply, and MUST
 write nothing. The apply MUST re-plan from current bytes, return Stale
 `content_changed` when the version moved, and inside its one commit section

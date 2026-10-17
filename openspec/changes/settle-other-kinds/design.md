@@ -94,7 +94,7 @@ gains the same resolution; the registry entry is unchanged.
 ## Sequence: apply a finding
 
 ```
-client            api.apply_decision     curate_decisions        finding_decisions          reconcile_service
+client            api.apply_decision     curate_decisions        (finding commit)           reconcile_service
   | version,action  |                      |                         |                          |
   |---------------->| apply_decision ----->| row, refusal, finding? -|                          |
   |                 |                      |------ commit_reconcile ->| prepare_pair (no lock) -->|

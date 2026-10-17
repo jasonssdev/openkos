@@ -19,6 +19,9 @@ from openkos.localapi._models import (
     AskRequest,
     DecisionList,
     DecisionPreview,
+    FindingPlan,
+    FindingPreview,
+    FindingPreviewRequest,
     HealthBody,
     KeptDistinctList,
     MergedConceptList,
@@ -169,6 +172,26 @@ def make_router() -> APIRouter:
                 decision_key=result.decision_key,
                 action=result.action,
                 plan=PreviewPlan(result.plan),
+                version=result.version,
+            )
+        raise _errors.outcome_problem(result)
+
+    @router.post(
+        "/decisions/{decision_key}/preview-finding", responses=_errors_of(409, 413)
+    )
+    def preview_finding(
+        decision_key: str,
+        body: FindingPreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> FindingPreview:
+        result = invoke(
+            lambda: api.preview_finding(workspace, decision_key, body.action)
+        )
+        if isinstance(result, api.FindingPreview):
+            return FindingPreview(
+                decision_key=result.decision_key,
+                action=result.action,
+                plan=FindingPlan(result.plan),
                 version=result.version,
             )
         raise _errors.outcome_problem(result)

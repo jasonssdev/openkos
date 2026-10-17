@@ -65,6 +65,41 @@ class DecisionPreview(BaseModel):
     version: api.DecisionVersion
 
 
+class FindingPlan(
+    RootModel[
+        Annotated[api.ReconcilePlan | api.DeclinePlan, Field(discriminator="kind")]
+    ]
+):
+    """The plan of a finding preview, a union discriminated on `kind`, kept apart
+    from `PreviewPlan` so the decision preview's union does not change (ADR-0072).
+    Defaulted fields are marked required in the response, as for `PreviewPlan`."""
+
+    model_config = ConfigDict(
+        frozen=True, json_schema_serialization_defaults_required=True
+    )
+
+
+class FindingPreview(BaseModel):
+    """`api.FindingPreview` with its plan declared as a discriminated union. A
+    response model only, like `DecisionPreview`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    decision_key: str
+    action: api.Action
+    plan: FindingPlan
+    version: api.DecisionVersion
+
+
+class FindingPreviewRequest(BaseModel):
+    """Which contradiction or revision action to preview for the decision named
+    in the path."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action: api.Action
+
+
 class JudgingOutcomeBody(BaseModel):
     """What a judging run returned, field for field, with a failure as a body."""
 

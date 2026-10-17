@@ -45,10 +45,10 @@ and has no API yet.
   returning `FindingPreview` with a `ReconcilePlan` or a `DeclinePlan` and the
   same `DecisionVersion`; `apply_decision` applies it. `preview_decision` given a
   finding action returns `NotApplied("wrong_preview")`, and `preview_finding` given any other action the same.
-- **The engine:** a narrow `application/finding_decisions.py` that builds the
-  previews and commits them on the token path, reusing
-  `reconcile_service` (split into a public prepare and commit, behaviour
-  unchanged) and `contradictions_service.apply_contradiction_decision`.
+- **The engine:** `application/curate_decisions.py`, where every kind's preview
+  and token-path commit already lives, builds the finding previews and commits
+  them, reusing `reconcile_service` (split into a public prepare and commit,
+  behaviour unchanged) and `contradictions_service.apply_contradiction_decision`.
 - **The queue:** a reconcile also resolves the open revision row over the
   pair (today only the contradiction row), `as_proposed` when the edge and the
   holder are the proposal's, `modified` otherwise; this reaches the CLI's
