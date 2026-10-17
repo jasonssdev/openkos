@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0066: The desktop screens are plain DOM over a tested view model, with no UI framework"
 description: The desktop app's screens are written in TypeScript against the DOM directly, split into a framework-free view model that holds every state transition and every word on screen, and thin render functions built from a few extracted components on the design tokens; no UI framework or runtime dependency enters the page.
-status: Proposed
+status: Accepted
 date: 2026-10-16
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0066: The desktop screens are plain DOM over a tested view model, with no UI framework
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-16
 
 ## Context
