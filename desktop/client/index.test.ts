@@ -183,6 +183,38 @@ describe("the requests", () => {
       "/v1/tiers/apply",
       { version: { type_name: "Person", tier: null, content_digest: "d" } },
     ],
+    ["modelSettings", (c) => c.modelSettings(), "GET", "/v1/settings/model", null],
+    [
+      "previewModelSettings",
+      (c) =>
+        c.previewModelSettings({
+          backend: "openai-compatible",
+          base_url: "https://api.example.com",
+          model: "m",
+          embedding_model: "e",
+        }),
+      "POST",
+      "/v1/settings/model/preview",
+      { backend: "openai-compatible", base_url: "https://api.example.com", model: "m", embedding_model: "e" },
+    ],
+    [
+      "applyModelSettings",
+      (c) =>
+        c.applyModelSettings({
+          version: {
+            change: { backend: "ollama", base_url: null, embedding_base_url: null, model: "m", embedding_model: "e" },
+            content_digest: "d",
+          },
+        }),
+      "POST",
+      "/v1/settings/model/apply",
+      {
+        version: {
+          change: { backend: "ollama", base_url: null, embedding_base_url: null, model: "m", embedding_model: "e" },
+          content_digest: "d",
+        },
+      },
+    ],
     [
       "applyReopen",
       (c) => c.applyReopen({ version: { member_ids: ["a", "b"], content_digest: "d" } }),

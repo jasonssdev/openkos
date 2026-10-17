@@ -189,6 +189,11 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
     applyUnrelate: (body: Schemas["UnrelateApplyRequest"]) => call("post", "/v1/unrelate/apply", { body }),
     previewTierChange: (body: Schemas["TierChangePreviewRequest"]) => call("post", "/v1/tiers/preview", { body }),
     applyTierChange: (body: Schemas["TierChangeApplyRequest"]) => call("post", "/v1/tiers/apply", { body }),
+    modelSettings: () => call("get", "/v1/settings/model"),
+    previewModelSettings: (body: Schemas["ModelSettingsPreviewRequest"]) =>
+      call("post", "/v1/settings/model/preview", { body }),
+    applyModelSettings: (body: Schemas["ModelSettingsApplyRequest"]) =>
+      call("post", "/v1/settings/model/apply", { body }),
   };
 }
 

@@ -343,6 +343,37 @@ class TierChangeResponse(BaseModel):
     warnings: list[str]
 
 
+class ModelSettingsPreviewRequest(BaseModel):
+    """The model setup asked for. A `null` URL removes its line, so the
+    backend's own default applies. There is no field for a key: the engine
+    reads a key only from its environment, which the desktop shell sets."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: api.ModelBackend
+    base_url: Annotated[str, Field(max_length=2048)] | None = None
+    embedding_base_url: Annotated[str, Field(max_length=2048)] | None = None
+    model: Annotated[str, Field(max_length=256)]
+    embedding_model: Annotated[str, Field(max_length=256)]
+
+
+class ModelSettingsApplyRequest(_EchoRequest):
+    """The version the settings preview issued (echoed unchanged) and how long
+    to wait for the workspace lock; a client can shorten the wait only."""
+
+    version: api.ModelSettingsVersion
+    wait_seconds: float = Field(default=WRITE_WAIT_SECONDS, ge=0, le=WRITE_WAIT_SECONDS)
+
+
+class ModelSettingsResponse(BaseModel):
+    """What was written, and the warnings the apply raised along the way."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    changed: api.ModelSettingsChanged
+    warnings: list[str]
+
+
 class UnmergePreviewRequest(BaseModel):
     """Which merge to undo: the survivor and the absorbed concept, and whether
     the first step may discard an edit made to the survivor since its merge."""

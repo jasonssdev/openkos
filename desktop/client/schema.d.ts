@@ -325,6 +325,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Model Settings */
+        get: operations["model_settings_v1_settings_model_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/model/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Model Settings Apply */
+        post: operations["model_settings_apply_v1_settings_model_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/model/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Model Settings Preview */
+        post: operations["model_settings_preview_v1_settings_model_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/setup/pulls": {
         parameters: {
             query?: never;
@@ -1215,6 +1266,139 @@ export interface components {
             tag: string;
         };
         /**
+         * ModelSettings
+         * @description The workspace's model setup.
+         *
+         *     `base_url` and `embedding_base_url` are what `openkos.yaml` says (`None`
+         *     when unset). `remote_hosts` is the redacted display host of each resolved
+         *     endpoint that is not on this machine, the chat endpoint first; `is_local`
+         *     is true exactly when it is empty. `takes_api_key` is true for the
+         *     `openai-compatible` backend, whose key the engine reads only from
+         *     `OPENKOS_OPENAI_API_KEY`; nothing here ever carries a key.
+         */
+        ModelSettings: {
+            /**
+             * Backend
+             * @enum {string}
+             */
+            backend: "ollama" | "openai-compatible";
+            /** Base Url */
+            base_url: string | null;
+            /** Embedding Base Url */
+            embedding_base_url: string | null;
+            /** Embedding Model */
+            embedding_model: string;
+            /** Is Local */
+            is_local: boolean;
+            /** Model */
+            model: string;
+            /** Remote Hosts */
+            remote_hosts: string[];
+            /** Takes Api Key */
+            takes_api_key: boolean;
+        };
+        /**
+         * ModelSettingsApplyRequest
+         * @description The version the settings preview issued (echoed unchanged) and how long
+         *     to wait for the workspace lock; a client can shorten the wait only.
+         */
+        ModelSettingsApplyRequest: {
+            version: components["schemas"]["ModelSettingsVersion"];
+            /**
+             * Wait Seconds
+             * @default 5
+             */
+            wait_seconds?: number;
+        };
+        /**
+         * ModelSettingsChange
+         * @description The model setup asked for. A `None` URL removes its line, so the
+         *     backend's own default applies (`ollama` only: `openai-compatible` needs a
+         *     `base_url`).
+         */
+        ModelSettingsChange: {
+            /**
+             * Backend
+             * @enum {string}
+             */
+            backend: "ollama" | "openai-compatible";
+            /** Base Url */
+            base_url: string | null;
+            /** Embedding Base Url */
+            embedding_base_url: string | null;
+            /** Embedding Model */
+            embedding_model: string;
+            /** Model */
+            model: string;
+        };
+        /**
+         * ModelSettingsChanged
+         * @description The settings were written. `commit_sha` is `None` when the commit could
+         *     not be made (the write itself landed).
+         */
+        ModelSettingsChanged: {
+            /** Commit Sha */
+            commit_sha: string | null;
+            settings: components["schemas"]["ModelSettings"];
+        };
+        /**
+         * ModelSettingsPreview
+         * @description What the change would do. `changes` lists every field that differs, in
+         *     the order of `ModelSettingsChange`. `search_rebuild` is true when the
+         *     embedding identity changes, so the stored vectors no longer match and
+         *     search needs rebuilding.
+         */
+        ModelSettingsPreview: {
+            /** Changes */
+            changes: components["schemas"]["SettingChange"][];
+            current: components["schemas"]["ModelSettings"];
+            proposed: components["schemas"]["ModelSettings"];
+            /** Search Rebuild */
+            search_rebuild: boolean;
+            version: components["schemas"]["ModelSettingsVersion"];
+        };
+        /**
+         * ModelSettingsPreviewRequest
+         * @description The model setup asked for. A `null` URL removes its line, so the
+         *     backend's own default applies. There is no field for a key: the engine
+         *     reads a key only from its environment, which the desktop shell sets.
+         */
+        ModelSettingsPreviewRequest: {
+            /**
+             * Backend
+             * @enum {string}
+             */
+            backend: "ollama" | "openai-compatible";
+            /** Base Url */
+            base_url?: string | null;
+            /** Embedding Base Url */
+            embedding_base_url?: string | null;
+            /** Embedding Model */
+            embedding_model: string;
+            /** Model */
+            model: string;
+        };
+        /**
+         * ModelSettingsResponse
+         * @description What was written, and the warnings the apply raised along the way.
+         */
+        ModelSettingsResponse: {
+            changed: components["schemas"]["ModelSettingsChanged"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * ModelSettingsVersion
+         * @description The version a stateless caller applies a change against: echo it
+         *     unchanged. `change` is the normalized request; `content_digest` covers it
+         *     and the bytes of `openkos.yaml`.
+         */
+        ModelSettingsVersion: {
+            change: components["schemas"]["ModelSettingsChange"];
+            /** Content Digest */
+            content_digest: string;
+        };
+        /**
          * OmittedConcept
          * @description A retrieved concept the context budget left out of the prompt entirely.
          */
@@ -1707,6 +1891,21 @@ export interface components {
             reachable: boolean;
             /** Version */
             version: string | null;
+        };
+        /**
+         * SettingChange
+         * @description One field that differs: what it is now and what it would become.
+         */
+        SettingChange: {
+            /** After */
+            after: string | null;
+            /** Before */
+            before: string | null;
+            /**
+             * Field
+             * @enum {string}
+             */
+            field: "backend" | "base_url" | "embedding_base_url" | "model" | "embedding_model";
         };
         /**
          * SetupReadiness
@@ -3417,6 +3616,229 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReopenPreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    model_settings_v1_settings_model_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSettings"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    model_settings_apply_v1_settings_model_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelSettingsApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSettingsResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    /** @description Seconds to wait before retrying a busy workspace. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    model_settings_preview_v1_settings_model_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelSettingsPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSettingsPreview"];
                 };
             };
             /** @description Unauthorized */

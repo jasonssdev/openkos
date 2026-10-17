@@ -652,6 +652,14 @@ def _validate_base_url(value: str, field: str) -> str:
     return value.rstrip("/")
 
 
+def validate_base_url(value: str, field: str = "base_url") -> str:
+    """The check `read_config` applies to `base_url`/`embedding_base_url`,
+    for a caller about to write one: an absolute `http(s)` URL with a host
+    and no whitespace, credential, query or fragment, returned without a
+    trailing `/`. Raises `ValueError` naming `field`."""
+    return _validate_base_url(value, field)
+
+
 @dataclass(frozen=True)
 class WorkspaceLayout:
     """The four paths init reads and writes at a workspace root, plus the
@@ -1533,8 +1541,20 @@ def read_config(root: Path) -> Config:
     truthiness: `review: false` is a real value (`False is not None`), so it
     must survive untouched and never get coerced to `DEFAULT_REVIEW`.
     """
+    text = WorkspaceLayout(root).config_path.read_text(encoding="utf-8")
+    return parse_config(root, text)
+
+
+def parse_config(root: Path, text: str) -> Config:
+    """Parse `text` as the `openkos.yaml` of the workspace at `root`, with
+    every check `read_config` applies, and return its `Config`.
+
+    `read_config` is this over the file's bytes. A caller about to write a
+    rewritten configuration (`set_model_settings`'s callers) runs it on the
+    new text first, so the file it writes is one `read_config` accepts.
+    `root` only names the file in messages and resolves relative paths, as
+    in `read_config`; nothing is read from disk. Raises `ValueError`."""
     layout = WorkspaceLayout(root)
-    text = layout.config_path.read_text(encoding="utf-8")
     try:
         raw = okf.load_unique_key_yaml(text)
     except okf.FrontmatterError as exc:
@@ -2441,3 +2461,156 @@ def set_type_tier(yaml_text: str, concept_type: str, tier: str) -> str:
 
     new_lines.insert(insert_at, f"{insert_indent}{concept_type}: {tier}\n")
     return "".join(new_lines)
+
+
+MODEL_SETTINGS_KEYS: Final = (
+    "backend",
+    "base_url",
+    "embedding_base_url",
+    "model",
+    "embedding_model",
+)
+"""The five top-level keys `set_model_settings` edits: which backend, where it
+is, and which chat and embedding models it serves. Every other key is left
+alone."""
+
+_MODEL_SETTINGS_WRITE_ORDER: Final = (
+    "model",
+    "embedding_model",
+    "backend",
+    "base_url",
+    "embedding_base_url",
+)
+"""The order a missing line is appended in: the template's own order."""
+
+
+@dataclass(frozen=True)
+class _SettingLine:
+    """One live `key: value` line: its index, separator, value token (empty
+    for a bare `key:`) and everything after the value (whitespace and an
+    optional comment)."""
+
+    index: int
+    sep: str
+    value: str
+    rest: str
+
+
+def _model_setting_lines(lines: list[str]) -> dict[str, _SettingLine | None]:
+    """Each model-settings key's one live, column-0 line, or `None`.
+
+    Matched on the raw line, so a commented `# base_url:` is not a live line
+    and `models:` is not `model:`. Raises `ValueError` on two lines for one key,
+    and on a value followed by anything but a comment (a quoted value with a
+    space, a flow mapping): shapes a one-token rewrite would corrupt."""
+    found: dict[str, _SettingLine | None] = dict.fromkeys(MODEL_SETTINGS_KEYS)
+    for index, line in enumerate(lines):
+        content, _ = _split_line_ending(line)
+        for key in MODEL_SETTINGS_KEYS:
+            if not content.startswith(f"{key}:"):
+                continue
+            if found[key] is not None:
+                raise ValueError(f"openkos.yaml: multiple '{key}:' keys found")
+            after = content[len(key) + 1 :]
+            sep = after[: len(after) - len(after.lstrip(" \t"))]
+            remainder = after[len(sep) :]
+            if not remainder or remainder.startswith("#"):
+                value, rest = "", remainder
+            else:
+                value = remainder.split(None, 1)[0]
+                rest = remainder[len(value) :]
+            if rest.strip() and not rest.strip().startswith("#"):
+                raise ValueError(
+                    f"openkos.yaml: unsupported value on the '{key}:' line "
+                    f"(line {index + 1}); only a bare value and an optional "
+                    "trailing comment are supported"
+                )
+            found[key] = _SettingLine(index, sep, value, rest)
+    return found
+
+
+def model_settings_lines(yaml_text: str) -> dict[str, str | None]:
+    """The value text of each of `MODEL_SETTINGS_KEYS`' live lines in
+    `yaml_text`, `None` for a key with no line or a bare `key:`. Reads the
+    shape `set_model_settings` edits and refuses the same shapes, so a caller
+    can ask whether two versions of the file disagree about these lines."""
+    lines = _model_setting_lines(yaml_text.splitlines(keepends=True))
+    return {
+        key: (line.value or None) if line is not None else None
+        for key, line in lines.items()
+    }
+
+
+def set_model_settings(
+    yaml_text: str,
+    *,
+    backend: str,
+    base_url: str | None,
+    embedding_base_url: str | None,
+    model: str,
+    embedding_model: str,
+) -> str:
+    """Return `yaml_text` with the five model-settings lines set, by
+    comment-safe text surgery, never a YAML round-trip: every other line stays
+    byte-identical.
+
+    An existing line keeps its separator, trailing comment and line ending and
+    gets the new value; a missing one is appended at the end (after making sure
+    the text ends in a newline); a `None` URL removes its line. An absent
+    `backend:` line stays absent when `backend` is the default, so a template
+    workspace switched away and back differs only by an explicit
+    `backend: ollama`. Values are written as given: the caller validates them
+    (`validate_model`, `validate_embedding_model`, `validate_base_url`).
+
+    Fail-closed. Raises `ValueError` on a shape `_model_setting_lines` cannot
+    edit, and when the result does not parse back to exactly these five
+    values (a block scalar whose body line survived its header, a value YAML
+    reads as a number); the caller writes nothing."""
+    desired: dict[str, str | None] = {
+        "backend": backend,
+        "base_url": base_url,
+        "embedding_base_url": embedding_base_url,
+        "model": model,
+        "embedding_model": embedding_model,
+    }
+    lines = yaml_text.splitlines(keepends=True)
+    live = _model_setting_lines(lines)
+    removed: set[int] = set()
+    appended: list[str] = []
+    for key in _MODEL_SETTINGS_WRITE_ORDER:
+        value = desired[key]
+        line = live[key]
+        if line is None:
+            if value is None or (key == "backend" and value == DEFAULT_BACKEND):
+                continue
+            appended.append(f"{key}: {value}\n")
+        elif value is None:
+            removed.add(line.index)
+        else:
+            _, ending = _split_line_ending(lines[line.index])
+            lines[line.index] = f"{key}:{line.sep or ' '}{value}{line.rest}{ending}"
+    kept = [line for index, line in enumerate(lines) if index not in removed]
+    if appended and kept and not kept[-1].endswith(("\n", "\r")):
+        kept[-1] += "\n"
+    new_text = "".join(kept + appended)
+    _check_model_settings(new_text, desired)
+    return new_text
+
+
+def _check_model_settings(text: str, desired: dict[str, str | None]) -> None:
+    """Raise `ValueError` unless `text` parses to a mapping whose model
+    settings are exactly `desired` (`backend` absent reads as the default)."""
+    try:
+        raw = okf.load_unique_key_yaml(text)
+    except okf.FrontmatterError as exc:
+        raise ValueError(f"openkos.yaml: invalid YAML after the edit -- {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("openkos.yaml: expected a mapping at the document root")
+    actual = {key: raw.get(key) for key in MODEL_SETTINGS_KEYS}
+    if actual["backend"] is None:
+        actual["backend"] = DEFAULT_BACKEND
+    if actual != desired:
+        raise ValueError(
+            "openkos.yaml: the model settings did not read back as written; "
+            "edit the file by hand"
+        )

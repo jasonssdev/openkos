@@ -1697,6 +1697,303 @@
         "title": "ModelReadiness",
         "type": "object"
       },
+      "ModelSettings": {
+        "description": "The workspace's model setup.\n\n`base_url` and `embedding_base_url` are what `openkos.yaml` says (`None`\nwhen unset). `remote_hosts` is the redacted display host of each resolved\nendpoint that is not on this machine, the chat endpoint first; `is_local`\nis true exactly when it is empty. `takes_api_key` is true for the\n`openai-compatible` backend, whose key the engine reads only from\n`OPENKOS_OPENAI_API_KEY`; nothing here ever carries a key.",
+        "properties": {
+          "backend": {
+            "enum": [
+              "ollama",
+              "openai-compatible"
+            ],
+            "title": "Backend",
+            "type": "string"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "embedding_base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Base Url"
+          },
+          "embedding_model": {
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "remote_hosts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Remote Hosts",
+            "type": "array"
+          },
+          "takes_api_key": {
+            "title": "Takes Api Key",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "backend",
+          "base_url",
+          "embedding_base_url",
+          "model",
+          "embedding_model",
+          "remote_hosts",
+          "is_local",
+          "takes_api_key"
+        ],
+        "title": "ModelSettings",
+        "type": "object"
+      },
+      "ModelSettingsApplyRequest": {
+        "description": "The version the settings preview issued (echoed unchanged) and how long\nto wait for the workspace lock; a client can shorten the wait only.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/ModelSettingsVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "ModelSettingsApplyRequest",
+        "type": "object"
+      },
+      "ModelSettingsChange": {
+        "description": "The model setup asked for. A `None` URL removes its line, so the\nbackend's own default applies (`ollama` only: `openai-compatible` needs a\n`base_url`).",
+        "properties": {
+          "backend": {
+            "enum": [
+              "ollama",
+              "openai-compatible"
+            ],
+            "title": "Backend",
+            "type": "string"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "embedding_base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Base Url"
+          },
+          "embedding_model": {
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "base_url",
+          "embedding_base_url",
+          "model",
+          "embedding_model"
+        ],
+        "title": "ModelSettingsChange",
+        "type": "object"
+      },
+      "ModelSettingsChanged": {
+        "additionalProperties": false,
+        "description": "The settings were written. `commit_sha` is `None` when the commit could\nnot be made (the write itself landed).",
+        "properties": {
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/ModelSettings"
+          }
+        },
+        "required": [
+          "settings",
+          "commit_sha"
+        ],
+        "title": "ModelSettingsChanged",
+        "type": "object"
+      },
+      "ModelSettingsPreview": {
+        "description": "What the change would do. `changes` lists every field that differs, in\nthe order of `ModelSettingsChange`. `search_rebuild` is true when the\nembedding identity changes, so the stored vectors no longer match and\nsearch needs rebuilding.",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/SettingChange"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "current": {
+            "$ref": "#/components/schemas/ModelSettings"
+          },
+          "proposed": {
+            "$ref": "#/components/schemas/ModelSettings"
+          },
+          "search_rebuild": {
+            "title": "Search Rebuild",
+            "type": "boolean"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ModelSettingsVersion"
+          }
+        },
+        "required": [
+          "current",
+          "proposed",
+          "changes",
+          "search_rebuild",
+          "version"
+        ],
+        "title": "ModelSettingsPreview",
+        "type": "object"
+      },
+      "ModelSettingsPreviewRequest": {
+        "additionalProperties": false,
+        "description": "The model setup asked for. A `null` URL removes its line, so the\nbackend's own default applies. There is no field for a key: the engine\nreads a key only from its environment, which the desktop shell sets.",
+        "properties": {
+          "backend": {
+            "enum": [
+              "ollama",
+              "openai-compatible"
+            ],
+            "title": "Backend",
+            "type": "string"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "embedding_base_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Base Url"
+          },
+          "embedding_model": {
+            "maxLength": 256,
+            "title": "Embedding Model",
+            "type": "string"
+          },
+          "model": {
+            "maxLength": 256,
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "model",
+          "embedding_model"
+        ],
+        "title": "ModelSettingsPreviewRequest",
+        "type": "object"
+      },
+      "ModelSettingsResponse": {
+        "additionalProperties": false,
+        "description": "What was written, and the warnings the apply raised along the way.",
+        "properties": {
+          "changed": {
+            "$ref": "#/components/schemas/ModelSettingsChanged"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "changed",
+          "warnings"
+        ],
+        "title": "ModelSettingsResponse",
+        "type": "object"
+      },
+      "ModelSettingsVersion": {
+        "description": "The version a stateless caller applies a change against: echo it\nunchanged. `change` is the normalized request; `content_digest` covers it\nand the bytes of `openkos.yaml`.",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/ModelSettingsChange"
+          },
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "change",
+          "content_digest"
+        ],
+        "title": "ModelSettingsVersion",
+        "type": "object"
+      },
       "OmittedConcept": {
         "description": "A retrieved concept the context budget left out of the prompt entirely.",
         "properties": {
@@ -2890,6 +3187,51 @@
           "download_url"
         ],
         "title": "RuntimeReadiness",
+        "type": "object"
+      },
+      "SettingChange": {
+        "description": "One field that differs: what it is now and what it would become.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          },
+          "field": {
+            "enum": [
+              "backend",
+              "base_url",
+              "embedding_base_url",
+              "model",
+              "embedding_model"
+            ],
+            "title": "Field",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "before",
+          "after"
+        ],
+        "title": "SettingChange",
         "type": "object"
       },
       "SetupReadiness": {
@@ -5472,6 +5814,273 @@
           }
         ],
         "summary": "Reopen Preview"
+      }
+    },
+    "/v1/settings/model": {
+      "get": {
+        "operationId": "model_settings_v1_settings_model_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Model Settings"
+      }
+    },
+    "/v1/settings/model/apply": {
+      "post": {
+        "operationId": "model_settings_apply_v1_settings_model_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelSettingsApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Model Settings Apply"
+      }
+    },
+    "/v1/settings/model/preview": {
+      "post": {
+        "operationId": "model_settings_preview_v1_settings_model_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelSettingsPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSettingsPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Model Settings Preview"
       }
     },
     "/v1/setup/pulls": {

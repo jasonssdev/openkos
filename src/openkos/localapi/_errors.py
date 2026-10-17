@@ -75,6 +75,14 @@ BACKEND_MODEL_NOT_FOUND: Final = "backend_model_not_found"
 GENERATION_CAPPED: Final = "generation_capped"
 BACKEND_ERROR: Final = "backend_error"
 
+# Settings rows.
+SETTINGS_UNCHANGED: Final = "settings_unchanged"
+INVALID_BASE_URL: Final = "invalid_base_url"
+INVALID_EMBEDDING_BASE_URL: Final = "invalid_embedding_base_url"
+INVALID_MODEL: Final = "invalid_model"
+INVALID_EMBEDDING_MODEL: Final = "invalid_embedding_model"
+BASE_URL_REQUIRED: Final = "base_url_required"
+
 # Setup rows.
 PULL_ACTIVE: Final = "pull_active"
 MODEL_NOT_CONFIGURED: Final = "model_not_configured"
@@ -457,6 +465,43 @@ def pull_active() -> ApiProblem:
     )
 
 
+_SETTINGS_REFUSED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
+    "invalid_base_url": (
+        422,
+        INVALID_BASE_URL,
+        False,
+        "the address must be a full http:// or https:// URL with no password, "
+        "query or fragment",
+    ),
+    "invalid_embedding_base_url": (
+        422,
+        INVALID_EMBEDDING_BASE_URL,
+        False,
+        "the embedding address must be a full http:// or https:// URL with no "
+        "password, query or fragment",
+    ),
+    "invalid_model": (422, INVALID_MODEL, False, "the model name is not valid"),
+    "invalid_embedding_model": (
+        422,
+        INVALID_EMBEDDING_MODEL,
+        False,
+        "the embedding model name is not valid",
+    ),
+    "base_url_required": (
+        422,
+        BASE_URL_REQUIRED,
+        False,
+        "an OpenAI-compatible backend needs an address",
+    ),
+    "unchanged": (
+        409,
+        SETTINGS_UNCHANGED,
+        False,
+        "the model settings are already set that way",
+    ),
+}
+
+
 def outcome_problem(
     outcome: (
         api.NotApplied
@@ -468,10 +513,12 @@ def outcome_problem(
         | api.NotUndoable
         | api.UndoStale
         | api.PullRefused
+        | api.ModelSettingsRefused
+        | api.ModelSettingsStale
     ),
 ) -> ApiProblem:
     """The failure a returned (not raised) outcome is answered with."""
-    if isinstance(outcome, api.UnmergeStale | api.UndoStale):
+    if isinstance(outcome, api.UnmergeStale | api.UndoStale | api.ModelSettingsStale):
         message = _STALE_MESSAGES["content_changed"]
         return ApiProblem(409, ErrorBody(code=STALE, retryable=False, message=message))
     if isinstance(outcome, api.QuoteStale):
@@ -499,6 +546,8 @@ def outcome_problem(
         row = _NOT_UNDOABLE.get(outcome.reason)
     elif isinstance(outcome, api.PullRefused):
         row = _PULL_REFUSED.get(outcome.reason)
+    elif isinstance(outcome, api.ModelSettingsRefused):
+        row = _SETTINGS_REFUSED.get(outcome.reason)
     else:
         row = _NOT_APPLIED.get(outcome.reason)
     if row is None:  # a reason added after this table: report it, do not guess

@@ -17,9 +17,10 @@ relying on it:
    only to the backends the workspace configures. Setup readiness and the
    model pull talk to the configured runtime too, but send no content: they
    read its version and model list and ask it to fetch a model the workspace
-   configures. The only other process the surface runs is the local git
-   auto-commit of a decision, an unmerge or an undo it applies, which never
-   pushes.
+   configures. Reading and changing the model settings reach nothing: they
+   read and rewrite `openkos.yaml` only, and never write a key. The only other
+   process the surface runs is the local git auto-commit of a decision, an
+   unmerge, an undo or a settings change it applies, which never pushes.
 4. Cancellation is cooperative: a stop is observed between chunks, so it waits
    for the chunk in flight. A model call is never preempted.
 5. Applying a decision, an unmerge or an undo does not reconcile merged concept
@@ -81,6 +82,11 @@ from openkos.api._reads import (
     status,
 )
 from openkos.api._refresh import KindRefresh, QueueRefresh, refresh_decision_queue
+from openkos.api._settings import (
+    apply_model_settings,
+    model_settings,
+    preview_model_settings,
+)
 from openkos.api._setup import pull_model, setup_readiness
 from openkos.api._undo import (
     KeptDistinct,
@@ -142,6 +148,17 @@ from openkos.application.judging import (
     QuoteToken,
     RunRefused,
     WorkItem,
+)
+from openkos.application.model_settings import (
+    ModelBackend,
+    ModelSettings,
+    ModelSettingsChange,
+    ModelSettingsChanged,
+    ModelSettingsPreview,
+    ModelSettingsRefused,
+    ModelSettingsStale,
+    ModelSettingsVersion,
+    SettingChange,
 )
 from openkos.application.pending_queue_report import QueueUnavailableError
 from openkos.application.queue_refresh import QueueRefreshRefused
@@ -230,7 +247,15 @@ __all__ = [
     "MergeStep",
     "MergedConcept",
     "Message",
+    "ModelBackend",
     "ModelReadiness",
+    "ModelSettings",
+    "ModelSettingsChange",
+    "ModelSettingsChanged",
+    "ModelSettingsPreview",
+    "ModelSettingsRefused",
+    "ModelSettingsStale",
+    "ModelSettingsVersion",
     "NotApplied",
     "NotUndoable",
     "NotUnmergeable",
@@ -264,6 +289,7 @@ __all__ = [
     "RunRefused",
     "RunResult",
     "RuntimeReadiness",
+    "SettingChange",
     "SetupReadiness",
     "Stale",
     "StopToken",
@@ -294,6 +320,7 @@ __all__ = [
     "WriteFailed",
     "WriteRefused",
     "apply_decision",
+    "apply_model_settings",
     "apply_reopen",
     "apply_tier_change",
     "apply_unmerge",
@@ -303,9 +330,11 @@ __all__ = [
     "list_decisions",
     "merge_history",
     "merged_concepts",
+    "model_settings",
     "pending_report",
     "preview_decision",
     "preview_finding",
+    "preview_model_settings",
     "preview_reopen",
     "preview_tier_change",
     "preview_unmerge",
