@@ -504,7 +504,7 @@ export interface components {
          * @description What a client may do with one open decision.
          * @enum {string}
          */
-        Action: "merge" | "keep_distinct" | "skip" | "relate" | "relate_reversed" | "set_tier" | "merge_group";
+        Action: "merge" | "keep_distinct" | "skip" | "relate" | "relate_reversed" | "set_tier" | "merge_group" | "decline" | "reconcile" | "supersede" | "supersede_reversed" | "revise" | "revise_reversed";
         /**
          * ActivityEntry
          * @description One `log.md` bullet: its section date and its text.
@@ -1885,7 +1885,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "pending_evaluation" | "judged_different" | "judged_uncertain" | "cross_type" | "more_than_two_members" | "no_valid_suggestion";
+            reason: "pending_evaluation" | "judged_different" | "judged_uncertain" | "cross_type" | "more_than_two_members" | "no_valid_suggestion" | "merged_content";
         };
         /** WorkItem */
         WorkItem: {

@@ -503,6 +503,20 @@ def is_fresh(
     return recomputed == current.input_digests
 
 
+def recorded_inputs_fresh(
+    layout: config.WorkspaceLayout,
+    pair_ids: tuple[str, str],
+    recorded: Sequence[tuple[str, str]],
+) -> bool:
+    """`is_fresh`'s digest rule (4) over digests recorded elsewhere, a queue
+    row's input table: the digests recomputed now for `pair_ids` equal
+    `recorded` exactly, as `(input_ref, digest)` pairs, so an input that became
+    unreadable can never count as unchanged."""
+    files = _bundle_text_snapshot(layout)
+    current = revision_input_digests(layout, files, pair_ids)
+    return sorted((d.input_ref, d.digest) for d in current) == sorted(recorded)
+
+
 @dataclass(frozen=True)
 class RevisionPlan:
     """One `plan_revisions` run's result (design.md's Phase B re-plan

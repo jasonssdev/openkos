@@ -11,13 +11,19 @@
       ],
       "kind": "enum",
       "members": {
+        "DECLINE": "decline",
         "KEEP_DISTINCT": "keep_distinct",
         "MERGE": "merge",
         "MERGE_GROUP": "merge_group",
+        "RECONCILE": "reconcile",
         "RELATE": "relate",
         "RELATE_REVERSED": "relate_reversed",
+        "REVISE": "revise",
+        "REVISE_REVERSED": "revise_reversed",
         "SET_TIER": "set_tier",
-        "SKIP": "skip"
+        "SKIP": "skip",
+        "SUPERSEDE": "supersede",
+        "SUPERSEDE_REVERSED": "supersede_reversed"
       }
     },
     "ActivityEntry": {
@@ -1126,7 +1132,7 @@
           "name": "action"
         },
         {
-          "annotation": "Literal['skipped', 'member_missing', 'record_failed', 'not_mergeable', 'not_offered', 'invalid_selection']",
+          "annotation": "Literal['skipped', 'member_missing', 'record_failed', 'not_mergeable', 'not_offered', 'invalid_selection', 'already_reconciled', 'wrong_preview']",
           "default": false,
           "name": "reason"
         },
@@ -2282,7 +2288,7 @@
           "name": "action"
         },
         {
-          "annotation": "Literal['pending_evaluation', 'judged_different', 'judged_uncertain', 'cross_type', 'more_than_two_members', 'no_valid_suggestion']",
+          "annotation": "Literal['pending_evaluation', 'judged_different', 'judged_uncertain', 'cross_type', 'more_than_two_members', 'no_valid_suggestion', 'merged_content']",
           "default": false,
           "name": "reason"
         }

@@ -10,7 +10,13 @@
           "relate",
           "relate_reversed",
           "set_tier",
-          "merge_group"
+          "merge_group",
+          "decline",
+          "reconcile",
+          "supersede",
+          "supersede_reversed",
+          "revise",
+          "revise_reversed"
         ],
         "title": "Action",
         "type": "string"
@@ -3253,7 +3259,8 @@
               "judged_uncertain",
               "cross_type",
               "more_than_two_members",
-              "no_valid_suggestion"
+              "no_valid_suggestion",
+              "merged_content"
             ],
             "title": "Reason",
             "type": "string"

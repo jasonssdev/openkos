@@ -193,6 +193,12 @@ def test_the_action_values_are_the_wire_names() -> None:
         "relate_reversed",
         "set_tier",
         "merge_group",
+        "decline",
+        "reconcile",
+        "supersede",
+        "supersede_reversed",
+        "revise",
+        "revise_reversed",
     ]
 
 
@@ -3006,14 +3012,20 @@ def test_a_volatility_with_an_invalid_tier_offers_nothing(tmp_path: Path) -> Non
     assert item.withheld == (WithheldAction(Action.SET_TIER, "no_valid_suggestion"),)
 
 
-def test_a_contradiction_has_no_actions_and_names_where_it_resolves(
+def test_a_contradiction_takes_the_finding_actions_and_names_where_it_resolves(
     tmp_path: Path,
 ) -> None:
     _root, layout = _merge_workspace(tmp_path)
 
     item = _listed(layout, _contradiction_row())
 
-    assert item.actions == ()
+    assert item.actions == (
+        Action.DECLINE,
+        Action.RECONCILE,
+        Action.SUPERSEDE,
+        Action.SUPERSEDE_REVERSED,
+        Action.SKIP,
+    )
     assert item.withheld == ()
     for place in (
         "openkos contradictions --decline",
@@ -3023,7 +3035,9 @@ def test_a_contradiction_has_no_actions_and_names_where_it_resolves(
         assert place in item.resolves_via
 
 
-def test_a_revision_has_no_actions_and_names_its_producer(tmp_path: Path) -> None:
+def test_an_unreadable_revision_has_no_actions_and_names_its_producer(
+    tmp_path: Path,
+) -> None:
     _root, layout = _merge_workspace(tmp_path)
 
     item = _listed(layout, _revision_row())
@@ -3452,7 +3466,7 @@ def test_every_withheld_merge_is_not_mergeable(tmp_path: Path, withheld: str) ->
         (lambda layout: _relation_row(layout, "related_to"), Action.RELATE_REVERSED),
         (lambda layout: _relation_row(layout, "supersedes"), Action.RELATE),
         (lambda layout: _volatility_row(), Action.KEEP_DISTINCT),
-        (lambda layout: _contradiction_row(), Action.SKIP),
+        (lambda layout: _contradiction_row(), Action.MERGE),
         (lambda layout: _revision_row(), Action.MERGE),
         (lambda layout: _watch_row(), Action.KEEP_DISTINCT),
     ],
@@ -3720,9 +3734,7 @@ def test_skip_and_listing_succeed_with_no_model_and_start_no_judging(
     assert _only(layout).evaluation == "pending_evaluation"  # still unjudged
 
 
-@pytest.mark.parametrize(
-    "row", [_contradiction_row, _revision_row, _watch_row], ids=lambda f: f.__name__
-)
+@pytest.mark.parametrize("row", [_watch_row], ids=lambda f: f.__name__)
 def test_a_kind_with_no_actions_reports_freshness_as_not_computed(
     tmp_path: Path, row: Callable[[], pq.Proposal]
 ) -> None:
