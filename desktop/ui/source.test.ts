@@ -22,8 +22,8 @@ describe("the page's source", () => {
     }
   });
 
-  it("styles with the tokens only", () => {
-    const css = readFileSync(join(UI, "style.css"), "utf8");
+  it.each(["style.css", "system.css", "gallery.css"])("%s styles with the tokens only", (sheet) => {
+    const css = readFileSync(join(UI, sheet), "utf8");
     const tokens = readFileSync(join(UI, "tokens.css"), "utf8");
     expect(css).not.toMatch(/#[0-9a-f]{3,8}\b/i);
     expect(css).not.toMatch(/\b(?:rgb|rgba|hsl|hsla|oklch|color-mix)\(/i);
