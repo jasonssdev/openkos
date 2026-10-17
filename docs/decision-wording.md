@@ -306,7 +306,7 @@ Every message says whether anything changed, and offers the one action that help
 | The pages changed under the person | `stale`, `write_drift` | "These pages changed while you were looking. Here is the current version." | reload |
 | A page in the decision is gone | `member_missing` | "One of these pages no longer exists, so there's nothing to decide." | **OK** (removes it from view) |
 | The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it." | **Try again** (the app does not start Ollama; setup, from **Check setup** on Status, offers **Get Ollama** and **Check again**) |
-| The AI model isn't installed | `backend_model_not_found` | "The AI model isn't installed. OpenKOS needs it to check pages. Check setup, on Status, can download it." | **OK** (setup downloads the models) |
+| The AI model isn't installed | `backend_model_not_found` | "The AI model isn't installed. OpenKOS needs it to check pages. Setup can download it." | **Open setup** (opens setup, where the model can be downloaded) |
 | Saving the choice failed | `record_failed` | "Your choice couldn't be saved. Nothing was changed." | **Try again** |
 | The marked pages don't fit the group | `invalid_selection` | "Something about your choice didn't match these pages. Please choose again." | reload **(H)** |
 | Only part of a group was combined | `merge_group_interrupted` | "Only some of these were combined. Nothing else changed, and each combine can be split again." | reload **(H)** |
@@ -388,7 +388,7 @@ A refused choice is an error callout worded from the shell's reason alone; its o
 
 ### Getting the AI model ready
 
-Shown on its own, once per session, when the library is open but its AI model is not ready (`setup_readiness` with `ready` false), and from Status while that lasts. Title "Set up OpenKOS"; under it "OpenKOS needs the internet only for these steps. Nothing you add is sent." One step at a time, as a card with "Step {n} of 2". "Ready" is the engine's: Ollama answers and the models the library needs to add files and answer questions are installed. A model used only for checking pages is not offered here (#1510).
+Shown on its own, once per session, when the library is open but its AI model is not ready (`setup_readiness` with `ready` false), and from Status while that lasts. Title "Set up OpenKOS"; under it "OpenKOS needs the internet only for these steps. Nothing you add is sent." One step at a time, as a card with "Step {n} of 2". "Ready" is the engine's: Ollama answers and the models the library needs to add files and answer questions are installed. A model used only for checking pages does not hold setup back, and "Download all" leaves it out, so a first run never pulls it unasked.
 
 **Step 1, when Ollama on this Mac does not answer:** "Install Ollama". "OpenKOS uses Ollama, a free app, to run AI models on this Mac. It isn't running yet." "Get it from Ollama's website, install it and open it. We'll notice when it's running."
 
@@ -418,7 +418,7 @@ When the AI model is not Ollama on this Mac (another address in the library's se
 
 **While it first reads:** a placeholder named "Checking your setup." **When the setup cannot be read:** "OpenKOS couldn't check its setup." with **Try again**.
 
-**Ready:** "You're ready. OpenKOS works offline from now on." with **Start using OpenKOS**, which opens the app.
+**Ready:** "You're ready. OpenKOS works offline from now on." with **Start using OpenKOS**, which opens the app. While the model used for checking pages is not installed, a closed "One more AI model" holds it under the button: "This one lets OpenKOS check whether pages are the same or disagree. It's a large download, so it's up to you." with its **Download**. It opens while that download runs and is gone once it is installed. To review reaches it: when a check finds that model missing, its message ends "Setup can download it." with **Open setup**.
 
 ## Settings
 

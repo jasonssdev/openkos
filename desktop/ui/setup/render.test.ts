@@ -95,10 +95,15 @@ describe("renderWelcome", () => {
   });
 });
 
-function readiness(over: { reachable?: boolean; installed?: Record<string, boolean>; local?: boolean; meets?: boolean } = {}) {
+function readiness(
+  over: { reachable?: boolean; installed?: Record<string, boolean>; local?: boolean; meets?: boolean; extra?: Record<string, boolean> } = {},
+) {
   const installed = over.installed ?? { "qwen3:8b": false, "bge-m3": false };
   const reachable = over.reachable ?? true;
-  const models = Object.entries(installed).map(([tag, value]) => ({ tag, roles: ["chat"], required: true, installed: value, pullable: true }));
+  const models = [
+    ...Object.entries(installed).map(([tag, value]) => ({ tag, roles: ["chat"], required: true, installed: value, pullable: true })),
+    ...Object.entries(over.extra ?? {}).map(([tag, value]) => ({ tag, roles: ["adjudication"], required: false, installed: value, pullable: true })),
+  ];
   return {
     runtime: {
       backend: "ollama",
@@ -110,7 +115,7 @@ function readiness(over: { reachable?: boolean; installed?: Record<string, boole
     },
     models,
     memory: { total_bytes: (over.meets === false ? 16 : 64) * GiB, floor_bytes: 32 * GiB, meets_floor: over.meets ?? true },
-    ready: reachable && models.every((m) => m.installed),
+    ready: reachable && models.filter((m) => m.required).every((m) => m.installed),
   } as Schemas["SetupReadiness"];
 }
 
@@ -238,6 +243,34 @@ describe("renderSetup", () => {
     expect(buttons(node)).toEqual(["Start using OpenKOS"]);
     button(node, "Start using OpenKOS").click();
     expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it("holds an optional model back behind a disclosure on the ready step", () => {
+    const both = { "qwen3:8b": true, "bge-m3": true };
+    const { node, model } = draw({ checking: false, readiness: readiness({ installed: both, extra: { "gemma4:26b": false } }) });
+    expect(node.querySelector("h1")?.textContent).toBe("You're ready.");
+    const more = node.querySelector("details") as HTMLDetailsElement;
+    expect(more.open).toBe(false);
+    expect(more.querySelector("summary")?.textContent).toBe("One more AI model");
+    expect(more.textContent).toContain("gemma4:26b");
+    expect(more.textContent).not.toMatch(/judge/i);
+    expect(buttons(node)).toEqual(["Start using OpenKOS", "Download"]);
+    button(more, "Download").click();
+    expect(model.download).toHaveBeenCalledWith("gemma4:26b");
+  });
+
+  it("opens the disclosure while the optional model downloads, and shows it installed", () => {
+    const both = { "qwen3:8b": true, "bge-m3": true };
+    const view = { state: "running" as const, phase: "downloading" as const, completed: 1, total: 10 };
+    const running = draw({
+      checking: false,
+      readiness: readiness({ installed: both, extra: { "gemma4:26b": false } }),
+      pull: { model: "gemma4:26b", id: "p", view },
+    });
+    expect((running.node.querySelector("details") as HTMLDetailsElement).open).toBe(true);
+    expect(buttons(running.node)).toContain("Stop");
+    const done = draw({ checking: false, readiness: readiness({ installed: both, extra: { "gemma4:26b": true } }) });
+    expect(done.node.querySelector("details")).toBeNull();
   });
 
   it("keeps focus on Stop across a progress redraw", () => {

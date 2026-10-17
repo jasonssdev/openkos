@@ -158,27 +158,37 @@ export interface ModelRow {
   note?: ModelNote;
 }
 
+function rowFor(state: SetupState, model: Readiness["models"][number]): ModelRow {
+  const row: ModelRow = { tag: model.tag, status: "missing", pullable: model.pullable };
+  if (state.pull?.model === model.tag) {
+    row.status = "running";
+    row.progress = state.pull.view;
+  } else if (state.waiting.includes(model.tag)) {
+    row.status = "waiting";
+  } else if (model.installed === true) {
+    row.status = "installed";
+  }
+  const note = state.notes[model.tag];
+  if (note && row.status === "missing") row.note = note;
+  return row;
+}
+
 /**
  * The models setup offers: the required ones, which the engine's `ready`
- * waits for. Optional ones (a judge) are not offered here (#1510).
+ * waits for. Optional ones (a judge) are kept apart, see `optionalRows`.
  */
 export function modelRows(state: SetupState): ModelRow[] {
+  return (state.readiness?.models ?? []).filter((model) => model.required).map((model) => rowFor(state, model));
+}
+
+/**
+ * The optional models still to offer (#1510): a large download no first run
+ * pulls unasked, and which Download all leaves out. Not listed once installed.
+ */
+export function optionalRows(state: SetupState): ModelRow[] {
   return (state.readiness?.models ?? [])
-    .filter((model) => model.required)
-    .map((model) => {
-      const row: ModelRow = { tag: model.tag, status: "missing", pullable: model.pullable };
-      if (state.pull?.model === model.tag) {
-        row.status = "running";
-        row.progress = state.pull.view;
-      } else if (state.waiting.includes(model.tag)) {
-        row.status = "waiting";
-      } else if (model.installed === true) {
-        row.status = "installed";
-      }
-      const note = state.notes[model.tag];
-      if (note && row.status === "missing") row.note = note;
-      return row;
-    });
+    .filter((model) => !model.required && model.installed !== true)
+    .map((model) => rowFor(state, model));
 }
 
 export class SetupModel extends Observable<SetupState> {

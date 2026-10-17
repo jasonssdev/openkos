@@ -70,6 +70,8 @@ export interface ModelOptions {
   now?: () => number;
   /** Today, for the dates on screen. */
   today?: () => Date;
+  /** Opens guided setup, where a missing AI model can be downloaded. */
+  openSetup?: () => void;
 }
 
 /** How long to wait between two reads of a running check. */
@@ -213,6 +215,7 @@ export class ReviewModel {
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #now: () => number;
   readonly #today: () => Date;
+  readonly #openSetup: () => void;
   #lastOp: Operation | null = null;
   #quote: Schemas["JudgingQuote"] | null = null;
   #runId: string | null = null;
@@ -223,6 +226,7 @@ export class ReviewModel {
     this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#now = options.now ?? (() => Date.now());
     this.#today = options.today ?? (() => new Date());
+    this.#openSetup = options.openSetup ?? (() => {});
   }
 
   get state(): ReviewState {
@@ -511,6 +515,11 @@ export class ReviewModel {
         else if (op?.kind === "undo") await this.undo();
         else if (op?.kind === "preview") await this.#preview(op.action);
         return;
+      case "set_up":
+        this.#openSetup();
+        this.#set({ open: null });
+        await this.load();
+        return;
       case "ok":
         this.#set({ open: null });
         await this.load();
@@ -724,7 +733,10 @@ export class ReviewModel {
     const problem = this.#state.check?.problem;
     if (problem == null) return;
     if (problem.action === "try_again" || problem.action === "requote") await this.startCheck();
-    else this.closeCheck();
+    else {
+      this.closeCheck();
+      if (problem.action === "set_up") this.#openSetup();
+    }
   }
 
   /** Closes the consent or the result; a running check is never abandoned. */

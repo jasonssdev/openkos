@@ -937,7 +937,7 @@ export function undoneLine(undo: Exclude<Undo, { kind: "split" }>): string {
 // -- problems ----------------------------------------------------------------- //
 
 /** The one thing a problem lets the person do next. */
-export type ProblemAction = "try_again" | "reload" | "ok" | "requote";
+export type ProblemAction = "try_again" | "reload" | "ok" | "requote" | "set_up";
 
 export interface Problem {
   message: string;
@@ -958,8 +958,8 @@ const PROBLEMS: Record<string, Problem> = {
     action: "try_again",
   },
   backend_model_not_found: {
-    message: "The AI model isn't installed. OpenKOS needs it to check pages. Check setup, on Status, can download it.",
-    action: "ok",
+    message: "The AI model isn't installed. OpenKOS needs it to check pages. Setup can download it.",
+    action: "set_up",
   },
   record_failed: { message: "Your choice couldn't be saved. Nothing was changed.", action: "try_again" },
   invalid_selection: {

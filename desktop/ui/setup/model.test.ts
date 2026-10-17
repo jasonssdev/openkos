@@ -6,6 +6,7 @@ import {
   SetupModel,
   WelcomeModel,
   modelRows,
+  optionalRows,
   setupStep,
   type SetupPorts,
   type WelcomePorts,
@@ -120,6 +121,23 @@ describe("SetupModel: the steps", () => {
       { tag: "qwen3:8b", status: "installed", pullable: true },
       { tag: "bge-m3", status: "missing", pullable: true },
     ]);
+  });
+
+  it("lists the optional models apart, so a first run never pulls one unasked", async () => {
+    const model = new SetupModel(ports({ setupReadiness: vi.fn(async () => readiness({ installed: { "qwen3:8b": true, "bge-m3": true } })) }));
+    await model.load();
+    expect(optionalRows(model.state)).toEqual([{ tag: "gemma4:26b", status: "missing", pullable: true }]);
+    expect(modelRows(model.state).map((r) => r.tag)).toEqual(["qwen3:8b", "bge-m3"]);
+    expect(setupStep(model.state)).toBe("ready");
+  });
+
+  it("downloads an optional model on request, and Download all leaves it out", async () => {
+    const p = ports({ setupReadiness: vi.fn(async () => readiness({ installed: { "qwen3:8b": true, "bge-m3": false } })) });
+    const model = new SetupModel(p);
+    await model.load();
+    await model.downloadAll();
+    expect(p.startModelPull).toHaveBeenCalledTimes(1);
+    expect(p.startModelPull).toHaveBeenCalledWith({ model: "bge-m3" });
   });
 
   it("does not read twice at once", async () => {

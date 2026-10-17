@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, EngineUnreachable, type Schemas } from "../../client/index.ts";
-import { ReviewModel, offersCheckAll, type ReviewClient } from "./model.ts";
+import { ReviewModel, offersCheckAll, type ModelOptions, type ReviewClient } from "./model.ts";
 import { CHANGED, CHANGED_CHECK, CHANGED_FINDING, DECIDE_LATER } from "./wording.ts";
 
 type Decision = Schemas["Decision"];
@@ -201,7 +201,7 @@ function outcome(judged: number, status: Schemas["JudgingOutcomeBody"]["status"]
   };
 }
 
-function fake(decisions: Decision[] = [PAIR]) {
+function fake(decisions: Decision[] = [PAIR], extra: ModelOptions = {}) {
   const client = {
     decisions: vi.fn(async () => ({ decisions })),
     readPage: vi.fn(async (id: string) => {
@@ -268,7 +268,7 @@ function fake(decisions: Decision[] = [PAIR]) {
   } satisfies ReviewClient;
   const sleep = vi.fn(async (_ms: number) => {});
   let clock = 0;
-  const model = new ReviewModel(client, { sleep, now: () => clock, today: () => NOW });
+  const model = new ReviewModel(client, { sleep, now: () => clock, today: () => NOW, ...extra });
   const advance = (ms: number) => {
     clock += ms;
   };
@@ -792,6 +792,21 @@ describe("the check", () => {
     });
     await model.resolveCheckProblem();
     expect(model.state.check?.phase).toBe("consent");
+  });
+
+  it("sends the person to setup when the AI model for checking isn't installed", async () => {
+    const openSetup = vi.fn();
+    const { model, client } = fake([UNJUDGED], { openSetup });
+    await model.load();
+    client.quoteJudging.mockRejectedValueOnce(apiError("backend_model_not_found", 502));
+    await model.startCheck();
+    expect(model.state.check?.problem).toEqual({
+      message: "The AI model isn't installed. OpenKOS needs it to check pages. Setup can download it.",
+      action: "set_up",
+    });
+    await model.resolveCheckProblem();
+    expect(openSetup).toHaveBeenCalledTimes(1);
+    expect(model.state.check).toBeNull();
   });
 
   it("words a run that failed and keeps what was checked", async () => {
