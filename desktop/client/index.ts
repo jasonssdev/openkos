@@ -170,6 +170,9 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
     readPage: (conceptId: string) => call("get", "/v1/pages", { query: { concept_id: conceptId } }),
     previewUnmerge: (body: Schemas["UnmergePreviewRequest"]) => call("post", "/v1/unmerge/preview", { body }),
     applyUnmerge: (body: Schemas["UnmergeApplyRequest"]) => call("post", "/v1/unmerge/apply", { body }),
+    keptDistinct: () => call("get", "/v1/kept-distinct"),
+    previewReopen: (body: Schemas["ReopenPreviewRequest"]) => call("post", "/v1/reopen/preview", { body }),
+    applyReopen: (body: Schemas["ReopenApplyRequest"]) => call("post", "/v1/reopen/apply", { body }),
   };
 }
 

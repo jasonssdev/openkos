@@ -343,9 +343,10 @@ again.
 `POST /v1/reopen/apply`, `POST /v1/unrelate/apply` and `POST /v1/tiers/apply`
 MUST take the version their preview returned (`ReopenVersion`,
 `UnrelateVersion`, `TierChangeVersion`) echoed unchanged in `version`, and an
-optional `wait_seconds` capped as every write's is. An altered field of the
-version MUST be answered 409 `stale` and write nothing; an unknown top-level key
-MUST be 422 `invalid_request`. Each version MUST be one component of the
+optional `wait_seconds` capped as every write's is. A version whose digest no
+longer matches what its key plans MUST be answered 409 `stale` and write
+nothing; a key altered to one with nothing to undo is refused as its preview
+would be; an unknown top-level key MUST be 422 `invalid_request`. Each version MUST be one component of the
 published schema, the same in the preview's response and the apply's request.
 The tier preview's `tier` MUST be one of `static`, `slow`, `volatile` or `null`;
 any other value MUST be 422 `invalid_request` before the operation runs.
@@ -359,7 +360,7 @@ any other value MUST be 422 `invalid_request` before the operation runs.
 #### Scenario: An altered unrelate version is stale
 
 - GIVEN an unrelate preview
-- WHEN its version is posted with a different `relation_type`
+- WHEN its version is posted with a different `content_digest`
 - THEN the response is 409 `stale` and the page is unchanged
 
 #### Scenario: An unknown tier is rejected before the operation

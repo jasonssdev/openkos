@@ -60,19 +60,23 @@ JSON and `schema.d.ts` are never hand-merged).
 
 ## S3 Reopen (P2, P5, H1-H3)
 
-- [ ] S3.1 RED: application tests for `kept_distinct`, `preview_reopen` and
+- [x] S3.1 RED: application tests for `kept_distinct`, `preview_reopen` and
   `apply_reopen` over a pair kept separate through the decision surface:
   refusals, digest stability, stale on a rewritten sidecar, busy lock, one
   commit of the sidecar only.
-- [ ] S3.2 GREEN: `application/undo_service.py` (D2-D5, reopen part).
-- [ ] S3.3 Facade `_undo.py`: `KeptDistinct`, `ReopenPreview`, `ReopenVersion`,
+- [x] S3.2 GREEN: `application/undo_service.py` (D2-D5, reopen part).
+- [x] S3.3 Facade `_undo.py`: `KeptDistinct`, `ReopenPreview`, `ReopenVersion`,
   `Reopened`, `NotUndoable`, `UndoStale`; exports; surface snapshot.
-- [ ] S3.4 Routes, error rows (`not_kept_distinct`), `_EchoRequest` apply body,
+- [x] S3.4 Routes, error rows (`not_kept_distinct`), `_EchoRequest` apply body,
   OpenAPI snapshot, client methods and `ERROR_CODES`.
-- [ ] S3.5 Check whether a queue refresh re-offers a reopened pair (D7) and
-  record the result here.
-- [ ] S3.6 Mutation-check the declined-state test, the digest lines and the stale
-  comparison.
+- [x] S3.5 Check whether a queue refresh re-offers a reopened pair (D7) and
+  record the result here. Confirmed: after `apply_reopen`, one
+  `refresh_decision_queue` lists the pair's identity decision again
+  (`test_a_reopened_pair_is_offered_again_by_a_queue_refresh`).
+- [x] S3.6 Mutation-check the declined-state test, the digest lines and the stale
+  comparison. One survivor, kept on purpose: `len(members) >= 2` is redundant
+  with the ruling lookup (no writer records a one-member ruling), and guards
+  the first-member index.
 
 ## S4 Unrelate (P3, P5, H1-H3)
 

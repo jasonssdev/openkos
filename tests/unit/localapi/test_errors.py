@@ -338,6 +338,33 @@ def test_an_interrupted_group_is_its_own_row_not_a_plain_write_failure() -> None
     assert plain[1].code == "write_failed"
 
 
+_UNDO_ROWS = {
+    "not_kept_distinct": (409, "not_kept_distinct"),
+    "not_related": (409, "not_related"),
+    "tier_unchanged": (409, "tier_unchanged"),
+    "unknown_type": (422, "unknown_type"),
+}
+
+
+def test_every_undo_reason_has_its_own_row_and_none_is_retryable() -> None:
+    reasons = get_args(get_type_hints(api.NotUndoable)["reason"])
+    assert set(reasons) == set(_UNDO_ROWS)
+    for reason in reasons:
+        problem = _errors.outcome_problem(api.NotUndoable(reason))
+        assert (problem.status, problem.body.code) == _UNDO_ROWS[reason]
+        assert problem.body.retryable is False
+
+
+def test_a_stale_undo_is_409_stale() -> None:
+    problem = _errors.outcome_problem(api.UndoStale())
+
+    assert (problem.status, problem.body.code, problem.body.retryable) == (
+        409,
+        "stale",
+        False,
+    )
+
+
 def test_drift_is_not_reported_as_a_plain_refusal() -> None:
     drift = _errors.error_body(api.DriftDetected("m"))
     refused = _errors.error_body(api.WriteRefused("m"))
@@ -379,6 +406,10 @@ SPEC_CODES = {
     "survivor_missing",
     "not_merged",
     "survivor_edited",
+    "not_kept_distinct",
+    "not_related",
+    "tier_unchanged",
+    "unknown_type",
     "workspace_busy",
     "workspace_lock_unavailable",
     "queue_unavailable",
@@ -422,6 +453,7 @@ def test_every_code_in_the_spec_table_is_produced_exactly_once_and_no_other(
     rows = [row.code for row in _errors._ROWS]
     not_applied = [row[1] for row in _errors._NOT_APPLIED.values()]
     not_applied += [row[1] for row in _errors._NOT_UNMERGEABLE.values()]
+    not_applied += [row[1] for row in _errors._NOT_UNDOABLE.values()]
     helpers = [
         _errors.key_mismatch().body.code,
         _errors.outcome_problem(api.Stale(_KEY, "content_changed")).body.code,

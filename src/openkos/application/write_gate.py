@@ -68,7 +68,9 @@ class WriteFailed(Refused):
 
     def __init__(
         self,
-        operation: Literal["merge", "relate", "set_tier", "merge_group", "unmerge"],
+        operation: Literal[
+            "merge", "relate", "set_tier", "merge_group", "unmerge", "reopen"
+        ],
         subjects: tuple[str, ...],
         error: str,
     ) -> None:

@@ -57,6 +57,10 @@ SURVIVOR_MISSING: Final = "survivor_missing"
 NOT_MERGED: Final = "not_merged"
 SURVIVOR_EDITED: Final = "survivor_edited"
 QUEUE_REFRESH_REFUSED: Final = "queue_refresh_refused"
+NOT_KEPT_DISTINCT: Final = "not_kept_distinct"
+NOT_RELATED: Final = "not_related"
+TIER_UNCHANGED: Final = "tier_unchanged"
+UNKNOWN_TYPE: Final = "unknown_type"
 
 # Judging rows.
 QUOTE_STALE: Final = "quote_stale"
@@ -254,6 +258,34 @@ _NOT_UNMERGEABLE: Final[Mapping[str, tuple[int, str, bool, str]]] = {
     ),
 }
 
+# Undo refusals returned by the undo operations, keyed by reason.
+_NOT_UNDOABLE: Final[Mapping[str, tuple[int, str, bool, str]]] = {
+    "not_kept_distinct": (
+        409,
+        NOT_KEPT_DISTINCT,
+        False,
+        "these concepts are not recorded as kept distinct",
+    ),
+    "not_related": (
+        409,
+        NOT_RELATED,
+        False,
+        "the source holds no such typed relation, or a concept no longer exists",
+    ),
+    "tier_unchanged": (
+        409,
+        TIER_UNCHANGED,
+        False,
+        "the type's tier is already set that way",
+    ),
+    "unknown_type": (
+        422,
+        UNKNOWN_TYPE,
+        False,
+        "that is not a concept type the engine knows",
+    ),
+}
+
 _STALE_MESSAGES: Final[Mapping[str, str]] = {
     "content_changed": "the concepts changed since the preview; preview it again",
     "row_resolved": "the decision was already resolved; preview it again",
@@ -373,10 +405,12 @@ def outcome_problem(
         | api.RunRefused
         | api.NotUnmergeable
         | api.UnmergeStale
+        | api.NotUndoable
+        | api.UndoStale
     ),
 ) -> ApiProblem:
     """The failure a returned (not raised) outcome is answered with."""
-    if isinstance(outcome, api.UnmergeStale):
+    if isinstance(outcome, api.UnmergeStale | api.UndoStale):
         message = _STALE_MESSAGES["content_changed"]
         return ApiProblem(409, ErrorBody(code=STALE, retryable=False, message=message))
     if isinstance(outcome, api.QuoteStale):
@@ -400,6 +434,8 @@ def outcome_problem(
         return ApiProblem(409, ErrorBody(code=STALE, retryable=False, message=message))
     if isinstance(outcome, api.NotUnmergeable):
         row = _NOT_UNMERGEABLE.get(outcome.reason)
+    elif isinstance(outcome, api.NotUndoable):
+        row = _NOT_UNDOABLE.get(outcome.reason)
     else:
         row = _NOT_APPLIED.get(outcome.reason)
     if row is None:  # a reason added after this table: report it, do not guess

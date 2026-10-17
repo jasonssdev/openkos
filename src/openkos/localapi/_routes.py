@@ -17,12 +17,16 @@ from openkos.localapi._models import (
     DecisionList,
     DecisionPreview,
     HealthBody,
+    KeptDistinctList,
     MergedConceptList,
     MergeHistory,
     PreviewPlan,
     PreviewRequest,
     QuoteRequest,
     RefreshRequest,
+    ReopenApplyRequest,
+    ReopenPreviewRequest,
+    ReopenResponse,
     RunRequest,
     RunStatus,
     UnmergeApplyRequest,
@@ -249,6 +253,42 @@ def make_router() -> APIRouter:
         )
         if isinstance(result, api.Unmerged):
             return UnmergeResponse(unmerged=result, warnings=warnings)
+        raise _errors.outcome_problem(result)
+
+    @router.get("/kept-distinct")
+    def kept_distinct(
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> KeptDistinctList:
+        return KeptDistinctList(
+            groups=list(invoke(lambda: api.kept_distinct(workspace)))
+        )
+
+    @router.post("/reopen/preview", responses=_errors_of(409, 413))
+    def reopen_preview(
+        body: ReopenPreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.ReopenPreview:
+        result = invoke(lambda: api.preview_reopen(workspace, body.member_ids))
+        if isinstance(result, api.ReopenPreview):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post("/reopen/apply", responses=_errors_of(409, 413, 503, retry_after=True))
+    def reopen_apply(
+        body: ReopenApplyRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> ReopenResponse:
+        warnings: list[str] = []
+        result = invoke(
+            lambda: api.apply_reopen(
+                workspace,
+                body.version,
+                wait_seconds=_wait(body.wait_seconds),
+                on_warning=warnings.append,
+            )
+        )
+        if isinstance(result, api.Reopened):
+            return ReopenResponse(reopened=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
     @router.post("/judging/quote", responses=_errors_of(413, 424, 502, 503))

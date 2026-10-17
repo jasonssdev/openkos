@@ -796,6 +796,47 @@
         "title": "KeepDistinctPlan",
         "type": "object"
       },
+      "KeptDistinct": {
+        "additionalProperties": false,
+        "description": "Pages a person said are different things, and when.",
+        "properties": {
+          "decided_at": {
+            "title": "Decided At",
+            "type": "string"
+          },
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "member_ids",
+          "decided_at"
+        ],
+        "title": "KeptDistinct",
+        "type": "object"
+      },
+      "KeptDistinctList": {
+        "additionalProperties": false,
+        "description": "Every member set kept distinct, newest first, in an envelope that leaves\nroom for additive fields.",
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/KeptDistinct"
+            },
+            "title": "Groups",
+            "type": "array"
+          }
+        },
+        "required": [
+          "groups"
+        ],
+        "title": "KeptDistinctList",
+        "type": "object"
+      },
       "KindCounts": {
         "description": "Lifetime counters of one pending-work kind.",
         "properties": {
@@ -1665,6 +1706,139 @@
           "rationale"
         ],
         "title": "RelationDetail",
+        "type": "object"
+      },
+      "ReopenApplyRequest": {
+        "description": "The version the reopen preview issued (echoed unchanged) and how long to\nwait for the workspace lock; a client can shorten the wait only.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/ReopenVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "ReopenApplyRequest",
+        "type": "object"
+      },
+      "ReopenPreview": {
+        "description": "Reopening the ruling over `member_ids`: they may be offered as the same\nthing again.",
+        "properties": {
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ReopenVersion"
+          }
+        },
+        "required": [
+          "member_ids",
+          "version"
+        ],
+        "title": "ReopenPreview",
+        "type": "object"
+      },
+      "ReopenPreviewRequest": {
+        "additionalProperties": false,
+        "description": "The members of the kept-distinct ruling to reopen, in any order.",
+        "properties": {
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "member_ids"
+        ],
+        "title": "ReopenPreviewRequest",
+        "type": "object"
+      },
+      "ReopenResponse": {
+        "additionalProperties": false,
+        "description": "What was reopened, and the warnings the apply raised along the way.",
+        "properties": {
+          "reopened": {
+            "$ref": "#/components/schemas/Reopened"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "reopened",
+          "warnings"
+        ],
+        "title": "ReopenResponse",
+        "type": "object"
+      },
+      "ReopenVersion": {
+        "description": "The version a stateless caller reopens a ruling against: echo it\nunchanged. `content_digest` covers the members and the sidecar holding the\nruling.",
+        "properties": {
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "member_ids",
+          "content_digest"
+        ],
+        "title": "ReopenVersion",
+        "type": "object"
+      },
+      "Reopened": {
+        "additionalProperties": false,
+        "description": "The ruling was reopened. `commit_sha` is `None` when its commit could not\nbe made (the write itself landed).",
+        "properties": {
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "member_ids",
+          "commit_sha"
+        ],
+        "title": "Reopened",
         "type": "object"
       },
       "RunRequest": {
@@ -2988,6 +3162,69 @@
         "summary": "Stop Run"
       }
     },
+    "/v1/kept-distinct": {
+      "get": {
+        "operationId": "kept_distinct_v1_kept_distinct_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeptDistinctList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Kept Distinct"
+      }
+    },
     "/v1/merged": {
       "get": {
         "operationId": "merged_v1_merged_get",
@@ -3388,6 +3625,210 @@
           }
         ],
         "summary": "Refresh"
+      }
+    },
+    "/v1/reopen/apply": {
+      "post": {
+        "operationId": "reopen_apply_v1_reopen_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReopenApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReopenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Reopen Apply"
+      }
+    },
+    "/v1/reopen/preview": {
+      "post": {
+        "operationId": "reopen_preview_v1_reopen_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReopenPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReopenPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Reopen Preview"
       }
     },
     "/v1/status": {

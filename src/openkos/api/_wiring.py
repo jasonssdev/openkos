@@ -93,8 +93,10 @@ def decision_ports(
     wait_seconds: float,
     on_warning: Callable[[str], None] | None,
     notes: CommitNotes | None = None,
+    what: str = "the decision",
 ) -> curate_decisions.DecisionPorts:
-    """The effects `apply_decision` needs, bound to `workspace`.
+    """The effects `apply_decision` needs, bound to `workspace`; an undo uses
+    the same effects, naming itself in a skipped commit's warning (`what`).
 
     The lock is taken only inside the service's commit section, waiting at most
     `wait_seconds`. Reconciliation is deliberately not wired: the service's
@@ -105,7 +107,7 @@ def decision_ports(
     def report(outcome: CommitOutcome) -> str | None:
         if notes is not None and outcome.includes_confidential:
             notes.confidential = True
-        warning = skipped_warning(outcome)
+        warning = skipped_warning(outcome, what)
         if warning is not None:
             warn(warning)
         return outcome.sha

@@ -646,6 +646,23 @@
       "kind": "dataclass",
       "members": {}
     },
+    "KeptDistinct": {
+      "fields": [
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "member_ids"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "decided_at"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "KindCounts": {
       "fields": [
         {
@@ -924,6 +941,18 @@
           "annotation": "str | None",
           "default": true,
           "name": "detail"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "NotUndoable": {
+      "fields": [
+        {
+          "annotation": "Literal['not_kept_distinct', 'not_related', 'tier_unchanged', 'unknown_type']",
+          "default": false,
+          "name": "reason"
         }
       ],
       "frozen": true,
@@ -1343,6 +1372,57 @@
       "kind": "dataclass",
       "members": {}
     },
+    "ReopenPreview": {
+      "fields": [
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "member_ids"
+        },
+        {
+          "annotation": "ReopenVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "ReopenVersion": {
+      "fields": [
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "member_ids"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "Reopened": {
+      "fields": [
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "member_ids"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "commit_sha"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "RunRefused": {
       "fields": [
         {
@@ -1473,6 +1553,18 @@
           "annotation": "Literal['set_tier']",
           "default": true,
           "name": "kind"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "UndoStale": {
+      "fields": [
+        {
+          "annotation": "Literal['content_changed']",
+          "default": true,
+          "name": "reason"
         }
       ],
       "frozen": true,
@@ -1870,6 +1962,36 @@
       ],
       "returns": "Applied | NotApplied | Stale"
     },
+    "apply_reopen": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "ReopenVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "Reopened | NotUndoable | UndoStale"
+    },
     "apply_unmerge": {
       "kind": "function",
       "parameters": [
@@ -1899,6 +2021,18 @@
         }
       ],
       "returns": "Unmerged | NotUnmergeable | UnmergeStale"
+    },
+    "kept_distinct": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "tuple[KeptDistinct, ...]"
     },
     "list_decisions": {
       "kind": "function",
@@ -1983,6 +2117,24 @@
         }
       ],
       "returns": "DecisionPreview | NotApplied | Stale"
+    },
+    "preview_reopen": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "Sequence[str]",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "member_ids"
+        }
+      ],
+      "returns": "ReopenPreview | NotUndoable"
     },
     "preview_unmerge": {
       "kind": "function",
