@@ -1,0 +1,335 @@
+// The settings screen as state and transitions, with no DOM (ADR-0066). The AI
+// model is read and changed through the local API's settings routes, previewed
+// before it is applied; turning on a cloud model waits for the warning to be
+// confirmed. The key goes only to the shell's keychain commands (ADR-0070) and
+// is never kept here once sent. The library is chosen through the shell's
+// workspace commands (ADR-0071). Every word comes from wording.ts.
+import {
+  ApiError,
+  ApiKeyError,
+  retryWhileBusy,
+  type Schemas,
+  type WorkspaceChoice,
+} from "../../client/index.ts";
+import { type Refusal, welcomeRefusal } from "../setup/wording.ts";
+import { WORDS, cloudWarning, keyAfterSaveFailure, keyFailure, saveFailure, savedNote } from "./wording.ts";
+
+type Settings = Schemas["ModelSettings"];
+type Preview = Schemas["ModelSettingsPreview"];
+
+/**
+ * The AI models a library uses on this Mac when it comes back from the cloud:
+ * the engine's packaged defaults (`config.DEFAULT_MODEL`,
+ * `config.DEFAULT_EMBEDDING_MODEL`), which a test holds equal to them.
+ */
+export const LOCAL_MODELS = { model: "qwen3:8b", embeddingModel: "bge-m3" } as const;
+
+/** The local API's settings calls (`client/index.ts`) for one engine launch. */
+export interface SettingsApi {
+  modelSettings(): Promise<Settings>;
+  previewModelSettings(body: Schemas["ModelSettingsPreviewRequest"]): Promise<Preview>;
+  applyModelSettings(body: Schemas["ModelSettingsApplyRequest"]): Promise<Schemas["ModelSettingsResponse"]>;
+}
+
+/** The shell's own commands, which work whether or not the engine runs. */
+export interface SettingsPorts {
+  keys: { set(key: string): Promise<void>; clear(): Promise<void>; isSet(): Promise<boolean> };
+  workspaces: {
+    status(): Promise<WorkspaceChoice>;
+    pickFolder(): Promise<string | null>;
+    open(path: string): Promise<WorkspaceChoice>;
+    create(path: string): Promise<WorkspaceChoice>;
+  };
+}
+
+export type Where = "local" | "cloud";
+
+export interface Draft {
+  where: Where;
+  baseUrl: string;
+  model: string;
+  embeddingModel: string;
+  /** Typed, not yet sent; cleared once it is. */
+  key: string;
+}
+
+export type DraftField = "baseUrl" | "model" | "embeddingModel" | "key";
+
+export interface SettingsState {
+  /** `waiting` until an engine runs; `failed` when the first read failed. */
+  phase: "waiting" | "loading" | "ready" | "failed";
+  settings: Settings | null;
+  /** Whether the shell keeps a key; `null` when it did not say. */
+  key: "saved" | "none" | "unsupported" | null;
+  editing: boolean;
+  draft: Draft;
+  saving: boolean;
+  removingKey: boolean;
+  /** The cloud warning, while it waits for an answer. */
+  confirming: { lines: string[] } | null;
+  /** What the last change did. */
+  note: string | null;
+  problem: string | null;
+  library: WorkspaceChoice | null;
+  libraryBusy: "open" | "create" | null;
+  libraryProblem: Refusal | null;
+  /** A library was chosen; the app is starting it. */
+  librarySwitching: boolean;
+}
+
+/** A cloud model is on: the shell shows it while it lasts. */
+export function cloudOn(state: Pick<SettingsState, "settings">): boolean {
+  return state.settings?.is_local === false;
+}
+
+const EMPTY_DRAFT: Draft = { where: "local", baseUrl: "", model: "", embeddingModel: "", key: "" };
+
+type Listener = (state: SettingsState) => void;
+
+export class SettingsModel {
+  state: SettingsState = {
+    phase: "waiting",
+    settings: null,
+    key: null,
+    editing: false,
+    draft: EMPTY_DRAFT,
+    saving: false,
+    removingKey: false,
+    confirming: null,
+    note: null,
+    problem: null,
+    library: null,
+    libraryBusy: null,
+    libraryProblem: null,
+    librarySwitching: false,
+  };
+
+  readonly #ports: SettingsPorts;
+  readonly #listeners = new Set<Listener>();
+  #api: SettingsApi | null = null;
+  #pending: Preview | null = null;
+
+  constructor(ports: SettingsPorts) {
+    this.#ports = ports;
+  }
+
+  subscribe(listener: Listener): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  #set(patch: Partial<SettingsState>): void {
+    this.state = { ...this.state, ...patch };
+    for (const listener of this.#listeners) listener(this.state);
+  }
+
+  /** The engine of this launch, or `null` while none runs. Reads everything again. */
+  async connect(api: SettingsApi | null): Promise<void> {
+    this.#api = api;
+    if (api === null) {
+      this.#set({ phase: this.state.settings === null ? "waiting" : this.state.phase });
+      return;
+    }
+    await this.load();
+  }
+
+  async load(): Promise<void> {
+    const api = this.#api;
+    if (api === null) return;
+    if (this.state.settings === null) this.#set({ phase: "loading" });
+    const [settings, key, library] = await Promise.allSettled([
+      api.modelSettings(),
+      this.#ports.keys.isSet(),
+      this.#ports.workspaces.status(),
+    ]);
+    if (api !== this.#api) return;
+    this.#set({
+      ...(settings.status === "fulfilled"
+        ? { phase: "ready" as const, settings: settings.value }
+        : { phase: this.state.settings === null ? ("failed" as const) : this.state.phase }),
+      key: keyState(key),
+      ...(library.status === "fulfilled" ? { library: library.value } : {}),
+      librarySwitching: false,
+    });
+  }
+
+  edit(): void {
+    const settings = this.state.settings;
+    if (settings === null) return;
+    const where: Where = settings.backend === "ollama" ? "local" : "cloud";
+    this.#set({ editing: true, draft: this.#draftFor(where), note: null, problem: null });
+  }
+
+  cancel(): void {
+    this.#pending = null;
+    this.#set({ editing: false, draft: EMPTY_DRAFT, confirming: null, problem: null });
+  }
+
+  choose(where: Where): void {
+    if (where === this.state.draft.where) return;
+    this.#set({ draft: { ...this.#draftFor(where), key: this.state.draft.key }, problem: null });
+  }
+
+  /** Typing is kept without a redraw, so the field keeps its focus and caret. */
+  setField(field: DraftField, value: string): void {
+    this.state = { ...this.state, draft: { ...this.state.draft, [field]: value } };
+  }
+
+  /** The draft for `where`: the settings in use when they are of that kind. */
+  #draftFor(where: Where): Draft {
+    const settings = this.state.settings;
+    const same = settings !== null && (settings.backend === "ollama") === (where === "local");
+    if (where === "local") {
+      return same
+        ? { where, baseUrl: "", model: settings.model, embeddingModel: settings.embedding_model, key: "" }
+        : { where, baseUrl: "", ...LOCAL_MODELS, key: "" };
+    }
+    return same
+      ? { where, baseUrl: settings.base_url ?? "", model: settings.model, embeddingModel: settings.embedding_model, key: "" }
+      : { where, baseUrl: "", model: "", embeddingModel: "", key: "" };
+  }
+
+  #change(): Schemas["ModelSettingsPreviewRequest"] {
+    const { draft, settings } = this.state;
+    if (draft.where === "local") {
+      return { backend: "ollama", base_url: null, embedding_base_url: null, model: draft.model, embedding_model: draft.embeddingModel };
+    }
+    return {
+      backend: "openai-compatible",
+      base_url: draft.baseUrl,
+      // A separate search address set by hand is kept while the service stays a cloud one.
+      embedding_base_url: settings?.backend === "openai-compatible" ? settings.embedding_base_url : null,
+      model: draft.model,
+      embedding_model: draft.embeddingModel,
+    };
+  }
+
+  /** Preview the draft; a new cloud service waits for the warning, anything else is applied. */
+  async save(): Promise<void> {
+    const api = this.#api;
+    const current = this.state.settings;
+    if (api === null || current === null || this.state.saving || !this.state.editing) return;
+    this.#set({ saving: true, problem: null, note: null });
+    let preview: Preview | null;
+    try {
+      preview = await api.previewModelSettings(this.#change());
+    } catch (error) {
+      if (!(error instanceof ApiError && error.code === "settings_unchanged")) {
+        this.#set({ saving: false, problem: saveFailure(error) });
+        return;
+      }
+      preview = null;
+    }
+    if (preview !== null && needsWarning(current, preview.proposed)) {
+      this.#pending = preview;
+      this.#set({ saving: false, confirming: { lines: cloudWarning(preview.proposed) } });
+      return;
+    }
+    await this.#apply(api, preview);
+  }
+
+  /** The warning was confirmed: apply what it was shown for. */
+  async confirm(): Promise<void> {
+    const preview = this.#pending;
+    const api = this.#api;
+    if (preview === null || api === null) return;
+    this.#pending = null;
+    this.#set({ confirming: null });
+    await this.#apply(api, preview);
+  }
+
+  /** The warning was declined: nothing changes and the draft stays. */
+  dismiss(): void {
+    this.#pending = null;
+    this.#set({ confirming: null });
+  }
+
+  async #apply(api: SettingsApi, preview: Preview | null): Promise<void> {
+    const key = this.state.draft.where === "cloud" ? this.state.draft.key.trim() : "";
+    this.#set({ saving: true });
+    let settings = this.state.settings;
+    if (preview !== null) {
+      try {
+        const answer = await retryWhileBusy(() => api.applyModelSettings({ version: preview.version }));
+        settings = answer.changed.settings;
+      } catch (error) {
+        this.#set({ saving: false, problem: saveFailure(error) });
+        if (error instanceof ApiError && error.code === "stale") await this.load();
+        return;
+      }
+    }
+    // The settings go first: setting the key restarts the engine, which then
+    // starts with both.
+    let keyProblem: string | null = null;
+    let keyState = this.state.key;
+    if (key !== "") {
+      try {
+        await this.#ports.keys.set(key);
+        keyState = "saved";
+      } catch (error) {
+        keyProblem = preview === null ? keyFailure(error) : keyAfterSaveFailure(error);
+      }
+    }
+    const note =
+      preview !== null && settings !== null
+        ? savedNote(settings, preview.search_rebuild)
+        : key !== "" && keyProblem === null
+          ? WORDS.keySavedNote
+          : null;
+    this.#set({
+      saving: false,
+      settings,
+      key: keyState,
+      editing: keyProblem !== null && preview === null,
+      draft: { ...EMPTY_DRAFT },
+      note: keyProblem === null ? note : null,
+      problem: keyProblem,
+    });
+  }
+
+  async removeKey(): Promise<void> {
+    if (this.state.removingKey) return;
+    this.#set({ removingKey: true, problem: null, note: null });
+    try {
+      await this.#ports.keys.clear();
+      this.#set({ removingKey: false, key: "none", note: WORDS.keyRemoved });
+    } catch (error) {
+      this.#set({ removingKey: false, problem: keyFailure(error) });
+    }
+  }
+
+  openLibrary(): Promise<void> {
+    return this.#chooseLibrary("open");
+  }
+
+  createLibrary(): Promise<void> {
+    return this.#chooseLibrary("create");
+  }
+
+  async #chooseLibrary(action: "open" | "create"): Promise<void> {
+    if (this.state.libraryBusy !== null) return;
+    this.#set({ libraryBusy: action, libraryProblem: null });
+    let path: string | null = null;
+    try {
+      path = await this.#ports.workspaces.pickFolder();
+      if (path === null) {
+        this.#set({ libraryBusy: null });
+        return;
+      }
+      const choice = await this.#ports.workspaces[action](path);
+      this.#set({ libraryBusy: null, library: choice, librarySwitching: true });
+    } catch (error) {
+      this.#set({ libraryBusy: null, libraryProblem: welcomeRefusal(action, error, path ?? "") });
+    }
+  }
+}
+
+/** A cloud service the person has not been warned about yet. */
+function needsWarning(current: Settings, proposed: Settings): boolean {
+  return !proposed.is_local && proposed.remote_hosts.some((host) => !current.remote_hosts.includes(host));
+}
+
+function keyState(answer: PromiseSettledResult<boolean>): SettingsState["key"] {
+  if (answer.status === "fulfilled") return answer.value ? "saved" : "none";
+  return answer.reason instanceof ApiKeyError && answer.reason.reason === "not_supported" ? "unsupported" : null;
+}

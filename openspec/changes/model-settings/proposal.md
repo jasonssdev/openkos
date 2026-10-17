@@ -52,14 +52,14 @@ setup is done.
 ### Out of scope
 
 - Marking a page confidential from the app. No API sets a page's sensitivity
-  yet; it is tracked as its own issue, and the settings screen says where
-  sensitivity is set today rather than offering a control that does not exist.
+  yet; it is tracked in #1517, and the settings screen offers no control that
+  does not exist.
 - Per-task model overrides (`models:`), sampling, timeouts and every other key:
   the change never touches them.
 - Testing a connection to the cloud endpoint from the settings screen. Setup
   readiness already probes the configured runtime.
-- Rebuilding search after an embedding change: the preview says it is needed;
-  the existing maintenance path does it.
+- Rebuilding search after an embedding change: the preview says it is needed
+  and the screen says so; doing it from the app is #1518.
 
 ## Principles
 

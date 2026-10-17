@@ -37,6 +37,17 @@ const READINESS = {
   ready: false,
 };
 
+const LOCAL_SETTINGS = {
+  backend: "ollama",
+  base_url: null,
+  embedding_base_url: null,
+  model: "qwen3:8b",
+  embedding_model: "bge-m3",
+  remote_hosts: [],
+  is_local: true,
+  takes_api_key: false,
+};
+
 const fetched: string[] = [];
 const fetchMock = vi.fn(async (request: Request) => {
   const path = new URL(request.url).pathname;
@@ -46,7 +57,9 @@ const fetchMock = vi.fn(async (request: Request) => {
       ? READINESS
       : path === "/v1/status"
         ? { root: "/Users/me/library", sources: 0, concepts: 0, open_decisions_by_kind: {} }
-        : { decisions: [] };
+        : path === "/v1/settings/model"
+          ? { ...LOCAL_SETTINGS }
+          : { decisions: [] };
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 });
 
