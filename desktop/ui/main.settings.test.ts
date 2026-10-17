@@ -45,7 +45,13 @@ const fetchMock = vi.fn(async (request: Request) => {
   const body =
     path === "/v1/settings/model"
       ? CLOUD
-      : path === "/v1/setup/readiness"
+      : path === "/v1/reconciled"
+        ? { pairs: [{ first_id: "b/x", second_id: "b/y", relation_type: "reconciled_with", holder_id: null, target_id: null }] }
+        : path === "/v1/declined-contradictions"
+          ? { contradictions: [] }
+          : path === "/v1/pages"
+            ? { concept_id: new URL(request.url).searchParams.get("concept_id"), title: new URL(request.url).searchParams.get("concept_id") === "b/x" ? "Tea" : "Coffee", excerpt: "", okf_type: null, sensitivity: "private", sources: [] }
+            : path === "/v1/setup/readiness"
         ? READINESS
         : path === "/v1/status"
           ? { root: "/Users/me/library", sources: 0, concepts: 0, open_decisions_by_kind: {} }
@@ -92,6 +98,14 @@ describe("settings in the app", () => {
     expect(view("settings").textContent).toContain("API key: Key saved");
     expect(view("settings").textContent).toContain("/Users/me/library");
     expect(button(footer(), "Settings")?.getAttribute("aria-current")).toBe("page");
+  });
+
+  it("lists the pages you settled, each with Undo, and nothing for what is empty", () => {
+    const text = view("settings").textContent ?? "";
+    expect(text).toContain("Pages you settled");
+    expect(text).toContain("'Tea' and 'Coffee'");
+    expect(text).not.toContain("Disagreements you left as they are");
+    expect(button(view("settings"), "Undo")).toBeDefined();
   });
 
   it("goes back to Status from the navigation", () => {

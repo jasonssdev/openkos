@@ -18,7 +18,7 @@ import {
   uiButton,
   uiCard,
 } from "../system/index.ts";
-import type { DraftField, SettingsModel, SettingsState } from "./model.ts";
+import type { DraftField, SettingsModel, SettingsState, UndoList, UndoRow } from "./model.ts";
 import { WORDS, modelFacts, whereItRuns } from "./wording.ts";
 
 type Dialog = ReturnType<typeof openDialog>;
@@ -78,7 +78,11 @@ function screen(model: SettingsModel, state: SettingsState): HTMLElement[] {
     state.note ? callout("success", state.note, { live: "status" }) : null,
     state.problem ? callout("error", state.problem, { live: "alert" }) : null,
   ].filter((node): node is HTMLElement => node !== null);
-  return [header, ...notes, modelCard(model, state), libraryCard(model, state)];
+  return [header, ...notes, modelCard(model, state),
+    ...undoCard(model, state, "settled", WORDS.settledTitle, WORDS.undo),
+    ...undoCard(model, state, "declined", WORDS.declinedTitle, WORDS.pointOutAgain),
+    libraryCard(model, state),
+  ];
 }
 
 function modelCard(model: SettingsModel, state: SettingsState): HTMLElement {
@@ -163,6 +167,35 @@ function modelForm(model: SettingsModel, state: SettingsState): HTMLElement[] {
     ),
   );
   return body;
+}
+
+/** An earlier decision list, drawn only while it has something in it. */
+function undoCard(model: SettingsModel, state: SettingsState, list: UndoList, title: string, label: string): HTMLElement[] {
+  const rows: UndoRow[] = state[list];
+  if (rows.length === 0) return [];
+  return [
+    uiCard(
+      { title, headingLevel: 2 },
+      el(
+        "ul",
+        { class: "ui-plain-list" },
+        ...rows.map((row) =>
+          el(
+            "li",
+            { class: "ui-line" },
+            el("span", {}, row.text),
+            uiButton(label, () => model.undo(list, row.key), {
+              size: "sm",
+              loading: state.undoing === row.key,
+              loadingLabel: WORDS.undoing,
+              disabled: state.undoing !== null && state.undoing !== row.key,
+              focusKey: `settings:undo:${list}:${row.key}`,
+            }),
+          ),
+        ),
+      ),
+    ),
+  ];
 }
 
 function libraryCard(model: SettingsModel, state: SettingsState): HTMLElement {

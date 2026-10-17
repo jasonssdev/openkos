@@ -466,6 +466,10 @@ The card says where the AI model runs in one line: "On this Mac." or "In the clo
 
 Nothing changed and no key typed simply closes the form.
 
+### Earlier decisions
+
+Two lists follow the AI model card, each drawn only while it has something in it. **Pages you settled** names each pair ("'{first title}' and '{second title}'") with **Undo**; **Disagreements you left as they are** names each with **Point this out again** (one found inside a combined page is named by that page alone). Both do what Undo does in To review, with the same confirmations and refusals (`not_reconciled`, `not_declined`, `stale`), shown at the top of the screen; the lists are then read again. A list that cannot be read is simply not shown.
+
 ### Library
 
 "Your library is the folder where OpenKOS keeps everything.", then "Folder" and the folder. **Open another library…** ("Opening…") and **Create a new library…** ("Setting up…") open the system's folder window; once a folder is accepted, "Opening your library…" until the app runs on it. A refused folder uses the welcome's messages (above). When the library was chosen outside the app: "This copy of OpenKOS is set to use a library chosen outside the app, so it can't be changed here.", with no buttons.

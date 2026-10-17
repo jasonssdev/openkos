@@ -44,7 +44,21 @@ const READY: SettingsState = {
   libraryBusy: null,
   libraryProblem: null,
   librarySwitching: false,
+  settled: [],
+  declined: [],
+  undoing: null,
 };
+
+const SETTLED_ROW = {
+  key: "a|b",
+  text: "'Old plan' and 'New plan'",
+  undo: { kind: "unreconcile", first: "a", second: "b", revision: false, outOfDate: "Old plan" },
+} as const;
+const DECLINED_ROW = {
+  key: "c|d|",
+  text: "'Tea' and 'Coffee'",
+  undo: { kind: "reopen_contradiction", first: "c", second: "d", absorbed: null },
+} as const;
 
 const METHODS = [
   "load",
@@ -58,6 +72,7 @@ const METHODS = [
   "removeKey",
   "openLibrary",
   "createLibrary",
+  "undo",
 ] as const;
 
 function fakeModel() {
@@ -249,5 +264,51 @@ describe("renderSettings", () => {
     renderSettings(node, model, { ...READY, phase: "failed", settings: null });
     button(node, WORDS.tryAgain)?.click();
     expect(model.load).toHaveBeenCalledOnce();
+  });
+
+  it("shows no list of earlier decisions while there are none", () => {
+    const node = root();
+    renderSettings(node, fakeModel(), READY);
+
+    expect(node.textContent).not.toContain("Pages you settled");
+    expect(node.textContent).not.toContain("Disagreements you left as they are");
+  });
+
+  it("lists the pages you settled, each with Undo", () => {
+    const node = root();
+    const model = fakeModel();
+    renderSettings(node, model, { ...READY, settled: [SETTLED_ROW] });
+
+    const titles = Array.from(node.querySelectorAll(".ui-card__title"), (t) => t.textContent);
+    expect(titles).toEqual(["AI model", "Pages you settled", "Library"]);
+    const card = node.querySelectorAll(".ui-card")[1] as HTMLElement;
+    expect(card.querySelector("li")?.textContent).toContain("'Old plan' and 'New plan'");
+    button(card, "Undo")?.click();
+    expect(model.undo).toHaveBeenCalledWith("settled", "a|b");
+  });
+
+  it("lists the disagreements you left as they are, each with Point this out again", () => {
+    const node = root();
+    const model = fakeModel();
+    renderSettings(node, model, { ...READY, declined: [DECLINED_ROW] });
+
+    const titles = Array.from(node.querySelectorAll(".ui-card__title"), (t) => t.textContent);
+    expect(titles).toEqual(["AI model", "Disagreements you left as they are", "Library"]);
+    const card = node.querySelectorAll(".ui-card")[1] as HTMLElement;
+    expect(card.textContent).toContain("'Tea' and 'Coffee'");
+    button(card, "Point this out again")?.click();
+    expect(model.undo).toHaveBeenCalledWith("declined", "c|d|");
+  });
+
+  it("shows the row being undone as busy and holds the other rows", () => {
+    const node = root();
+    const other = { ...SETTLED_ROW, key: "e|f", text: "'Tea' and 'Coffee'" };
+    renderSettings(node, fakeModel(), { ...READY, settled: [SETTLED_ROW, other], undoing: "a|b" });
+
+    const [busy, held] = Array.from(node.querySelectorAll<HTMLButtonElement>("li button"));
+    expect(busy?.textContent).toBe("Undoing…");
+    expect(busy?.getAttribute("aria-busy")).toBe("true");
+    expect(held?.textContent).toBe("Undo");
+    expect(held?.disabled).toBe(true);
   });
 });
