@@ -8,7 +8,7 @@ tags:
   - user-experience
   - reference
 resource: https://github.com/jasonssdev/openkos
-timestamp: 2026-10-16T00:00:00Z
+timestamp: 2026-10-17T00:00:00Z
 sensitivity: public
 ---
 
@@ -219,12 +219,76 @@ The middle line is load-bearing: the engine sends everything except `confidentia
 
 The cloud model's warning, in settings only and never during setup, uses the same words: what leaves the Mac (pages marked Shareable and Private), what never does (Only on this Mac), who receives it (the provider, by name) and that the provider may charge. While it is on, the app says so on every screen that asks the AI model.
 
+## Setup
+
+The words of the first run: choosing a folder for the library, then getting the AI model ready on this Mac ([ADR-0057](adr/0057-the-first-model-runtime-is-a-user-installed-ollama-behind-a-guided-setup.md), [ADR-0071](adr/0071-the-desktop-shell-remembers-the-chosen-workspace-in-its-own-config-directory-and-creates-one-with-the-engines-init.md)). Setup is the one time the app uses the internet, and it never sends anything the person added. A cloud AI model is never offered here ([roadmap](roadmap.md#mvp-6--the-desktop-app)): it is turned on in settings only, behind the warning under "Who can see a page". **(H)** for the whole section.
+
+### Welcome — "Choose a folder for your library."
+
+Shown instead of the app when no library is chosen yet (`no_workspace`), with the navigation held back. Title "Welcome to OpenKOS"; under it "Choose a folder for your library." and "Your library is a folder on this Mac. Everything you add to OpenKOS stays there."
+
+- **Create a new library** — opens the system's folder window, then sets the library up in the chosen folder. While it runs: "Setting up your library…". Below the buttons: "A new library needs an empty folder. You can make one in the window that opens."
+- **Open an existing library** — opens the folder window, then opens the library in it. While it runs: "Opening your library…".
+- Once a folder is accepted: "Opening your library…" until the app is running on it. Closing the folder window changes nothing.
+- When the library chosen before is no longer where it was: "The library you used before isn't at {folder} any more. Open it from where it is now, or create a new one."
+
+A refused choice is an error callout worded from the shell's reason alone; its own report, where it has one, waits behind **Show details**:
+
+| Reason | Message | Action |
+| --- | --- | --- |
+| `folder_not_empty` | "That folder already has files in it. Choose an empty folder, or make a new one, so nothing of yours is changed." | — |
+| `already_a_workspace` | "That folder already holds an OpenKOS library." | **Open it** |
+| `not_a_workspace` | "That folder doesn't hold an OpenKOS library. Choose another, or create a new library." | — |
+| `invalid_path`, `not_a_folder` | "OpenKOS can't use that folder. Please choose another." | — |
+| `set_by_environment` | "This copy of OpenKOS is set to use a library chosen outside the app, so it can't be changed here." | — |
+| `init_failed` | "OpenKOS couldn't set up a library in that folder." | **Show details** |
+| `init_timed_out` | "Setting up the library took too long, so OpenKOS stopped. Please try again." | — |
+| `engine_not_located` | "Part of OpenKOS is missing, so it can't set up a library. Reinstalling OpenKOS may help." | — |
+| `store_failed`, creating | "Your library was set up, but OpenKOS couldn't remember it. Open it to continue." | **Open it** |
+| `store_failed`, opening | "OpenKOS couldn't remember your choice. Please try again." | — |
+| anything else | "Something went wrong. Please try again." | — |
+
+### Getting the AI model ready
+
+Shown on its own, once per session, when the library is open but its AI model is not ready (`setup_readiness` with `ready` false), and from Status while that lasts. Title "Set up OpenKOS"; under it "OpenKOS needs the internet only for these steps. Nothing you add is sent." One step at a time, as a card with "Step {n} of 2". "Ready" is the engine's: Ollama answers and the models the library needs to add files and answer questions are installed. A model used only for checking pages is not offered here (#1510).
+
+**Step 1, when Ollama on this Mac does not answer:** "Install Ollama". "OpenKOS uses Ollama, a free app, to run AI models on this Mac. It isn't running yet." "Get it from Ollama's website, install it and open it. We'll notice when it's running."
+
+- **Get Ollama** — opens Ollama's download page in the browser. When the browser does not open: "Your browser didn't open. You can go to {address} yourself."
+- **Check again** — "Checking…". The app also checks on its own every few seconds while this step is shown.
+
+When the AI model is not Ollama on this Mac (another address in the library's settings), the step is "Reach the AI model": "OpenKOS can't reach the AI model at {address}. Check that it's running, then check again.", with **Check again** only.
+
+**Step 2, models missing:** "Download the AI models". "OpenKOS needs these AI models on this Mac. They're large, so this can take a while. Once they're here, they work without the internet." Each model is listed by its name, with:
+
+- "✓ Installed", or **Download**, one model at a time; asking for another while one runs queues it ("Waiting…"). **Download all** downloads every missing one in turn, offered when more than one is missing.
+- While it runs: a progress bar named "Downloading {model}" and "{done} of {size} ({percent}%)" ("{done} so far" before the size is known; "Getting ready…", "Checking the download…", "Finishing…" around it), with **Stop** ("Stopping…"). Sizes are in MB and GB as Finder shows them; the percent reaches 100 only when everything is there.
+- After **Stop**: "Stopped at {done} of {size}. Downloading again continues from there." with **Continue download**. Stopping drops the downloads waiting behind it.
+- When it fails, with **Try again**:
+
+| Situation | Code | Message |
+| --- | --- | --- |
+| Ollama stopped answering | `backend_unavailable` | "OpenKOS lost touch with Ollama. Try again: the download continues from where it stopped." |
+| Another download is running | `pull_active` | "Another download is already running. Try again in a moment." |
+| Ollama has no such model | `backend_model_not_found` | "Ollama couldn't find this AI model to download." |
+| The library no longer names it | `model_not_configured` | "Your library doesn't use this AI model any more." |
+| The AI model can't be downloaded from the app | `pull_not_supported` | "This AI model can't be downloaded from here." (also shown, with no button, for such a model) |
+| OpenKOS does not answer | — | "OpenKOS isn't responding. Try again in a moment." |
+| Anything else | — | "The download didn't finish. Try again: it continues from where it stopped." |
+
+**Memory below the floor** (ADR-0047's, as the Mac reports it) is a note on every step, never a block: "This Mac has {n} GB of memory. OpenKOS is made for {floor} GB or more, so answers may be slow and some steps may not finish. You can still continue."
+
+**While it first reads:** a placeholder named "Checking your setup." **When the setup cannot be read:** "OpenKOS couldn't check its setup." with **Try again**.
+
+**Ready:** "You're ready. OpenKOS works offline from now on." with **Start using OpenKOS**, which opens the app.
+
 ## The sidebar and Status
 
 The words around the decisions, outside the decision screens.
 
 - **Sidebar.** **Ask**, **To review** and **Status**. Ask is listed before it exists, with "Coming soon" beside it, and choosing it does nothing. To review shows a count only when something waits.
-- **The engine's badge**, at the foot of the sidebar, a symbol and a word: "Engine starting", "Engine running", "Engine restarting", "Engine not running" (it could not be started), "Engine stopped", "Engine state unknown".
+- **The engine's badge**, at the foot of the sidebar, a symbol and a word: "Engine starting", "Engine running", "Engine restarting", "Engine not running" (it could not be started), "Engine stopped", "No library open" (before a library is chosen; Status then says "No library is open yet."), "Engine state unknown".
+- **Check setup.** While the AI model is not ready, Status says "Some setup steps are left." under its title, with **Check setup**, which opens setup. Otherwise Status shows neither.
 - **Status disclosures.** What is rarely needed waits behind a disclosure named for what it holds: "Show details" for the engine's own report when it failed or restarted, "Show the folder" for where the files live.
 
 ## Open questions

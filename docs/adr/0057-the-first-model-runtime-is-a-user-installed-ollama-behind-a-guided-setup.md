@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0057: The first model runtime is a user-installed Ollama behind a guided setup"
 description: The desktop app detects a user-installed Ollama, sends the user to the official download when it is absent, and pulls models with progress through Ollama's own API.
-status: Proposed
+status: Accepted
 date: 2026-10-14
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0057: The first model runtime is a user-installed Ollama behind a guided setup
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-14
 
 ## Context
