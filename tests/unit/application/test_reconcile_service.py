@@ -321,3 +321,88 @@ def test_resolve_pair_member_names_the_pair_on_a_stranger(workspace: Path) -> No
     assert svc.resolve_pair_member(layout, "--winner", _B, _A, _B) == (_B, _A)
     with pytest.raises(ValueError, match="must resolve to one of the pair"):
         svc.resolve_pair_member(layout, "--revision", "concepts/gamma", _A, _B)
+
+
+# -- the split transaction: prepare, then commit (settle-other-kinds D5) ------ #
+
+
+def _pair(root: Path, holder: str | None = None) -> svc.PairRequest:
+    layout = config.WorkspaceLayout(root)
+    return svc.resolve_pair(layout, _A, _B, winner=holder)
+
+
+def test_prepare_pair_plans_without_writing(workspace: Path) -> None:
+    before = tree(workspace)
+
+    prepared = svc.prepare_pair(
+        config.WorkspaceLayout(workspace),
+        _pair(workspace, holder=_A),
+        svc.ReconcilePorts(autocommit=CommitRecorder()),
+    )
+
+    assert tree(workspace) == before
+    assert prepared.preview.edge_added_a is True
+    assert prepared.preview.edge_added_b is False
+    assert prepared.changed is True
+    assert prepared.bytes_a == before[f"bundle/{_A}.md"]
+
+
+def test_commit_pair_writes_what_was_prepared(workspace: Path) -> None:
+    commits = CommitRecorder()
+    ports = svc.ReconcilePorts(autocommit=commits)
+    prepared = svc.prepare_pair(
+        config.WorkspaceLayout(workspace), _pair(workspace, holder=_A), ports
+    )
+
+    outcome = svc.commit_pair(workspace, prepared, ports=ports)
+
+    assert outcome == svc.ReconcileOutcome(changed=True)
+    assert _relations(workspace, _A) == [okf.Relation(target=_B, type="supersedes")]
+    assert commits.calls[0][2] == f"openkos: reconcile {_A} supersedes {_B}"
+
+
+def test_a_guard_that_answers_stops_the_commit_inside_the_section(
+    workspace: Path,
+) -> None:
+    entered: list[str] = []
+
+    class _Section:
+        def __enter__(self) -> None:
+            entered.append("in")
+
+        def __exit__(self, *exc: object) -> None:
+            entered.append("out")
+
+    commits = CommitRecorder()
+    ports = svc.ReconcilePorts(autocommit=commits, commit_section=_Section)
+    prepared = svc.prepare_pair(
+        config.WorkspaceLayout(workspace), _pair(workspace), ports
+    )
+    before = tree(workspace)
+
+    def guard() -> str:
+        entered.append("guard")
+        return "no"
+
+    outcome = svc.commit_pair(workspace, prepared, ports=ports, guard=guard)
+
+    assert outcome == "no"
+    assert entered == ["in", "guard", "out"]
+    assert tree(workspace) == before
+    assert commits.calls == []
+
+
+def test_the_conflict_gate_is_a_typed_refusal_the_cli_still_renders(
+    workspace: Path,
+) -> None:
+    _reconcile(workspace)
+
+    with pytest.raises(svc.ReconcileConflict) as caught:
+        svc.prepare_pair(
+            config.WorkspaceLayout(workspace),
+            _pair(workspace, holder=_A),
+            svc.ReconcilePorts(autocommit=CommitRecorder()),
+        )
+
+    assert isinstance(caught.value, Refused)
+    assert "already reconciled as a symmetric reconciliation" in caught.value.message

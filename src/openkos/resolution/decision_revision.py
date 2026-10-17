@@ -971,3 +971,73 @@ def judge_pairs(
         if on_progress is not None:
             on_progress(index, total, verdict)
     return RevisionBatch(results=results)
+
+
+# -- a stored revision proposal ------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ProposedRevision:
+    """What one stored revision proposal asks for: the change its verdict names
+    and, when the resolved dates order the pair, the later Decision and the one
+    relation `reconcile --from-findings` would offer. `later_id` and
+    `relation_type` are `None` together for an undirected change, where the
+    person names both."""
+
+    pair_ids: tuple[str, str]
+    verdict: RevisionVerdictValue
+    later_id: str | None
+    relation_type: Literal["supersedes", "revises"] | None
+
+
+def _stored_date(value: object, state: object) -> DecisionDate | None:
+    if state in ("missing", "multiple", "none-reached"):
+        return DecisionDate(value=None, state=state)
+    if state != "dated":
+        return None
+    parsed = okf.parse_event_when(value) if isinstance(value, str) else None
+    return None if parsed is None else DecisionDate(value=parsed, state="dated")
+
+
+def proposed_revision(payload: Mapping[str, object]) -> ProposedRevision | None:
+    """Read one queue row's revision payload (`pair_ids`, `verdict`, `dates`,
+    `date_states`, as `queue_producers.revision_proposals` writes it), or
+    `None` when it is not a readable REVERSES or REFINES proposal. Direction
+    comes from the stored dates through `pair_direction`, never from a reply
+    field (ADR-0025)."""
+    pair, dates, states = (
+        payload.get("pair_ids"),
+        payload.get("dates"),
+        payload.get("date_states"),
+    )
+    if not (
+        isinstance(pair, list)
+        and len(pair) == 2
+        and all(isinstance(p, str) for p in pair)
+        and isinstance(dates, list)
+        and isinstance(states, list)
+        and len(dates) == 2
+        and len(states) == 2
+    ):
+        return None
+    try:
+        verdict = RevisionVerdictValue(payload.get("verdict"))
+    except ValueError:
+        return None
+    relation = RELATION_FOR_VERDICT.get(verdict)
+    if relation is None:
+        return None
+    first = _stored_date(dates[0], states[0])
+    second = _stored_date(dates[1], states[1])
+    if first is None or second is None:
+        return None
+    pair_ids = (str(pair[0]), str(pair[1]))
+    direction = pair_direction(pair_ids[0], first, pair_ids[1], second)
+    if direction.holder is None:
+        return ProposedRevision(pair_ids, verdict, None, None)
+    return ProposedRevision(
+        pair_ids,
+        verdict,
+        direction.holder,
+        cast(Literal["supersedes", "revises"], relation),
+    )

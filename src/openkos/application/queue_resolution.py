@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Final
 
 from openkos import config
+from openkos.resolution import decision_revision
 from openkos.state import derived
 from openkos.state import pending_queue as pq
 
@@ -55,7 +56,7 @@ WRITE_CORE_RESOLUTIONS: Final = {
     "openkos.application.lifecycle.merge_core": "resolve_merged",
     "openkos.application.lifecycle.relate_core": "resolve_related",
     "openkos.application.lifecycle.set_volatility_core": "resolve_volatility_set",
-    "openkos.application.reconcile_service.reconcile_pair": "resolve_reconciled",
+    "openkos.application.reconcile_service.commit_pair": "resolve_reconciled",
     "openkos.application.duplicates_service.apply_identity_decision": (
         "resolve_declined_identity"
     ),
@@ -259,11 +260,21 @@ def resolve_volatility_set(root: Path, *, type_name: str, tier: str) -> None:
     )
 
 
-def resolve_reconciled(root: Path, *, pair_ids: Sequence[str]) -> None:
-    """`reconcile`: the typed-edge contradiction row over the pair. A merged-body
-    row is a different proposal (its key carries the absorbed id) and stays
-    open. The row proposes "reconcile this pair" with no direction, so any
-    direction the human chose is `as_proposed`."""
+def resolve_reconciled(
+    root: Path,
+    *,
+    pair_ids: Sequence[str],
+    holder: str | None = None,
+    edge_type: str | None = None,
+) -> None:
+    """`reconcile`: the typed-edge contradiction row and the revision row over
+    the pair. A merged-body contradiction row is a different proposal (its key
+    carries the absorbed id) and stays open. The contradiction row proposes
+    "reconcile this pair" with no direction, so any direction the human chose
+    is `as_proposed`. The revision row proposes a change: `as_proposed` when the
+    edge written is the one its verdict and dates name (any directed edge when
+    the dates do not order the pair), `modified` otherwise, including the
+    symmetric `reconciled_with` (`holder` `None`)."""
     first, second = sorted(pair_ids)
     _resolve_by_key(
         root,
@@ -271,6 +282,20 @@ def resolve_reconciled(root: Path, *, pair_ids: Sequence[str]) -> None:
         pq.contradiction_key((first, second), None),
         lambda _item: "as_proposed",
         "reconcile",
+    )
+
+    def revision(item: pq.PendingItem) -> pq.Resolution:
+        proposed = decision_revision.proposed_revision(_decode(item.payload))
+        if proposed is None or holder is None:
+            return "modified"
+        if proposed.later_id is None:
+            return "as_proposed"
+        return _as_proposed(
+            holder == proposed.later_id and edge_type == proposed.relation_type
+        )
+
+    _resolve_by_key(
+        root, "revision", pq.revision_key((first, second)), revision, "reconcile"
     )
 
 
