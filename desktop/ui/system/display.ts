@@ -168,6 +168,19 @@ export function spinner(label: string): HTMLElement {
   );
 }
 
+/**
+ * How far a known task has got, e.g. a download, as a native progress bar.
+ * Indeterminate when `max` is not known. The text beside it says the numbers.
+ */
+export function progressBar(label: string, value: number, max: number | null): HTMLProgressElement {
+  const bar = el("progress", { class: "ui-progress", attrs: { "aria-label": label } });
+  if (max !== null && max > 0) {
+    bar.max = max;
+    bar.value = Math.min(value, max);
+  }
+  return bar;
+}
+
 /** Placeholder lines for content on its way; named for assistive technology only. */
 export function skeleton(lines: number, label: string): HTMLElement {
   return el(

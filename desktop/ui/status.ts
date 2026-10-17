@@ -4,7 +4,7 @@
 // view.ts or is fixed here, and every value is written as text.
 import type { Schemas } from "../client/index.ts";
 import { el, redraw } from "./components.ts";
-import { callout, disclosure, facts, pageHeader, skeleton, uiCard } from "./system/index.ts";
+import { callout, disclosure, facts, pageHeader, skeleton, uiButton, uiCard } from "./system/index.ts";
 import { type EngineWording, workspaceSummary } from "./view.ts";
 
 export type WorkspaceView =
@@ -15,12 +15,16 @@ export type WorkspaceView =
 export interface StatusScreen {
   engine: EngineWording;
   workspace: WorkspaceView;
+  /** Guided setup is not complete: Status offers to go back to it. */
+  setupNeeded?: boolean;
 }
 
 export interface StatusOptions {
   /** The disclosures the person opened; they stay open across redraws. */
   expanded: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
+  /** Opens guided setup. */
+  onCheckSetup?: () => void;
 }
 
 function more(key: string, summary: string, options: StatusOptions, ...children: HTMLElement[]): HTMLDetailsElement {
@@ -56,9 +60,19 @@ function workspaceCard(workspace: WorkspaceView, options: StatusOptions): HTMLEl
   }
 }
 
+function header(screen: StatusScreen, options: StatusOptions): HTMLElement {
+  const onCheckSetup = options.onCheckSetup;
+  if (!screen.setupNeeded || !onCheckSetup) return pageHeader({ title: "Status" });
+  return pageHeader({
+    title: "Status",
+    description: "Some setup steps are left.",
+    actions: [uiButton("Check setup", onCheckSetup, { focusKey: "status:setup" })],
+  });
+}
+
 /** Redraws the status screen into `root`, keeping focus on the same control. */
 export function renderStatus(root: HTMLElement, screen: StatusScreen, options: StatusOptions): void {
   redraw(root, "status", () =>
-    root.replaceChildren(pageHeader({ title: "Status" }), engineCard(screen.engine, options), workspaceCard(screen.workspace, options)),
+    root.replaceChildren(header(screen, options), engineCard(screen.engine, options), workspaceCard(screen.workspace, options)),
   );
 }

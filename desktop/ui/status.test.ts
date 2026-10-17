@@ -84,4 +84,20 @@ describe("the status screen", () => {
     renderStatus(root, { ...screen, engine: { text: "y", detail: "trace" } }, { expanded: new Set(), onToggle: vi.fn() });
     expect(document.activeElement).toBe(root.querySelector("summary"));
   });
+
+  it("offers Check setup only while setup is not ready", () => {
+    const onCheckSetup = vi.fn();
+    const screen: StatusScreen = { engine: { text: "x" }, workspace: { kind: "waiting" } };
+    const root = document.createElement("div");
+    document.body.replaceChildren(root);
+    renderStatus(root, screen, { expanded: new Set(), onToggle: vi.fn(), onCheckSetup });
+    expect(root.querySelector(".ui-page-header button")).toBeNull();
+    renderStatus(root, { ...screen, setupNeeded: true }, { expanded: new Set(), onToggle: vi.fn(), onCheckSetup });
+    const header = root.querySelector(".ui-page-header") as HTMLElement;
+    expect(header.querySelector(".ui-page-header__description")?.textContent).toBe("Some setup steps are left.");
+    const check = header.querySelector("button") as HTMLButtonElement;
+    expect(check.textContent).toBe("Check setup");
+    check.click();
+    expect(onCheckSetup).toHaveBeenCalledOnce();
+  });
 });

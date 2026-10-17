@@ -30,6 +30,8 @@ export function describeEngine(state: EngineState): EngineWording {
       return { text: "The engine could not be started.", detail: state.detail };
     case "stopped":
       return { text: "The engine has stopped." };
+    case "no_workspace":
+      return { text: "No library is open yet." };
     default:
       return { text: "The engine's state is unknown." };
   }
@@ -48,6 +50,8 @@ export function engineBadge(state: EngineState | null): [BadgeTone, string] {
       return ["error", "Engine not running"];
     case "stopped":
       return ["error", "Engine stopped"];
+    case "no_workspace":
+      return ["neutral", "No library open"];
     case undefined:
       return ["error", "Engine state unknown"];
     default:
