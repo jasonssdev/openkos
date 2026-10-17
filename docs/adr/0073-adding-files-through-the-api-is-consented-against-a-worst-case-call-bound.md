@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0073: Adding files through the API is consented against a worst-case call bound"
 description: openkos.api adds source files through a free quote and a run bound to it, as judging does; the quote's number is an upper bound computed by extraction itself, the run holds each file to its share by degrading to a Source-only add, and a person's changed file stays refused.
-status: Proposed
+status: Accepted
 date: 2026-10-17
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0073: Adding files through the API is consented against a worst-case call bound
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-17
 
 ## Context

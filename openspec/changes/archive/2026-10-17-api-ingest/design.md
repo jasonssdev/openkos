@@ -162,7 +162,7 @@ checks), so a stale token or a missing one answers `POST /v1/ingest/runs`
 itself (409 `quote_stale`, 422 `run_refused`) and leaves no job; one active run
 (409 `ingest_active`, retryable); the newest 16 finished kept; a stop route;
 shutdown sets every stop. The job is `{run_id, state, index, total, phase,
-calls, outcome, error}`. `POST /v1/decisions/{key}/ingest-quote` takes `{include_confidential}` and
+calls, outcome, warnings, error}`. `POST /v1/decisions/{key}/ingest-quote` takes `{include_confidential}` and
 answers `Stale` as 409 `stale`. `POST /v1/ingest/quote` takes `{paths,
 include_confidential}` with `paths` a list of 1 to 500 strings of at most 4096
 characters each. `IngestRefused` maps to 503 `ingest_refused`. A busy

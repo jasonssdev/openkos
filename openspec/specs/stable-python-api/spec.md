@@ -11,8 +11,8 @@ its own finding preview), judging quote and run, the
 model-free queue refresh, reading the pages a decision shows, the merge
 history and its unmerge, the list of combined pages, the undo of a
 keep-separate ruling, a typed relation or a type's tier, guided setup's
-model-free readiness read and configured-model pull, and asking a question.
-Ingest and doctor are not part of v1.
+model-free readiness read and configured-model pull, asking a question, and
+adding source files through a quote and a run. Doctor is not part of v1.
 
 The surface is owner-local, as the CLI is: its caller is the workspace owner.
 It applies no sensitivity disclosure gate except to the answer `ask` returns,
@@ -372,12 +372,15 @@ caller is the owner, that `ask` applies the query disclosure rule to its answer
 (ADR-0068), and that any other disclosing adapter MUST apply the local API's
 gate itself (ADR-0058). Results other than an answer MAY therefore carry stored
 content. The API MUST NOT send content to any model backend other than the
-configured one, and only through the judging run and `ask`. The only other
-process it invokes is the local git auto-commit for a decision it applies,
-which never pushes. The docstring MUST also state that cancellation is
-cooperative (a stop waits for the chunk in flight), that v1 apply does not
-reconcile merged bodies and does not refresh the derived stores, and that
-`API_VERSION`, not the package version, is the compatibility promise.
+configured one, and only through the judging run, `ask` and an ingest run (the
+added files' text to the extraction model, then the derived refresh to the
+embedding model). The only other process it invokes is the local git
+auto-commit for a decision, an unmerge, an undo, a settings change or an
+added file, which never pushes. The docstring MUST also state that cancellation is cooperative (a stop
+waits for the chunk, or when adding files the file, in flight), that v1 apply
+does not reconcile merged bodies and does not refresh the derived stores, and
+that `API_VERSION`, not the package version, is the compatibility promise.
+
 
 #### Scenario: The docstring states the boundary
 
@@ -391,6 +394,13 @@ reconcile merged bodies and does not refresh the derived stores, and that
 - GIVEN the import guard
 - WHEN it inspects `openkos.api`
 - THEN no module imports `openkos.mcp.gate`
+
+#### Scenario: The docstring names adding files
+
+- GIVEN `openkos.api` is imported
+- WHEN its `__doc__` is read
+- THEN it names adding files among the operations that send content and among
+  those whose stop waits for the item in flight
 
 ### Requirement: Workspace Status And The Pending Report Are Readable
 
@@ -1567,3 +1577,150 @@ classified additive by the surface classifier, and `API_VERSION` MUST stay 1.
 - GIVEN the regenerated `api_surface.json`
 - WHEN the classifier compares it with the snapshot on `main`
 - THEN every change is additive and `API_VERSION` is 1
+
+### Requirement: Files Are Added Through A Quote And A Run Against It
+
+`quote_ingest(workspace, paths, *, include_confidential=False)` MUST price
+adding the files at `paths` without any model call and without writing. It MUST
+build the extraction client from the configuration read afresh only to read the
+model and its host's locality, and return an `IngestQuote` holding, per file in
+the order given (a file named twice is quoted once), its path, name, size,
+status (`extracts`, `source_only`, `unchanged` or `refused`), its upper bound of
+chat calls, the reason it is source-only (`not_text`, `blank`,
+`confidential_floor`) or refused; and the total bound, the extraction model,
+the backend, whether the host is this machine, the host as it may be shown
+(never a credential), the consent bit and a token.
+
+The bound MUST be an upper bound on the chat calls adding the file can make
+whatever the model replies and whatever title its Source takes: every retry,
+re-ask, optional pass and judge attempt the extraction may spend. A file that
+is unchanged since it was added, is not text, is blank, or lies below a
+confidential workspace floor without `include_confidential` MUST be quoted at
+0.
+
+Before any byte of a path is read, a path that is not absolute, does not exist,
+is not a regular file after links are followed, or resolves inside the
+workspace's `bundle/` or `.openkos/` MUST be refused (`not_absolute`,
+`not_found`, `not_a_file`, `inside_workspace`); two different files with one
+name MUST both be refused (`duplicate_name`). A file whose bytes differ from the
+raw copy of the file it matches MUST be refused as `changed_after_import`: a
+person's ingest keeps raw/ immutable, and the remedy is a rename. The service's
+other Phase A refusals MUST be reported as `inconsistent_workspace`,
+`symlinked_destination` or `unreadable`. A refused file is not in the token.
+
+`run_ingest(workspace, token, *, stop=None, progress=None, wait_seconds=0.0,
+on_warning=None)` MUST add the files the token covers through the ingest
+service the CLI uses, each held to its quoted bound: a call past a file's bound
+MUST NOT be made. `None` for `token` MUST return `RunRefused`. When the model,
+the backend, the host's locality, the settings that move the bound
+(`union_judge`, `transcript_decisions`, `default_sensitivity`) or any file's
+bytes moved since the quote, it MUST return `IngestQuoteStale` naming them,
+before any call or write. Each file MUST be committed as the CLI commits it; a
+commit that cannot be made MUST be reported through `on_warning` and the file
+still counts as added. A `watch_refusal` row whose refused bytes land MUST be
+resolved as the CLI's ingest resolves it. `stop` MUST be observed before each
+file. A file whose commit cannot take the workspace lock within
+`wait_seconds` MUST end the run with status `busy`, the remaining files
+`not_reached`. A refusal the service raises at run time MUST be that file's
+result and the run MUST go on. After a run that wrote, the derived stores MUST
+be refreshed once; a refresh failure MUST leave them reported stale and MUST
+NOT fail the run. `progress`, when given, MUST hear each file's `reading`
+phase, `extracting` when its model wait starts, `writing` once it is written,
+and `refreshing` once when the run refreshes the derived stores; an exception
+from it MUST be recorded on the outcome and MUST NOT end the run.
+
+`quote_refused_file(workspace, decision_key, *, include_confidential=False)`
+MUST quote, as `quote_ingest` does, the file an open `watch_refusal` decision
+names: the row's file inside the configured inbox (refused `not_found` when no
+inbox is configured). A settled decision MUST return `Stale("row_resolved")`
+and an unknown key `Stale("unknown_key")`; a key of another kind MUST raise
+`ValueError`. Running the quote's token resolves the decision when the refused
+bytes land; a file that changed after it was added is quoted refused, and the
+decision stays open.
+
+An unreadable workspace MUST raise `IngestRefused`, an `OpenKosError`. An empty
+`paths`, or one path passed in place of a sequence, MUST raise `ValueError`, and
+so MUST a `wait_seconds` outside `[0, ceiling]`.
+
+#### Scenario: A quote is free
+
+- GIVEN a chosen text file and a chat client that counts its calls
+- WHEN `quote_ingest` is called
+- THEN no call is made, the workspace bytes are unchanged, and the file is
+  `extracts` with the bound `max_extraction_calls` gives its text
+
+#### Scenario: No reply spends past the bound
+
+- GIVEN replies built to spend every retry, re-ask and judge attempt
+- WHEN the real extractors run over chunked and short sources, with either
+  title and either extraction path
+- THEN the calls made never exceed the bound
+
+#### Scenario: A changed file is refused, not retried
+
+- GIVEN a file added once and then edited
+- WHEN it is quoted
+- THEN it is `refused` with `changed_after_import`, costs 0 and is not in the
+  token
+
+#### Scenario: A protected path is refused before it is read
+
+- GIVEN a path inside the workspace's `.openkos/`
+- WHEN it is quoted
+- THEN it is `refused` with `inside_workspace`
+
+#### Scenario: A stale quote spends nothing
+
+- GIVEN a quote, then a file edited or a setting changed
+- WHEN the run is started with its token
+- THEN `IngestQuoteStale` names `files` or `settings` and no call or write
+  happens
+
+#### Scenario: A file is held to its share
+
+- GIVEN a token whose file bound is 1 and an extraction that would make more
+- WHEN the run is started
+- THEN exactly one call is made and the file is added as a Source only
+
+#### Scenario: Adding a refused file resolves its row
+
+- GIVEN an open `watch_refusal` row for a file over the per-pass budget
+- WHEN that file is quoted and run
+- THEN the row is applied
+
+#### Scenario: A refused file is quoted by its decision
+
+- GIVEN an inbox and an open `watch_refusal` decision for a file in it
+- WHEN `quote_refused_file` is called with the decision's key and the token is
+  run
+- THEN the quote names the file's path in the inbox, the run adds it, and the
+  same key then returns `Stale("row_resolved")`
+
+#### Scenario: A busy workspace ends the run
+
+- GIVEN the workspace lock held elsewhere
+- WHEN a run of two files is started
+- THEN the first is `busy`, the second `not_reached`, the status is `busy` and
+  nothing is written
+
+#### Scenario: A stop waits for the file in flight
+
+- GIVEN a run of two files and a stop set while the first is written
+- WHEN the run returns
+- THEN the first is `added`, the second `not_reached` and the status is
+  `stopped`
+
+### Requirement: Ingest Extends v1 Additively
+
+`quote_ingest`, `quote_refused_file`, `run_ingest`, `IngestQuote`, `IngestFileQuote`,
+`IngestQuoteToken`, `IngestTokenFile`, `IngestBinding`, `IngestQuoteStale`,
+`IngestRunOutcome`, `IngestFileResult`, `IngestProgress`, `IngestRunResult` and
+`IngestRefused` MUST be exported, and the committed surface snapshot MUST be
+regenerated so the classifier reports only additive changes; `API_VERSION` MUST
+stay 1.
+
+#### Scenario: The ingest snapshot change is additive
+
+- GIVEN the snapshot from `main` before this change
+- WHEN the classifier compares it with the live surface
+- THEN every change it prints is additive and `API_VERSION` is 1

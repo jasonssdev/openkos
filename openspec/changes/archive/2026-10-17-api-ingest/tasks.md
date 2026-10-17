@@ -29,23 +29,23 @@ Authored changed lines (additions plus deletions); the generated
 - [x] 1.4 RED: `openkos.api` tests; then `api/_ingest.py`,
       `_wiring.ingest_ports`, the exports and the package docstring.
 - [x] 1.5 Regenerate the surface snapshot; the classifier prints additions only.
-- [ ] 1.6 Mutation-check the ceiling, the path guard, the stale-files check and
+- [x] 1.6 Mutation-check the ceiling, the path guard, the stale-files check and
       the bound.
 
 ## S2 Local API and client
 
-- [ ] 2.1 RED: registry and route tests for "Adding Files Runs As A Single
+- [x] 2.1 RED: registry and route tests for "Adding Files Runs As A Single
       Pollable Job" and the route table.
-- [ ] 2.2 `localapi/_ingests.py`, the models, the four routes, the
+- [x] 2.2 `localapi/_ingests.py`, the models, the four routes, the
       `ingest_active` and `ingest_refused` rows, the package docstring scope.
-- [ ] 2.3 Regenerate the OpenAPI snapshot and `schema.d.ts`; the four client
+- [x] 2.3 Regenerate the OpenAPI snapshot and `schema.d.ts`; the four client
       methods, the error codes and their tests.
 
 ## S3 Archive
 
-- [ ] 3.1 `docs/decision-wording.md`: adding files, the consent line, progress,
+- [x] 3.1 `docs/decision-wording.md`: adding files, the consent line, progress,
       results, refusals. CHANGELOG.
-- [ ] 3.2 Merge the deltas, each heading exactly once; the Purpose lines; the
+- [x] 3.2 Merge the deltas, each heading exactly once; the Purpose lines; the
       pull's "Poll to completion" renamed.
-- [ ] 3.3 ADR-0073 Accepted in all three places; move to `archive/`;
+- [x] 3.3 ADR-0073 Accepted in all three places; move to `archive/`;
       `archive-report.md`.

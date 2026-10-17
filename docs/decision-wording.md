@@ -206,15 +206,64 @@ The action is `supersede` or `revise` when the later page is the first, and its 
 
 ## A file that wasn't added
 
-`kind: watch_refusal`. It carries no action: adding the file runs the AI model, which the app cannot yet ask you to agree to (#1496). It is listed with what happened and what you can do in your folder, never with a command. `finding` is a `RefusedFileDetail` with the file's name in your folder and a reason:
+`kind: watch_refusal`. It is listed with what happened and, where the app can add the file, an **Add it** action; never with a command. `finding` is a `RefusedFileDetail` with the file's name in your folder and a reason:
 
-| `reason` | What the screen says |
+| `reason` | What the screen says | Action |
+| --- | --- | --- |
+| `changed_after_import` | "'{file_name}' wasn't added. A file with this name is already in your library, with different contents. To add this one too, give it a new name in your folder." | none: adding it would be refused the same way (raw files are never replaced). Followed by "This can't be settled in the app." |
+| `exceeds_pass_budget` | "'{file_name}' wasn't added. It's too large to add automatically." | **Add it** — "We'll show you what adding it takes before anything is sent." It opens the consent screen of "Adding files" below for that one file (`quote_refused_file` with the decision's key). |
+| no detail | "A file was not added." | **Add it**, as above; the consent screen shows the refusal if adding it would be refused. |
+
+Adding the file clears the item. Once a file is renamed in the folder instead, OpenKOS adds it the next time it checks your folder, and the item leaves To review. A settled item answers `stale` and is dropped from view. **(H)** that the folder remedy is enough for a first-time reader.
+
+## Adding files
+
+Adding files runs the AI model too, so it follows the same quote → consent → run protocol (`quote_ingest`, `run_ingest`, [ADR-0073](adr/0073-adding-files-through-the-api-is-consented-against-a-worst-case-call-bound.md)); the quote is free and nothing is added before the person agrees. A file is named by its file name, never by its path or as a "source".
+
+**Choosing.** **Add files** opens the system's file chooser, several files at once. Folders are not opened for the person: "This is a folder. Choose the files inside it." **(H)** that a chooser of files, not folders, is enough for a first library.
+
+**Consent screen,** one for everything chosen:
+
+- Heading: "Add {n} files?" ("Add {file}?" when one).
+- One line per file, by what adding it will do:
+  - It will be read: no line beyond its name.
+  - Already added and unchanged (`unchanged`): "Already in your library. Nothing to do."
+  - Not a text file (`not_text`): "We'll keep this file, but the AI model can't read it, so no pages will be made from it."
+  - Empty (`blank`): "This file is empty. We'll keep it, but there is nothing to make pages from."
+  - Kept from the AI model by the library's setting (`confidential_floor`): "Your library keeps new files Only on this Mac, so the AI model won't read this one. We'll keep the file without making pages." **(H)** whether to offer the consent here ("Let the AI model read it", `include_confidential`) or only in settings; when offered with a cloud model it carries the cloud warning below.
+  - Not added, with the reason, below.
+- What leaves the Mac, the same words as checking: "The AI model on this Mac will read {k} of them and make pages. Nothing leaves this Mac." When the backend is not local: "The text of these files will be sent to the provider of {model} to make pages. The provider may charge you."
+- With a cloud model only: "At most {calls} requests to {model}, usually fewer." The quote's number is an upper bound, never an estimate, so the copy says "at most". **(H)** that on this Mac the file count is enough and the number adds nothing.
+- Buttons: **Add {n}** · **Not now**. When nothing can be added: "None of these can be added." with **OK**.
+
+**Not added** (`refusal`), shown on the consent screen and in the result, each with the one thing the person can do:
+
+| Reason | Message |
 | --- | --- |
-| `changed_after_import` | "'{file_name}' wasn't added. A file with this name is already in your library, with different contents. To add this one too, give it a new name in your folder." |
-| `exceeds_pass_budget` | "'{file_name}' wasn't added. It's too large to add automatically. To add it, split it into smaller files in your folder." |
-| no detail | "A file was not added." |
+| `changed_after_import` | "A different version of {file} is already in your library, and files you added are never replaced. To add this version too, rename the file and add it again." |
+| `duplicate_name` | "Two of the files you chose are called {file}. Rename one of them and add it again." |
+| `not_found` | "{file} isn't there any more." |
+| `not_a_file` | "{file} is a folder, not a file. Choose the files inside it." |
+| `inside_workspace` | "{file} is part of your library's own storage, so it can't be added." |
+| `unreadable` | "{file} couldn't be opened. Check that you can open it, then add it again." |
+| `inconsistent_workspace`, `symlinked_destination`, `not_absolute` | "{file} can't be added from the app right now." |
 
-Each is followed by "This can't be settled in the app yet." Once the file is renamed or split, OpenKOS adds it the next time it checks your folder, and the item leaves To review. **(H)** that the folder remedy is enough for a first-time reader.
+**While it runs:** "Adding {index} of {total}: {file}" with the step under it: reading "Opening it…", extracting "The AI model is reading it…", writing "Saving…", and once at the end, refreshing "Making it searchable…". **Stop**: "Stopping after this file. Files already added are kept." A file the AI model is reading cannot be interrupted, so the stop waits for it.
+
+**After** (`IngestRunOutcome`): "Added {n} files." and one line per file:
+
+- `added`: "{file}: {created} new pages" (and "and {revised} pages updated" when the file added to existing pages rather than repeating them).
+- `updated`: "{file}: finished adding."
+- `unchanged`: "{file}: already in your library."
+- `extraction_degraded`: "{file}: kept, but the AI model couldn't finish reading it. Add it again later to try again."
+- `refused`: the reason, above.
+- `interrupted`: "{file}: your library changed while it was being saved, so it wasn't added. Try again."
+- `busy`: "OpenKOS is finishing something else, so {file} and the files after it weren't added." with **Try again**.
+- `failed`: "{file}: saving stopped part way. Look at Status." **(H)**
+- `not_reached`: "{file}: not added, because you stopped."
+- When the search could not be updated (`indexes` is `stale`): "Search will catch up the next time OpenKOS tidies up." **(H)**
+
+**Changed since agreeing** (`quote_stale`): "Something changed since you agreed — a file or the AI model. Please look again." with the consent screen reloaded; nothing is added on an old agreement. **Already adding** (`ingest_active`): "Files are already being added." with **OK**.
 
 ## The check: agreeing to spend
 
@@ -240,6 +289,8 @@ Every message says whether anything changed, and offers the one action that help
 | --- | --- | --- | --- |
 | The library is busy with another change | `workspace_busy` | "OpenKOS is finishing something else. Nothing was changed." | **Try again** (H: automatic retry for a few seconds first) |
 | A check is already running | `run_active` | "A check is already running." | **OK** (a check started elsewhere has no id the app can show) |
+| Files are already being added | `ingest_active` | "Files are already being added." | **OK** |
+| The library can't be read to add files | `ingest_refused` | "Your library can't be read right now. Nothing was added." | **OK** |
 | The pages changed under the person | `stale`, `write_drift` | "These pages changed while you were looking. Here is the current version." | reload |
 | A page in the decision is gone | `member_missing` | "One of these pages no longer exists, so there's nothing to decide." | **OK** (removes it from view) |
 | The AI model isn't running | `backend_unavailable` | "The AI model isn't running. OpenKOS needs it to check pages. Check setup, on Status, helps you start it." | **Try again** (the app does not start Ollama; setup, from **Check setup** on Status, offers **Get Ollama** and **Check again**) |
