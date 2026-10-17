@@ -64,15 +64,15 @@ confidence number is shown.
 - WHEN it is opened
 - THEN the question is "Are these the same person?" under "The AI model thinks
   these are the same person."
-- AND the options are Combine them, Keep separate and Decide later, each with
-  its "what it does" line
+- AND the options are Same thing, Different things and Decide later, each with
+  its "what it does" line, and Same thing previews the combine
 
 #### Scenario: An unjudged pair offers the check, not a combine
 
 - GIVEN an identity decision with `evaluation` `pending_evaluation`
 - WHEN it is opened
 - THEN the line above the question is "These haven't been checked yet."
-- AND the options are Check these, Keep separate and Decide later, and no
+- AND the options are Check these, Different things and Decide later, and no
   combine control exists
 
 #### Scenario: Decide later sends nothing
@@ -107,31 +107,53 @@ setting MUST offer Undo; no other confirmation offers one.
 - WHEN the person confirms and the apply succeeds
 - THEN the confirmation reads "Kept separate." with Undo
 
-### Requirement: The Person Marks A Group's Members, Its Name And Its Kind
+### Requirement: Identity Asks "Same?" First, Then The Person Marks The Group Or Chooses The Kind
 
-For a `merge_group` offered because the group has more than two pages, the app
-MUST show a mark per page and ask "Which one should the combined page keep its
-name from?" over the marked pages only, and MUST NOT preview "Combine the ones
-I marked" until at least two pages are marked and a name is chosen among them,
-showing "Mark at least two pages" as the reason. For one offered because the
-pages are of different kinds, the app MUST ask "What is {title}?" with one
-option per kind among the pages ("It's a person", ...) and "They're different
-things", MUST take the name from the page of the chosen kind, and MUST ask
-which keeps its name when more than one page has that kind. The selection MUST
-be sent as `{survivor_id, member_ids}` with the preview. The app MUST NOT mark
-pages, choose a name or choose a kind for the person, and MUST NOT offer any
-bulk acceptance of identity decisions.
+Every identity decision MUST first ask "Are these the same {kind}?" ("Are these
+the same thing?" when the pages are of different kinds), with **Same thing**
+and **Different things** shown together with the same weight; Different things
+previews keep separate. For a pair, Same thing previews the combine. For a
+`merge_group`, Same thing MUST NOT preview anything: it asks the second
+question, and the app MUST NOT preview a `merge_group` before the person has
+answered Same thing. For a group of more than two pages the second question
+MUST show a mark per page, none set, and ask "Which one should the combined
+page keep its name from?" over the marked pages only, and MUST NOT preview
+"Combine the ones I marked" until at least two pages are marked and a name is
+chosen among them, showing "Mark at least two pages" as the reason. For pages
+of different kinds it MUST ask "What is {title}?" with one option per kind
+among the pages ("It's a person", ...), MUST take the name from the page of the
+chosen kind, and MUST ask which keeps its name when more than one page has that
+kind. **Back** MUST return to the first question and forget every answer given
+after it. The selection MUST be sent as `{survivor_id, member_ids}` with the
+preview. The app MUST NOT mark pages, choose a name or choose a kind for the
+person, and MUST NOT offer any bulk acceptance of identity decisions.
+
+#### Scenario: Pages of different kinds are asked "same?" before "what is it?"
+
+- GIVEN a judged-same decision over an idea and a project, offered as
+  `merge_group` because of `cross_type`
+- WHEN it is opened
+- THEN the question is "Are these the same thing?" with Same thing, Different
+  things and Decide later, and no kind is offered
+- AND choosing a kind before Same thing sends no preview
+
+#### Scenario: Same thing asks what it is, and only that is previewed
+
+- GIVEN that decision, answered Same thing
+- WHEN the person chooses "It's a project"
+- THEN the preview is sent with the project page as the survivor
 
 #### Scenario: One mark is not enough
 
-- GIVEN a group of three pages with one marked
+- GIVEN a group of three pages answered Same thing, with one marked
 - WHEN the options are shown
 - THEN Combine the ones I marked is unavailable with the reason "Mark at least
   two pages" and no preview is sent
 
 #### Scenario: The marked pages and the chosen name are sent
 
-- GIVEN pages a, b, c with a and c marked and c chosen as the name
+- GIVEN pages a, b, c answered Same thing, with a and c marked and c chosen as
+  the name
 - WHEN Combine the ones I marked is chosen
 - THEN the preview is sent with selection survivor `c` and members `a`, `c`
 
@@ -334,7 +356,7 @@ the decision queue on each visit to To review, before it lists the decisions.
 - GIVEN a changed pair that the queue refresh makes fresh
 - WHEN Check again is chosen
 - THEN the queue is refreshed, the decisions are listed again, and the pair is
-  shown with Combine them, and no quote is requested
+  shown with Same thing, and no quote is requested
 
 #### Scenario: A still-changed pair asks for agreement first
 
