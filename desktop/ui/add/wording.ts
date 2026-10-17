@@ -5,6 +5,7 @@
 // count is enough. A failure is worded from its code only, never from an
 // unknown error's text.
 import { ApiError, EngineUnreachable, type Schemas } from "../../client/index.ts";
+import type { AddPhase } from "./model.ts";
 
 type Quote = Schemas["IngestQuote"];
 type FileQuote = Schemas["IngestFileQuote"];
@@ -232,4 +233,23 @@ export function problemFor(error: unknown): AddProblem {
   if (error instanceof ApiError) return PROBLEMS[error.code] ?? SOMETHING_WENT_WRONG;
   if (error instanceof EngineUnreachable) return { text: "OpenKOS isn't responding.", action: "try_again" };
   return SOMETHING_WENT_WRONG;
+}
+
+const ENDED = new Set<AddPhase>(["done", "problem"]);
+
+/** The quiet word beside Add files in the sidebar, or none: a run going, or one that ended and has not been looked at. */
+export function addCue(add: { phase: AddPhase; outcome: Outcome | null }, unseen: boolean): string | null {
+  if (add.phase === "starting" || add.phase === "running" || add.phase === "stopping") return "Adding…";
+  if (!unseen) return null;
+  if (add.phase === "problem") return "Problem";
+  if (add.phase !== "done") return null;
+  if (add.outcome?.status === "stopped") return "Stopped";
+  if (add.outcome?.status === "busy") return "Library busy";
+  return "Added";
+}
+
+/** Whether a run's end is still unseen: raised when a run ends off the screen, cleared on a visit or a new run. */
+export function nextUnseen(unseen: boolean, before: AddPhase, after: AddPhase, onScreen: boolean): boolean {
+  if (onScreen || !ENDED.has(after)) return false;
+  return unseen || (before !== after && ENDED.has(after));
 }

@@ -59,11 +59,11 @@ export function engineBadge(state: EngineState | null): [BadgeTone, string] {
   }
 }
 
-/** The sidebar: Ask, Add files, To review with its count when one is known, and Status. */
-export function navEntries(reviewCount: number | undefined): NavEntry[] {
+/** The sidebar: Ask, Add files (with a quiet cue while a run goes or after one ended unseen), To review with its count when one is known, and Status. */
+export function navEntries(reviewCount: number | undefined, addCue: string | null = null): NavEntry[] {
   return [
     { id: "ask", label: "Ask" },
-    { id: "add", label: "Add files" },
+    addCue === null ? { id: "add", label: "Add files" } : { id: "add", label: "Add files", hint: addCue },
     reviewCount === undefined ? { id: "review", label: "To review" } : { id: "review", label: "To review", count: reviewCount },
     { id: "status", label: "Status" },
   ];
