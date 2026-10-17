@@ -40,6 +40,8 @@ EXPECTED_ROUTES = {
     ("POST", "/v1/judging/runs"),
     ("GET", "/v1/judging/runs/{run_id}"),
     ("POST", "/v1/judging/runs/{run_id}/stop"),
+    ("POST", "/v1/ask"),
+    ("GET", "/v1/ask/{ask_id}"),
 }
 
 
@@ -220,6 +222,7 @@ _BODY_ROUTES = [
     "/v1/unmerge/apply",
     "/v1/judging/quote",
     "/v1/judging/runs",
+    "/v1/ask",
 ]
 
 

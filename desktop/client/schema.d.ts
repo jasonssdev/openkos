@@ -2,6 +2,40 @@
 // Do not edit: regenerate it whenever the snapshot changes.
 
 export interface paths {
+    "/v1/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Ask */
+        post: operations["start_ask_v1_ask_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ask/{ask_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ask Status */
+        get: operations["ask_status_v1_ask__ask_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/decisions": {
         parameters: {
             query?: never;
@@ -414,6 +448,64 @@ export interface components {
             text: string;
         };
         /**
+         * Answer
+         * @description What an ask returns, already gated: no field names, titles or quotes a
+         *     concept outside the disclosable set; `withheld` counts them.
+         */
+        Answer: {
+            /** Answer */
+            answer: string | null;
+            /**
+             * Attribution
+             * @enum {string}
+             */
+            attribution: "reported" | "none" | "absent" | "unparsed";
+            /** Citations */
+            citations: components["schemas"]["AnswerCitation"][];
+            /** Dense Unavailable */
+            dense_unavailable: boolean;
+            /** Lexical Unavailable */
+            lexical_unavailable: boolean;
+            /**
+             * No Match Cause
+             * @enum {string}
+             */
+            no_match_cause: "none" | "empty_query" | "zero_hits" | "all_unreadable" | "insufficient_context";
+            /** Omitted */
+            omitted: components["schemas"]["OmittedConcept"][];
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "answered" | "no_match" | "no_answer_in_context" | "withheld";
+            /** Question */
+            question: string;
+            /** Stale Indexes */
+            stale_indexes: string[];
+            /** Sufficiency Checked */
+            sufficiency_checked: boolean;
+            /** Sufficiency Degraded */
+            sufficiency_degraded: boolean;
+            /** Withheld */
+            withheld: number;
+        };
+        /**
+         * AnswerCitation
+         * @description A concept the answer drew on.
+         */
+        AnswerCitation: {
+            /** Concept Id */
+            concept_id: string;
+            /** Confidential */
+            confidential: boolean;
+            /** Excerpted */
+            excerpted: boolean;
+            /** History */
+            history: ("superseded" | "refined") | null;
+            /** Title */
+            title: string;
+        };
+        /**
          * Applied
          * @description The action took effect. `commit_sha` is `None` when the auto-commit
          *     degraded (the write itself still landed). `committed_confidential` is true
@@ -470,6 +562,49 @@ export interface components {
             applied: components["schemas"]["Applied"];
             /** Warnings */
             warnings: string[];
+        };
+        /**
+         * AskJob
+         * @description An ask as a poll sees it. The answer is `openkos.api.ask`'s own, already
+         *     gated; a failure is a field here, never the poll's HTTP status. A response
+         *     model only: no `extra="forbid"`, which would reach the nested dataclasses.
+         */
+        AskJob: {
+            answer: components["schemas"]["Answer"] | null;
+            /** Ask Id */
+            ask_id: string;
+            /** Completed */
+            completed: number | null;
+            error: components["schemas"]["ErrorBody"] | null;
+            /** Phase */
+            phase: ("retrieving" | "assembling" | "checking" | "synthesizing") | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "running" | "finished" | "failed";
+            /** Total */
+            total: number | null;
+        };
+        /**
+         * AskRequest
+         * @description A question to ask. An omitted `limit` is the API's default.
+         */
+        AskRequest: {
+            /**
+             * Include Confidential
+             * @default false
+             */
+            include_confidential?: boolean;
+            /**
+             * Include Deprecated
+             * @default false
+             */
+            include_deprecated?: boolean;
+            /** Limit */
+            limit?: number | null;
+            /** Question */
+            question: string;
         };
         /**
          * Decision
@@ -889,6 +1024,21 @@ export interface components {
         MergedConceptList: {
             /** Concepts */
             concepts: components["schemas"]["MergedConcept"][];
+        };
+        /**
+         * OmittedConcept
+         * @description A retrieved concept the context budget left out of the prompt entirely.
+         */
+        OmittedConcept: {
+            /** Concept Id */
+            concept_id: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "context_budget" | "context_budget_earlier_version";
+            /** Title */
+            title: string;
         };
         /**
          * Page
@@ -1606,6 +1756,151 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    start_ask_v1_ask_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AskJob"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    ask_status_v1_ask__ask_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ask_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AskJob"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     decisions_v1_decisions_get: {
         parameters: {
             query?: never;

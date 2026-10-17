@@ -119,6 +119,18 @@ def test_the_run_start_route_is_202_with_a_job_and_a_run_refusal_row() -> None:
     }
 
 
+def test_the_ask_start_route_is_202_with_a_job() -> None:
+    paths = openapi_document()["paths"]
+    assert isinstance(paths, dict)
+
+    start = paths["/v1/ask"]["post"]
+
+    assert "202" in start["responses"]
+    assert start["responses"]["202"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/AskJob"
+    }
+
+
 _ERROR_REF = {"$ref": "#/components/schemas/ErrorBody"}
 _EVERY_ROUTE = {"401", "403", "422", "500"}
 # The statuses a route answers beyond the ones every route can.
@@ -146,6 +158,8 @@ _ROUTE_ERRORS: dict[tuple[str, str], set[str]] = {
     ("post", "/v1/judging/runs"): {"409", "413"},
     ("get", "/v1/judging/runs/{run_id}"): {"404"},
     ("post", "/v1/judging/runs/{run_id}/stop"): {"404"},
+    ("post", "/v1/ask"): {"409", "413"},
+    ("get", "/v1/ask/{ask_id}"): {"404"},
 }
 _RETRY_AFTER = {
     ("post", "/v1/decisions/{decision_key}/apply"),

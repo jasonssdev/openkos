@@ -117,6 +117,8 @@ describe("the requests", () => {
     ["startJudgingRun", (c) => c.startJudgingRun({ token: null }), "POST", "/v1/judging/runs", { token: null }],
     ["judgingRun", (c) => c.judgingRun("r1"), "GET", "/v1/judging/runs/r1", null],
     ["stopJudgingRun", (c) => c.stopJudgingRun("r1"), "POST", "/v1/judging/runs/r1/stop", null],
+    ["ask", (c) => c.ask({ question: "q" }), "POST", "/v1/ask", { question: "q" }],
+    ["askJob", (c) => c.askJob("a/1"), "GET", "/v1/ask/a%2F1", null],
     [
       "mergeHistory",
       (c) => c.mergeHistory("concepts/a b"),
@@ -211,6 +213,11 @@ describe("the requests", () => {
     await client.applyUnmerge({ version });
     expect(sent[0]).toMatchObject({ method: "POST", url: "http://127.0.0.1:4242/v1/unmerge/apply" });
     expect(sent[0]!.body).toEqual({ version });
+  });
+
+  it("accepts the 202 of a started ask", async () => {
+    const { client } = engine(json({ ask_id: "a1" }, { status: 202 }));
+    await expect(client.ask({ question: "q" })).resolves.toEqual({ ask_id: "a1" });
   });
 
   it("accepts the 202 of a started run", async () => {

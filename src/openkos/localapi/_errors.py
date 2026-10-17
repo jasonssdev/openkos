@@ -66,6 +66,7 @@ UNKNOWN_TYPE: Final = "unknown_type"
 QUOTE_STALE: Final = "quote_stale"
 RUN_REFUSED: Final = "run_refused"
 RUN_ACTIVE: Final = "run_active"
+ASK_ACTIVE: Final = "ask_active"
 JUDGING_REFUSED: Final = "judging_refused"
 BACKEND_UNAVAILABLE: Final = "backend_unavailable"
 BACKEND_MODEL_NOT_FOUND: Final = "backend_model_not_found"
@@ -393,6 +394,18 @@ def run_active() -> ApiProblem:
             code=RUN_ACTIVE,
             retryable=True,
             message="a judging run is already active",
+        ),
+    )
+
+
+def ask_active() -> ApiProblem:
+    """An ask was started while another is running; trying again later can work."""
+    return ApiProblem(
+        409,
+        ErrorBody(
+            code=ASK_ACTIVE,
+            retryable=True,
+            message="an ask is already running",
         ),
     )
 

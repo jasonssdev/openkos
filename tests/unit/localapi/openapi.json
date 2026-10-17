@@ -34,6 +34,160 @@
         "title": "ActivityEntry",
         "type": "object"
       },
+      "Answer": {
+        "description": "What an ask returns, already gated: no field names, titles or quotes a\nconcept outside the disclosable set; `withheld` counts them.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "attribution": {
+            "enum": [
+              "reported",
+              "none",
+              "absent",
+              "unparsed"
+            ],
+            "title": "Attribution",
+            "type": "string"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/AnswerCitation"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "dense_unavailable": {
+            "title": "Dense Unavailable",
+            "type": "boolean"
+          },
+          "lexical_unavailable": {
+            "title": "Lexical Unavailable",
+            "type": "boolean"
+          },
+          "no_match_cause": {
+            "enum": [
+              "none",
+              "empty_query",
+              "zero_hits",
+              "all_unreadable",
+              "insufficient_context"
+            ],
+            "title": "No Match Cause",
+            "type": "string"
+          },
+          "omitted": {
+            "items": {
+              "$ref": "#/components/schemas/OmittedConcept"
+            },
+            "title": "Omitted",
+            "type": "array"
+          },
+          "outcome": {
+            "enum": [
+              "answered",
+              "no_match",
+              "no_answer_in_context",
+              "withheld"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "stale_indexes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stale Indexes",
+            "type": "array"
+          },
+          "sufficiency_checked": {
+            "title": "Sufficiency Checked",
+            "type": "boolean"
+          },
+          "sufficiency_degraded": {
+            "title": "Sufficiency Degraded",
+            "type": "boolean"
+          },
+          "withheld": {
+            "title": "Withheld",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "question",
+          "outcome",
+          "answer",
+          "no_match_cause",
+          "citations",
+          "omitted",
+          "attribution",
+          "withheld",
+          "sufficiency_checked",
+          "sufficiency_degraded",
+          "lexical_unavailable",
+          "dense_unavailable",
+          "stale_indexes"
+        ],
+        "title": "Answer",
+        "type": "object"
+      },
+      "AnswerCitation": {
+        "description": "A concept the answer drew on.",
+        "properties": {
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "confidential": {
+            "title": "Confidential",
+            "type": "boolean"
+          },
+          "excerpted": {
+            "title": "Excerpted",
+            "type": "boolean"
+          },
+          "history": {
+            "anyOf": [
+              {
+                "enum": [
+                  "superseded",
+                  "refined"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concept_id",
+          "title",
+          "excerpted",
+          "confidential",
+          "history"
+        ],
+        "title": "AnswerCitation",
+        "type": "object"
+      },
       "Applied": {
         "additionalProperties": false,
         "description": "The action took effect. `commit_sha` is `None` when the auto-commit\ndegraded (the write itself still landed). `committed_confidential` is true\nonly when a commit landed and holds a concept explicitly marked\n`sensitivity: confidential`; an adapter that has no notice of its own to\nprint leaves it false, and one that reports it sets it from the commit's\noutcome.",
@@ -150,6 +304,131 @@
           "warnings"
         ],
         "title": "ApplyResponse",
+        "type": "object"
+      },
+      "AskJob": {
+        "description": "An ask as a poll sees it. The answer is `openkos.api.ask`'s own, already\ngated; a failure is a field here, never the poll's HTTP status. A response\nmodel only: no `extra=\"forbid\"`, which would reach the nested dataclasses.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Answer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ask_id": {
+            "title": "Ask Id",
+            "type": "string"
+          },
+          "completed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "retrieving",
+                  "assembling",
+                  "checking",
+                  "synthesizing"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "finished",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          }
+        },
+        "required": [
+          "ask_id",
+          "state",
+          "phase",
+          "completed",
+          "total",
+          "answer",
+          "error"
+        ],
+        "title": "AskJob",
+        "type": "object"
+      },
+      "AskRequest": {
+        "additionalProperties": false,
+        "description": "A question to ask. An omitted `limit` is the API's default.",
+        "properties": {
+          "include_confidential": {
+            "default": false,
+            "title": "Include Confidential",
+            "type": "boolean"
+          },
+          "include_deprecated": {
+            "default": false,
+            "title": "Include Deprecated",
+            "type": "boolean"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "AskRequest",
         "type": "object"
       },
       "Decision": {
@@ -1164,6 +1443,34 @@
           "concepts"
         ],
         "title": "MergedConceptList",
+        "type": "object"
+      },
+      "OmittedConcept": {
+        "description": "A retrieved concept the context budget left out of the prompt entirely.",
+        "properties": {
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "context_budget",
+              "context_budget_earlier_version"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concept_id",
+          "title",
+          "reason"
+        ],
+        "title": "OmittedConcept",
         "type": "object"
       },
       "Page": {
@@ -2820,6 +3127,183 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/ask": {
+      "post": {
+        "operationId": "start_ask_v1_ask_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Start Ask"
+      }
+    },
+    "/v1/ask/{ask_id}": {
+      "get": {
+        "operationId": "ask_status_v1_ask__ask_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ask_id",
+            "required": true,
+            "schema": {
+              "title": "Ask Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Ask Status"
+      }
+    },
     "/v1/decisions": {
       "get": {
         "operationId": "decisions_v1_decisions_get",
