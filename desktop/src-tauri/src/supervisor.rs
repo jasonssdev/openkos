@@ -96,6 +96,9 @@ pub enum EngineState {
         reason: String,
         detail: String,
     },
+    /// No workspace is chosen yet, so no engine runs: the page offers to open
+    /// or create one, and a requested restart starts it.
+    NoWorkspace,
     Stopped,
 }
 
@@ -121,8 +124,17 @@ impl Default for SupervisorConfig {
     }
 }
 
+/// Why no engine could be located.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Unlocated {
+    /// No workspace is chosen yet: not a failure, nothing to start.
+    NoWorkspace,
+    /// The engine cannot be formed; the detail says why.
+    Failed(String),
+}
+
 /// Locates the engine afresh before each start.
-pub type Locate = dyn Fn() -> Result<EngineCommand, String> + Send + Sync;
+pub type Locate = dyn Fn() -> Result<EngineCommand, Unlocated> + Send + Sync;
 
 /// The extra environment of each start, read afresh before each one.
 pub type Environ = dyn Fn() -> EngineEnv + Send + Sync;
@@ -362,12 +374,15 @@ fn supervise(shared: &Shared, launch: &Launch) {
         shared.publish(EngineState::Starting { attempt });
         let command = match (launch.locate)() {
             Ok(command) => command,
-            Err(detail) => {
-                let failed = EngineState::Failed {
-                    reason: "engine_not_located".into(),
-                    detail,
+            Err(unlocated) => {
+                let state = match unlocated {
+                    Unlocated::NoWorkspace => EngineState::NoWorkspace,
+                    Unlocated::Failed(detail) => EngineState::Failed {
+                        reason: "engine_not_located".into(),
+                        detail,
+                    },
                 };
-                if shared.finish(failed) {
+                if shared.finish(state) {
                     return;
                 }
                 continue;
@@ -650,7 +665,7 @@ mod tests {
     #[test]
     fn a_locator_failure_is_final_and_spawns_nothing() {
         let sup = Supervisor::start(
-            Box::new(|| Err("the workspace is missing".to_owned())),
+            Box::new(|| Err(Unlocated::Failed("the workspace is missing".to_owned()))),
             fast(3),
         );
         let state = sup
@@ -663,6 +678,45 @@ mod tests {
                 detail: "the workspace is missing".into(),
             }
         );
+        sup.shutdown();
+    }
+
+    #[test]
+    fn no_workspace_yet_is_its_own_state_and_spawns_nothing() {
+        let sup = Supervisor::start(Box::new(|| Err(Unlocated::NoWorkspace)), fast(3));
+        let state = sup
+            .wait_for(WAIT, |s| matches!(s, EngineState::NoWorkspace))
+            .expect("no workspace");
+        assert_eq!(state, EngineState::NoWorkspace);
+        assert_eq!(
+            serde_json::to_value(&state).expect("json"),
+            serde_json::json!({"state": "no_workspace"})
+        );
+        sup.shutdown();
+        assert_eq!(sup.state(), EngineState::NoWorkspace);
+    }
+
+    #[test]
+    fn a_requested_restart_after_no_workspace_starts_the_chosen_one() {
+        let dir = fake::scratch("sup-chosen");
+        let chosen = Arc::new(Mutex::new(false));
+        let seen = Arc::clone(&chosen);
+        let engine = fake::well_behaved(&dir);
+        let sup = Supervisor::start(
+            Box::new(move || {
+                if *seen.lock().expect("chosen") {
+                    Ok(engine.clone())
+                } else {
+                    Err(Unlocated::NoWorkspace)
+                }
+            }),
+            fast(0),
+        );
+        sup.wait_for(WAIT, |s| matches!(s, EngineState::NoWorkspace))
+            .expect("no workspace");
+        *chosen.lock().expect("chosen") = true;
+        sup.restart();
+        sup.wait_for(WAIT, is_ready).expect("ready");
         sup.shutdown();
     }
 
