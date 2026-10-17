@@ -111,5 +111,12 @@ export function createWorkspaces(invoke: Invoke) {
       if (answer === null || typeof answer === "string") return answer;
       throw new WorkspaceError("unknown", UNKNOWN);
     },
+    /** The system file chooser, several files at once; `null` when the user cancels. */
+    async pickFiles(): Promise<string[] | null> {
+      const answer = await run(invoke, "pick_files");
+      if (answer === null) return null;
+      if (Array.isArray(answer) && answer.every((path) => typeof path === "string")) return answer as string[];
+      throw new WorkspaceError("unknown", UNKNOWN);
+    },
   };
 }

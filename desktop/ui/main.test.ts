@@ -28,23 +28,23 @@ afterAll(() => vi.useRealTimers());
 
 describe("the app", () => {
   it("draws the shell with Ask offered, Settings at the foot, and Status open", () => {
-    expect(navButtons().map((n) => n.textContent)).toEqual(["Ask", "To review", "Status", "Settings"]);
+    expect(navButtons().map((n) => n.textContent)).toEqual(["Ask", "Add files", "To review", "Status", "Settings"]);
     expect(document.querySelector(".ui-sidebar__footer .ui-nav-item")?.textContent).toBe("Settings");
     expect(navButtons()[0]?.hasAttribute("aria-disabled")).toBe(false);
-    expect(navButtons()[2]?.getAttribute("aria-current")).toBe("page");
+    expect(navButtons()[3]?.getAttribute("aria-current")).toBe("page");
     expect(text("#engine-status")).toBe("The engine could not be started.");
     expect(text(".ui-sidebar__footer .ui-badge__word")).toBe("Engine not running");
   });
 
   it("opens To review in the main region, and back", () => {
-    (navButtons()[1] as HTMLButtonElement).click();
+    (navButtons()[2] as HTMLButtonElement).click();
     const review = document.getElementById("review")?.parentElement as HTMLElement;
     expect(review.hidden).toBe(false);
     expect(review.closest("main")).not.toBeNull();
     expect(review.querySelector(".ui-loading")?.textContent).toBe("Waiting for OpenKOS to start…");
     expect(document.querySelector(".ui-legacy")).toBeNull();
-    expect(navButtons()[1]?.getAttribute("aria-current")).toBe("page");
-    (navButtons()[2] as HTMLButtonElement).click();
+    expect(navButtons()[2]?.getAttribute("aria-current")).toBe("page");
+    (navButtons()[3] as HTMLButtonElement).click();
     expect(review.hidden).toBe(true);
     expect(document.activeElement?.textContent).toBe("Status");
   });
@@ -58,9 +58,21 @@ describe("the app", () => {
     expect(document.activeElement?.textContent).toBe("Ask");
     expect(text("#ask-waiting")).toBe("Waiting for OpenKOS to start…");
     expect((document.querySelector(".ask-form .ui-button--primary") as HTMLButtonElement).disabled).toBe(true);
-    (navButtons()[2] as HTMLButtonElement).click();
+    (navButtons()[3] as HTMLButtonElement).click();
     expect(ask.hidden).toBe(true);
-    expect(navButtons()[2]?.getAttribute("aria-current")).toBe("page");
+    expect(navButtons()[3]?.getAttribute("aria-current")).toBe("page");
+  });
+
+  it("opens Add files on its title, waiting for the engine, and back", () => {
+    (navButtons()[1] as HTMLButtonElement).click();
+    const add = document.querySelector('[data-screen="add"]') as HTMLElement;
+    expect(add.hidden).toBe(false);
+    expect(add.closest("main")).not.toBeNull();
+    expect(navButtons()[1]?.getAttribute("aria-current")).toBe("page");
+    expect(document.activeElement?.textContent).toBe("Add files");
+    expect(text("#add-waiting")).toBe("Waiting for OpenKOS to start…");
+    (navButtons()[3] as HTMLButtonElement).click();
+    expect(add.hidden).toBe(true);
   });
 
   it("says when the shell cannot report the engine", async () => {

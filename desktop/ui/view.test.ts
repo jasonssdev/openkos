@@ -120,16 +120,17 @@ describe("engineBadge", () => {
 });
 
 describe("navEntries", () => {
-  it("offers Ask, To review with its count, then Status", () => {
+  it("offers Ask, Add files, To review with its count, then Status", () => {
     expect(navEntries(3)).toEqual([
       { id: "ask", label: "Ask" },
+      { id: "add", label: "Add files" },
       { id: "review", label: "To review", count: 3 },
       { id: "status", label: "Status" },
     ]);
   });
 
   it("shows no count when none is known", () => {
-    expect(navEntries(undefined)[1]).toEqual({ id: "review", label: "To review" });
+    expect(navEntries(undefined)[2]).toEqual({ id: "review", label: "To review" });
   });
 });
 

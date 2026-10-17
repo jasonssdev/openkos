@@ -113,6 +113,23 @@ async fn pick_workspace_folder(app: tauri::AppHandle) -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
+/// Ask the user for files with the system's own picker, several at once. `None`
+/// when they cancel. The paths are absolute; only the shell opens the dialog.
+#[tauri::command]
+async fn pick_files(app: tauri::AppHandle) -> Option<Vec<String>> {
+    app.dialog()
+        .file()
+        .set_title("Choose files to add to your library")
+        .blocking_pick_files()
+        .map(|picked| {
+            picked
+                .into_iter()
+                .filter_map(|file| file.into_path().ok())
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect()
+        })
+}
+
 /// Open Ollama's official download page in the system browser. The page
 /// cannot name another address: the shell opens only this fixed one.
 #[tauri::command]
@@ -162,6 +179,7 @@ pub fn run() {
             open_workspace,
             create_workspace,
             pick_workspace_folder,
+            pick_files,
             open_runtime_download
         ])
         .build(tauri::generate_context!())

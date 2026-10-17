@@ -266,6 +266,10 @@ The shell MUST expose four commands to the web view:
 - `pick_workspace_folder` MUST show the system's folder picker from the shell
   and answer the chosen path, or null when cancelled. The web view MUST NOT be
   granted the dialog plugin's own permissions.
+- `pick_files` MUST show the system's file picker from the shell, several files
+  at once, and answer their absolute paths, or null when cancelled. It MUST NOT
+  pick folders, and the web view MUST NOT be granted the dialog plugin's own
+  permissions.
 
 When `OPENKOS_WORKSPACE` is set, `open_workspace` and `create_workspace` MUST
 refuse with `set_by_environment` before writing anything. A refusal MUST answer

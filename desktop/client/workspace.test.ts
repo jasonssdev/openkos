@@ -58,6 +58,23 @@ describe("the workspace commands", () => {
     }
   });
 
+  it("picks files, or nothing when the user cancels", async () => {
+    for (const picked of [["/Users/me/a.md", "/Users/me/b.txt"], null]) {
+      const { invoke, calls } = fakeInvoke(() => picked);
+      expect(await createWorkspaces(invoke).pickFiles()).toEqual(picked);
+      expect(calls).toEqual([{ command: "pick_files", args: undefined }]);
+    }
+  });
+
+  it("refuses a file pick that is not a list of paths", async () => {
+    for (const answer of ["/a", 42, [1], [null]]) {
+      const error = await createWorkspaces(fakeInvoke(() => answer).invoke)
+        .pickFiles()
+        .catch((e: unknown) => e);
+      expect((error as WorkspaceError).reason).toBe("unknown");
+    }
+  });
+
   it("refuses an answer that is not a choice", async () => {
     for (const answer of [null, "x", { source: "elsewhere", path: null, valid: false }, { source: "none", valid: 1 }]) {
       const error = await createWorkspaces(fakeInvoke(() => answer).invoke)
@@ -95,7 +112,7 @@ describe("the workspace commands", () => {
 describe("the shell's side of the contract", () => {
   it("registers every command the wrapper calls", () => {
     const handler = /generate_handler!\[([^\]]*)\]/.exec(LIB)?.[1] ?? "";
-    for (const command of ["workspace_choice_status", "open_workspace", "create_workspace", "pick_workspace_folder"]) {
+    for (const command of ["workspace_choice_status", "open_workspace", "create_workspace", "pick_workspace_folder", "pick_files"]) {
       expect(handler).toMatch(new RegExp(`\\b${command}\\b`));
       expect(LIB).toMatch(new RegExp(`fn ${command}\\(`));
     }

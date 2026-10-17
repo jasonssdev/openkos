@@ -8,6 +8,7 @@ import {
   checkProgress,
   checkResult,
   confirmation,
+  addRefusedOption,
   describeDecision,
   formatDate,
   historyLine,
@@ -390,7 +391,6 @@ describe("decisions the app cannot act on", () => {
   it.each([
     ["contradiction", "Two pages say different things about Marguerite Osei."],
     ["revision", "A newer file may replace an older one."],
-    ["watch_refusal", "A file was not added."],
   ] as const)("lists a %s with a plain sentence and no options", (kind, sentence) => {
     const decision: Decision = { ...identity(), kind, actions: [], detail: null, evaluation: "not_applicable" };
     const view = describeDecision(decision, pages);
@@ -917,28 +917,50 @@ describe("a changed disagreement or newer decision", () => {
 });
 
 describe("a file that wasn't added", () => {
-  it.each([
-    [
-      "changed_after_import",
-      "'notes.md' wasn't added.",
+  it("says a changed file stays refused and to give it a new name, with no Add it", () => {
+    const decision = refused("changed_after_import");
+    const view = describeDecision(decision, pagesOf(), NOW);
+    expect(view.question).toBe("'notes.md' wasn't added.");
+    expect(view.statement).toBe(
       "A file with this name is already in your library, with different contents. To add this one too, give it a new name in your folder.",
-    ],
-    ["exceeds_pass_budget", "'notes.md' wasn't added.", "It's too large to add automatically. To add it, split it into smaller files in your folder."],
-  ] as const)("says what happened and what to do in the folder (%s), with no action", (reason, question, statement) => {
-    const view = describeDecision(refused(reason), pagesOf(), NOW);
-    expect(view.question).toBe(question);
-    expect(view.statement).toBe(statement);
+    );
     expect(view.pages).toEqual([]);
     expect(view.options).toEqual([]);
     expect(view.cannotAct).toBe("This can't be settled in the app yet.");
     expect(JSON.stringify(view)).not.toContain("openkos");
-    expect(listEntry(refused(reason), pagesOf())).toEqual({ title: question, meta: "This can't be settled in the app yet.", changed: false, canAct: false });
+    expect(addRefusedOption(decision)).toBeNull();
+    expect(listEntry(decision, pagesOf())).toEqual({
+      title: "'notes.md' wasn't added.",
+      meta: "This can't be settled in the app yet.",
+      changed: false,
+      canAct: false,
+    });
   });
 
-  it("without its detail, says only that a file was not added", () => {
+  it("offers Add it for a file too large to add automatically, which the Add files screen takes", () => {
+    const decision = refused("exceeds_pass_budget");
+    const view = describeDecision(decision, pagesOf(), NOW);
+    expect(view.question).toBe("'notes.md' wasn't added.");
+    expect(view.statement).toBe("It's too large to add automatically.");
+    expect(view.options).toEqual([]);
+    expect(view.cannotAct).toBeNull();
+    expect(addRefusedOption(decision)).toEqual({
+      label: "Add it",
+      does: "We'll show you what adding it takes before anything is sent.",
+    });
+    expect(listEntry(decision, pagesOf())).toEqual({ title: "'notes.md' wasn't added.", meta: null, changed: false, canAct: true });
+  });
+
+  it("without its detail, says only that a file was not added, and offers Add it", () => {
     const view = describeDecision(refused(null), pagesOf(), NOW);
     expect(view.question).toBe("A file was not added.");
-    expect(view.cannotAct).toBe("This can't be settled in the app yet.");
+    expect(view.cannotAct).toBeNull();
+    expect(addRefusedOption(refused(null))?.label).toBe("Add it");
+  });
+
+  it("offers Add it for nothing but a refused file", () => {
+    expect(addRefusedOption(contradiction())).toBeNull();
+    expect(addRefusedOption(revision())).toBeNull();
   });
 });
 
