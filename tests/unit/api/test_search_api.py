@@ -237,6 +237,31 @@ def test_a_remote_rebuild_that_withheld_only_confidential_pages_is_not_behind(
     assert any("safe" in t for t in local.texts)
 
 
+def test_switching_back_after_a_partial_remote_rebuild_reads_as_behind(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1548: A, then remote B (confidential page withheld), then A again. The
+    pages B embedded sit under A's tag, so search must read as needing a
+    rebuild, and a rebuild under A ends with a clean index."""
+    install(monkeypatch, Embedder())
+    original = (root / "openkos.yaml").read_text(encoding="utf-8")
+    assert isinstance(_rebuild(root), api.RebuildOutcome)
+    install(monkeypatch, Embedder(local=False))
+    _remote(root, monkeypatch)
+    _set(root, embedding_model="cloud-embedder")
+    assert isinstance(_rebuild(root, allow_remote=True), api.RebuildOutcome)
+
+    install(monkeypatch, Embedder())
+    (root / "openkos.yaml").write_text(original, encoding="utf-8")
+
+    assert api.search_index(api.Workspace.open(root)).needs_rebuild is True
+    outcome = _rebuild(root)
+    assert isinstance(outcome, api.RebuildOutcome), outcome
+    assert outcome.complete is True
+    after = api.search_index(api.Workspace.open(root))
+    assert (after.model_changed, after.needs_rebuild) == (False, False)
+
+
 def test_a_client_that_turns_out_remote_is_refused_without_consent(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

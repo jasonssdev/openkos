@@ -61,11 +61,17 @@ def search_state(root: Path, *, environ: Mapping[str, str] = os.environ) -> Sear
     # A run that withheld only confidential pages from a remote embedder leaves
     # the old tag (those pages keep their old vectors) but records it was
     # remote-complete: a rebuild could send nothing more (#1529).
-    model_changed = (
-        stored is not None
-        and stored != configured
-        and vectorstore.read_stored_remote_complete_tag(layout.vectors_db_path)
-        != configured
+    # A store that mixes two models (an earlier switch that did not finish, or a
+    # switch back after one) is behind under every tag but the mixing model's
+    # (#1548).
+    mixed = vectorstore.read_stored_mixed_tag(layout.vectors_db_path)
+    model_changed = stored is not None and (
+        (
+            stored != configured
+            and vectorstore.read_stored_remote_complete_tag(layout.vectors_db_path)
+            != configured
+        )
+        or (mixed is not None and mixed != configured)
     )
     stale = application_status.stale_index_names(layout, reads=("fts", "graph"))
     return SearchState(

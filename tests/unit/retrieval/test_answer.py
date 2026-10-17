@@ -220,6 +220,15 @@ class _FakeVectorStore:
     def write_remote_complete_tag(self, tag: str) -> None:
         raise NotImplementedError  # pragma: no cover -- unused by answer()
 
+    def read_mixed_tag(self) -> str | None:
+        return None
+
+    def write_mixed_tag(self, tag: str) -> None:
+        pass
+
+    def clear_switch_markers(self) -> None:
+        pass
+
     def close(self) -> None:
         pass
 

@@ -466,10 +466,19 @@ def reindex(
     cached_hashes = db.meta_hashes()
     stored_model_tag = db.read_model_tag()
     effective_model_tag = _effective_model_tag(model_tag, embedding_backend)
+    # #1548: a store holding another model's vectors beside the stored tag's
+    # (an earlier switch that did not finish) is changed under every tag but
+    # the one that mixed it -- including the stored tag itself.
+    mixed_model_tag = db.read_mixed_tag()
     model_changed = effective_model_tag is not None and (
         stored_model_tag is None
         or parse_embedding_tag(stored_model_tag)
         != parse_embedding_tag(effective_model_tag)
+        or (
+            mixed_model_tag is not None
+            and parse_embedding_tag(mixed_model_tag)
+            != parse_embedding_tag(effective_model_tag)
+        )
     )
     seen: set[str] = set()
     cache_hits = 0
@@ -646,7 +655,30 @@ def reindex(
             and effective_model_tag is not None
         ):
             db.write_model_tag(effective_model_tag)
+            # One model's vectors under one tag again (#1548).
+            db.clear_switch_markers()
             tag_written = True
+
+        # #1548: a run that embedded pages without re-tagging leaves vectors
+        # from this model beside the stored tag's. Record it so the store reads
+        # as mixed, and so switching back to the stored tag re-embeds them
+        # instead of reading them as its own. An existing record stays when
+        # the run re-embeds under the stored tag itself: the other model's
+        # remaining vectors are still there.
+        mixed_written = False
+        if (
+            model_changed
+            and not tag_written
+            and embedded > 0
+            and effective_model_tag is not None
+            and (
+                stored_model_tag is None
+                or parse_embedding_tag(stored_model_tag)
+                != parse_embedding_tag(effective_model_tag)
+            )
+        ):
+            db.write_mixed_tag(effective_model_tag)
+            mixed_written = True
 
         # #1529: the tag stays the old model's while a confidential page is
         # withheld, so also record that the withheld pages were the ONLY thing
@@ -665,7 +697,13 @@ def reindex(
             db.write_remote_complete_tag(effective_model_tag)
             remote_complete_written = True
 
-        if to_embed or to_prune or tag_written or remote_complete_written:
+        if (
+            to_embed
+            or to_prune
+            or tag_written
+            or remote_complete_written
+            or mixed_written
+        ):
             db.commit()
 
     if fts_db_path is not None:

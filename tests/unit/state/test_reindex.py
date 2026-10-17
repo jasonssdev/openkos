@@ -2172,6 +2172,60 @@ def test_a_run_with_an_unembedded_shareable_doc_is_not_remote_complete(
         assert db.read_remote_complete_tag() is None
 
 
+def test_switching_back_after_a_partial_switch_re_embeds_the_other_models_vectors(
+    tmp_path: Path,
+) -> None:
+    """#1548: model A, then a remote model B that withheld a confidential page
+    (so B embedded the rest but the tag stayed A's), then A again. The pages B
+    embedded sit under A's tag; they must be re-embedded, not read as a cache
+    hit."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", sensitivity="private")
+    _write_doc(bundle_dir / "concepts" / "s.md", title="S", sensitivity="confidential")
+    store = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(store) as db:
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="A", local_exemption=True
+        )
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="B", local_exemption=False
+        )
+        assert db.read_model_tag() == reindex.embedding_tag("A")
+
+        back = _FakeEmbedder()
+        report = reindex.reindex(
+            bundle_dir, db, back, model_tag="A", local_exemption=True
+        )
+
+        assert report.model_reembedded is True
+        assert report.embedded == 2
+        assert db.read_mixed_tag() is None
+        assert db.read_remote_complete_tag() is None
+
+
+def test_a_complete_run_clears_the_stale_remote_complete_tag(tmp_path: Path) -> None:
+    """#1548: a remote-complete record from an earlier partial switch must not
+    outlive the complete run that re-tags the store."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", sensitivity="private")
+    _write_doc(bundle_dir / "concepts" / "s.md", title="S", sensitivity="confidential")
+    store = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(store) as db:
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="A", local_exemption=True
+        )
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="B", local_exemption=False
+        )
+        assert db.read_remote_complete_tag() == reindex.embedding_tag("B")
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="A", local_exemption=True
+        )
+        assert db.read_remote_complete_tag() is None
+
+
 # --- Phase 11 (issue #1057): backend-aware embedding identity --------------
 
 

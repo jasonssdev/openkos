@@ -631,6 +631,22 @@ documentation; `reindex --force` is the remedy for that case.
 - WHEN `reindex()` completes this run
 - THEN no remote-complete tag is recorded
 
+#### Scenario: A switch that embedded pages without re-tagging marks the store mixed
+
+- GIVEN a store tagged for model A and a model-change run for model B that
+  embedded some pages but left others (withheld, skipped or failed), so the tag
+  stays A
+- WHEN that run completes
+- THEN the store's `meta` records B as the mixed tag, and a later `reindex()`
+  under A (the stored tag) is itself a model-change run that re-embeds every page
+  rather than reading B's vectors as A's cache hits
+
+#### Scenario: A complete run clears the mixed and remote-complete records
+
+- GIVEN a store carrying a mixed tag and/or a remote-complete tag
+- WHEN a model-change run embeds every page and persists the tag
+- THEN both records are removed in the same commit
+
 #### Scenario: Partial embed failure during a model change leaves a transient mixed-model store
 
 - GIVEN a model-change run where some docs succeed on the new model and one
