@@ -469,6 +469,11 @@ class OfflineOllama(OllamaClient):
             "offline test default: no Ollama server (tests/unit/conftest.py)"
         )
 
+    def version(self) -> str:
+        raise OllamaUnavailable(
+            "offline test default: no Ollama server (tests/unit/conftest.py)"
+        )
+
 
 class OfflineOpenAICompatible(OpenAICompatibleClient):
     """A real `OpenAICompatibleClient` with EVERY network method stubbed.

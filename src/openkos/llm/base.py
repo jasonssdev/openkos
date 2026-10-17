@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, TypedDict
+from typing import Any, Protocol, TypedDict, runtime_checkable
 
 from openkos.errors import OpenKosError
 
@@ -224,6 +224,18 @@ class BackendDiagnostics(Protocol):
     @property
     def locality(self) -> BackendHostLocality:
         """This backend's own locality verdict (issue #240)."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+
+@runtime_checkable
+class ModelRuntime(BackendDiagnostics, Protocol):
+    """A model runtime the engine can set up: diagnostics plus the runtime's own
+    version. Only the Ollama client implements it; an `openai-compatible`
+    server has no version or pull protocol, so setup asks it for the model list
+    alone."""
+
+    def version(self) -> str:
+        """The runtime's version string."""
         ...  # pragma: no cover -- Protocol stub body, never executed
 
 

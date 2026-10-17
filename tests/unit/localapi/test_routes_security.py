@@ -42,6 +42,7 @@ EXPECTED_ROUTES = {
     ("POST", "/v1/judging/runs/{run_id}/stop"),
     ("POST", "/v1/ask"),
     ("GET", "/v1/ask/{ask_id}"),
+    ("GET", "/v1/setup/readiness"),
 }
 
 
