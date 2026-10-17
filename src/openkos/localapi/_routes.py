@@ -10,10 +10,13 @@ from fastapi.security import HTTPBearer
 
 from openkos import api
 from openkos.localapi import _errors
+from openkos.localapi._asks import AskRegistry
 from openkos.localapi._errors import ApiProblem, ErrorBody, invoke
 from openkos.localapi._models import (
     ApplyRequest,
     ApplyResponse,
+    AskJob,
+    AskRequest,
     DecisionList,
     DecisionPreview,
     HealthBody,
@@ -67,6 +70,12 @@ def _workspace(request: Request) -> api.Workspace:
 def _registry(request: Request) -> RunRegistry:
     """The run registry `_build` keeps on the app."""
     registry: RunRegistry = request.app.state.registry
+    return registry
+
+
+def _asks(request: Request) -> AskRegistry:
+    """The ask registry `_build` keeps on the app."""
+    registry: AskRegistry = request.app.state.asks
     return registry
 
 
@@ -401,5 +410,23 @@ def make_router() -> APIRouter:
         registry: RunRegistry = Depends(_registry),  # noqa: B008
     ) -> RunStatus:
         return registry.stop(run_id)
+
+    @router.post("/ask", status_code=202, responses=_errors_of(409, 413))
+    def start_ask(
+        body: AskRequest,
+        response: Response,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+        asks: AskRegistry = Depends(_asks),  # noqa: B008
+    ) -> AskJob:
+        job = asks.start(workspace, body)
+        response.headers["Location"] = f"{prefix()}/ask/{job.ask_id}"
+        return job
+
+    @router.get("/ask/{ask_id}", responses=_errors_of(404))
+    def ask_status(
+        ask_id: str,
+        asks: AskRegistry = Depends(_asks),  # noqa: B008
+    ) -> AskJob:
+        return asks.status(ask_id)
 
     return router

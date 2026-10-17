@@ -16,7 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from openkos import api
-from openkos.localapi import _errors, _routes, _runs
+from openkos.localapi import _asks, _errors, _routes, _runs
 from openkos.localapi._guard import ALLOWED_ORIGINS, LocalApiGuard, _GuardConfig
 
 DEFAULT_ORIGINS: Final = tuple(sorted(ALLOWED_ORIGINS))
@@ -85,6 +85,7 @@ def _build() -> FastAPI:
         lifespan=_lifespan,
     )
     app.state.registry = _runs.RunRegistry()
+    app.state.asks = _asks.AskRegistry()
     app.include_router(_routes.make_router())
     handlers: dict[Any, Any] = {
         _errors.ApiProblem: _on_api_problem,

@@ -57,6 +57,8 @@ export const ERROR_CODES = [
   "backend_model_not_found",
   "generation_capped",
   "backend_error",
+  // Asking.
+  "ask_active",
 ] as const;
 
 export type KnownErrorCode = (typeof ERROR_CODES)[number];

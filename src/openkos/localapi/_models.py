@@ -311,3 +311,30 @@ class UnmergeResponse(BaseModel):
 
     unmerged: api.Unmerged
     warnings: list[str]
+
+
+class AskRequest(BaseModel):
+    """A question to ask. An omitted `limit` is the API's default."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    question: str
+    limit: Annotated[int, Field(ge=1, strict=True)] | None = None
+    include_deprecated: bool = False
+    include_confidential: bool = False
+
+
+class AskJob(BaseModel):
+    """An ask as a poll sees it. The answer is `openkos.api.ask`'s own, already
+    gated; a failure is a field here, never the poll's HTTP status. A response
+    model only: no `extra="forbid"`, which would reach the nested dataclasses."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ask_id: str
+    state: Literal["running", "finished", "failed"]
+    phase: Literal["retrieving", "assembling", "checking", "synthesizing"] | None
+    completed: int | None
+    total: int | None
+    answer: api.Answer | None
+    error: ErrorBody | None
