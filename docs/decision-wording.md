@@ -90,9 +90,9 @@ A withheld combine is never shown as a disabled button with no reason. The line 
 
 **Undo, and how it is shown:**
 
-- After combining: the confirmation says "Combined into '{title}'." with an **Undo** button, which is **Split again** on that combine. Later, the combined page shows "Combined from '{other title}' on {date}" with **Split again**; the lines come from `merge_history`, which keeps each other page's title as it was when combined. Splitting restores both pages exactly as they were (`preview_unmerge`, then `apply_unmerge`; `unmerge` on the CLI). A single split asks "Split '{title}' out again? Both pages go back exactly as they were." and confirms "Split. '{title}' is back as it was." (several: "'{a}' and '{b}' are back as they were."). Until the app can list every combined page (#1467), these lines appear under "Combined just now" in To review, for the pages combined while the app has been open. Only the most recent combine on a page can be split directly; when there are later ones, the preview lists them first and the app explains: "To split this, the later combines on this page are split first: {list}. Continue?" and does them in order, all in one apply (`unmerge --to`). **(H)** that "split again" is understood as the undo of "combine".
+- After combining: the confirmation says "Combined into '{title}'." with an **Undo** button, which is **Split again** on that combine. Later, the combined page shows "Combined from '{other title}' on {date}" with **Split again**; the lines come from `merge_history`, which keeps each other page's title as it was when combined. Splitting restores both pages exactly as they were (`preview_unmerge`, then `apply_unmerge`; `unmerge` on the CLI). A single split asks "Split '{title}' out again? Both pages go back exactly as they were." and confirms "Split. '{title}' is back as it was." (several: "'{a}' and '{b}' are back as they were."). Until the app has a page view, these lines appear in To review under "Pages you combined", which lists every combined page, newest combine first (`merged_concepts`), so a combine made in an earlier session or from the terminal can be split from the app too. Only the most recent combine on a page can be split directly; when there are later ones, the preview lists them first and the app explains: "To split this, the later combines on this page are split first: {list}. Continue?" and does them in order, all in one apply (`unmerge --to`). **(H)** that "split again" is understood as the undo of "combine".
 - After combining a group: the page shows one "Combined from '{other title}' on {date}" line per page that was combined into it, newest first, each with **Split again**. A whole group is undone by splitting its oldest combine: the preview lists every later one first, with the same "the later combines on this page are split first" wording.
-- After keeping separate: "Kept separate." with **Undo** once the API can reopen a pair (#1466); until then the confirmation offers no Undo, following rule 4. Later, under the library's settings, "Pages you kept separate" lists each pair with **Ask me again** (`duplicates --reopen`; the list is `duplicates --kept-distinct`).
+- After keeping separate: "Kept separate." with **Undo** (`preview_reopen`, then `apply_reopen`; `duplicates --reopen` on the CLI). The undo confirms "Undone. We'll ask you about these again." and the pages come back to To review once the list is refreshed, which the app does at once. Later, under the library's settings, "Pages you kept separate" lists each pair with **Ask me again** (the same operation; the list is `kept_distinct`, `duplicates --kept-distinct` on the CLI).
 
 ### More than two pages — "Which of these are the same?"
 
@@ -140,7 +140,7 @@ The "different files" line and the cross-type warning are shown as for a pair.
 
 **Bulk:** for `related_to` only, the list may offer "Accept all {n} 'related' suggestions", with the sentences listed before the agreement.
 
-**Undo:** the confirmation offers **Undo**; later the page lists its connections, each with **Remove** (`unrelate`). Until the API can remove a connection (#1466), the confirmation is "We recorded that {sentence}." with no Undo.
+**Undo:** the confirmation, "We recorded that {sentence}.", offers **Undo**, which removes exactly that connection (`preview_unrelate`, then `apply_unrelate`; `unrelate` on the CLI) and confirms "Undone. That connection is removed." Later the page lists its connections, each with **Remove** (the same operation).
 
 ## How quickly it goes out of date
 
@@ -154,7 +154,7 @@ The "different files" line and the cross-type warning are shown as for a pair.
 | `slow` | "Slowly — over months or years." | "We'll remind you to recheck them now and then." |
 | `volatile` | "Quickly — they can change within weeks." | "We'll remind you to recheck them often." |
 
-The screen shows the current setting and the suggestion, each by its plain line, and the model's reason. **Options:** **Use this** ("From now on, {kinds} are treated as changing {slowly}.") and **Decide later**. Bulk acceptance of all such suggestions is allowed. **Undo:** **Undo** on the confirmation; later, the same setting is changeable under the library's settings. Until the API can restore a setting (#1466), the confirmation offers no Undo. The windows behind "now and then" and "often" are the engine's, named in its configuration, and are not repeated in copy.
+The screen shows the current setting and the suggestion, each by its plain line, and the model's reason. **Options:** **Use this** ("From now on, {kinds} are treated as changing {slowly}.") and **Decide later**. Bulk acceptance of all such suggestions is allowed. **Undo:** **Undo** on the confirmation puts back the setting the kind had before (`preview_tier_change` with the plan's `configured_tier`, then `apply_tier_change`; when the kind had no setting of its own, the engine's default applies again) and confirms "Undone. {Kinds} are treated as before." When the earlier setting is not one the app can name, the confirmation offers no Undo. Later, the same setting is changeable under the library's settings. The windows behind "now and then" and "often" are the engine's, named in its configuration, and are not repeated in copy.
 
 ## Items the app lists but cannot act on
 
@@ -193,13 +193,16 @@ Every message says whether anything changed, and offers the one action that help
 | Only part of a group was combined | `merge_group_interrupted` | "Only some of these were combined. Nothing else changed, and each combine can be split again." | reload **(H)** |
 | The page to split was itself combined into another | `survivor_missing` | "This page was combined into another one. Split that first." | **OK** (opening the other page needs a page view) **(H)** |
 | The combine is no longer on this page | `not_merged` | "These pages are already separate." | reload **(H)** |
+| An undo finds the pages no longer kept separate | `not_kept_distinct` | "These pages aren't kept separate any more." | **OK** |
+| An undo finds the connection already gone | `not_related` | "These pages aren't connected any more." | **OK** |
+| An undo finds the setting already put back | `tier_unchanged` | "This setting is already as it was." | **OK** |
 | The page was changed after it was combined | `survivor_edited` | "This page was changed after it was combined, so it can't be split here." | **OK** only: the app does not offer to split anyway (#1442) |
 | Only some of the later combines were split | `unmerge_interrupted` | "Only some of these were split. Each page that was split is back as it was." | reload **(H)** |
 | The pages changed and the question is gone | `stale`, then not listed | "These pages changed, and this question no longer applies." | back to To review |
 | Any other failure, before a write | — | "Something went wrong. Nothing was changed." ("OpenKOS isn't responding. Nothing was changed." when the engine does not answer) | **Try again** |
 | Any other failure, after a write was sent | — | "Something went wrong. Look at To review to see what changed." ("OpenKOS stopped responding. …" when the engine does not answer) | reload |
 
-A busy write is retried for up to five seconds before the message is shown; a preview is never retried blindly. After a write was sent, a failure the table does not name never says "Nothing was changed".
+A busy write is retried for up to five seconds before the message is shown; a preview is never retried blindly. An undo is previewed and applied in one step, because the person has just seen the choice it reverses; a stale undo is never applied again on its own. After a write was sent, a failure the table does not name never says "Nothing was changed".
 
 ## Who can see a page
 

@@ -104,18 +104,19 @@ JSON and `schema.d.ts` are never hand-merged).
 
 ## S6 Review screen (R1-R3; Closes #1467, #1466)
 
-- [ ] S6.1 RED: model tests: the combined list read on load, Undo after keep
+- [x] S6.1 RED: model tests: the combined list read on load, Undo after keep
   separate / connect / set-tier (preview then apply, versions echoed, refresh
   after reopen, done line, Undo gone), stale and refused undos.
-- [ ] S6.2 RED: wording tests for the undone lines and the new problems.
-- [ ] S6.3 GREEN: `desktop/ui/review/model.ts`, `wording.ts`, `render.ts`
+- [x] S6.2 RED: wording tests for the undone lines and the new problems.
+- [x] S6.3 GREEN: `desktop/ui/review/model.ts`, `wording.ts`, `render.ts`
   ("Pages you combined").
-- [ ] S6.4 Node gates: `typecheck`, `test`, `check:schema`, `build`.
-- [ ] S6.5 Mutation-check the undo dispatch and the refresh-after-reopen.
+- [x] S6.4 Node gates: `typecheck`, `test`, `check:schema`, `build`.
+- [x] S6.5 Mutation-check the undo dispatch and the refresh-after-reopen.
 
 ## S7 Archive
 
-- [ ] S7.1 `docs/decision-wording.md`: the new copy, the #1466/#1467 gaps closed.
+- [x] S7.1 `docs/decision-wording.md`: the new copy, the #1466/#1467 gaps closed
+  (landed with S6, beside the code that shows it).
 - [ ] S7.2 CHANGELOG entry.
 - [ ] S7.3 Merge the deltas into `openspec/specs/`, name-match every heading,
   check each requirement against shipped code.

@@ -5,6 +5,7 @@ import { button, card, choiceGroup, el, heading, notice, redraw, type Tone } fro
 import type { ReviewModel, ReviewState } from "./model.ts";
 import {
   CANNOT_ACT,
+  COMBINED_HEADING,
   describeDecision,
   identityShape,
   listEntry,
@@ -113,7 +114,7 @@ function drawList(model: ReviewModel, state: ReviewState): HTMLElement[] {
 
 function drawCombined(model: ReviewModel, state: ReviewState): HTMLElement {
   const section = el("section", { attrs: { "aria-labelledby": "combined-heading" } });
-  section.append(el("h2", { attrs: { id: "combined-heading" } }, "Combined just now"));
+  section.append(el("h2", { attrs: { id: "combined-heading" } }, COMBINED_HEADING));
   for (const page of state.combined) {
     section.append(el("h3", {}, page.title));
     section.append(
@@ -258,6 +259,9 @@ function drawDecision(model: ReviewModel, state: ReviewState): HTMLElement[] {
       parts.push(notice("done", step.lines.join(" "), ...actions));
       break;
     }
+    case "undoing":
+      parts.push(notice("done", step.lines.join(" ")), busy("Undoing…"));
+      break;
   }
   return parts;
 }

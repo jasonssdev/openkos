@@ -3,6 +3,7 @@
 // the brief is a defect in one of them. Nothing here touches the DOM, reads the
 // token or shows the engine's own text, a code, a Concept ID or a command.
 import { ApiError, EngineUnreachable, type Schemas } from "../../client/index.ts";
+import type { Undo } from "./model.ts";
 
 type Decision = Schemas["Decision"];
 type Page = Schemas["Page"];
@@ -596,6 +597,24 @@ export function splitDone(titles: string[]): string {
   return `Split. ${head} and '${titles.at(-1)}' are back as they were.`;
 }
 
+export const COMBINED_HEADING = "Pages you combined";
+
+// -- undoing ------------------------------------------------------------------ //
+
+/** What an Undo other than Split again did, in the past tense. */
+export function undoneLine(undo: Exclude<Undo, { kind: "split" }>): string {
+  switch (undo.kind) {
+    case "reopen":
+      return "Undone. We'll ask you about these again.";
+    case "unrelate":
+      return "Undone. That connection is removed.";
+    case "tier": {
+      const many = typeNoun(undo.typeName).many;
+      return `Undone. ${many.charAt(0).toUpperCase()}${many.slice(1)} are treated as before.`;
+    }
+  }
+}
+
 // -- problems ----------------------------------------------------------------- //
 
 /** The one thing a problem lets the person do next. */
@@ -642,6 +661,9 @@ const PROBLEMS: Record<string, Problem> = {
     message: "Only some of these were split. Each page that was split is back as it was.",
     action: "reload",
   },
+  not_kept_distinct: { message: "These pages aren't kept separate any more.", action: "ok" },
+  not_related: { message: "These pages aren't connected any more.", action: "ok" },
+  tier_unchanged: { message: "This setting is already as it was.", action: "ok" },
   quote_stale: {
     message: "Something changed since you agreed — the AI model or the pages. Please look again.",
     action: "requote",

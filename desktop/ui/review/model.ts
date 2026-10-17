@@ -16,6 +16,7 @@ import {
   problemFor,
   splitDone,
   splitQuestion,
+  undoneLine,
   type Consent,
   type Option,
   type Problem,
@@ -35,10 +36,27 @@ export type ReviewClient = Pick<
   | "startJudgingRun"
   | "judgingRun"
   | "stopJudgingRun"
-  | "mergeHistory"
+  | "mergedConcepts"
+  | "refreshQueue"
   | "previewUnmerge"
   | "applyUnmerge"
+  | "previewReopen"
+  | "applyReopen"
+  | "previewUnrelate"
+  | "applyUnrelate"
+  | "previewTierChange"
+  | "applyTierChange"
 >;
+
+type Tier = Schemas["TierChangePreviewRequest"]["tier"];
+const TIERS: readonly string[] = ["static", "slow", "volatile"] satisfies Exclude<Tier, null>[];
+
+/** What a confirmation's Undo reverses, taken from the previewed plan. */
+export type Undo =
+  | { kind: "split"; survivor: string; absorbed: string }
+  | { kind: "reopen"; members: string[] }
+  | { kind: "unrelate"; source: string; relationType: string; target: string }
+  | { kind: "tier"; typeName: string; tier: Tier };
 
 export interface ModelOptions {
   sleep?: (ms: number) => Promise<void>;
@@ -65,7 +83,8 @@ export type Step =
   | { name: "previewing"; action: Action }
   | { name: "preview"; action: Action; preview: Schemas["DecisionPreview"]; lines: string[] }
   | { name: "applying"; action: Action; preview: Schemas["DecisionPreview"]; lines: string[] }
-  | { name: "done"; lines: string[]; undo: { survivor: string; absorbed: string } | null };
+  | { name: "done"; lines: string[]; undo: Undo | null }
+  | { name: "undoing"; lines: string[]; undo: Exclude<Undo, { kind: "split" }> };
 
 export interface OpenDecision {
   key: string;
@@ -113,14 +132,14 @@ export interface ReviewState {
   open: OpenDecision | null;
   check: CheckState | null;
   split: SplitState | null;
-  /** The pages combined while the app has been open, with their history. */
+  /** Every combined page, newest combine first, with its history. */
   combined: CombinedPage[];
   notice: Notice | null;
 }
 
 const GONE = "These pages changed, and this question no longer applies.";
 
-type Operation = { kind: "preview"; action: Action } | { kind: "apply" };
+type Operation = { kind: "preview"; action: Action } | { kind: "apply" } | { kind: "undo" };
 
 /** The ids of the pages a decision shows. */
 function pageIds(decision: Decision): string[] {
@@ -189,19 +208,36 @@ export class ReviewModel {
 
   // -- the list ----------------------------------------------------------------- //
 
-  /** Lists the open decisions and reads every page they show. */
+  /**
+   * Lists the open decisions and every combined page, and reads every page
+   * they show. A combined list that cannot be read leaves the last one shown.
+   */
   async load(): Promise<void> {
     this.#set({ loading: true });
     try {
-      const { decisions } = await this.#client.decisions();
-      const ids = [...new Set(decisions.flatMap(pageIds))];
+      const [{ decisions }, merged] = await Promise.all([
+        this.#client.decisions(),
+        this.#client.mergedConcepts().catch(() => null),
+      ]);
+      const survivors = merged?.concepts.map((c) => c.concept_id) ?? [];
+      const ids = [...new Set([...decisions.flatMap(pageIds), ...survivors])];
       const read = await Promise.all(ids.map((id) => this.#client.readPage(id).catch(() => null)));
       const pages = new Map<string, Page>();
       for (const page of read) if (page !== null) pages.set(page.concept_id, page);
-      this.#set({ loading: false, loaded: true, decisions, pages, listProblem: null });
+      const combined = merged === null ? this.#state.combined : this.#combinedFrom(merged.concepts, pages);
+      this.#set({ loading: false, loaded: true, decisions, pages, combined, listProblem: null });
     } catch (error) {
       this.#set({ loading: false, listProblem: problemFor(error, "before") });
     }
+  }
+
+  #combinedFrom(concepts: Schemas["MergedConcept"][], pages: ReadonlyMap<string, Page>): CombinedPage[] {
+    const today = this.#today();
+    return concepts.map((c) => ({
+      survivor: c.concept_id,
+      title: pages.get(c.concept_id)?.title ?? "",
+      lines: c.merges.map((m) => ({ text: historyLine(m, today), absorbed: m.absorbed_id })),
+    }));
   }
 
   dismissNotice(): void {
@@ -363,19 +399,11 @@ export class ReviewModel {
       const { applied } = await this.#retry(() =>
         this.#client.applyDecision(open.key, { action, version: preview.version }),
       );
-      const pages = this.#state.pages;
-      const first = applied.merged?.[0];
-      const undo = first === undefined ? null : { survivor: first[0], absorbed: first[1] };
-      this.#setOpen({ step: { name: "done", lines: confirmation(open.decision, applied, pages), undo }, changed: null });
-      if (undo !== null) {
-        this.#set({
-          combined: [
-            { survivor: undo.survivor, title: pages.get(undo.survivor)?.title ?? "", lines: [] },
-            ...this.#state.combined.filter((c) => c.survivor !== undo.survivor),
-          ],
-        });
-        await this.refreshHistory(undo.survivor);
-      }
+      const undo = undoFor(preview.plan, applied);
+      this.#setOpen({
+        step: { name: "done", lines: confirmation(open.decision, applied, this.#state.pages), undo },
+        changed: null,
+      });
       await this.load();
     } catch (error) {
       if (isStale(error)) {
@@ -396,6 +424,7 @@ export class ReviewModel {
       case "try_again":
         this.#setOpen({ problem: null });
         if (op?.kind === "apply") await this.confirm();
+        else if (op?.kind === "undo") await this.undo();
         else if (op?.kind === "preview") await this.#preview(op.action);
         return;
       case "ok":
@@ -405,7 +434,7 @@ export class ReviewModel {
       default: {
         await this.load();
         const decision = this.#state.decisions.find((d) => d.decision_key === open.key);
-        if (decision === undefined || op?.kind === "apply") {
+        if (decision === undefined || op?.kind === "apply" || op?.kind === "undo") {
           this.#set({ open: null });
           return;
         }
@@ -422,11 +451,61 @@ export class ReviewModel {
     if (decision !== undefined) this.#setOpen({ decision, step: { name: "choosing" }, problem: null });
   }
 
-  /** A combine's Undo: split its first absorbed page again. */
+  /**
+   * The confirmation's Undo. A combine's is Split again on its first absorbed
+   * page. The others preview the reversal and apply it at once, echoing the
+   * version: the person just saw the choice, and the undo puts back what was
+   * there. A busy apply is retried; anything else is worded and never applied
+   * again blindly.
+   */
   async undo(): Promise<void> {
     const step = this.#state.open?.step;
     if (step?.name !== "done" || step.undo === null) return;
-    await this.openSplit(step.undo.survivor, step.undo.absorbed);
+    const undo = step.undo;
+    if (undo.kind === "split") {
+      await this.openSplit(undo.survivor, undo.absorbed);
+      return;
+    }
+    this.#lastOp = { kind: "undo" };
+    this.#setOpen({ step: { name: "undoing", lines: step.lines, undo }, problem: null });
+    let sent = false;
+    try {
+      const apply = await this.#previewUndo(undo);
+      sent = true;
+      await this.#retry(apply);
+    } catch (error) {
+      const when = !sent || isBusy(error) ? "before" : "after";
+      const problem = problemFor(error, when);
+      const kept = problem.action === "try_again" ? undo : null;
+      this.#setOpen({ step: { name: "done", lines: step.lines, undo: kept }, problem });
+      return;
+    }
+    this.#setOpen({ step: { name: "done", lines: [undoneLine(undo)], undo: null } });
+    if (undo.kind === "reopen") await this.#client.refreshQueue().catch(() => undefined);
+    await this.load();
+  }
+
+  /** Previews an undo; returns the apply of exactly that version. */
+  async #previewUndo(undo: Exclude<Undo, { kind: "split" }>): Promise<() => Promise<unknown>> {
+    const client = this.#client;
+    switch (undo.kind) {
+      case "reopen": {
+        const { version } = await client.previewReopen({ member_ids: undo.members });
+        return () => client.applyReopen({ version });
+      }
+      case "unrelate": {
+        const { version } = await client.previewUnrelate({
+          source_id: undo.source,
+          relation_type: undo.relationType,
+          target_id: undo.target,
+        });
+        return () => client.applyUnrelate({ version });
+      }
+      case "tier": {
+        const { version } = await client.previewTierChange({ type_name: undo.typeName, tier: undo.tier });
+        return () => client.applyTierChange({ version });
+      }
+    }
   }
 
   // -- the check -------------------------------------------------------------------- //
@@ -561,10 +640,9 @@ export class ReviewModel {
       const titles = preview.steps.map((s) => s.absorbed_title ?? "a page");
       this.#set({ split: { ...split, phase: "done", text: splitDone(titles), problem: null } });
       const step = this.#state.open?.step;
-      if (step?.name === "done" && step.undo?.survivor === split.survivor) {
+      if (step?.name === "done" && step.undo?.kind === "split" && step.undo.survivor === split.survivor) {
         this.#setOpen({ step: { ...step, undo: null } });
       }
-      await this.refreshHistory(split.survivor);
       await this.load();
     } catch (error) {
       if (isStale(error)) {
@@ -585,10 +663,7 @@ export class ReviewModel {
       return;
     }
     this.#set({ split: null });
-    if (split.problem.action === "reload") {
-      await this.refreshHistory(split.survivor);
-      await this.load();
-    }
+    if (split.problem.action === "reload") await this.load();
   }
 
   closeSplit(): void {
@@ -596,25 +671,23 @@ export class ReviewModel {
     this.#splitPreview = null;
     this.#set({ split: null });
   }
+}
 
-  /** Reads a combined page's history again; a page with none leaves the list. */
-  async refreshHistory(survivor: string): Promise<void> {
-    let merges: Schemas["MergeRecord"][];
-    try {
-      ({ merges } = await this.#client.mergeHistory(survivor));
-    } catch {
-      return;
+/** What a confirmation's Undo reverses, from the plan that was applied. */
+function undoFor(plan: Schemas["PreviewPlan"], applied: Schemas["Applied"]): Undo | null {
+  switch (plan.kind) {
+    case "merge": {
+      const first = applied.merged?.[0];
+      return first === undefined ? null : { kind: "split", survivor: first[0], absorbed: first[1] };
     }
-    const today = this.#today();
-    const lines = merges.map((m) => ({ text: historyLine(m, today), absorbed: m.absorbed_id }));
-    const others = this.#state.combined.filter((c) => c.survivor !== survivor);
-    const known = this.#state.combined.find((c) => c.survivor === survivor);
-    if (lines.length === 0) {
-      this.#set({ combined: others });
-      return;
+    case "keep_distinct":
+      return { kind: "reopen", members: plan.member_ids };
+    case "relate":
+      return { kind: "unrelate", source: plan.source_id, relationType: plan.relation_type, target: plan.target_id };
+    case "set_tier": {
+      const before = plan.configured_tier;
+      if (before !== null && !TIERS.includes(before)) return null;
+      return { kind: "tier", typeName: plan.type_name, tier: before as Tier };
     }
-    const title = known?.title || this.#state.pages.get(survivor)?.title || "";
-    const entry = { survivor, title, lines };
-    this.#set({ combined: known === undefined ? [entry, ...others] : this.#state.combined.map((c) => (c === known ? entry : c)) });
   }
 }
