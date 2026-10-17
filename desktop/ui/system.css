@@ -200,9 +200,10 @@
   padding: var(--space-10) var(--space-8) var(--space-16);
 }
 
+/* The list gives way in a narrow window, so the detail keeps room to read. */
 .ui-split {
   display: grid;
-  grid-template-columns: var(--list-width) minmax(0, 1fr);
+  grid-template-columns: min(var(--list-width), 36%) minmax(0, 1fr);
   height: 100%;
   min-height: 0;
 }
@@ -261,7 +262,7 @@
   flex-direction: column;
   gap: var(--space-6);
   max-width: 52rem;
-  padding: var(--space-10) var(--space-10) var(--space-16);
+  padding: var(--space-10) clamp(var(--space-5), 4vw, var(--space-10)) var(--space-16);
   font-size: var(--font-size-md);
   line-height: var(--line-height-md);
 }
@@ -310,7 +311,7 @@
 
 .ui-answers {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
   gap: var(--space-5) var(--space-4);
   margin: 0;
   padding: 0;
