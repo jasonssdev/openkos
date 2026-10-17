@@ -712,6 +712,54 @@ def retire_open_naming_absent(
     return counts
 
 
+def retire_open_changed_unseen(
+    conn: sqlite3.Connection,
+    kind: str,
+    seen_keys: Collection[str],
+    current_digest: Callable[[str], str | None],
+    *,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] | None = None,
+) -> int:
+    """Retire as `stale` every open row of `kind` that a pass did not produce
+    (`decision_key` not in `seen_keys`) AND whose recorded inputs no longer hash
+    as recorded, and return how many moved.
+
+    For a pass that was not complete: `retire_unseen` cannot tell a row the
+    search dropped from one it never reached, but a row whose inputs changed
+    can never be applied (`row_inputs_changed`) and nothing will re-judge it
+    until the search keeps it again, when it is published anew. An input that
+    cannot be read is not a change, and a row with no recorded input is left
+    alone. Resolved rows keep their state; an absent queue answers 0."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown pending-work kind: {kind!r}")
+    if not queue_exists(conn):
+        return 0
+    now = (clock or _now)().isoformat()
+    with _transaction(conn, commit_section):
+        rows = conn.execute(
+            "SELECT id, decision_key FROM pending_items"
+            " WHERE kind = ? AND status IN ('pending','claimed')",
+            (kind,),
+        ).fetchall()
+        doomed = [
+            item_id
+            for item_id, key in rows
+            if key not in seen_keys
+            and any(
+                (now_digest := current_digest(entry.input_ref)) is not None
+                and now_digest != entry.digest
+                for entry in item_input_digests(conn, item_id)
+            )
+        ]
+        conn.executemany(
+            "UPDATE pending_items SET status='stale', resolution='stale',"
+            " claimed_by=NULL, resolved_at=? WHERE id = ?",
+            [(now, item_id) for item_id in doomed],
+        )
+    return len(doomed)
+
+
 def _platform() -> str:
     """`sys.platform` read through a function so mypy does not narrow the
     per-OS branches below to the host it runs on (with `warn_unreachable`,

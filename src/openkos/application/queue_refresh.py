@@ -25,7 +25,12 @@ pass's job. An event-driven row is never retired here for being absent.
 row naming a concept absent from the bundle is retired, complete pass or not:
 the bundle proves the absence, and such a row can never be acted on (#1475). A
 queue written before merges retired their rows (#1280), or edited by hand, heals
-here. A `contradiction` is left alone: one found while combining names the
+here.
+
+**Changed rows outside the search.** A truncated identity pass cannot retire the
+rows it did not reach, but an open identity row whose inputs changed and which
+the search no longer keeps can never be applied and nothing re-judges it (#1504).
+It is retired and counted in `retired`; an unchanged row outside the search stays. A `contradiction` is left alone: one found while combining names the
 absorbed concept on purpose.
 """
 
@@ -120,8 +125,11 @@ def refresh_decision_queue(
     current_digest = application_pending.current_finding_digest(layout.bundle_dir)
     identity_complete = report.truncation_notice is None
 
+    identity_proposals = queue_producers.identity_proposals(
+        report, current_digest=current_digest
+    )
     nothing_to_publish = (
-        not queue_producers.identity_proposals(report, current_digest=current_digest)
+        not identity_proposals
         and not any(
             queue_producers.relation_suggestion_proposal(
                 suggestion, current_digest=current_digest
@@ -156,6 +164,18 @@ def refresh_decision_queue(
         identity = identity_stage.enqueue_identity_report(
             conn, layout, report, commit_section=commit_section, clock=clock
         )
+        retired_changed = (
+            0
+            if identity_complete
+            else pq.retire_open_changed_unseen(
+                conn,
+                "identity",
+                {proposal.decision_key for proposal in identity_proposals},
+                current_digest,
+                commit_section=commit_section,
+                clock=clock,
+            )
+        )
         relation_type = queue_producers.enqueue_stored_relations(
             conn,
             suggestions,
@@ -175,7 +195,9 @@ def refresh_decision_queue(
         conn.close()
     return RefreshOutcome(
         identity=dataclasses.replace(
-            identity, retired_missing=missing.get("identity", 0)
+            identity,
+            retired=identity.retired + retired_changed,
+            retired_missing=missing.get("identity", 0),
         ),
         relation_type=dataclasses.replace(
             relation_type, retired_missing=missing.get("relation_type", 0)

@@ -717,3 +717,44 @@ def test_the_default_candidate_walk_is_late_bound(
     outcome = queue_refresh.refresh_decision_queue(root, commit_section=_section)
 
     assert outcome.identity.inserted == 1
+
+
+# -- #1504 a changed row the candidate search no longer keeps ----------------------
+
+OTHER = ("concepts/c", "concepts/d")
+
+
+def test_a_changed_identity_row_the_truncated_search_dropped_is_retired(
+    root: Path,
+) -> None:
+    layout = _record_all(root)
+    _refresh(root, _group(*MEMBERS))
+    write_doc(root, MEMBERS[0], {"type": "Concept", "title": "edited"}, "New body.\n")
+
+    # The search keeps another group only (1 of 59); the changed pair is outside.
+    outcome = _refresh(root, _group(*OTHER), produced=59)
+
+    assert outcome.identity.complete is False
+    assert outcome.identity.retired == 1
+    statuses = {
+        r.status
+        for r in _rows(layout)
+        if r.kind == "identity" and MEMBERS[0] in r.targets
+    }
+    assert statuses == {"stale"}
+    assert all(
+        item.fresh is not False for item in _open_by_kind(layout).get("identity", [])
+    )
+
+
+def test_an_unchanged_identity_row_the_truncated_search_dropped_stays_open(
+    root: Path,
+) -> None:
+    layout = _record_all(root)
+    _refresh(root, _group(*MEMBERS))
+
+    outcome = _refresh(root, _group(*OTHER), produced=59)
+
+    assert outcome.identity.retired == 0
+    targets = [item.targets for item in _open_by_kind(layout)["identity"]]
+    assert MEMBERS in targets

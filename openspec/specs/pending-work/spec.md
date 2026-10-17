@@ -776,6 +776,31 @@ absent queue MUST NOT be created by it.
 - WHEN a refresh runs
 - THEN the row is not retired for a missing page
 
+### Requirement: A Truncated Refresh Retires A Changed Identity Row The Search Dropped
+
+When the identity report of a refresh was truncated, the refresh MUST retire as
+`stale` every open `identity` row that the report did not produce and whose
+recorded inputs no longer hash as recorded, and MUST count it in the identity
+result's `retired`. An open row the report did not produce whose inputs are
+unchanged MUST stay open, an input that cannot be read MUST NOT count as a
+change, and a complete report is retired by the existing unseen rule. The rule
+MUST call no model and write only the queue; a pair the search keeps again is
+published anew.
+
+#### Scenario: A changed pair outside the kept groups is retired
+
+- GIVEN a truncated identity report that does not produce an open identity row
+  whose member was edited since the row was written
+- WHEN a refresh runs
+- THEN the row is `stale` and the identity result counts it as retired
+
+#### Scenario: An unchanged pair outside the kept groups stays open
+
+- GIVEN a truncated identity report that does not produce an open identity row
+  whose members are unchanged
+- WHEN a refresh runs
+- THEN the row stays open
+
 ### Requirement: A Reconcile Resolves The Revision Row Over Its Pair
 
 The reconcile write core MUST resolve, besides the typed-edge contradiction row
