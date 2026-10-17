@@ -1,12 +1,15 @@
 // The app's shell: the shell process supervises the engine, and this page reads
-// its state, shows the status page and the review screen, and creates one
-// client and one review model per engine launch (a restarted engine has a new
-// port and token). Every value is written with textContent, never as HTML,
-// and nothing is logged.
+// its state, draws the app shell (sidebar and main), the status page and the
+// review screen, and creates one client and one review model per engine launch
+// (a restarted engine has a new port and token). Every value is written with
+// textContent, never as HTML, and nothing is logged.
 import { createClient, type EngineState } from "../client/index.ts";
+import { el, redraw } from "./components.ts";
 import { ReviewModel } from "./review/model.ts";
 import { renderReview } from "./review/render.ts";
-import { describeEngine, statusFacts, statusFailure } from "./view.ts";
+import { renderStatus, type StatusScreen } from "./status.ts";
+import { appShell, badge, navItem } from "./system/index.ts";
+import { describeEngine, engineBadge, navEntries, openDecisions, reviewCount, statusFailure } from "./view.ts";
 
 declare global {
   interface Window {
@@ -23,20 +26,22 @@ function element<T extends HTMLElement>(id: string): T {
   return found as T;
 }
 
-const engineStatus = element("engine-status");
-const engineDetail = element<HTMLPreElement>("engine-detail");
-const workspaceMessage = element("workspace-message");
-const workspaceFacts = element<HTMLDListElement>("workspace-facts");
-const statusView = element("status-view");
-const reviewView = element("review-view");
-const reviewWaiting = element("review-waiting");
-const reviewRoot = element("review");
-const live = { status: element("review-live-status"), alert: element("review-live-alert") };
-const navStatus = element<HTMLButtonElement>("nav-status");
-const navReview = element<HTMLButtonElement>("nav-review");
-
 type View = "status" | "review";
 let view: View = "status";
+
+const live = { status: element("review-live-status"), alert: element("review-live-alert") };
+const engineFooter = el("div");
+const statusRoot = el("div", { class: "ui-view" });
+// The review screen keeps its own styles (style.css) until it moves onto the
+// design system; ui-legacy keeps the system's resets off it.
+const reviewWaiting = el("p", {}, "Waiting for OpenKOS to start…");
+const reviewRoot = el("div", { attrs: { id: "review" } });
+const reviewView = el("div", { class: "ui-view ui-legacy" }, reviewWaiting, reviewRoot);
+reviewView.hidden = true;
+
+const shell = appShell({ nav: [], current: view, onNavigate: (id) => navigate(id), footer: engineFooter });
+shell.main.append(statusRoot, reviewView);
+element("app").replaceChildren(shell.root);
 
 // One launch: its client's model, and whether its status was read.
 let launch: string | null = null;
@@ -44,48 +49,62 @@ let statusRead = false;
 let review: ReviewModel | null = null;
 let unsubscribe: (() => void) | null = null;
 
+let statusOpen: number | undefined;
+let screen: StatusScreen = { engine: describeEngine({ state: "starting", attempt: 1 }), workspace: { kind: "waiting" } };
+let drawnScreen = "";
+const expanded = new Set<string>();
+
+function paintStatus(force = false): void {
+  // The engine is polled every second; redraw only on a change, so an open
+  // disclosure and the focused control are left alone.
+  const key = JSON.stringify(screen);
+  if (!force && key === drawnScreen) return;
+  drawnScreen = key;
+  renderStatus(statusRoot, screen, {
+    expanded,
+    onToggle: (name, open) => void (open ? expanded.add(name) : expanded.delete(name)),
+  });
+}
+
+function paintNav(): void {
+  const count = reviewCount(review?.state ?? null, statusOpen);
+  redraw(shell.nav, "nav", () =>
+    shell.nav.replaceChildren(...navEntries(count).map((entry) => navItem(entry, entry.id === view, navigate))),
+  );
+}
+
+function paintEngine(state: EngineState | null): void {
+  const [tone, word] = engineBadge(state);
+  engineFooter.replaceChildren(badge(tone, word));
+}
+
+function navigate(id: string): void {
+  if (id === "status" || id === "review") show(id);
+}
+
 function show(next: View): void {
   view = next;
-  statusView.hidden = next !== "status";
+  statusRoot.hidden = next !== "status";
   reviewView.hidden = next !== "review";
-  const [current, other] = next === "status" ? [navStatus, navReview] : [navReview, navStatus];
-  current.setAttribute("aria-current", "page");
-  other.removeAttribute("aria-current");
+  paintNav();
   if (next === "review") {
     // Everything is read again on each visit: To review is never stale.
     if (review !== null) void review.load();
   } else {
-    statusView.querySelector<HTMLElement>("h1")?.focus();
+    statusRoot.querySelector<HTMLElement>('[data-view="heading"]')?.focus();
   }
-}
-
-navStatus.addEventListener("click", () => show("status"));
-navReview.addEventListener("click", () => show("review"));
-
-function showDetail(detail: string | undefined): void {
-  engineDetail.hidden = !detail;
-  engineDetail.textContent = detail ? detail.trim() : "";
-}
-
-function showFacts(facts: [string, string][]): void {
-  workspaceFacts.replaceChildren(
-    ...facts.flatMap(([term, value]) => {
-      const dt = document.createElement("dt");
-      dt.textContent = term;
-      const dd = document.createElement("dd");
-      dd.textContent = value;
-      return [dt, dd];
-    }),
-  );
-  workspaceMessage.textContent = "Read from the engine just now.";
-  workspaceFacts.hidden = false;
 }
 
 function startReview(state: Extract<EngineState, { state: "ready" }>): void {
   unsubscribe?.();
   review = new ReviewModel(createClient(state));
   const model = review;
-  unsubscribe = model.subscribe((next) => renderReview(reviewRoot, live, model, next));
+  const stopDrawing = model.subscribe((next) => renderReview(reviewRoot, live, model, next));
+  const stopCounting = model.subscribe(() => paintNav());
+  unsubscribe = () => {
+    stopDrawing();
+    stopCounting();
+  };
   reviewWaiting.hidden = true;
   renderReview(reviewRoot, live, model, model.state);
   if (view === "review") void model.load();
@@ -97,6 +116,7 @@ function stopReview(): void {
   review = null;
   reviewWaiting.hidden = false;
   reviewRoot.replaceChildren();
+  paintNav();
 }
 
 async function tick(): Promise<void> {
@@ -104,13 +124,14 @@ async function tick(): Promise<void> {
   try {
     state = await window.__TAURI__.core.invoke<EngineState>("engine_state");
   } catch (error) {
-    engineStatus.textContent = "The shell could not report the engine's state.";
-    showDetail(String(error));
+    paintEngine(null);
+    screen = { ...screen, engine: { text: "The shell could not report the engine's state.", detail: String(error) } };
+    paintStatus();
     return;
   }
-  const { text, detail } = describeEngine(state);
-  engineStatus.textContent = text;
-  showDetail(detail);
+  paintEngine(state);
+  screen = { ...screen, engine: describeEngine(state) };
+  paintStatus();
 
   if (state.state !== "ready") {
     if (launch !== null) stopReview();
@@ -127,13 +148,19 @@ async function tick(): Promise<void> {
   if (statusRead) return;
   statusRead = true;
   try {
-    showFacts(statusFacts(await createClient(state).status()));
+    const status = await createClient(state).status();
+    statusOpen = openDecisions(status);
+    screen = { ...screen, workspace: { kind: "read", status } };
   } catch (error) {
     statusRead = false;
-    workspaceFacts.hidden = true;
-    workspaceMessage.textContent = statusFailure(error);
+    screen = { ...screen, workspace: { kind: "failed", message: statusFailure(error) } };
   }
+  paintStatus();
+  paintNav();
 }
 
+paintEngine({ state: "starting", attempt: 1 });
+paintStatus(true);
+paintNav();
 void tick();
 setInterval(() => void tick(), POLL_MS);

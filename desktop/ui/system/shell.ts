@@ -31,6 +31,10 @@ export interface NavEntry {
   label: string;
   /** Things waiting; shown only when above zero. */
   count?: number;
+  /** Listed but not offered yet: focusable, announced as unavailable, inert. */
+  disabled?: boolean;
+  /** A short word beside the label, e.g. why it is unavailable. */
+  hint?: string;
 }
 
 /** One item of the sidebar's navigation. */
@@ -39,9 +43,15 @@ export function navItem(entry: NavEntry, current: boolean, onSelect: (id: string
     "button",
     { class: "ui-nav-item", attrs: { type: "button" } },
     el("span", { class: "ui-nav-item__label" }, entry.label),
+    entry.hint ? el("span", { class: "ui-nav-item__hint" }, entry.hint) : null,
     entry.count ? el("span", { class: "ui-count" }, String(entry.count)) : null,
   );
   node.dataset["focus"] = `nav:${entry.id}`;
+  if (entry.disabled) {
+    // aria-disabled, not disabled: it stays in the tab order, so it can be found and its hint read.
+    node.setAttribute("aria-disabled", "true");
+    return node;
+  }
   if (current) node.setAttribute("aria-current", "page");
   node.addEventListener("click", () => onSelect(entry.id));
   return node;
@@ -55,9 +65,14 @@ export interface AppShellOptions {
   footer?: Child;
 }
 
-/** The whole window: sidebar and main. Fill `main` with a view or a splitView. */
-export function appShell(options: AppShellOptions): { root: HTMLElement; main: HTMLElement } {
+/** The whole window: sidebar and main. Fill `main` with a view or a splitView; redraw `nav` as the current page or a count changes. */
+export function appShell(options: AppShellOptions): { root: HTMLElement; main: HTMLElement; nav: HTMLElement } {
   const main = el("main", { class: "ui-main" });
+  const nav = el(
+    "nav",
+    { class: "ui-nav", attrs: { "aria-label": "Main" } },
+    ...options.nav.map((entry) => navItem(entry, entry.id === options.current, options.onNavigate)),
+  );
   const root = el(
     "div",
     { class: "ui-shell" },
@@ -65,16 +80,12 @@ export function appShell(options: AppShellOptions): { root: HTMLElement; main: H
       "aside",
       { class: "ui-sidebar" },
       lockup(),
-      el(
-        "nav",
-        { class: "ui-nav", attrs: { "aria-label": "Main" } },
-        ...options.nav.map((entry) => navItem(entry, entry.id === options.current, options.onNavigate)),
-      ),
+      nav,
       options.footer ? el("div", { class: "ui-sidebar__footer" }, options.footer) : null,
     ),
     main,
   );
-  return { root, main };
+  return { root, main, nav };
 }
 
 /** A list pane and a detail pane, each scrolling on its own. */

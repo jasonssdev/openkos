@@ -4,7 +4,7 @@ How the desktop app looks and why. [`docs/brand.md`](../docs/brand.md) owns the 
 
 ## See it
 
-The gallery shows every component in every state, and two mock compositions (To review as list and detail; Status), on made-up data:
+The gallery shows every component in every state, and two compositions on made-up data: To review as list and detail (a mock), and Status (the app's real status screen, `ui/status.ts`):
 
 ```sh
 pnpm --dir desktop install
@@ -16,6 +16,7 @@ It needs no engine and no Rust; any browser works. It is not an input of `pnpm b
 ## Principles
 
 - **Calm.** Whitespace and type carry the hierarchy, not boxes. Separate with 1 px hairlines and a one-step change of surface; a shadow only on what floats (a dialog).
+- **Light: few things at once, the rest on request.** A view shows what the person came for and holds the rest back. Prefer whitespace to a border, one card to two, and a disclosure ("Show details", "Show the folder") to a fact that is rarely needed; a badge or a callout appears only when it says something the text beside it does not. When a view feels busy, remove before restyling. (From the maintainer's review of the gallery: "professional, but still a bit overloaded".)
 - **One primary per view, for an action.** Everything else is secondary or quiet. When the user *answers a question* ("Are these the same?"), every answer has the same weight: the app does not nudge a judgment it is not entitled to make.
 - **Color never stands alone.** Every tone is a symbol and a word as well as a color.
 - **Keyboard first.** Every control is a native button or input, or a documented ARIA pattern; focus is always visible and returns where it was.
@@ -95,8 +96,15 @@ Brand Indigo itself is 3.87:1 on Ink, so it is used as a fill (with white text) 
 - **Error.** An error callout in the flow, saying what did and did not happen, with a retry.
 - **Offline.** The engine is unreachable: a warning callout saying the files are safe, a way to start it, and the sidebar's engine badge in the error tone.
 
+## The app
+
+`ui/index.html` loads `tokens.css`, `system.css` and `style.css`, and `ui/main.ts` draws the app shell into it: the sidebar holds the lockup, the navigation (**Ask**, listed as "Coming soon" and not offered until it exists; **To review**, with a count of what its list shows, or what the status counted before the list is read; **Status**) and the engine's badge at its foot. The main region shows one view at a time.
+
+- **Status** (`ui/status.ts`) is on the system: a page header; an Engine card with the engine's state in words and any detail behind "Show details"; a Workspace card with the counts first, the folder behind "Show the folder", a skeleton while it waits for the engine and an error callout when the status cannot be read.
+- **To review** (`ui/review/`) still draws with `ui/components.ts` and `style.css`. It is mounted in the shell under `ui-legacy`, which keeps the system's resets off it, until it moves onto the system.
+
 ## Components
 
-All in [`ui/system/`](ui/system/), each a function returning an element: `appShell`, `splitView`, `navItem` (with count), `lockup`/`isotype`, `pageHeader`, `listRow`/`uiList`, `uiCard`, `uiButton` (primary, secondary, quiet, destructive; `sm`/`md`; disabled; loading), `badge`, `callout`, `openDialog`/`dialogPanel` (modal, labelled, Escape, focus kept and returned, the rest inert), `segmented` (a radio group with arrow keys), `compare`, `emptyState`, `spinner`, `skeleton`, `textField`, `facts`. Their classes are prefixed `ui-` so they never collide with the screens' older classes in `style.css`. The `button`, `notice` and `card` of `ui/components.ts` still serve the screens not yet moved.
+All in [`ui/system/`](ui/system/), each a function returning an element: `appShell`, `splitView`, `navItem` (with count), `lockup`/`isotype`, `pageHeader`, `listRow`/`uiList`, `uiCard`, `uiButton` (primary, secondary, quiet, destructive; `sm`/`md`; disabled; loading), `badge`, `callout`, `openDialog`/`dialogPanel` (modal, labelled, Escape, focus kept and returned, the rest inert), `segmented` (a radio group with arrow keys), `compare`, `emptyState`, `spinner`, `skeleton`, `textField`, `facts`, `disclosure` (a native `details`/`summary` for secondary content, closed unless asked; `ui-pre` sets a detail block inside one). A `navItem` can be listed but not offered (`disabled` with a `hint`): it stays focusable with `aria-disabled`, and choosing it does nothing. Their classes are prefixed `ui-` so they never collide with the screens' older classes in `style.css`. The `button`, `notice` and `card` of `ui/components.ts` still serve To review.
 
-Component behavior is tested in jsdom (a dev dependency; `// @vitest-environment jsdom` per file), so the view models keep running in plain Node.
+Component behavior is tested in jsdom (a dev dependency; `// @vitest-environment jsdom` per file), so the view models keep running in plain Node. Components may be built ahead of the screens that use them and reviewed in the gallery first ([ADR-0069](../docs/adr/0069-the-desktop-components-are-a-design-system-built-ahead-of-screens-and-tested-in-jsdom.md), extending ADR-0066).

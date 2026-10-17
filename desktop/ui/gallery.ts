@@ -1,13 +1,16 @@
 // The component gallery (desktop/DESIGN.md): every component of the design
 // system in every state, and two mock compositions, on made-up OpenKOS data.
 // A development page only: nothing here reaches the engine.
+import type { Schemas } from "../client/index.ts";
 import { el } from "./components.ts";
+import { renderStatus } from "./status.ts";
 import {
   appShell,
   badge,
   callout,
   compare,
   dialogPanel,
+  disclosure,
   emptyState,
   facts,
   listRow,
@@ -131,7 +134,7 @@ const DECISIONS: MockDecision[] = [
 // -- composition: review list + detail ---------------------------------------- //
 
 const NAV: NavEntry[] = [
-  { id: "ask", label: "Ask" },
+  { id: "ask", label: "Ask", disabled: true, hint: "Coming soon" },
   { id: "review", label: "To review", count: DECISIONS.length },
   { id: "status", label: "Status" },
 ];
@@ -202,37 +205,24 @@ function reviewComposition(): HTMLElement {
 
 // -- composition: status --------------------------------------------------------- //
 
+// The real status screen (status.ts) on made-up data, so the gallery shows what ships.
 function statusComposition(): HTMLElement {
   const shell = appShell({ nav: NAV, current: "status", onNavigate: noop, footer: badge("success", "Engine running") });
-  shell.main.append(
-    el(
-      "div",
-      { class: "ui-view" },
-      pageHeader({ title: "Status", description: "OpenKOS runs on this Mac. Nothing you add leaves it." }),
-      callout("warning", "2 sources changed since they were compiled. Their pages may be out of date.", {
-        title: "Sources changed",
-        actions: [uiButton("Recompile 2 sources", noop, { variant: "secondary", size: "sm" })],
-      }),
-      uiCard(
-        { title: "Engine", headingLevel: 2, aside: badge("success", "Running") },
-        facts([
-          ["Model", "qwen3:8b", "code"],
-          ["Backend", "Ollama, on this Mac"],
-          ["Address", "127.0.0.1:8765", "code"],
-          ["Started", "Today at 09:41"],
-        ]),
-      ),
-      uiCard(
-        { title: "Workspace", headingLevel: 2, aside: badge("info", "4 to review") },
-        facts([
-          ["Folder", "~/Notes/good-life", "code"],
-          ["Pages", "128"],
-          ["Sources", "46"],
-          ["Last change", "Today at 10:02, combined two pages"],
-        ]),
-      ),
-    ),
+  const view = el("div", { class: "ui-view" });
+  // Already "status", so drawing it does not move the gallery's focus to its title.
+  view.dataset["view"] = "status";
+  const status = {
+    root: "/Users/me/Notes/good-life",
+    sources: 46,
+    concepts: 128,
+    open_decisions_by_kind: { identity: 3 },
+  } as unknown as Schemas["WorkspaceStatus"];
+  renderStatus(
+    view,
+    { engine: { text: "The engine is running." }, workspace: { kind: "read", status } },
+    { expanded: new Set(), onToggle: noop },
   );
+  shell.main.append(view);
   return frame(shell.root);
 }
 
@@ -310,8 +300,9 @@ function badgesAndNav(): HTMLElement[] {
       "Sidebar items: the current page is lifted and medium; a count shows only when something waits.",
       specimens(
         specimen("current, with count", navItem({ id: "review", label: "To review", count: 4 }, true, noop)),
-        specimen("rest", navItem({ id: "ask", label: "Ask" }, false, noop)),
+        specimen("rest", navItem({ id: "status", label: "Status" }, false, noop)),
         specimen("rest, with count", navItem({ id: "review", label: "To review", count: 12 }, false, noop)),
+        specimen("not offered yet", navItem({ id: "ask", label: "Ask", disabled: true, hint: "Coming soon" }, false, noop)),
       ),
     ),
   ];
@@ -439,6 +430,7 @@ function states(): HTMLElement {
       wide("busy", el("div", { class: "ui-actions" }, uiButton("Combine pages", noop, { variant: "primary", loading: true, loadingLabel: "Combining…" }), uiButton("Different things", noop, { disabled: true }))),
       wide("empty", emptyState({ title: "Nothing to review", text: "When OpenKOS finds pages that may be one, or sources that disagree, they wait here.", action: uiButton("Add a source", noop) })),
       wide("error", callout("error", "OpenKOS couldn't load the decisions. Nothing was changed.", { title: "Couldn't load", actions: [uiButton("Try again", noop, { size: "sm" })] })),
+      wide("secondary facts, closed until asked", disclosure({ summary: "Show the folder" }, facts([["Folder", "~/Notes/good-life", "code"]]))),
       wide("offline", callout("warning", "The engine isn't running. Your pages and sources are safe on this Mac.", { title: "OpenKOS is offline", actions: [uiButton("Start the engine", noop, { variant: "primary", size: "sm" })] })),
     ),
   );

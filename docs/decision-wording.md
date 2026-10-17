@@ -218,6 +218,14 @@ The middle line is load-bearing: the engine sends everything except `confidentia
 
 The cloud model's warning, in settings only and never during setup, uses the same words: what leaves the Mac (pages marked Shareable and Private), what never does (Only on this Mac), who receives it (the provider, by name) and that the provider may charge. While it is on, the app says so on every screen that asks the AI model.
 
+## The sidebar and Status
+
+The words around the decisions, outside the decision screens.
+
+- **Sidebar.** **Ask**, **To review** and **Status**. Ask is listed before it exists, with "Coming soon" beside it, and choosing it does nothing. To review shows a count only when something waits.
+- **The engine's badge**, at the foot of the sidebar, a symbol and a word: "Engine starting", "Engine running", "Engine restarting", "Engine not running" (it could not be started), "Engine stopped", "Engine state unknown".
+- **Status disclosures.** What is rarely needed waits behind a disclosure named for what it holds: "Show details" for the engine's own report when it failed or restarted, "Show the folder" for where the files live.
+
 ## Open questions
 
 - **Splitting an edited page** is decided (#1442): the app shows the refusal only and never offers to discard the edit; the terminal's `unmerge --discard-survivor-edits` remains the way to do it.

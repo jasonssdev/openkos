@@ -25,3 +25,25 @@ describe("appShell", () => {
     expect(shell.root.querySelector(".ui-wordmark")?.textContent).toBe("openkos");
   });
 });
+
+describe("a navItem that is not available yet", () => {
+  it("stays focusable, says why, and does nothing when chosen", () => {
+    const onSelect = vi.fn();
+    const item = navItem({ id: "ask", label: "Ask", disabled: true, hint: "Coming soon" }, true, onSelect);
+    item.click();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(item.disabled).toBe(false);
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.hasAttribute("aria-current")).toBe(false);
+    expect(item.querySelector(".ui-nav-item__hint")?.textContent).toBe("Coming soon");
+    expect(item.textContent).toBe("AskComing soon");
+  });
+});
+
+describe("appShell's navigation", () => {
+  it("is returned so the app can redraw it", () => {
+    const shell = appShell({ nav: [{ id: "status", label: "Status" }], current: "status", onNavigate: () => {} });
+    expect(shell.nav.tagName).toBe("NAV");
+    expect(shell.root.contains(shell.nav)).toBe(true);
+  });
+});
