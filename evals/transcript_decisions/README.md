@@ -15,7 +15,38 @@ uv run python -u evals/transcript_decisions/run_transcript_decisions.py \
     --gold <csv> --rescore            # recompute from results/*.json, no model
 ```
 
-**Use `-u`**, as in the other harnesses.
+**Use `-u`**, as in the other harnesses. `--results-dir <dir>` stores (and, with
+a bare `--rescore`, reads) runs somewhere other than the untracked `results/`,
+for runs that must outlive a worktree.
+
+## The thesis metric (`thesis_metric.py`)
+
+The evidence-overlap recall above is this harness's own yardstick. The
+maintainer's thesis scores decisions differently, and `thesis_metric.py`
+reproduces its metric so the pass can be read on both:
+
+```bash
+uv run python evals/transcript_decisions/thesis_metric.py --self-test   # no model
+uv run python evals/transcript_decisions/thesis_metric.py \
+    --gold <SERIES>.decisions.adjudicated.csv <runs-pass-*.json ...>
+```
+
+- Reference units are the gold rows with `final_status == "decision"` (the
+  split children of a `compuesta` row included), as `"<final_object>:
+  <final_content>"`; a pass Decision is `"<subject>: <value>"` (the pass arm
+  stores both per item).
+- Cosine similarity of `bge-m3` embeddings from the local Ollama, computed at
+  run time; no embedding is cached or stored.
+- A one-to-one minimum-cost (Hungarian) assignment within each meeting (the
+  thesis's primary same-meeting scope), keeping pairs with similarity >= tau.
+- Recall, precision and F1 per run over tau = 0.50 to 0.90, mean and min-max
+  over runs, plus the pooled figures; and the language (English or Spanish) of
+  the produced texts, since the gold is written in Spanish.
+
+It was validated against the thesis's own first extraction of ES2015 (three
+runs, `--thesis-runs <extracciones.jsonl>`): it gives the same true positives
+at every tau of the grid (pooled 42 of 81, recall 0.519, F1 0.290 at tau 0.60)
+as the thesis's scorer.
 
 ## The data stays outside this repository
 

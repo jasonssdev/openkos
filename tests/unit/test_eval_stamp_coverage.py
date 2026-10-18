@@ -41,6 +41,7 @@ EXEMPT: dict[str, str] = {
     "query_identity/run_query_identity_probe.py": "embedding model only, zero chat calls",
     "retrieval_stability/run_retrieval_stability_probe.py": "retrieval only: the chat LLM is a stub",
     "section_coverage/run_embedding_coverage_probe.py": "embedding model only, zero chat calls",
+    "transcript_decisions/thesis_metric.py": "embedding model only, zero chat calls; scores stored runs that carry their own stamp",
 }
 
 
