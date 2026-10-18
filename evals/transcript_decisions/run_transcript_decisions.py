@@ -119,6 +119,9 @@ def run_meeting(
     windows = 0
     produced: list[tuple[str, list[str]]] = []  # (title, texts to match through)
     kept_evidence: list[list[str]] = []
+    # (subject, value) per pass Decision: the thesis metric embeds "object: content"
+    # (`thesis_metric.py`), and the subject is not recoverable from the title.
+    pairs: list[tuple[str, str] | None] = []
     if arm == "pass":
         windows_list = pass_windows(text, meeting)
         windows = len(windows_list)
@@ -128,6 +131,7 @@ def run_meeting(
             evidence = result.body.split("\n> ", 1)[-1] if "\n> " in result.body else ""
             produced.append((result.title, [evidence]))
             kept_evidence.append([evidence])
+            pairs.append(subject_value(result.description, result.body))
     else:
         try:
             union = concept_mod.extract_concept_union(
@@ -140,14 +144,17 @@ def run_meeting(
                 if obj.type == "Decision":
                     produced.append((obj.title, [obj.body]))
                     kept_evidence.append([])  # a pasted body is not persisted
-    items = [
-        {
+                    pairs.append(None)
+    items = []
+    for (title, texts), kept, pair in zip(produced, kept_evidence, pairs, strict=True):
+        item: dict[str, Any] = {
             "title": title,
             "evidence": kept,
             "matched_ids": scoring.match_item(texts, rows),
         }
-        for (title, texts), kept in zip(produced, kept_evidence, strict=True)
-    ]
+        if pair is not None:
+            item["subject"], item["value"] = pair
+        items.append(item)
     return {
         "arm": arm,
         "run": run,
@@ -160,6 +167,18 @@ def run_meeting(
         "wall_s": round(time.monotonic() - started, 2),
         "items": items,
     }
+
+
+def subject_value(description: str, body: str) -> tuple[str, str]:
+    """`(subject, value)` of a pass Decision, recovered from what `to_result` built.
+
+    The body is `<value>\n\n> <evidence>` and the description `<subject>: <value>`,
+    so the value is read from the body and the subject is what precedes it in the
+    description (a subject may itself contain ": ")."""
+    value = body.split("\n\n> ", 1)[0]
+    suffix = f": {value}"
+    subject = description[: -len(suffix)] if description.endswith(suffix) else ""
+    return subject, value
 
 
 def run_arm(
@@ -274,6 +293,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-partial", action="store_true")
     parser.add_argument("--rescore", nargs="*", type=pathlib.Path, default=None)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--results-dir",
+        type=pathlib.Path,
+        default=RESULTS_DIR,
+        help="where to store (and, with a bare --rescore, read) runs",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -283,9 +308,9 @@ def main(argv: list[str] | None = None) -> int:
     rows, meetings = prepare(args.gold, args.allow_partial)
 
     if args.rescore is not None:
-        paths = args.rescore or sorted(RESULTS_DIR.glob("runs-*.json"))
+        paths = args.rescore or sorted(args.results_dir.glob("runs-*.json"))
         if not paths:
-            raise SystemExit(f"no stored runs in {RESULTS_DIR}")
+            raise SystemExit(f"no stored runs in {args.results_dir}")
         records, kept = scoring.rematch_records(load_records(paths), rows)
         if kept:
             print(
@@ -327,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
         runs=args.runs,
         partial=partial,
         stamp=stamp_for(args.arm, args.model),
+        directory=args.results_dir,
     )
     print(f"stored {path}")
     print(scoring.render_report(records, rows, meetings))
@@ -666,6 +692,21 @@ def _self_test() -> int:
             "matched ids of item 0",
             first["items"][0]["matched_ids"],
             ["d1"],
+        )
+        check(
+            "a pass item keeps its subject and value (thesis metric input)",
+            (first["items"][0]["subject"], first["items"][0]["value"]),
+            ("casing", "Use rubber for the casing"),
+        )
+        check(
+            "subject_value keeps a subject that contains a colon",
+            subject_value("a: b: the thing is done", "the thing is done\n\n> x"),
+            ("a: b", "the thing is done"),
+        )
+        check(
+            "subject_value refuses a description it cannot split",
+            subject_value("unrelated", "the thing is done\n\n> x"),
+            ("", "the thing is done"),
         )
         metrics = scoring.series_run_metrics(
             [r for r in records if r["run"] == 1], rows
