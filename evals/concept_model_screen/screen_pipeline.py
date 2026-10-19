@@ -74,11 +74,20 @@ class CallRecord:
     reply_chars: int | None = None
     thinking_chars: int | None = None
     error: str | None = None
+    num_ctx: int = CONTEXT_WINDOW
 
 
 def call_key(
-    *, model: str, digest: str | None, messages: Sequence[Any], seed: int
+    *,
+    model: str,
+    digest: str | None,
+    messages: Sequence[Any],
+    seed: int,
+    num_ctx: int = CONTEXT_WINDOW,
 ) -> str:
+    """Content address of one chat call. `num_ctx` is the context window SENT
+    to Ollama; at the shipped default the key is byte-identical to #1557's,
+    which is what lets the window-size screen (#1558) replay its cache."""
     payload = json.dumps(
         {
             "model": model,
@@ -86,7 +95,7 @@ def call_key(
             "messages": list(messages),
             "seed": seed,
             "think": False,
-            "num_ctx": CONTEXT_WINDOW,
+            "num_ctx": num_ctx,
             "num_predict": MAX_GENERATION_TOKENS,
         },
         sort_keys=True,
@@ -161,9 +170,10 @@ Sender = Callable[[str, Sequence[Any], int, float], tuple[str | None, dict[str, 
 """(model, messages, seed, timeout_s) -> (content or None, entry fields)."""
 
 
-def ollama_sender(host: str | None) -> Sender:
+def ollama_sender(host: str | None, num_ctx: int = CONTEXT_WINDOW) -> Sender:
     """The real transport: production `OllamaClient` with the production
-    ceiling and context window, plus a per-call seed and timeout."""
+    ceiling and context window (or a raised `num_ctx`, #1558), plus a
+    per-call seed and timeout."""
 
     def send(
         model: str, messages: Sequence[Any], seed: int, timeout_s: float
@@ -174,7 +184,7 @@ def ollama_sender(host: str | None) -> Sender:
             host=host,
             timeout=timeout_s,
             max_generation_tokens=MAX_GENERATION_TOKENS,
-            context_window=CONTEXT_WINDOW,
+            context_window=num_ctx,
             seed=seed,
             urlopen=opener,
         )
@@ -224,7 +234,11 @@ def ollama_sender(host: str | None) -> Sender:
 
 
 class ScreenBackend:
-    """Cached, timed, recorded `LLMBackend` for one source run."""
+    """Cached, timed, recorded `LLMBackend` for one source run.
+
+    `context_window` is what the PIPELINE plans its whole-source prompt bound
+    against and stays the shipped 12288; `num_ctx` is what is sent (its
+    sender must be built with the same value) and enters the cache key."""
 
     context_window: int = CONTEXT_WINDOW
     max_generation_tokens: int = MAX_GENERATION_TOKENS
@@ -240,8 +254,10 @@ class ScreenBackend:
         cache: ChatCache,
         send: Sender,
         windows: Sequence[str] = (),
+        num_ctx: int = CONTEXT_WINDOW,
     ) -> None:
         self.model = model
+        self.num_ctx = num_ctx
         self.digest = digest
         self.run = run
         self.window_timeout_s = window_timeout_s
@@ -265,7 +281,11 @@ class ScreenBackend:
             self.window_timeout_s if kind == KIND_WINDOW else self.whole_timeout_s
         )
         key = call_key(
-            model=self.model, digest=self.digest, messages=messages, seed=seed
+            model=self.model,
+            digest=self.digest,
+            messages=messages,
+            seed=seed,
+            num_ctx=self.num_ctx,
         )
         if prompt_id in self._timed_out:
             # The registered rule: a timed-out call is a failure, and the
@@ -281,6 +301,7 @@ class ScreenBackend:
                     0.0,
                     True,
                     key,
+                    num_ctx=self.num_ctx,
                 )
             )
             raise HarnessTimeout("timeout (retry not re-sent)")
@@ -316,6 +337,7 @@ class ScreenBackend:
                 reply_chars=len(content) if isinstance(content, str) else None,
                 thinking_chars=entry.get("thinking_chars"),
                 error=entry.get("error"),
+                num_ctx=self.num_ctx,
             )
         )
         if outcome == "ok" and isinstance(content, str):
