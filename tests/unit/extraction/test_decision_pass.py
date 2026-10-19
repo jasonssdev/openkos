@@ -7,6 +7,7 @@ import pytest
 
 from openkos.extraction import decision_pass as dp
 from openkos.llm.base import BackendGenerationCapped, BackendUnavailable, Message
+from openkos.llm.ollama import ChatDiagnostics
 from openkos.resolution.decision_subject import quoted_verbatim
 from openkos.resolution.normalize import normalize_key
 
@@ -285,3 +286,61 @@ def test_prompt_admits_imposed_requirements_and_excludes_actions() -> None:
     assert "requirement or constraint" in prompt
     assert "without the transcript" in prompt
     assert "action items" in prompt
+
+
+def _diag(reason: str = "stop") -> ChatDiagnostics:
+    return ChatDiagnostics(reason, 10, 3, 5)
+
+
+def test_observer_gets_reply_window_index_attempt_and_diagnostics() -> None:
+    seen: list[dp.CallObservation] = []
+    llm = _FakeLLM(["not json", "[]", "[]"])
+    dp.run_decision_pass(
+        [WINDOW_A, WINDOW_B],
+        llm,
+        on_call=seen.append,
+        diagnostics=lambda: _diag(),
+    )
+    assert [(o.window_index, o.attempt, o.reply, o.failure) for o in seen] == [
+        (0, 1, "not json", f"{dp.CALL_NAME}: unparseable reply"),
+        (0, 2, "[]", None),
+        (1, 1, "[]", None),
+    ]
+    assert all(o.diagnostics == _diag() for o in seen)
+
+
+def test_observer_sees_a_raised_call_with_no_reply() -> None:
+    seen: list[dp.CallObservation] = []
+    llm = _FakeLLM([BackendGenerationCapped("cap"), BackendGenerationCapped("cap")])
+    dp.run_decision_pass(
+        [WINDOW_A], llm, on_call=seen.append, diagnostics=lambda: _diag("length")
+    )
+    assert [(o.reply, o.failure, o.diagnostics) for o in seen] == [
+        (None, f"{dp.CALL_NAME}: BackendGenerationCapped", _diag("length"))
+    ] * 2
+
+
+def test_no_observer_leaves_the_result_unchanged() -> None:
+    replies = ["not json", "[]"]
+    plain = dp.run_decision_pass([WINDOW_A], _FakeLLM(list(replies)))
+    hooked = dp.run_decision_pass(
+        [WINDOW_A], _FakeLLM(list(replies)), on_call=lambda _o: None
+    )
+    assert plain == hooked
+
+
+def test_a_capped_window_is_retried_by_default() -> None:
+    llm = _FakeLLM([BackendGenerationCapped("c"), BackendGenerationCapped("c")])
+    result = dp.run_decision_pass([WINDOW_A], llm)
+    assert len(llm.calls) == 2
+    assert result.failure == f"{dp.CALL_NAME}: BackendGenerationCapped"
+
+
+def test_retry_after_cap_can_be_switched_off_and_only_for_a_cap() -> None:
+    llm = _FakeLLM([BackendGenerationCapped("c")])
+    result = dp.run_decision_pass([WINDOW_A], llm, retry_after_cap=False)
+    assert len(llm.calls) == 1
+    assert result.failure == f"{dp.CALL_NAME}: BackendGenerationCapped"
+    other = _FakeLLM(["not json", "[]"])
+    dp.run_decision_pass([WINDOW_A], other, retry_after_cap=False)
+    assert len(other.calls) == 2
