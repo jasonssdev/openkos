@@ -211,3 +211,98 @@ Failures in the confirmatory run, by cause:
   cheapest next measurement.
 - The language lever above, and the 0.60 leniency, each need their own
   registration before they inform a threshold or a prompt.
+
+## Confirmatory: qwen3.6:35b-a3b (#1561)
+
+**Verdict: `qwen3.6:35b-a3b` does NOT pass the registered rule at n = 15 against
+`qwen3:8b`; NOTHING ADOPTED.** It clears conditions 2, 3 and 4 on both series
+but fails condition 1 (the margin) on both: +0.164 against a need of 0.192 on
+ES2015 and +0.070 against a need of 0.165 on TS3009. The n = 5 screen passed it
+(+0.171 and +0.105); the larger sample did not hold the TS3009 gain.
+
+### Run
+
+- Date: 2026-10-18 and 19. Harness code identical to the registration merge
+  `28ed7bed` (only `RESULTS-model-screen.md` changed on `main` since, in #1555);
+  decision-pass prompt hash `6d3962b0dd75650c`, generation ceiling 8192, context
+  window 12288, one retry per window, `MAX_PASS_DECISIONS` 25. Only the model
+  tag differs from the 27b confirmatory.
+- Fresh `qwen3.6:35b-a3b` n = 15, pass arm, on ES2015 and TS3009: 120
+  meeting-runs, all completed, exit 0. No screen run reused. Comparators are the
+  stored confirmatory runs of `qwen3:8b` (15) and `qwen3.6:27b` (15), the same
+  runs the section above scores, re-scored here by the same script.
+- Wall-clock: ES2015 2184 s, TS3009 2859 s, total 5043 s (1.40 h) of model time,
+  against a forecast of 1.28 h.
+- **Latency caveat: the seconds-per-run figures of this section are contaminated
+  by external CPU load.** While the ES2015 runs were going, another process on
+  the same machine deliberately ran about 40 CPU-bound processes (load average
+  about 186, back to about 3 afterwards) to reproduce an unrelated flaky test.
+  The harness logs carry no per-run timestamps; the bounds are the run's start
+  (about 21:07 local, 2026-10-18), the ES2015 end (21:44:30) and the TS3009 end
+  (22:32:09), so the affected window lies within ES2015 and possibly the start of
+  TS3009. The first ES2015 run (1053 s against about 81 s for later runs) is
+  probably part of it. Quality numbers (recall, F1, failures, volume) are not
+  affected. **No speed conclusion is drawn from the s-per-run columns below**;
+  for speed, cite the clean n = 5 screen (89.6 s ES2015, 187.1 s TS3009 per run
+  for the 35b; 580.8 and 882.6 s for the 27b).
+
+### Per-series table (mean over 15 runs; thesis metric, same-meeting Hungarian)
+
+| Series | Model | R / F1 @0.50 | R / F1 @0.60 (F1 min-max) | R / F1 @0.70 | R / F1 @0.80 | harness recall (recalled) | failed meeting-runs | Decisions per meeting | s per run (load-contaminated, see above) |
+|---|---|---|---|---|---|---|---|---|---|
+| ES2015 | `qwen3:8b` | 0.822 / 0.502 | 0.474 / 0.289 (0.255-0.322) | 0.136 / 0.083 | 0.010 / 0.006 | 0.341 (138 of 405) | 1 of 60 | 15.43 | 165.7 |
+| ES2015 | `qwen3.6:27b` | 0.800 / 0.654 | 0.575 / 0.470 (0.394-0.554) | 0.225 / 0.183 | 0.035 / 0.028 | 0.457 (185 of 405) | 0 of 60 | 9.80 | 597.6 |
+| ES2015 | `qwen3.6:35b-a3b` | 0.919 / 0.634 | 0.657 / 0.453 (0.347-0.538) | 0.257 / 0.177 | 0.032 / 0.022 | 0.531 (215 of 405) | 0 of 60 | 12.87 (772 in 60) | 145.6 |
+| TS3009 | `qwen3:8b` | 0.987 / 0.462 | 0.646 / 0.303 (0.248-0.400) | 0.226 / 0.106 | 0.010 / 0.005 | 0.146 (57 of 390) | 6 of 60 | 21.32 | 488.8 |
+| TS3009 | `qwen3.6:27b` | 1.000 / 0.583 | 0.818 / 0.474 (0.429-0.522) | 0.392 / 0.228 | 0.051 / 0.030 | 0.205 (80 of 390) | 4 of 60 | 15.90 | 894.7 |
+| TS3009 | `qwen3.6:35b-a3b` | 0.995 / 0.482 | 0.769 / 0.373 (0.304-0.468) | 0.228 / 0.110 | 0.028 / 0.013 | 0.259 (101 of 390) | 0 of 60 | 20.42 (1225 in 60) | 190.6 |
+
+Pooled true positives at tau 0.60: ES2015 266 of 405 (`qwen3:8b` 192, `qwen3.6:27b`
+233); TS3009 300 of 390 (252, 319). Every `qwen3.6:35b-a3b` subject-and-value
+text read as English (772 of 772 and 1225 of 1225). Its 15-run harness recall
+(0.531, 0.259) is the highest of the three on both series.
+
+F1 curve (mean), tau 0.50 to 0.90:
+
+| Model | ES2015 | TS3009 |
+|---|---|---|
+| `qwen3.6:35b-a3b` | 0.634 / 0.569 / 0.453 / 0.322 / 0.177 / 0.065 / 0.022 / 0.000 / 0.000 | 0.482 / 0.466 / 0.373 / 0.260 / 0.110 / 0.036 / 0.013 / 0.004 / 0.000 |
+
+### Rule verdict against `qwen3:8b`
+
+| Series | dF1 | need (S) | 1 margin | 2 recall | 3 failures <= max(2, `qwen3:8b`) | 4 volume <= 1.10 x |
+|---|---|---|---|---|---|---|
+| ES2015 | 0.453 - 0.289 = +0.164 | max(0.192, 0.067) = 0.192 | **fail** (short by 0.028) | 0.657 >= 0.474 pass | 0 <= 2 pass | 12.87 <= 16.98 pass |
+| TS3009 | 0.373 - 0.303 = +0.070 | max(0.165, 0.152) = 0.165 | **fail** (short by 0.095) | 0.769 >= 0.646 pass | 0 <= 6 pass | 20.42 <= 23.45 pass |
+
+`qwen3.6:35b-a3b` does not advance. Its own F1 spread at 0.60 (0.347-0.538 and
+0.304-0.468) is wider than the 27b's and exceeds its gain over `qwen3:8b`. It is
+still above `qwen3:8b` in mean F1 and recall at every tau from 0.50 to 0.80 on
+both series; the rule asks for a margin larger than the run-to-run spread, and
+n = 15 shows the gain is not that large on TS3009.
+
+### Head-to-head against `qwen3.6:27b` (35b minus 27b)
+
+| Series | dF1 @0.50 | dF1 @0.60 | dF1 @0.70 | dF1 @0.80 | dR @0.50 | dR @0.60 | dR @0.70 | dR @0.80 |
+|---|---|---|---|---|---|---|---|---|
+| ES2015 | -0.020 | -0.017 | -0.006 | -0.006 | +0.119 | +0.081 | +0.032 | -0.002 |
+| TS3009 | -0.101 | -0.102 | -0.118 | -0.016 | -0.005 | -0.049 | -0.164 | -0.023 |
+
+On ES2015 the two are close: the 35b matches more gold decisions (higher recall
+up to tau 0.70, 266 against 233 pooled at 0.60) but emits more (12.87 against
+9.80 per meeting), so F1 is slightly lower. On TS3009 the 27b is better on F1
+at every tau and on recall from 0.60 up, and the gap grows with tau. The 35b
+has no failed meeting-runs (0 of 120 overall; the 27b failed 4 of 60 on TS3009,
+above bar F). Speed is not compared here: the s-per-run figures are
+load-contaminated; the clean screen puts the 35b at 89.6 and 187.1 s per run
+against the 27b's 580.8 and 882.6 s.
+
+### Reading
+
+- Precision against failures: the 35b costs about 0.10 F1 at 0.60 on TS3009
+  against the 27b, with no parse failures; on ES2015 it costs 0.017. Its speed
+  advantage is established only by the clean n = 5 screen, not by this run.
+- The memory budget of ADR-0047 (24 GB) was not checked here: the model is 22 GB
+  on disk and this run did not measure its resident size.
+- Whether to change the decision pass's model remains a maintainer decision.
+  Nothing here changes a default.
