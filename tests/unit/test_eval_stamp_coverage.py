@@ -31,6 +31,7 @@ _STAMP_CALL = re.compile(r"\b(?:build_stamp|write_stamp_sidecar)\(")
 EXEMPT: dict[str, str] = {
     "bakeoff/bakeoff_ollama.py": "reads Ollama's model list and load state; no results",
     "bakeoff/run_bakeoff.py": "the driver: it reads and checks the children's stamps",
+    "concept_model_screen/screen_pipeline.py": "transport module with no entry point; `run_concept_screen.py` stamps every result it stores",
     "decision_extraction/scripts/run_type_coverage.py": "prints to stdout; stores no result",
     "extraction_collapse/run_collapse_probe.py": "prints to stdout; stores no result",
     "ingest_concurrency/probe_fanout_share.py": "prints to stdout; stores no result",
