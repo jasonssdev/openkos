@@ -538,6 +538,9 @@ def sources_for(pool: str, prose: bool) -> list[str]:
         meetings = list(data.POOL_DA)
     elif pool == "F":
         meetings = list(data.POOL_F_WINDOWED)
+    elif pool == "F-noTS":
+        # Shortening step 2 of the registration: confirmation without TS3012.
+        meetings = [m for m in data.POOL_F_WINDOWED if not m.startswith("TS3012")]
     elif pool == "F-IB":
         meetings = list(data.POOL_F_MEETING_ONLY)
     else:
@@ -1984,18 +1987,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     s0.add_argument("--models", nargs="*")
     r = sub.add_parser("run")
     r.add_argument("--models", nargs="+", required=True)
-    r.add_argument("--pool", required=True, choices=("DA", "F", "F-IB"))
+    r.add_argument("--pool", required=True, choices=("DA", "F", "F-noTS", "F-IB"))
     r.add_argument("--runs", nargs="+", type=int, required=True)
     r.add_argument("--prose", action="store_true")
     j = sub.add_parser("judge")
     j.add_argument("--models", nargs="+", required=True)
-    j.add_argument("--pool", required=True, choices=("DA", "F", "F-IB"))
+    j.add_argument("--pool", required=True, choices=("DA", "F", "F-noTS", "F-IB"))
     j.add_argument("--runs", nargs="+", type=int, required=True)
     j.add_argument("--coverage", action="store_true")
     sc = sub.add_parser("score")
     sc.add_argument("--name", required=True)
     sc.add_argument("--models", nargs="+", required=True)
-    sc.add_argument("--pool", required=True, choices=("DA", "F", "F-IB"))
+    sc.add_argument("--pool", required=True, choices=("DA", "F", "F-noTS", "F-IB"))
     sc.add_argument("--runs", nargs="+", type=int, required=True)
     sc.add_argument("--prose-runs", nargs="*", type=int)
     sc.add_argument("--g1", action="store_true")
