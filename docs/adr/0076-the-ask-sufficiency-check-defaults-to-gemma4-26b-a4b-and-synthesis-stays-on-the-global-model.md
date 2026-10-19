@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0076: The Ask sufficiency check defaults to gemma4:26b-a4b, and synthesis stays on the global model"
 description: The packaged per-task default for a new sufficiency task key is gemma4:26b-a4b on the ollama backend, on a pre-registered screen in which it won the check and nothing else; answer and citation stay on model:, and a cold ask now swaps chat models once.
-status: Proposed
+status: Accepted
 date: 2026-10-19
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0076: The Ask sufficiency check defaults to gemma4:26b-a4b, and synthesis stays on the global model
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 - **Issues:** [#1560](https://github.com/jasonssdev/openkos/issues/1560)
 
@@ -120,6 +120,28 @@ end-to-end measurement, run after this section was committed, meets this bar.
 - **Otherwise** the change is not merged: the PR is closed with the data, and
   an issue records `qwen3:14b` (tied on sufficiency in round 2, smaller
   footprint) as the alternative to measure.
+
+### Result (2026-10-19, after the bar was committed in e1f8cbfd)
+
+Measured on one machine (48 GB, Apple Silicon, Ollama 0.32.9), n = 3
+interleaved sequences per arm, 36 `openkos query` runs, all exit 0.
+
+| | arm (a): check on `qwen3:8b` | arm (b): check on `gemma4:26b-a4b` | bar |
+| --- | ---: | ---: | --- |
+| warm median per question (15 per arm) | 14.24 s | 12.00 s | (b)/(a) = 0.84, needs <= 1.5: **pass** |
+| cold first question (median of 3) | 22.97 s | 22.86 s | needs <= 30 s: **pass** |
+| chat models resident after every question | `qwen3:8b` | `qwen3:8b` and `gemma4:26b-a4b` | no swap per question: **pass** |
+
+The bar's third clause passes through its "no swap" branch, not through
+the 24 GB fit. The `ollama ps` sum is 7.4 GB, but `ollama ps` under-reports
+`gemma4` (985 MB shown); see the memory note above. By the loader's buffer
+report the two chat models need about 24.1 GiB together (17.76 + 6.35), which
+is over the 24 GB budget. So on this machine both stay resident and nothing
+swaps; on the 32 GB floor, where one chat model is resident at a time, each
+ask would still swap, and that remains unmeasured. The warm check is faster
+on `gemma4:26b-a4b` (a median of about 1.9 s against 2.7 s in the screen),
+which is why arm (b) is faster per question. **The bar passed, and this ADR
+is accepted.**
 
 ## Alternatives considered
 

@@ -1,7 +1,7 @@
 # Tasks: adopt-gemma4-sufficiency-default
 
 Refs #1560. Proposal: `proposal.md`. Specs: `specs/query-answer`,
-`specs/query-command`, `specs/doctor-command`. ADR-0076 (Proposed).
+`specs/query-command`, `specs/doctor-command`. ADR-0076 (Accepted on merge, after its adoption bar passed).
 
 Strict TDD is ON, runner `uv run pytest`. No test reaches Ollama.
 
