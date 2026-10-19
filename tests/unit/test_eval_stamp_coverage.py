@@ -29,6 +29,7 @@ _MODEL_CALL = re.compile(r"OllamaClient\(|/api/chat|/api/generate|/api/embed|\.c
 _STAMP_CALL = re.compile(r"\b(?:build_stamp|write_stamp_sidecar)\(")
 
 EXEMPT: dict[str, str] = {
+    "ask_model_screen/ask_screen_core.py": "the cache wrapper around a client; its runner stamps every result",
     "bakeoff/bakeoff_ollama.py": "reads Ollama's model list and load state; no results",
     "bakeoff/run_bakeoff.py": "the driver: it reads and checks the children's stamps",
     "concept_model_screen/screen_pipeline.py": "transport module with no entry point; `run_concept_screen.py` stamps every result it stores",
