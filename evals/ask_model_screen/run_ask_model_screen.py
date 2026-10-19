@@ -161,8 +161,8 @@ def write_bundle(
 
 BUILT_SET: Final = "es-built"
 """The set over a bundle COMPILED by `openkos ingest` with the extraction
-model #1557/#1558 choose (`--built-bundle`). Optional until those finish;
-see PREREGISTRATION-DRAFT.md."""
+model #1557/#1558 chose (`--built-bundle`);
+see PREREGISTRATION.md."""
 
 
 def load_bundle_docs(bundle: pathlib.Path) -> dict[str, tuple[str, str]]:
@@ -520,8 +520,17 @@ def generate(
     return rows, totals
 
 
-def runs_path(cache_dir: pathlib.Path, model: str) -> pathlib.Path:
-    return cache_dir / "runs" / f"runs-{slug(model)}.json"
+def run_range(first_run: int, runs: int) -> range:
+    """Runs `first_run .. first_run + runs - 1`; seed = run number."""
+    return range(first_run, first_run + runs)
+
+
+def runs_path(cache_dir: pathlib.Path, model: str, first_run: int = 1) -> pathlib.Path:
+    """The screen's runs (from 1) keep their file; stage 0 and the
+    confirmation, on seeds outside the screen's, get one of their own, so
+    neither overwrites nor mixes with the screen's projection."""
+    suffix = "" if first_run == 1 else f"-from{first_run}"
+    return cache_dir / "runs" / f"runs-{slug(model)}{suffix}.json"
 
 
 def write_runs(
@@ -532,10 +541,12 @@ def write_runs(
     stamp: Mapping[str, Any],
     timeout: float,
     totals: Mapping[str, int],
+    first_run: int = 1,
 ) -> pathlib.Path:
-    """Rows are always regenerated from the cache for runs 1..N, so this file
-    is a projection of the cache, never the only copy of a generation."""
-    path = runs_path(cache_dir, model)
+    """Rows are always regenerated from the cache for the requested runs, so
+    this file is a projection of the cache, never the only copy of a
+    generation."""
+    path = runs_path(cache_dir, model, first_run)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -555,12 +566,36 @@ def write_runs(
     return path
 
 
-def load_rows(cache_dir: pathlib.Path, model: str, runs: int) -> list[Row]:
-    path = runs_path(cache_dir, model)
+def load_rows(
+    cache_dir: pathlib.Path, model: str, runs: int, first_run: int = 1
+) -> list[Row]:
+    path = runs_path(cache_dir, model, first_run)
     if not path.is_file():
         raise SystemExit(f"no runs for {model} at {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return [Row(**r) for r in payload["rows"] if r["run"] <= runs]
+    wanted = set(run_range(first_run, runs))
+    return [Row(**r) for r in payload["rows"] if r["run"] in wanted]
+
+
+STAGE0_SET: Final = "es-en"
+"""Stage 0 calibrates on the cross-lingual set, the one #1560 adds."""
+
+
+def sample_contexts(contexts: Mapping[str, Any], k: int) -> dict[str, Any]:
+    """`k` evenly spaced items of the `es-en` set: stage 0's calibration
+    sample (latency and timeouts only, never a quality decision). Fixed by
+    position, so every model is timed on the same items."""
+    items = contexts["sets"][STAGE0_SET]["items"]
+    picks = sorted({round(i * len(items) / k) for i in range(k)})
+    return {
+        **contexts,
+        "sets": {
+            STAGE0_SET: {
+                **contexts["sets"][STAGE0_SET],
+                "items": [items[i] for i in picks],
+            }
+        },
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -680,7 +715,7 @@ def guardrails(rows: Sequence[Row]) -> dict[str, float | None]:
 def vetoes(
     role: str, cand: Mapping[str, float | None], base: Mapping[str, float | None]
 ) -> list[str]:
-    """The pre-registered vetoes for `role` (see PREREGISTRATION-DRAFT.md)."""
+    """The pre-registered vetoes for `role` (see PREREGISTRATION.md)."""
     out: list[str] = []
     call = "sufficiency" if role == "sufficiency" else "answer"
     prefix = "suff" if call == "sufficiency" else "ans"
@@ -755,6 +790,10 @@ def compare(
             if model == baseline:
                 continue
             cand_scores = scores_by_item(rows, role)
+            if not cand_scores:
+                # The candidate did not make this role's call this round: it
+                # was cut from the role and entered with `--calls` narrowed.
+                continue
             delta = core.paired_bootstrap(base_scores, cand_scores, resamples=resamples)
             veto = vetoes(role, result["guardrails"][model], base_guard)
             per_set = per_set_deltas(base_scores, cand_scores, resamples=resamples)
@@ -800,9 +839,9 @@ def compare(
     return result
 
 
-def render(result: Mapping[str, Any], *, runs: int) -> str:
+def render(result: Mapping[str, Any], *, runs: int, first_run: int = 1) -> str:
     lines = [
-        f"# Ask model screen (#1560), runs 1..{runs}",
+        f"# Ask model screen (#1560), runs {first_run}..{first_run + runs - 1}",
         "",
         f"Baseline `{result['baseline']}`. Delta = candidate minus baseline, "
         "paired over items, 95% percentile bootstrap.",
@@ -1140,6 +1179,106 @@ def _self_test() -> int:
             "a timeout counts as a failure", failure_rate([row], "sufficiency") == 1.0
         )
 
+        # A candidate that survived only some roles enters the next round with
+        # only those calls (`--calls answer`); the comparison must score it on
+        # those roles and leave it out of the others, not refuse to pair.
+        rows_answer_only, _ = generate(
+            contexts,
+            model="answer-only",
+            digest="d4",
+            runs=[1],
+            calls=("answer",),
+            cache=cache,
+            timeout=60.0,
+            make_inner=lambda _r: _ScriptedModel(),
+            log=lambda _m: None,
+        )
+        partial = compare(
+            {"base": rows_base, "answer-only": rows_answer_only},
+            baseline="base",
+            resamples=200,
+        )
+        check(
+            "a candidate without the sufficiency call is left out of that role",
+            "answer-only" not in partial["roles"]["sufficiency"]["candidates"]
+            and "answer-only" in partial["roles"]["answer"]["candidates"],
+        )
+
+        # Confirmation and stage 0 run on seeds outside the screen's 1..3 and
+        # must neither overwrite nor mix with the screen's projection.
+        cache_dir = pathlib.Path(tmp)
+        rows_confirm, _ = generate(
+            contexts,
+            model="base",
+            digest="d0",
+            runs=run_range(11, 2),
+            calls=CALLS,
+            cache=cache,
+            timeout=60.0,
+            make_inner=lambda _r: good,
+            log=lambda _m: None,
+        )
+        totals0 = {"hits": 0, "misses": 0}
+        write_runs(cache_dir, "base", rows_base, stamp={}, timeout=60.0, totals=totals0)
+        write_runs(
+            cache_dir,
+            "base",
+            rows_confirm,
+            stamp={},
+            timeout=60.0,
+            totals=totals0,
+            first_run=11,
+        )
+        check(
+            "seeds 11.. get their own projection file",
+            runs_path(cache_dir, "base", 11) != runs_path(cache_dir, "base")
+            and runs_path(cache_dir, "base", 11).is_file()
+            and runs_path(cache_dir, "base").is_file(),
+        )
+        check(
+            "loading from run 11 returns exactly runs 11 and 12",
+            sorted({r.run for r in load_rows(cache_dir, "base", 2, first_run=11)})
+            == [11, 12],
+        )
+        check(
+            "the screen's projection still holds only run 1",
+            sorted({r.run for r in load_rows(cache_dir, "base", 3)}) == [1],
+        )
+
+    # Stage 0 calibrates on a fixed, evenly spaced handful of es-en items.
+    sample = sample_contexts(contexts, 5)
+    sample_items = sample["sets"]["es-en"]["items"]
+    all_items = contexts["sets"]["es-en"]["items"]
+    check(
+        "the stage-0 sample is 5 evenly spaced es-en items",
+        list(sample["sets"]) == ["es-en"]
+        and [all_items.index(i) for i in sample_items] == [0, 6, 13, 19, 26],
+    )
+    check(
+        "it mixes transferred and anchored questions",
+        {i["anchored"] is None for i in sample_items} == {True, False},
+    )
+
+    # The CLI carries every option the registered protocol uses.
+    parsed = build_parser().parse_args(
+        [
+            "--stage",
+            "contexts",
+            "--built-bundle",
+            "/x/bundle",
+            "--first-run",
+            "11",
+            "--sample",
+            "5",
+        ]
+    )
+    check(
+        "the CLI takes --built-bundle, --first-run and --sample",
+        parsed.built_bundle == pathlib.Path("/x/bundle")
+        and parsed.first_run == 11
+        and parsed.sample == 5,
+    )
+
     for name in failures:
         print(f"FAIL: {name}")
     print(f"self-test: {checks - len(failures)}/{checks} passed")
@@ -1161,24 +1300,47 @@ def _model_digest(model: str, stamp: Mapping[str, Any]) -> str:
     return str(digest)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--stage", choices=("contexts", "generate", "compare"))
     parser.add_argument("--cache-dir", type=pathlib.Path, default=DEFAULT_CACHE_DIR)
+    parser.add_argument(
+        "--built-bundle",
+        type=pathlib.Path,
+        default=None,
+        help="contexts: add the es-built set over this compiled bundle/",
+    )
     parser.add_argument("--model", default=None)
-    parser.add_argument("--runs", type=int, default=1, help="runs 1..N (seed = run)")
+    parser.add_argument("--runs", type=int, default=1, help="number of runs")
+    parser.add_argument(
+        "--first-run",
+        type=int,
+        default=1,
+        help="first run number (seed = run); the confirmation starts at 11",
+    )
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        help="generate: only N evenly spaced es-en items (stage 0)",
+    )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--calls", default=",".join(CALLS), help="sufficiency,answer")
     parser.add_argument("--offline", action="store_true", help="replay the cache only")
     parser.add_argument("--baseline", default=BASELINE)
     parser.add_argument("--candidates", default="")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.self_test:
         return _self_test()
     if args.stage == "contexts":
-        payload = build_contexts(args.timeout)
+        payload = build_contexts(args.timeout, built_bundle=args.built_bundle)
         args.cache_dir.mkdir(parents=True, exist_ok=True)
         contexts_path(args.cache_dir).write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
@@ -1192,6 +1354,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not set(calls) <= set(CALLS):
             parser.error(f"--calls takes {CALLS}")
         contexts = load_contexts(args.cache_dir)
+        if args.sample is not None:
+            contexts = sample_contexts(contexts, args.sample)
         stamp = build_stamp(
             model=args.model,
             prompts={
@@ -1214,7 +1378,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             contexts,
             model=args.model,
             digest=digest,
-            runs=range(1, args.runs + 1),
+            runs=run_range(args.first_run, args.runs),
             calls=calls,
             cache=core.GenerationCache(args.cache_dir),
             timeout=args.timeout,
@@ -1228,6 +1392,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             stamp=stamp,
             timeout=args.timeout,
             totals=totals,
+            first_run=args.first_run,
         )
         print(f"wrote {path} (cache hits {totals['hits']}, misses {totals['misses']})")
         return 0
@@ -1237,12 +1402,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("--stage compare needs --candidates")
         load_contexts(args.cache_dir)  # refuses rows scored on a stale corpus
         by_model = {
-            m: load_rows(args.cache_dir, m, args.runs)
+            m: load_rows(args.cache_dir, m, args.runs, args.first_run)
             for m in [args.baseline, *candidates]
         }
         result = compare(by_model, baseline=args.baseline)
-        report = render(result, runs=args.runs)
-        out = args.cache_dir / f"compare-runs{args.runs}-{slug(args.baseline)}.md"
+        report = render(result, runs=args.runs, first_run=args.first_run)
+        tag = "" if args.first_run == 1 else f"-from{args.first_run}"
+        out = args.cache_dir / f"compare-runs{args.runs}{tag}-{slug(args.baseline)}.md"
         out.write_text(report, encoding="utf-8")
         (out.with_suffix(".json")).write_text(
             json.dumps(result, indent=1), encoding="utf-8"

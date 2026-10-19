@@ -345,3 +345,62 @@ def forecast_hours(
 ) -> float:
     """Model wall-clock for one model: calls x seconds per call, in hours."""
     return items * runs * calls_per_item * s_per_call / 3600
+
+
+# --------------------------------------------------------------------------- #
+# The pre-registered shortening rule                                           #
+# --------------------------------------------------------------------------- #
+
+LADDER: Final[tuple[tuple[int, int], ...]] = (
+    (3, 10),
+    (3, 5),
+    (2, 5),
+    (2, 3),
+    (2, 0),
+)
+"""(round-2 runs, confirmation runs), longest first. Round 2 reuses run 1, so
+it adds `runs - 1`; a confirmation of 0 runs means none runs, and the best
+verdict is then "selected, not confirmed"."""
+
+
+@dataclass(frozen=True)
+class Plan:
+    """The rung the shortening rule chose, and its forecast."""
+
+    round2_runs: int
+    confirm_runs: int
+    hours: float
+    fits: bool
+
+
+def shorten(
+    *,
+    fixed_h: float,
+    round2_h_per_run: float,
+    confirm_h_per_run: float,
+    budget_h: float,
+    floor: tuple[int, int] | None = None,
+    ladder: Sequence[tuple[int, int]] = LADDER,
+) -> Plan:
+    """The first rung of `ladder` whose forecast fits `budget_h`.
+
+    `fixed_h` is what the plan cannot shorten: hours already spent plus the
+    rounds the rung does not change. `floor` is a rung already taken at an
+    earlier re-forecast; the rule only ever shortens, so rungs above it are
+    skipped. When no rung fits, the last one is returned with `fits=False`."""
+    rungs = list(ladder)
+    if floor is not None:
+        rungs = rungs[rungs.index(floor) :]
+    plan: Plan | None = None
+    for round2_runs, confirm_runs in rungs:
+        hours = (
+            fixed_h
+            + (round2_runs - 1) * round2_h_per_run
+            + confirm_runs * confirm_h_per_run
+        )
+        plan = Plan(round2_runs, confirm_runs, hours, hours <= budget_h)
+        if plan.fits:
+            return plan
+    if plan is None:
+        raise ValueError("an empty ladder")
+    return plan

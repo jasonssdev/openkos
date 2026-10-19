@@ -316,3 +316,51 @@ def test_forecast_hours_is_calls_times_seconds_over_3600() -> None:
     assert core.forecast_hours(items=60, runs=2, calls_per_item=2, s_per_call=15.0) == (
         pytest.approx(1.0)
     )
+
+
+# --------------------------------------------------------------------------- #
+# the pre-registered shortening rule                                           #
+# --------------------------------------------------------------------------- #
+
+
+def test_shortening_keeps_the_full_design_when_it_fits() -> None:
+    plan = core.shorten(
+        fixed_h=1.0, round2_h_per_run=0.2, confirm_h_per_run=0.1, budget_h=4.0
+    )
+    # (3 - 1) x 0.2 + 10 x 0.1 + 1.0 = 2.4 h: the first rung, unshortened.
+    assert (plan.round2_runs, plan.confirm_runs) == (3, 10)
+    assert plan.hours == pytest.approx(2.4)
+    assert plan.fits
+
+
+def test_shortening_walks_the_ladder_in_order_until_the_budget_holds() -> None:
+    # Rung by rung: (3,10) 1.0+0.6+3.0=4.6; (3,5) 1.0+0.6+1.5=3.1 fits.
+    plan = core.shorten(
+        fixed_h=1.0, round2_h_per_run=0.3, confirm_h_per_run=0.3, budget_h=4.0
+    )
+    assert (plan.round2_runs, plan.confirm_runs) == (3, 5)
+    # Tighter: (3,5) 2.0+0.6+1.5=4.1 and (2,5) 2.0+0.3+1.5=3.8 fits.
+    plan = core.shorten(
+        fixed_h=2.0, round2_h_per_run=0.3, confirm_h_per_run=0.3, budget_h=4.0
+    )
+    assert (plan.round2_runs, plan.confirm_runs) == (2, 5)
+
+
+def test_shortening_ends_at_no_confirmation_and_says_it_does_not_fit() -> None:
+    plan = core.shorten(
+        fixed_h=3.9, round2_h_per_run=0.5, confirm_h_per_run=0.5, budget_h=4.0
+    )
+    assert (plan.round2_runs, plan.confirm_runs) == (2, 0)
+    assert plan.hours == pytest.approx(4.4)
+    assert not plan.fits
+
+
+def test_shortening_never_lengthens_past_a_rung_already_taken() -> None:
+    plan = core.shorten(
+        fixed_h=0.1,
+        round2_h_per_run=0.1,
+        confirm_h_per_run=0.1,
+        budget_h=4.0,
+        floor=(2, 5),
+    )
+    assert (plan.round2_runs, plan.confirm_runs) == (2, 5)
