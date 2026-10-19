@@ -35,6 +35,7 @@ fixed in [`PREREGISTRATION.md`](PREREGISTRATION.md); the outcome is in
 | `screen_judge.py` | The `gpt-oss:20b` prompts and fail-closed label parsing |
 | `windows.json` | Registered window hashes (no text) and gold counts per meeting |
 | `drop_ablation.py` | #1572: per-rule L6/L7 drop ablation on the cached records, cache-only embeddings (`list`, `score`, `--self-test`); rules in `DROP_ABLATION_PREREGISTRATION.md`, outcome in `DROP_ABLATION_RESULTS.md` |
+| `judge_study.py` | #1571: the cached records replayed with only the selector judge routed (none, self, fixed `DEFAULT_JUDGE_MODEL`); extraction calls cache-only (`replay-self`, `run`, `score`, `--self-test`); rules in `JUDGE_STUDY_PREREGISTRATION.md`, outcome in `JUDGE_STUDY_RESULTS.md` |
 
 ## Data stays outside the repository
 
