@@ -1893,6 +1893,21 @@ def _t_stage_capture() -> None:
                 ]
             )
             return reply, {"outcome": "ok", "wall_s": 1.0, "content": reply}
+        if (
+            str(messages[0]["content"])
+            == concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT
+        ):
+            reply = json.dumps(
+                [
+                    {
+                        "type": "Person",
+                        "title": "Speaker A",
+                        "description": "A participant.",
+                        "body": "b",
+                    }
+                ]
+            )
+            return reply, {"outcome": "ok", "wall_s": 1.0, "content": reply}
         return "[]", {"outcome": "ok", "wall_s": 1.0, "content": "[]"}
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1923,6 +1938,10 @@ def _t_stage_capture() -> None:
     check(
         sum(1 for o in rec["stages"]["dedup"] if o["title"] == "Shared") == 1,
         "dedup stage",
+    )
+    check(
+        len(rec["stages"]["dedup"]) == len(windows),
+        f"dedup stage must be the window merge only: {len(rec['stages']['dedup'])}",
     )
     check(
         all(o["window"] is not None for o in rec["stages"]["dedup"]),
