@@ -57,18 +57,61 @@ from openkos.config import (  # noqa: E402
 )
 from openkos.extraction import concept as concept_mod  # noqa: E402
 from openkos.extraction import decision_pass  # noqa: E402
-from openkos.llm.ollama import OllamaClient  # noqa: E402
+from openkos.llm.ollama import ChatDiagnostics, OllamaClient  # noqa: E402
 
 DEFAULT_MODEL: Final = "qwen3:8b"
 DEFAULT_RUNS: Final = 5
 """Five is the floor the repo's earlier harnesses used and also the size at
 which one of them saw an arm swing 0.25 against ITSELF; the pre-registration
 asks for more on the treatment run."""
+REPLY_HEAD_CHARS: Final = 300
+"""How much of a FAILED call's reply is stored (#1562): enough to tell prose,
+a fence or a syntax error from an empty reply, bounded because a meeting
+transcript is somebody else's text. A successful call stores no text."""
 RESULTS_DIR: Final = pathlib.Path(__file__).resolve().parent / "results"
 ARMS: Final = ("pass", "baseline")
 
 
 # --- running ---------------------------------------------------------------
+
+
+class DiagnosticsRecorder:
+    """Keeps the latest `ChatDiagnostics` the client reported (#1562).
+
+    The harness is serial, so one slot is enough. Wire `record` as the
+    client's `diagnostics_sink` and `last` as the pass's `diagnostics` getter."""
+
+    def __init__(self) -> None:
+        self.latest: ChatDiagnostics | None = None
+
+    def record(self, diagnostics: ChatDiagnostics) -> None:
+        self.latest = diagnostics
+
+    def last(self) -> ChatDiagnostics | None:
+        """The report for the call that just finished, then forgotten, so a
+        call that raised before parsing cannot inherit its predecessor's."""
+        latest, self.latest = self.latest, None
+        return latest
+
+
+def call_entry(
+    observation: decision_pass.CallObservation, latency_s: float | None
+) -> dict[str, Any]:
+    """One stored per-call record. Counters always; reply text only on failure."""
+    diag = observation.diagnostics
+    entry: dict[str, Any] = {
+        "window": observation.window_index,
+        "attempt": observation.attempt,
+        "latency_s": None if latency_s is None else round(latency_s, 2),
+        "failure": observation.failure,
+        "reply_chars": None if observation.reply is None else len(observation.reply),
+        "done_reason": getattr(diag, "done_reason", None),
+        "eval_count": getattr(diag, "eval_count", None),
+        "thinking_chars": getattr(diag, "thinking_chars", None),
+    }
+    if observation.failure is not None and observation.reply is not None:
+        entry["reply_head"] = observation.reply[:REPLY_HEAD_CHARS]
+    return entry
 
 
 def load_transcripts(
@@ -111,9 +154,11 @@ def run_meeting(
     rows: Sequence[scoring.GoldRow],
     llm: TimedBackend,
     run: int,
+    recorder: DiagnosticsRecorder | None = None,
 ) -> dict[str, Any]:
     """One arm run on one meeting: the raw, JSON-safe record to persist."""
     calls_before = len(llm.call_latencies_s)
+    call_log: list[dict[str, Any]] = []
     started = time.monotonic()
     failure: str | None = None
     windows = 0
@@ -125,7 +170,20 @@ def run_meeting(
     if arm == "pass":
         windows_list = pass_windows(text, meeting)
         windows = len(windows_list)
-        outcome = decision_pass.run_decision_pass(windows_list, llm)
+
+        def on_call(observation: decision_pass.CallObservation) -> None:
+            latency = llm.call_latencies_s[-1] if llm.call_latencies_s else None
+            call_log.append(call_entry(observation, latency))
+
+        # No re-ask after a generation cap: it repeats and costs a second
+        # runaway (~250 s). Harness-only; production still retries (#1562).
+        outcome = decision_pass.run_decision_pass(
+            windows_list,
+            llm,
+            on_call=on_call,
+            diagnostics=recorder.last if recorder is not None else None,
+            retry_after_cap=False,
+        )
         failure = outcome.failure
         for result in outcome.results:
             evidence = result.body.split("\n> ", 1)[-1] if "\n> " in result.body else ""
@@ -165,6 +223,8 @@ def run_meeting(
         "calls": len(llm.call_latencies_s) - calls_before,
         "failure": failure,
         "wall_s": round(time.monotonic() - started, 2),
+        "call_latencies_s": [round(v, 2) for v in llm.call_latencies_s[calls_before:]],
+        "call_log": call_log,
         "items": items,
     }
 
@@ -188,12 +248,13 @@ def run_arm(
     llm: TimedBackend,
     runs: int,
     log: Callable[[str], None] = print,
+    recorder: DiagnosticsRecorder | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for run in range(1, runs + 1):
         for meeting, text in texts.items():
             meeting_rows = [r for r in rows if r.meeting_id == meeting]
-            record = run_meeting(arm, meeting, text, meeting_rows, llm, run)
+            record = run_meeting(arm, meeting, text, meeting_rows, llm, run, recorder)
             records.append(record)
             log(
                 f"    {arm} run {run} {meeting}: items={len(record['items'])} "
@@ -333,17 +394,19 @@ def main(argv: list[str] | None = None) -> int:
             f"meeting(s): {', '.join(unshaped)}. The pass would not fire in production, "
             "so a run would measure a false zero."
         )
+    recorder = DiagnosticsRecorder()
     llm = TimedBackend(
         OllamaClient(
             model=args.model,
             max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
             context_window=DEFAULT_CONTEXT_WINDOW,
+            diagnostics_sink=recorder.record,
         )
     )
     print(
         f"model {args.model}, arm {args.arm}, {args.runs} run(s), {len(texts)} meeting(s)"
     )
-    records = run_arm(args.arm, texts, rows, llm, args.runs)
+    records = run_arm(args.arm, texts, rows, llm, args.runs, recorder=recorder)
     partial = bool(scoring.blank_rows(rows))
     path = write_results(
         records,
@@ -453,6 +516,25 @@ _PASS_REPLY: Final = json.dumps(
         },
     ]
 )
+
+
+class _DiagLLM:
+    """Replies or raises per call, reporting `ChatDiagnostics` like the client."""
+
+    def __init__(self, outcomes: Sequence[object], recorder: DiagnosticsRecorder):
+        self.outcomes = list(outcomes)
+        self.recorder = recorder
+        self.calls = 0
+
+    def chat(self, messages: Sequence[Any]) -> str:
+        self.calls += 1
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            self.recorder.record(ChatDiagnostics("length", 8192, 0, 0))
+            raise outcome
+        reply = str(outcome)
+        self.recorder.record(ChatDiagnostics("stop", 17, 4, len(reply)))
+        return reply
 
 
 class _FakeLLM:
@@ -683,6 +765,73 @@ def _self_test() -> int:
         )[0]
         check("a retried window counts both real calls", retry["calls"], 2)
         check("a retried window is not a failure", retry["failure"], None)
+        # failure diagnostics (#1562)
+        from openkos.llm.base import BackendGenerationCapped
+
+        prose = "I think the answer is " + "blah " * 100
+        rec_a = DiagnosticsRecorder()
+        diag_llm = _DiagLLM([prose, prose], rec_a)
+        failed = run_arm(
+            "pass",
+            {"ES2015a": _SYNTH_TRANSCRIPT},
+            rows,
+            TimedBackend(diag_llm),
+            1,
+            log=lambda _line: None,
+            recorder=rec_a,
+        )[0]
+        check("unparseable run is a failure", bool(failed["failure"]), True)
+        check("both attempts are logged", len(failed["call_log"]), 2)
+        entry = failed["call_log"][0]
+        check("failed call stores the reply length", entry["reply_chars"], len(prose))
+        check("failed call stores a bounded head", entry["reply_head"], prose[:300])
+        check("head is at most 300 chars", len(entry["reply_head"]) <= 300, True)
+        check("failed call stores done_reason", entry["done_reason"], "stop")
+        check("failed call stores eval_count", entry["eval_count"], 17)
+        check("failed call stores thinking length", entry["thinking_chars"], 4)
+        check("failed call stores the window", entry["window"], 0)
+        check("failed call stores its latency", entry["latency_s"] is not None, True)
+        check("latencies are persisted", len(failed["call_latencies_s"]), 2)
+        rec2 = DiagnosticsRecorder()
+        cap_llm = _DiagLLM([BackendGenerationCapped("cap")], rec2)
+        capped_run = run_arm(
+            "pass",
+            {"ES2015a": _SYNTH_TRANSCRIPT},
+            rows,
+            TimedBackend(cap_llm),
+            1,
+            log=lambda _line: None,
+            recorder=rec2,
+        )[0]
+        check("a capped window is not re-asked", cap_llm.calls, 1)
+        check(
+            "a capped call records its done_reason",
+            (
+                capped_run["call_log"][0]["done_reason"],
+                capped_run["call_log"][0]["eval_count"],
+                capped_run["call_log"][0]["reply_chars"],
+            ),
+            ("length", 8192, None),
+        )
+        rec3 = DiagnosticsRecorder()
+        ok_run = run_arm(
+            "pass",
+            {"ES2015a": _SYNTH_TRANSCRIPT},
+            rows,
+            TimedBackend(_DiagLLM([_PASS_REPLY], rec3)),
+            1,
+            log=lambda _line: None,
+            recorder=rec3,
+        )[0]
+        ok_entry = ok_run["call_log"][0]
+        check("a successful call stores no reply text", "reply_head" in ok_entry, False)
+        check("a successful call keeps its counters", ok_entry["eval_count"], 17)
+        check(
+            "no reply text anywhere in a successful record",
+            "welcome to the meeting" in json.dumps(ok_run)
+            or "Use rubber" in json.dumps(ok_run["call_log"]),
+            False,
+        )
         first = records[0]
         check("windows reported", first["windows"], 1)
         check("calls reported", first["calls"], 1)

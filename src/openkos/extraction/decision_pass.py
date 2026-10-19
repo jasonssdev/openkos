@@ -24,13 +24,19 @@ evidence alone, so no transcript excerpt is carried.
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
 from openkos.extraction.concept import OPTIONAL_CALL_DECISION_PASS, ExtractionResult
 from openkos.llm import parsing
-from openkos.llm.base import BackendError, BackendUnavailable, LLMBackend, Message
+from openkos.llm.base import (
+    BackendError,
+    BackendGenerationCapped,
+    BackendUnavailable,
+    LLMBackend,
+    Message,
+)
 from openkos.llm.prompts import load_prompt
 
 CALL_NAME: Final = OPTIONAL_CALL_DECISION_PASS
@@ -193,25 +199,68 @@ def to_result(item: DecisionItem) -> ExtractionResult:
     )
 
 
+@dataclass(frozen=True)
+class CallObservation:
+    """One decision-pass call, handed to an opt-in observer (issue #1562).
+
+    For an evaluation harness that needs to say WHY a call failed. `reply` is
+    the raw reply text, or `None` when the call raised before returning one;
+    `failure` is the cause string `_ask_window` would report, or `None` on a
+    usable reply; `diagnostics` is whatever the caller's `diagnostics` getter
+    returned right after the call (for Ollama, a `ChatDiagnostics`). Production
+    passes no observer, so reply text is never retained or logged there."""
+
+    window_index: int
+    attempt: int
+    reply: str | None
+    failure: str | None
+    diagnostics: Any
+
+
 def _ask_window(
-    window: str, llm: LLMBackend
+    window: str,
+    llm: LLMBackend,
+    observe: Callable[[str | None, str | None], None] | None = None,
+    *,
+    retry_after_cap: bool = True,
 ) -> tuple[list[dict[str, Any]] | None, str | None, bool]:
     """One call for one window: `(items, None, False)` on a usable reply,
     else `(None, cause, retryable)`. The cause is the type name only, never
-    the message; `BackendUnavailable` is the one cause not worth a re-ask."""
+    the message; `BackendUnavailable` is the one cause not worth a re-ask.
+
+    `observe(reply, failure)` is called once per call when given (#1562)."""
     try:
         reply = llm.chat(build_messages(window))
     except BackendUnavailable:
-        return None, f"{CALL_NAME}: BackendUnavailable", False
+        cause = f"{CALL_NAME}: BackendUnavailable"
+        if observe is not None:
+            observe(None, cause)
+        return None, cause, False
     except BackendError as exc:
-        return None, f"{CALL_NAME}: {type(exc).__name__}", True
+        cause = f"{CALL_NAME}: {type(exc).__name__}"
+        if observe is not None:
+            observe(None, cause)
+        capped = isinstance(exc, BackendGenerationCapped)
+        return None, cause, retry_after_cap or not capped
     parsed = parse_reply(reply)
     if parsed is None:
-        return None, f"{CALL_NAME}: unparseable reply", True
+        cause = f"{CALL_NAME}: unparseable reply"
+        if observe is not None:
+            observe(reply, cause)
+        return None, cause, True
+    if observe is not None:
+        observe(reply, None)
     return parsed, None, False
 
 
-def run_decision_pass(windows: Sequence[str], llm: LLMBackend) -> DecisionPassResult:
+def run_decision_pass(
+    windows: Sequence[str],
+    llm: LLMBackend,
+    *,
+    on_call: Callable[[CallObservation], None] | None = None,
+    diagnostics: Callable[[], Any] | None = None,
+    retry_after_cap: bool = True,
+) -> DecisionPassResult:
     """Ask each window which decisions it reached; admit what verifies.
 
     Never raises on a backend failure or an unusable reply. A window whose
@@ -222,13 +271,42 @@ def run_decision_pass(windows: Sequence[str], llm: LLMBackend) -> DecisionPassRe
     Only when the retry also fails does that window contribute nothing, and
     the first such cause -- the retry's -- is reported on `failure` (type name
     only, never the message); the other windows still count. A valid `[]`, or
-    a parsed reply with no verbatim items, is an answer and is never retried."""
+    a parsed reply with no verbatim items, is an answer and is never retried.
+
+    The keyword-only arguments are opt-in and default to the behaviour above
+    byte for byte (#1562). `on_call` receives a `CallObservation` per call;
+    `diagnostics` is a zero-argument getter read right after each call to fill
+    its `diagnostics`; `retry_after_cap=False` skips the re-ask after a
+    `BackendGenerationCapped`, which a harness uses to avoid paying for a
+    second runaway."""
+
+    def observer(
+        index: int, attempt: int
+    ) -> Callable[[str | None, str | None], None] | None:
+        if on_call is None:
+            return None
+
+        def observe(reply: str | None, failure: str | None) -> None:
+            on_call(
+                CallObservation(
+                    index,
+                    attempt,
+                    reply,
+                    failure,
+                    diagnostics() if diagnostics is not None else None,
+                )
+            )
+
+        return observe
+
     admitted: list[DecisionItem] = []
     failure: str | None = None
-    for window in windows:
-        parsed, cause, retryable = _ask_window(window, llm)
+    for index, window in enumerate(windows):
+        parsed, cause, retryable = _ask_window(
+            window, llm, observer(index, 1), retry_after_cap=retry_after_cap
+        )
         if retryable:
-            parsed, cause, _ = _ask_window(window, llm)
+            parsed, cause, _ = _ask_window(window, llm, observer(index, 2))
         if parsed is None:
             failure = failure or cause
             continue

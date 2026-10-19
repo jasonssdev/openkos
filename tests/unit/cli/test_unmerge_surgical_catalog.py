@@ -224,3 +224,42 @@ def test_ledger_size_tracks_the_merge_not_the_bundle(
         f"the ledger grew with the bundle: {small} chars with 2 bystanders, "
         f"{large} with 40 -- it must record the merge, not the catalog"
     )
+
+
+def test_ledger_size_does_not_depend_on_the_clock_reading(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sidecar's `merged_at` stamp has a fixed width, whatever instant the
+    merge ran at (issue #1553).
+
+    `datetime.isoformat()` drops the fraction when the microsecond is exactly
+    0, so two otherwise identical merges differed by seven characters on the
+    rare tick that landed on a whole second -- which made the size-equality
+    test above fail without any code change. Pinning the clock to such a tick
+    removes the luck from the comparison.
+    """
+    from datetime import UTC, datetime
+
+    from openkos.cli import main as cli_main
+
+    ticks = iter(
+        [
+            datetime(2026, 10, 18, 1, 2, 3, 0, tzinfo=UTC),
+            datetime(2026, 10, 18, 1, 2, 3, 5, tzinfo=UTC),
+        ]
+    )
+
+    class _PinnedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[no-untyped-def]
+            return next(ticks) if tz is UTC else datetime.now(tz)
+
+    monkeypatch.setattr(cli_main, "datetime", _PinnedDatetime)
+    whole_second = _sidecar_size_after_merge(
+        tmp_path_factory.mktemp("whole"), monkeypatch, bystanders=2
+    )
+    fractional = _sidecar_size_after_merge(
+        tmp_path_factory.mktemp("fraction"), monkeypatch, bystanders=2
+    )
+
+    assert whole_second == fractional
