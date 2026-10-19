@@ -82,6 +82,7 @@ from openkos.config import (  # noqa: E402
 from openkos.extraction.concept import _dominant_language  # noqa: E402
 from openkos.llm.base import Message, is_timeout_failure  # noqa: E402
 from openkos.llm.ollama import OllamaClient  # noqa: E402
+from openkos.llm.openai_compatible import OpenAICompatibleClient  # noqa: E402
 from openkos.model import okf  # noqa: E402
 from openkos.retrieval.answer import (  # noqa: E402
     _SUFFICIENCY_PROMPT,
@@ -1290,6 +1291,65 @@ def _self_test() -> int:
 # --------------------------------------------------------------------------- #
 
 
+OPENAI_SETTINGS: Final = ("base_url", "served_model", "digest")
+"""What `--backend openai-compatible` needs (#1586): where the server is,
+what to ask it for, and the weights digest the cache key rests on (there is
+no Ollama to report one)."""
+
+
+def resolve_digest(args: argparse.Namespace, stamp: dict[str, Any]) -> str:
+    """The digest the cache identity is keyed on.
+
+    On Ollama it is the one the local server reports (`_model_digest`). On
+    an OpenAI-compatible server it is the one given, and the stamp's model
+    entry is rewritten to say which server and served model produced the
+    rows, so a runs file cannot pass for an Ollama run."""
+    if args.backend == "ollama":
+        return _model_digest(args.model, stamp)
+    missing = [s for s in OPENAI_SETTINGS if not getattr(args, s)]
+    if missing:
+        raise SystemExit(
+            "--backend openai-compatible needs "
+            + ", ".join("--" + m.replace("_", "-") for m in missing)
+        )
+    stamp["model"] = {
+        "name": args.model,
+        "digest": args.digest,
+        "backend": args.backend,
+        "base_url": args.base_url,
+        "served_model": args.served_model,
+    }
+    return str(args.digest)
+
+
+def inner_factory(args: argparse.Namespace) -> Callable[[int], Any]:
+    """Run number -> the production client for that seed, on either backend."""
+    if args.backend == "openai-compatible":
+
+        def make_openai(run: int) -> OpenAICompatibleClient:
+            return OpenAICompatibleClient(
+                args.served_model,
+                base_url=args.base_url,
+                max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
+                context_window=DEFAULT_CONTEXT_WINDOW,
+                timeout=args.timeout,
+                seed=run,
+            )
+
+        return make_openai
+
+    def make_ollama(run: int) -> OllamaClient:
+        return OllamaClient(
+            model=args.model,
+            max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
+            context_window=DEFAULT_CONTEXT_WINDOW,
+            timeout=args.timeout,
+            seed=run,
+        )
+
+    return make_ollama
+
+
 def _model_digest(model: str, stamp: Mapping[str, Any]) -> str:
     digest = (stamp.get("model") or {}).get("digest")
     if not digest:
@@ -1330,6 +1390,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--offline", action="store_true", help="replay the cache only")
     parser.add_argument("--baseline", default=BASELINE)
     parser.add_argument("--candidates", default="")
+    parser.add_argument(
+        "--backend",
+        choices=("ollama", "openai-compatible"),
+        default="ollama",
+        help="generate: the transport (#1586); --model is then a label",
+    )
+    parser.add_argument("--base-url", default=None)
+    parser.add_argument("--served-model", default=None)
+    parser.add_argument("--digest", default=None, help="weights digest (openai)")
     return parser
 
 
@@ -1363,16 +1432,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "answer/sufficiency": _SUFFICIENCY_PROMPT,
             },
         )
-        digest = _model_digest(args.model, stamp)
-
-        def make_inner(run: int) -> OllamaClient:
-            return OllamaClient(
-                model=args.model,
-                max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
-                context_window=DEFAULT_CONTEXT_WINDOW,
-                timeout=args.timeout,
-                seed=run,
-            )
+        digest = resolve_digest(args, stamp)
+        make_inner = inner_factory(args)
 
         rows, totals = generate(
             contexts,

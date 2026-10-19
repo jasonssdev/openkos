@@ -34,8 +34,12 @@ from typing import Any, Final
 from openkos.extraction import concept as concept_mod
 from openkos.extraction import judge as judge_mod
 from openkos.llm import parsing
-from openkos.llm.base import BackendError
+from openkos.llm.base import BackendError, BackendUnavailable
 from openkos.llm.ollama import OllamaClient, OllamaGenerationCapped, OllamaUnavailable
+from openkos.llm.openai_compatible import (
+    OpenAICompatibleClient,
+    OpenAICompatibleGenerationCapped,
+)
 
 CONTEXT_WINDOW: Final = 12_288
 MAX_GENERATION_TOKENS: Final = 8_192
@@ -126,13 +130,20 @@ def classify_call(
 
 
 class _CapturingOpener:
-    """`urlopen` stand-in that remembers the last response body for counters."""
+    """`urlopen` stand-in that remembers the last response body for counters.
 
-    def __init__(self) -> None:
+    `inner` is the opener actually used (the stdlib one by default; a test
+    injects a fake)."""
+
+    def __init__(self, inner: Callable[..., Any] | None = None) -> None:
         self.last_body: bytes | None = None
+        self._inner = inner
 
     def __call__(self, request: urllib.request.Request, timeout: float) -> Any:
-        response = urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 -- local Ollama
+        if self._inner is not None:
+            response = self._inner(request, timeout=timeout)
+        else:
+            response = urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 -- local server
         outer = self
 
         class _Wrapped:
@@ -226,6 +237,86 @@ def ollama_sender(host: str | None, num_ctx: int = CONTEXT_WINDOW) -> Sender:
                     entry["thinking_chars"] = (
                         len(thinking) if isinstance(thinking, str) else 0
                     )
+        if content is not None:
+            entry["content"] = content
+        return content, entry
+
+    return send
+
+
+def _timed_out(exc: BaseException, elapsed: float, timeout_s: float) -> bool:
+    cause = exc.__cause__
+    return (
+        isinstance(cause, TimeoutError)
+        or (
+            isinstance(cause, urllib.error.URLError)
+            and isinstance(cause.reason, TimeoutError)
+        )
+        or elapsed >= timeout_s * 0.95
+    )
+
+
+def openai_compatible_sender(
+    base_url: str,
+    *,
+    served_model: str,
+    urlopen: Callable[..., Any] | None = None,
+) -> Sender:
+    """The runtime screen's transport (#1586): the production
+    `OpenAICompatibleClient` against `llama-server` or `mlx_lm.server`, with
+    the production generation ceiling, a per-call seed and timeout.
+
+    `served_model` is what the SERVER is asked for (a path for MLX, which
+    loads whatever the request names); the label the cache is keyed on is
+    the harness's model name. The context window is fixed when the server
+    starts and is never sent, as in production. The entry carries the same
+    fields as `ollama_sender`'s, read from the OpenAI `usage` block, and a
+    reasoning segment (`reasoning_content`) is counted, not returned."""
+
+    def send(
+        model: str, messages: Sequence[Any], seed: int, timeout_s: float
+    ) -> tuple[str | None, dict[str, Any]]:
+        del model  # the label; the server is asked for `served_model`
+        opener = _CapturingOpener(urlopen)
+        client = OpenAICompatibleClient(
+            served_model,
+            base_url=base_url,
+            timeout=timeout_s,
+            max_generation_tokens=MAX_GENERATION_TOKENS,
+            context_window=CONTEXT_WINDOW,
+            seed=seed,
+            urlopen=opener,
+        )
+        started = time.monotonic()
+        entry: dict[str, Any] = {}
+        content: str | None = None
+        try:
+            content = client.chat(list(messages))
+            entry["outcome"] = "ok"
+        except OpenAICompatibleGenerationCapped as exc:
+            entry["outcome"] = "capped"
+            entry["error"] = str(exc)[:300]
+        except BackendUnavailable as exc:
+            if _timed_out(exc, time.monotonic() - started, timeout_s):
+                entry["outcome"] = "timeout"
+            else:
+                raise
+        except BackendError as exc:
+            entry["outcome"] = "error"
+            entry["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        entry["wall_s"] = time.monotonic() - started
+        if opener.last_body is not None:
+            with contextlib.suppress(ValueError, KeyError, IndexError, TypeError):
+                data = json.loads(opener.last_body)
+                usage = data.get("usage") or {}
+                entry["prompt_eval_count"] = usage.get("prompt_tokens")
+                entry["eval_count"] = usage.get("completion_tokens")
+                choice = data["choices"][0]
+                entry["done_reason"] = choice.get("finish_reason")
+                reasoning = (choice.get("message") or {}).get("reasoning_content")
+                entry["thinking_chars"] = (
+                    len(reasoning) if isinstance(reasoning, str) else 0
+                )
         if content is not None:
             entry["content"] = content
         return content, entry
