@@ -517,6 +517,44 @@ def cmd_stage0(args: argparse.Namespace) -> int:
     return 0
 
 
+def timeout_key(args: argparse.Namespace, model: str) -> str:
+    """Whose stage-0 timeout a run uses. A runtime replay (#1586) borrows
+    the timeout fixed for the model it re-serves (`--timeout-from`)."""
+    return getattr(args, "timeout_from", None) or model
+
+
+def run_digest(args: argparse.Namespace, model: str) -> str | None:
+    """The digest a run's cache key rests on: Ollama's for its tag, or the
+    one given for an OpenAI-compatible server, which serves one model."""
+    if getattr(args, "backend", "ollama") == "ollama":
+        return model_identity(model, args.host).get("digest")
+    if len(args.models) != 1:
+        raise SystemExit("--backend openai-compatible serves one model per run")
+    missing = [
+        "--" + s.replace("_", "-")
+        for s in ("base_url", "served_model", "digest")
+        if not getattr(args, s)
+    ]
+    if missing:
+        raise SystemExit("--backend openai-compatible needs " + ", ".join(missing))
+    return str(args.digest)
+
+
+def run_sender(args: argparse.Namespace) -> sp.Sender:
+    if getattr(args, "backend", "ollama") == "ollama":
+        return sp.ollama_sender(args.host)
+    return sp.openai_compatible_sender(args.base_url, served_model=args.served_model)
+
+
+def run_warm_up(args: argparse.Namespace, model: str) -> float:
+    if getattr(args, "backend", "ollama") == "ollama":
+        return warm_up(model, args.host)
+    started = time.monotonic()
+    with contextlib.suppress(Exception):
+        run_sender(args)(model, [{"role": "user", "content": "Reply ok."}], 0, 600)
+    return time.monotonic() - started
+
+
 def run_one(
     args: argparse.Namespace,
     corpus: Corpus,
@@ -545,10 +583,11 @@ def run_one(
         model=model,
         digest=digest,
         run=run,
-        window_timeout_s=timeouts[model],
-        whole_timeout_s=WHOLE_SOURCE_TIMEOUT_MULTIPLE * timeouts[model],
+        window_timeout_s=timeouts[timeout_key(args, model)],
+        whole_timeout_s=WHOLE_SOURCE_TIMEOUT_MULTIPLE
+        * timeouts[timeout_key(args, model)],
         cache=cache,
-        send=sp.ollama_sender(args.host),
+        send=run_sender(args),
         windows=windows,
     )
     record = sp.run_source(text=text, title=title, backend=backend, cache=cache)
@@ -581,19 +620,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     timeouts = load_timeouts(args.runs_dir)
     corpus = Corpus(args.runs_dir)
     for model in args.models:
-        ident = model_identity(model, args.host)
+        digest = run_digest(args, model)
         stamp_path = args.runs_dir / "records" / safe(model) / "stamp.json"
         stamp_path.parent.mkdir(parents=True, exist_ok=True)
         if not stamp_path.is_file():
-            stamp_path.write_text(
-                json.dumps(
-                    build_stamp(
-                        model=model, prompts=extraction_prompts(), host=args.host
-                    ),
-                    indent=2,
-                ),
-                encoding="utf-8",
+            stamp = build_stamp(
+                model=model, prompts=extraction_prompts(), host=args.host
             )
+            if args.backend != "ollama":
+                stamp["model"] = {
+                    "name": model,
+                    "digest": digest,
+                    "backend": args.backend,
+                    "base_url": args.base_url,
+                    "served_model": args.served_model,
+                }
+            stamp_path.write_text(json.dumps(stamp, indent=2), encoding="utf-8")
         warmed = False
         for source in sources_for(args.pool, args.prose):
             for run in args.runs:
@@ -602,13 +644,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                     continue
                 if not warmed:
                     print(
-                        f"warm-up {model}: {warm_up(model, args.host):.1f} s",
+                        f"warm-up {model}: {run_warm_up(args, model):.1f} s",
                         flush=True,
                     )
                     warmed = True
-                record = run_one(
-                    args, corpus, model, ident.get("digest"), source, run, timeouts
-                )
+                record = run_one(args, corpus, model, digest, source, run, timeouts)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(
                     json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -2026,6 +2066,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     r.add_argument("--pool", required=True, choices=("DA", "F", "F-noTS", "F-IB"))
     r.add_argument("--runs", nargs="+", type=int, required=True)
     r.add_argument("--prose", action="store_true")
+    r.add_argument(
+        "--backend", choices=("ollama", "openai-compatible"), default="ollama"
+    )
+    r.add_argument("--base-url", default=None)
+    r.add_argument("--served-model", default=None)
+    r.add_argument("--digest", default=None)
+    r.add_argument(
+        "--timeout-from", default=None, help="use this model's stage-0 timeout"
+    )
     j = sub.add_parser("judge")
     j.add_argument("--models", nargs="+", required=True)
     j.add_argument("--pool", required=True, choices=("DA", "F", "F-noTS", "F-IB"))
