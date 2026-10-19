@@ -1,10 +1,9 @@
 # Ask model screen (#1560): design note
 
 Which chat model should Ask use for each of its roles? This directory holds the
-harness that measures it and the draft pre-registration
-(`PREREGISTRATION-DRAFT.md`). Nothing here has been run. No default, prompt or
-`TASK_MODEL_KEYS` entry changes because of it; a new task key would need its
-own ADR, decided after the results.
+harness that measures it and the pre-registration (`PREREGISTRATION.md`). No
+default, prompt or `TASK_MODEL_KEYS` entry changes because of it; a new task
+key would need its own ADR, decided after the results.
 
 ```
 uv run python -u evals/ask_model_screen/run_ask_model_screen.py --self-test
@@ -12,6 +11,17 @@ uv run python -u evals/ask_model_screen/run_ask_model_screen.py --stage contexts
 uv run python -u evals/ask_model_screen/run_ask_model_screen.py --stage generate --model qwen3:8b --runs 1 --timeout <s>
 uv run python -u evals/ask_model_screen/run_ask_model_screen.py --stage compare --baseline qwen3:8b --candidates <a,b,...> --runs 1
 ```
+
+- `--first-run K --runs N` runs seeds `K .. K+N-1`. Runs starting anywhere but
+  1 get their own projection file (`runs-<model>-fromK.json`), so stage 0
+  (`--first-run 101`) and the confirmation (`--first-run 11`) neither
+  overwrite nor mix with the screen's runs 1..3. `compare` takes the same flags.
+- `--sample 5` (generate) times a model on 5 evenly spaced `es-en` items:
+  stage 0's calibration, never a quality decision.
+- `--calls answer` (or `sufficiency`) narrows a candidate to the calls of the
+  roles it survived; `compare` leaves it out of the other roles.
+- `ask_screen_core.shorten` is the registered shortening rule: the first rung
+  of `LADDER` (round-2 runs, confirmation runs) whose forecast fits the budget.
 
 ## Three roles, two calls
 
@@ -121,7 +131,7 @@ Per item and run; a failed call (timeout or error) scores **0**, never "skipped"
 | answer | share of the gold tokens the answer states (diacritics- and case-insensitive; numbers by value) | anchored only |
 | citation | grounded: a reported, non-empty `USED:` line naming a derived gold document when one reached the context; adjacent: `USED: none` | all |
 
-The guardrails and vetoes are in the pre-registration draft.
+The guardrails and vetoes are in the pre-registration.
 
 ## Limits
 
