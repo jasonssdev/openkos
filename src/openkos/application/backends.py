@@ -35,7 +35,7 @@ goes through the resolver" is enforced, not remembered."""
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
 
@@ -404,6 +404,21 @@ def resolve_local_exemption(client: HasLocality, cfg: config.Config) -> bool:
     `sensitivity.should_block`'s contract, never re-derived at a call
     site."""
     return client.locality.is_local and cfg.confidential_local_exemption
+
+
+def resolve_local_exemption_all(
+    clients: Sequence[HasLocality], cfg: config.Config
+) -> bool:
+    """The confidential local exemption for a call that sends the SAME context
+    to several chat clients (issue #1560): `True` only when every client is
+    verifiably local and the workspace has not opted out.
+
+    `query`'s sufficiency check can run on a different model than synthesis,
+    and confidential bodies travel to both, so one remote client withdraws the
+    exemption. Fails closed: no clients grants nothing."""
+    return bool(clients) and all(
+        resolve_local_exemption(client, cfg) for client in clients
+    )
 
 
 # ---------------------------------------------------------------------------

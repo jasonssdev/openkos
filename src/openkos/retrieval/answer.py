@@ -524,6 +524,12 @@ class AnswerResult:
     Defaults to `"absent"`, which is both the pre-#753 behavior and the
     honest value for every short-circuit return above: those never reach
     `llm.chat`, so no model ever reported anything for them."""
+    sufficiency_model_missing: bool = False
+    """`True` when the sufficiency check ran on its own model (#1560) and that
+    model is not installed: the check was skipped and synthesis proceeded
+    (`sufficiency_degraded` is also `True`). Lets the adapter name the model
+    and how to pull it; never `True` for a check sharing the synthesis
+    client, whose missing model stays a fatal error."""
     sufficiency_degraded: bool = False
     """`True` when the pre-synthesis sufficiency check was REQUESTED and could
     not run (#764), so synthesis proceeded unguarded.
@@ -1223,6 +1229,8 @@ def _context_holds_the_answer(
     llm: LLMBackend,
     user_content: str,
     reply_out: list[str] | None = None,
+    *,
+    missing_model_out: list[bool] | None = None,
 ) -> tuple[bool, bool]:
     """Whether the assembled context contains an answer to the question.
 
@@ -1250,6 +1258,14 @@ def _context_holds_the_answer(
 
     `reply_out` (#1345), when given, receives the check's raw reply and
     nothing else reads it; observability only.
+
+    `missing_model_out` (#1560), when given, says the check runs on a client
+    SEPARATE from synthesis, so a `BackendModelNotFound` from it is the
+    check's own model being absent rather than the answer model's: it fails
+    open like any other check error (the answer is still produced) and
+    appends `True` so the caller can name the missing model. When `None` the
+    check shares the synthesis client and the error stays fatal, exactly as
+    before the task key existed.
     """
     try:
         reply = llm.chat(
@@ -1258,11 +1274,12 @@ def _context_holds_the_answer(
                 {"role": "user", "content": user_content},
             ]
         )
-    except (
-        BackendUnavailable,
-        BackendModelNotFound,
-        BackendEmbeddingDimensionMismatch,
-    ):
+    except BackendModelNotFound:
+        if missing_model_out is None:
+            raise
+        missing_model_out.append(True)
+        return True, True
+    except BackendUnavailable, BackendEmbeddingDimensionMismatch:
         raise
     except BackendError:
         return True, True
@@ -1440,6 +1457,7 @@ def answer(
     include_confidential: bool = False,
     local_exemption: bool = False,
     sufficiency_check: bool = False,
+    sufficiency_llm: LLMBackend | None = None,
     revision_history: bool = False,
     progress: ProgressCallback | None = None,
 ) -> AnswerResult:
@@ -1499,6 +1517,14 @@ def answer(
     the same `AnswerResult` as before this parameter existed -- `progress`
     is a pure observability seam, never a control-flow input. Never read
     from configuration: this module stays config-free.
+
+    `sufficiency_llm` (#1560), when given, is the client the sufficiency
+    check runs on; synthesis always uses `llm`. `None` (the default) runs the
+    check on `llm`, byte-identical to before the parameter existed. With a
+    separate client, `BackendModelNotFound` from it fails the CHECK open
+    (`sufficiency_degraded` and `sufficiency_model_missing` set) instead of
+    ending the query. Both clients receive the same context bytes, so a
+    caller deciding `local_exemption` must consider both.
     """
     if not question.split():
         return AnswerResult(
@@ -1701,11 +1727,18 @@ def answer(
     # added latency unless it opts in.
     sufficiency_degraded = False
     sufficiency_replies: list[str] = []
+    sufficiency_missing: list[bool] = []
     if sufficiency_check:
         if progress is not None:
             progress("checking", 2, progress_total)
+        # #1560: the check may run on its own model; synthesis never does.
         holds, sufficiency_degraded = _context_holds_the_answer(
-            llm, user_content, sufficiency_replies
+            sufficiency_llm if sufficiency_llm is not None else llm,
+            user_content,
+            sufficiency_replies,
+            missing_model_out=sufficiency_missing
+            if sufficiency_llm is not None
+            else None,
         )
     else:
         holds = True
@@ -1789,6 +1822,7 @@ def answer(
         dense_degraded=dense_degraded,
         confidential_excluded_count=confidential_excluded_count,
         sufficiency_degraded=sufficiency_degraded,
+        sufficiency_model_missing=bool(sufficiency_missing),
         context_block_count=len(context_blocks),
         attribution=attribution,
         excerpted_titles=excerpted_titles,

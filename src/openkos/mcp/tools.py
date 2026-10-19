@@ -49,6 +49,10 @@ class ToolContext:
     make_llm: Callable[[config.Config], LLMBackend]
     make_embedder: Callable[[config.Config], Embedder]
     local_exemption_for: Callable[[LLMBackend, config.Config], bool]
+    make_task_llm: Callable[[config.Config, str], LLMBackend] | None = None
+    """Builds the chat client for a named task (issue #1560: `query`'s
+    `sufficiency` check). `None` -- a context that wires no task clients --
+    keeps the check on `make_llm`'s client."""
 
 
 class WorkspaceReadError(OSError):
@@ -249,8 +253,24 @@ def _query_run(
     cfg = config.read_config(ctx.layout.root)
     llm = ctx.make_llm(cfg)
     embedder = ctx.make_embedder(cfg)
+    make_task_llm = ctx.make_task_llm
+    sufficiency_llm = (
+        None
+        if make_task_llm is None
+        else query_service.build_sufficiency_client(
+            cfg, lambda task: make_task_llm(cfg, cast(str, task))
+        )
+    )
+    # Confidential bodies reach the check model too (#1560): the exemption
+    # holds only when EVERY chat client that receives the context is local.
     local_exemption = (
-        ctx.local_exemption_for(llm, cfg) if ctx.expose_confidential else False
+        all(
+            ctx.local_exemption_for(client, cfg)
+            for client in (llm, sufficiency_llm)
+            if client is not None
+        )
+        if ctx.expose_confidential
+        else False
     )
     return query_service.run_query(
         question,
@@ -262,6 +282,7 @@ def _query_run(
         include_deprecated=False,
         include_confidential=False,
         local_exemption=local_exemption,
+        sufficiency_llm=sufficiency_llm,
         progress=progress,
     )
 

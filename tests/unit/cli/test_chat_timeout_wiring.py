@@ -657,16 +657,18 @@ def test_the_extracted_verbs_still_resolve_their_own_task_model() -> None:
     assert "_chat_client(cfg, task=task)" in ports_source
 
 
-def test_query_and_the_locality_probe_stay_on_the_global_model() -> None:
-    """`query` and `curate`'s locality probe name NO task, on purpose.
+def test_query_synthesis_and_the_locality_probe_stay_on_the_global_model() -> None:
+    """`query`'s synthesis client and `curate`'s locality probe name NO task.
 
     Pinned rather than left implicit: adding `task=` to either would be a
-    quiet policy change. `query` has no harness, so #508's rule forbids
-    picking a model for it; the locality probe asks about the HOST, and a
-    per-task locality is not a thing that exists.
+    quiet policy change. Ask's answer and citation had no winner (#1560), so
+    synthesis keeps `model:`; the locality probe asks about the HOST, and a
+    per-task locality is not a thing that exists. `query` additionally builds
+    ONE `sufficiency` client for the pre-synthesis check, the only task it
+    names.
     """
     tree = ast.parse((_SRC / "main.py").read_text(encoding="utf-8"))
     by_function = _chat_client_tasks_by_function(tree)
 
-    assert by_function.get("query") == {None}
+    assert by_function.get("query") == {None, "sufficiency"}
     assert by_function.get("curate") == {None}

@@ -370,3 +370,77 @@ def test_run_query_threads_revision_history(
         local_exemption=False,
     )
     assert captured["revision_history"] is True
+
+
+# --- the sufficiency client (#1560) ------------------------------------------
+
+
+def test_build_sufficiency_client_is_none_when_the_check_is_off(
+    tmp_path: Path,
+) -> None:
+    _, cfg = _workspace(tmp_path)
+    cfg = dataclasses.replace(cfg, sufficiency_check=False)
+    asked: list[str | None] = []
+
+    def build(task: str | None) -> _FakeLLM:
+        asked.append(task)
+        return _FakeLLM()
+
+    got = query_service.build_sufficiency_client(cfg, build)
+
+    assert got is None
+    assert asked == []
+
+
+def test_build_sufficiency_client_reuses_the_synthesis_client_on_the_same_tag(
+    tmp_path: Path,
+) -> None:
+    """`models: {sufficiency: null}` resolves to `model:`: one model, one
+    client, no second load."""
+    _workspace(tmp_path)
+    (tmp_path / "openkos.yaml").write_text(
+        (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+        + "\nmodels:\n  sufficiency: null\n",
+        encoding="utf-8",
+    )
+    cfg = config.read_config(tmp_path)
+    assert config.resolve_task_model(cfg, "sufficiency") == cfg.model
+
+    got = query_service.build_sufficiency_client(cfg, lambda task: _FakeLLM())
+
+    assert got is None
+
+
+def test_build_sufficiency_client_builds_the_task_client_on_a_different_tag(
+    tmp_path: Path,
+) -> None:
+    _, cfg = _workspace(tmp_path)
+    asked: list[str | None] = []
+    client = _FakeLLM()
+
+    def build(task: str | None) -> _FakeLLM:
+        asked.append(task)
+        return client
+
+    got = query_service.build_sufficiency_client(cfg, build)
+
+    assert got is client
+    assert asked == ["sufficiency"]
+
+
+def test_run_query_threads_the_sufficiency_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured.update(kwargs)
+        return _fixed_result()
+
+    monkeypatch.setattr(query_service, "answer", fake_answer)
+    judge = _FakeLLM()
+
+    _run(tmp_path, monkeypatch, sufficiency_llm=judge)
+
+    assert captured["sufficiency_llm"] is judge
+    assert captured["llm"] is not judge

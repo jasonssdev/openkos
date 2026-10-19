@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import date
@@ -108,6 +108,26 @@ def _open_fts_or_degrade(
     return handle, False
 
 
+def build_sufficiency_client(
+    cfg: config.Config, build: Callable[[str | None], LLMBackend]
+) -> LLMBackend | None:
+    """The chat client the sufficiency check should run on, or `None` when the
+    check should simply share the synthesis client (issue #1560).
+
+    `None` when the check is off (nothing to build) and when the resolved
+    `sufficiency` tag equals the synthesis tag (one model, one client, no
+    second load -- the `models: {sufficiency: null}` opt-out lands here).
+    `build` is the adapter's own task-aware chat-client constructor, so no
+    client is hand-built in this module."""
+    if not cfg.sufficiency_check:
+        return None
+    if config.resolve_task_model(cfg, "sufficiency") == config.resolve_task_model(
+        cfg, None
+    ):
+        return None
+    return build("sufficiency")
+
+
 def run_query(
     question: str,
     *,
@@ -119,10 +139,15 @@ def run_query(
     include_deprecated: bool,
     include_confidential: bool,
     local_exemption: bool,
+    sufficiency_llm: LLMBackend | None = None,
     progress: ProgressCallback | None = None,
 ) -> QueryOutcome:
     """Compose store opening (degrade-to-`None`) and the `answer()` call for
     one query.
+
+    `sufficiency_llm` (#1560) is threaded to `answer()` unmodified; the
+    caller builds it with `build_sufficiency_client` and must have decided
+    `local_exemption` over BOTH clients (`resolve_local_exemption_all`).
 
     `progress` (mcp-read-surface slice 8, design Decision 9) is threaded to
     `answer()` unmodified -- the same callback object, never wrapped --
@@ -167,6 +192,9 @@ def run_query(
             # (#760), so the product-ON default lives in the config and
             # `answer` itself stays OFF for library callers.
             sufficiency_check=cfg.sufficiency_check,
+            # #1560: the check's own client, when its model differs from
+            # synthesis's; `None` keeps the check on `llm`.
+            sufficiency_llm=sufficiency_llm,
             # Same single-place threading as `sufficiency_check` above, for
             # `cfg.revision_history` (#1014 piece b): `answer` itself
             # defaults `False`, so every library and eval caller stays

@@ -349,3 +349,84 @@ def test_the_default_limit_is_the_query_default() -> None:
 
     default = inspect.signature(api.ask).parameters["limit"].default
     assert default == DEFAULT_QUERY_LIMIT
+
+
+# -- the sufficiency model (#1560) --------------------------------------------- #
+
+
+def _install_per_model(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    local_by_model: dict[str, bool],
+    replies_by_model: dict[str, list[str]],
+) -> list[str]:
+    """Fake clients that remember the model they were built for, so a test can
+    tell the check client from the synthesis one. Returns the build order."""
+    built: list[str] = []
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            self.model = str(kwargs["model"])
+            built.append(self.model)
+
+        @property
+        def locality(self) -> BackendHostLocality:
+            local = local_by_model.get(self.model, True)
+            return BackendHostLocality(
+                is_local=local, display_host="localhost" if local else "far.example"
+            )
+
+        def chat(self, messages: Sequence[Message]) -> str:
+            return replies_by_model[self.model].pop(0)
+
+        def embed(self, texts: Sequence[str]) -> list[list[float]]:
+            raise AssertionError("no vectors.db, so nothing embeds")
+
+    monkeypatch.setattr(_wiring, "OllamaClient", Client)
+    monkeypatch.setattr(_wiring, "OpenAICompatibleClient", Client)
+    return built
+
+
+def test_the_check_runs_on_the_sufficiency_model_and_synthesis_on_the_chat_model(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _sufficiency(root, on=True)
+    built = _install_per_model(
+        monkeypatch,
+        local_by_model={},
+        replies_by_model={
+            config.DEFAULT_JUDGE_MODEL: ["a sentence that answers it"],
+            config.DEFAULT_MODEL: ["An answer.\nUSED: 1"],
+        },
+    )
+
+    answer = _ask(root)
+
+    assert answer.sufficiency_checked is True
+    # Both clients are local, so the exemption holds and the confidential
+    # concept entered the prompt: the answer is withheld, not refused.
+    assert answer.outcome == "withheld"
+    chat_builds = [m for m in built if m != config.DEFAULT_EMBEDDING_MODEL]
+    assert chat_builds == [config.DEFAULT_MODEL, config.DEFAULT_JUDGE_MODEL]
+
+
+def test_a_remote_check_model_withholds_the_confidential_exemption(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Confidential bodies reach the check model too: with synthesis local and
+    the check remote, the exemption must not hold, so the confidential concept
+    never enters the prompt."""
+    _sufficiency(root, on=True)
+    _install_per_model(
+        monkeypatch,
+        local_by_model={config.DEFAULT_JUDGE_MODEL: False},
+        replies_by_model={
+            config.DEFAULT_JUDGE_MODEL: ["a sentence that answers it"],
+            config.DEFAULT_MODEL: ["An answer.\nUSED: 1"],
+        },
+    )
+
+    answer = _ask(root)
+
+    assert answer.outcome == "answered"
+    assert "concepts/secret" not in {c.concept_id for c in answer.citations}

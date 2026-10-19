@@ -230,10 +230,19 @@ def _make_llm(cfg: config.Config) -> LLMBackend:
     """Build the CHAT client `query` uses, through the SAME non-CLI seam
     the CLI's own `_chat_client` delegates to (design Decision 7; issue
     #1057 Phase 9, design Decision 4): no per-task model override here,
-    mirroring `cli/main.py`'s own `query` command, which omits `task=` for
-    the same reason `application/backends.py`'s docstring gives (`query`
-    has no harness)."""
+    mirroring `cli/main.py`'s own `query` command, whose synthesis stays on
+    `model:` (answer and citation had no winner, #1560). Only the
+    sufficiency check has a task client, `_make_task_llm`."""
     return application_backends.chat_client(cfg, factories=_backend_factories())
+
+
+def _make_task_llm(cfg: config.Config, task: str) -> LLMBackend:
+    """Build the chat client for `task` -- `query`'s `sufficiency` check
+    (issue #1560) -- through the same non-CLI seam as `_make_llm`, so the
+    task's resolved model (and nothing else) differs."""
+    return application_backends.chat_client(
+        cfg, factories=_backend_factories(), task=task
+    )
 
 
 def _make_embedder(cfg: config.Config) -> Embedder:
@@ -265,6 +274,7 @@ def _build_context(root: Path, *, expose_confidential: bool) -> mcp_tools.ToolCo
         layout=config.WorkspaceLayout(root=root),
         expose_confidential=expose_confidential,
         make_llm=_make_llm,
+        make_task_llm=_make_task_llm,
         make_embedder=_make_embedder,
         local_exemption_for=_local_exemption_for,
     )

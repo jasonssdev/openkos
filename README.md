@@ -38,10 +38,10 @@ Five steps from a fresh machine to your first cited answer. Everything runs on y
 ```bash
 ollama pull qwen3:8b        # chat model — extraction and answers (~5 GB)
 ollama pull bge-m3          # embedding model — semantic search (~1.2 GB)
-ollama pull gemma4:26b-a4b  # judge model — contradictions and identity (large; ~21.5 GB in memory)
+ollama pull gemma4:26b-a4b  # judge model — contradictions, identity and the answer check (large; ~21.5 GB in memory)
 ```
 
-> The first two cover ingest, query and everything else. The third is the default for the two judging jobs, `contradictions` and `adjudicate` (and `curate`'s Identity and Contradictions stages); without it only those fail, with the exact pull command. It is large, so the engine runs one chat model at a time and swaps between `qwen3:8b` and the judge as stages change; see [System requirements](#system-requirements) for memory and disk. On a smaller machine, opt out per task with `models: {contradiction: null, adjudication: null}` in `openkos.yaml` and the judges follow `model:`.
+> The first two cover ingest, query and everything else. The third is the default for the two judging jobs, `contradictions` and `adjudicate` (and `curate`'s Identity and Contradictions stages), and for the check `query` runs before answering; without it the judging jobs fail, with the exact pull command, and `query` skips its check and says so. It is large, so the engine runs one chat model at a time and swaps between `qwen3:8b` and the judge as stages change; see [System requirements](#system-requirements) for memory and disk. On a smaller machine, opt out per task with `models: {contradiction: null, adjudication: null, sufficiency: null}` in `openkos.yaml` and they follow `model:`.
 >
 > For naming relations during curation there is also an **optional measured upgrade** (`ollama pull gemma2:27b`, **15.6 GB**) that nearly doubles relation-type accuracy — opt in later with `models: {edge_typing: gemma2:27b}` in `openkos.yaml`; `openkos doctor` and `curate` both point at it.
 

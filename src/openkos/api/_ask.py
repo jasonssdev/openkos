@@ -204,9 +204,20 @@ def ask(
     cfg = _read_config(workspace)
     layout = config.WorkspaceLayout(workspace.root)
     llm = _wiring.default_chat_client(cfg, None)
+    # #1560: the pre-synthesis check runs on its own task model.
+    sufficiency_llm = query_service.build_sufficiency_client(
+        cfg, lambda task: _wiring.default_chat_client(cfg, task)
+    )
     embedder = _wiring.default_embedder(cfg)
-    local_exemption = backends.resolve_local_exemption(
-        cast(backends.HasLocality, llm), cfg
+    # Confidential bodies reach the check model as well as the synthesis one,
+    # so the exemption holds only when every chat client is local.
+    local_exemption = backends.resolve_local_exemption_all(
+        [
+            cast(backends.HasLocality, client)
+            for client in (llm, sufficiency_llm)
+            if client is not None
+        ],
+        cfg,
     )
     stale = application_status.stale_index_names(layout, reads=("fts",))
     outcome = query_service.run_query(
@@ -219,6 +230,7 @@ def ask(
         include_deprecated=include_deprecated,
         include_confidential=include_confidential,
         local_exemption=local_exemption,
+        sufficiency_llm=sufficiency_llm,
         progress=_progress_sink(progress),
     )
     # Taken after the query ran, so a concept raised to confidential while it

@@ -5160,3 +5160,152 @@ def test_default_query_limit_is_the_measured_constant() -> None:
         inspect.signature(answer_mod.answer).parameters["limit"].default
         == answer_mod.DEFAULT_QUERY_LIMIT
     )
+
+
+# --- a separate sufficiency model (#1560) -----------------------------------
+
+
+class _RaisingLLM:
+    """An `LLMBackend` whose every `chat` raises `exc`."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        raise self._exc
+
+
+def test_the_check_runs_on_the_sufficiency_client_and_synthesis_on_the_main_one(
+    tmp_path: Path,
+) -> None:
+    """Two clients, one question: the check goes to `sufficiency_llm`, the
+    synthesis to `llm`, and neither sees the other's call."""
+    bundle_dir = _bundle_with_two(tmp_path)
+    judge = _ScriptedLLM("dichotomyzz alpha body")
+    synth = _ScriptedLLM("The answer.")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=synth,
+            sufficiency_llm=judge,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert len(judge.calls) == 1
+    assert judge.calls[0][0]["content"] == answer_mod._SUFFICIENCY_PROMPT
+    assert len(synth.calls) == 1
+    assert synth.calls[0][0]["content"] != answer_mod._SUFFICIENCY_PROMPT
+    assert result.llm_invoked is True
+    assert result.sufficiency_degraded is False
+
+
+def test_a_refusal_by_the_sufficiency_client_never_reaches_synthesis(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = _bundle_with_two(tmp_path)
+    judge = _ScriptedLLM("NONE")
+    synth = _ScriptedLLM()
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=synth,
+            sufficiency_llm=judge,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert result.no_match_cause == "insufficient_context"
+    assert synth.calls == []
+
+
+def test_the_sufficiency_client_is_never_called_when_the_check_is_off(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = _bundle_with_two(tmp_path)
+    judge = _ScriptedLLM()
+    synth = _ScriptedLLM("The answer.")
+    with fts.build_index(bundle_dir) as idx:
+        answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=synth,
+            sufficiency_llm=judge,
+            fts_index=idx,
+            sufficiency_check=False,
+        )
+
+    assert judge.calls == []
+    assert len(synth.calls) == 1
+
+
+def test_a_missing_sufficiency_model_fails_open_and_is_reported(
+    tmp_path: Path,
+) -> None:
+    """A separately-configured check model that is not pulled must not take
+    the query down (#1560): the check is skipped, the answer synthesised, and
+    the degradation is flagged with the missing-model marker."""
+    bundle_dir = _bundle_with_two(tmp_path)
+    judge = _RaisingLLM(OllamaModelNotFound("gemma4:26b-a4b"))
+    synth = _ScriptedLLM("The answer.")
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=synth,
+            sufficiency_llm=judge,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert result.sufficiency_degraded is True
+    assert result.sufficiency_model_missing is True
+    assert result.llm_invoked is True
+    assert len(synth.calls) == 1
+
+
+def test_an_unreachable_sufficiency_server_stays_fatal(tmp_path: Path) -> None:
+    bundle_dir = _bundle_with_two(tmp_path)
+    judge = _RaisingLLM(OllamaUnavailable("down"))
+    with fts.build_index(bundle_dir) as idx, pytest.raises(OllamaUnavailable):
+        answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=_ScriptedLLM("The answer."),
+            sufficiency_llm=judge,
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+
+def test_a_missing_model_on_the_shared_client_stays_fatal(tmp_path: Path) -> None:
+    """Without a separate client the check IS the synthesis model, so its
+    absence is the existing fatal error, byte-identical to before #1560."""
+    bundle_dir = _bundle_with_two(tmp_path)
+    with fts.build_index(bundle_dir) as idx, pytest.raises(OllamaModelNotFound):
+        answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=_RaisingLLM(OllamaModelNotFound("qwen3:8b")),
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+
+def test_a_working_check_does_not_flag_a_missing_model(tmp_path: Path) -> None:
+    bundle_dir = _bundle_with_two(tmp_path)
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=_ScriptedLLM("The answer."),
+            sufficiency_llm=_ScriptedLLM("dichotomyzz alpha body"),
+            fts_index=idx,
+            sufficiency_check=True,
+        )
+
+    assert result.sufficiency_model_missing is False

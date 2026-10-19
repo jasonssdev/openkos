@@ -2182,7 +2182,7 @@ def test_read_config_rejects_a_non_bool_union_judge(
 # --- #515: per-task model overrides (`models:`) ---
 
 
-def test_task_model_keys_are_the_five_measured_tasks() -> None:
+def test_task_model_keys_are_the_measured_tasks() -> None:
     """The task-key vocabulary is keyed by TASK, not by verb (#515 design
     decision 1): `suggest_edge_types` is used by both `curate`'s Structure
     stage and standalone `suggest-relations`, and keying by verb would let
@@ -2198,6 +2198,7 @@ def test_task_model_keys_are_the_five_measured_tasks() -> None:
                 "edge_typing",
                 "volatility_typing",
                 "contradiction",
+                "sufficiency",
             }
         )
         == config.TASK_MODEL_KEYS
@@ -2387,15 +2388,17 @@ def test_resolve_task_model_survives_a_hand_built_non_mapping_models() -> None:
 # --- #513/#650: `edge_typing` recommendation, no longer a packaged default ---
 
 
-def test_default_task_models_packages_the_judge_model_for_two_roles() -> None:
-    """`DEFAULT_TASK_MODELS` ships `gemma4:26b-a4b` for exactly the two judge
-    roles where it met every pre-registered bar (#1269 "Adoption decision"):
-    `contradiction` and `adjudication`. `edge_typing` keeps its listed-but-
-    `None` entry (#650: no Label winner), and no other task is named."""
+def test_default_task_models_packages_the_judge_model_for_three_roles() -> None:
+    """`DEFAULT_TASK_MODELS` ships `gemma4:26b-a4b` for exactly the roles
+    where it met every pre-registered bar: the two judges, `contradiction`
+    and `adjudication` (#1269), and the Ask sufficiency check (#1560).
+    `edge_typing` keeps its listed-but-`None` entry (#650: no Label winner),
+    and no other task is named -- Ask's synthesis stays on `model:`."""
     assert config.DEFAULT_TASK_MODELS == {
         "edge_typing": None,
         "adjudication": "gemma4:26b-a4b",
         "contradiction": "gemma4:26b-a4b",
+        "sufficiency": "gemma4:26b-a4b",
     }
     assert set(config.DEFAULT_TASK_MODELS) <= config.TASK_MODEL_KEYS
 
@@ -2432,13 +2435,13 @@ def test_edge_typing_opt_in_resolves_to_the_configured_model(
     assert config.resolve_task_model(cfg, "extraction") == "qwen3:8b"
 
 
-def test_the_judge_default_covers_only_the_two_judge_tasks(tmp_path: Path) -> None:
+def test_the_judge_default_covers_only_the_packaged_tasks(tmp_path: Path) -> None:
     """Every other task still resolves to the global `model:`. The packaged
-    default is two tasks wide, not a second global."""
+    default is three tasks wide, not a second global."""
     (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
     cfg = config.read_config(tmp_path)
 
-    judge = {"adjudication", "contradiction"}
+    judge = {"adjudication", "contradiction", "sufficiency"}
     for task in sorted(config.TASK_MODEL_KEYS - judge):
         assert config.resolve_task_model(cfg, task) == "qwen3:8b"
     for task in sorted(judge):
@@ -3781,3 +3784,51 @@ def test_the_template_documents_the_transcript_decisions_key() -> None:
     entry = template.split("# transcript_decisions:", 1)[1].split("\n# ", 1)[0]
     assert "unmeasured" not in entry.casefold()
     assert "measured" in entry.casefold()
+
+
+# --- #1560: the Ask sufficiency check ships the judge model ---
+
+
+def test_sufficiency_is_an_accepted_models_key(tmp_path: Path) -> None:
+    """`models: {sufficiency: ...}` parses and wins over the packaged tag."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: qwen3:8b\nmodels:\n  sufficiency: qwen3:14b\n", encoding="utf-8"
+    )
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "sufficiency") == "qwen3:14b"
+    assert config.resolve_task_model(cfg, None) == "qwen3:8b"
+
+
+def test_sufficiency_ships_the_packaged_tag_on_ollama_and_synthesis_does_not(
+    tmp_path: Path,
+) -> None:
+    """The check runs on `gemma4:26b-a4b`; `task=None` (the synthesis call)
+    stays on `model:` because answer and citation had no winner (#1560)."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "sufficiency") == "gemma4:26b-a4b"
+    assert config.resolve_task_model(cfg, None) == "qwen3:8b"
+
+
+def test_sufficiency_default_is_skipped_on_openai_compatible(tmp_path: Path) -> None:
+    """A packaged Ollama tag means nothing to another provider."""
+    (tmp_path / "openkos.yaml").write_text(
+        "backend: openai-compatible\nbase_url: http://localhost:8080/v1\n"
+        "model: my-served-model\n",
+        encoding="utf-8",
+    )
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "sufficiency") == "my-served-model"
+
+
+def test_an_explicit_null_declines_the_sufficiency_default(tmp_path: Path) -> None:
+    """`sufficiency: null` is the opt-out: the check follows `model:`."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: qwen3:8b\nmodels:\n  sufficiency: null\n", encoding="utf-8"
+    )
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "sufficiency") == "qwen3:8b"

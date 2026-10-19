@@ -1365,13 +1365,14 @@ def test_a_stock_workspace_without_the_judge_model_fails_informationally(
 def test_a_declined_judge_default_leaves_the_task_check_passing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Explicit nulls decline the packaged judge: with nothing differing from
+    """Explicit nulls decline the packaged judge and check: with nothing differing from
     the global model, the check passes without the judge being installed."""
     _init_workspace(tmp_path, monkeypatch)
     cfg_path = tmp_path / "openkos.yaml"
     cfg_path.write_text(
         cfg_path.read_text(encoding="utf-8")
-        + "\nmodels:\n  adjudication: null\n  contradiction: null\n",
+        + "\nmodels:\n  adjudication: null\n  contradiction: null\n"
+        "  sufficiency: null\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(

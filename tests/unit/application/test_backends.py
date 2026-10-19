@@ -725,3 +725,20 @@ def test_openai_api_key_without_prefix_is_never_read(tmp_path: Path) -> None:
     assert isinstance(embed, _RecordingFactory)
     assert chat.kwargs["api_key"] is None
     assert embed.kwargs["api_key"] is None
+
+
+def test_resolve_local_exemption_all_needs_every_client_local(tmp_path: Path) -> None:
+    """The confidential bodies travel to EVERY chat client that receives the
+    context (#1560): the exemption holds only when all of them are local, and
+    one remote client withdraws it. An empty set grants nothing."""
+    cfg = _cfg(tmp_path)
+    local = _StubClient(is_local=True)
+    remote = _StubClient(is_local=False)
+
+    assert backends.resolve_local_exemption_all([local, local], cfg) is True
+    assert backends.resolve_local_exemption_all([local, remote], cfg) is False
+    assert backends.resolve_local_exemption_all([remote, local], cfg) is False
+    assert backends.resolve_local_exemption_all([local], cfg) is True
+    assert backends.resolve_local_exemption_all([], cfg) is False
+    off = dataclasses.replace(cfg, confidential_local_exemption=False)
+    assert backends.resolve_local_exemption_all([local, local], off) is False
