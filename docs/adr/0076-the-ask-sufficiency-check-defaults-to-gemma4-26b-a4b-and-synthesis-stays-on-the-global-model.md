@@ -93,6 +93,34 @@ the `ollama`-only gate, the null opt-out and the doctor's task-models check.
 - `llm.sufficiency_model` is an additive field of the `--json` report
   (`schema_version` stays `1`).
 
+## Adoption bar (stated before measuring)
+
+The screen did not measure the model swap, so this ADR is accepted only if an
+end-to-end measurement, run after this section was committed, meets this bar.
+
+- **Setup.** `openkos query` wall time (process start to exit) on a copy of the
+  `es-built` workspace from #1560, at this branch's code. Arm (a): the check on
+  `qwen3:8b` (`models: {sufficiency: null}`). Arm (b): the check on
+  `gemma4:26b-a4b` (`models: {sufficiency: gemma4:26b-a4b}`). Synthesis is on
+  `qwen3:8b` in both.
+- **Sequence.** Unload the chat models and `bge-m3` (`ollama stop <model>`;
+  the server keeps running), ask one cold question, then 5 more in a row: six
+  fixed Spanish questions from `evals/query_grounding/`, the same in every
+  sequence. n = 3 sequences per arm, arms interleaved (a, b, a, b, a, b).
+  `ollama ps` is recorded after each sequence.
+- **Bar.** Adopt only if all three hold:
+  1. the median per-question time over the 5 warm questions of (b) is at most
+     1.5x that of (a), medians pooled over the three sequences;
+  2. the cold first question of (b) takes at most 30 s (median of three);
+  3. both chat models fit resident inside the 24 GB budget (the sum of their
+     `ollama ps` sizes), **or** no swap occurs per question. "No swap" is
+     judged from `ollama ps` after each sequence showing both chat models
+     resident, on the measuring machine (48 GB); it does not show the 32 GB
+     floor, and is reported as such.
+- **Otherwise** the change is not merged: the PR is closed with the data, and
+  an issue records `qwen3:14b` (tied on sufficiency in round 2, smaller
+  footprint) as the alternative to measure.
+
 ## Alternatives considered
 
 - **Keep `qwen3:8b` for the check (status quo).** Rejected: the confirmed gain
