@@ -119,14 +119,37 @@ def safe(model: str) -> str:
 class Corpus:
     """Transcripts, windows and gold for the registered meetings."""
 
-    def __init__(self, runs_dir: pathlib.Path) -> None:
+    def __init__(
+        self,
+        runs_dir: pathlib.Path,
+        *,
+        target: int | None = None,
+        registered: Mapping[str, Sequence[str]] | None = None,
+    ) -> None:
+        """`target` is the window size to cut at (None: production's
+        `_CHUNK_TARGET`); `registered` the window hashes a meeting must match
+        (None: this screen's `windows.json`). The window-size screen (#1558)
+        builds one corpus per arm."""
+        self.target = target
+        self.registered = REGISTERED_WINDOWS if registered is None else registered
         inputs = runs_dir / "inputs"
         self.transcripts_dir = inputs / "transcripts"
-        self.archive = data.AmiArchive(inputs / "ami" / "ami_public_manual_1.6.2.zip")
+        self._archive_path = inputs / "ami" / "ami_public_manual_1.6.2.zip"
+        self._archive: data.AmiArchive | None = None
         self._cache: dict[
             str, tuple[data.Transcript, list[data.Window], data.MeetingGold]
         ] = {}
         self._gold_only: dict[str, data.MeetingGold] = {}
+
+    @property
+    def archive(self) -> data.AmiArchive:
+        """Opened (and its checksum verified) on first use."""
+        if self._archive is None:
+            self._archive = data.AmiArchive(self._archive_path)
+        return self._archive
+
+    def chunk(self, body: str) -> list[str]:
+        return concept_mod._chunk_lines(body, self.target)
 
     def meeting(
         self, meeting: str
@@ -134,11 +157,11 @@ class Corpus:
         data.require_allowed(meeting)
         if meeting not in self._cache:
             transcript = data.load_transcript(self.transcripts_dir, meeting)
-            windows = data.build_windows(
-                meeting, transcript.body, concept_mod._chunk_lines
-            )
-            registered = REGISTERED_WINDOWS.get(meeting)
-            if registered is not None and [w.sha256 for w in windows] != registered:
+            windows = data.build_windows(meeting, transcript.body, self.chunk)
+            registered = self.registered.get(meeting)
+            if registered is not None and [w.sha256 for w in windows] != list(
+                registered
+            ):
                 raise SystemExit(
                     f"{meeting}: windows differ from the registered window list"
                 )
@@ -808,14 +831,19 @@ def score_pool(
     corpus: Corpus,
     *,
     prose_runs: Sequence[int] | None = None,
+    load: Callable[[str, str, int], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
-    """Every registered number for (models x pool x runs)."""
+    """Every registered number for (models x pool x runs).
+
+    `load(model, source, run)` reads a record; None means this screen's
+    layout under `runs_dir` (the window-size screen passes its own)."""
+    loader = load or (lambda m, s, r: load_record(runs_dir, m, s, r))
     meetings = sources_for(pool, prose=False)
     records: dict[tuple[str, str, int], dict[str, Any]] = {}
     for model in models:
         for meeting in meetings:
             for run in runs:
-                rec = load_record(runs_dir, model, meeting, run)
+                rec = loader(model, meeting, run)
                 if rec is None:
                     raise SystemExit(f"missing record {model} {meeting} r{run}")
                 records[(model, meeting, run)] = rec
@@ -948,7 +976,11 @@ def score_pool(
             },
         }
     prose = score_prose(
-        runs_dir, models, prose_runs if prose_runs is not None else runs, store
+        runs_dir,
+        models,
+        prose_runs if prose_runs is not None else runs,
+        store,
+        load=loader,
     )
     for model in models:
         out["models"][model]["prose"] = prose[model]
@@ -972,6 +1004,7 @@ def score_pool(
                 sm.mean,
             )
         )
+    out["per_meeting"] = {m: dict(v) for m, v in per_meeting.items()}
     out["per_window"] = {
         m: {k: {str(i): v for i, v in ws.items()} for k, ws in w.items()}
         for m, w in per_window.items()
@@ -1066,8 +1099,11 @@ def score_prose(
     models: Sequence[str],
     runs: Sequence[int],
     store: EmbedStore,
+    *,
+    load: Callable[[str, str, int], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Secondary: exact and embedding-matched subject recall; V3 language."""
+    loader = load or (lambda m, s, r: load_record(runs_dir, m, s, r))
     calib = (
         json.loads((runs_dir / "calibration.json").read_text(encoding="utf-8"))
         if (runs_dir / "calibration.json").is_file()
@@ -1085,7 +1121,7 @@ def score_prose(
             dominant = concept_mod._dominant_language(text)
             fx_exact = fx_embed = fx_subjects = 0
             for run in runs:
-                rec = load_record(runs_dir, model, f"prose-{name}", run)
+                rec = loader(model, f"prose-{name}", run)
                 if rec is None:
                     continue
                 final = rec["stages"]["final"] or []
