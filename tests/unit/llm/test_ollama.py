@@ -27,6 +27,7 @@ from openkos.llm import ollama as llm_ollama
 from openkos.llm.base import EMBED_DIM, BackendUnavailable, Embedder, Message
 from openkos.llm.ollama import (
     DEFAULT_TIMEOUT,
+    ChatDiagnostics,
     InstalledModel,
     OllamaClient,
     OllamaEmbeddingDimensionMismatch,
@@ -2954,3 +2955,51 @@ def test_ollama_concrete_classes_are_also_neutral_subclasses() -> None:
         llm_base.BackendEmbeddingDimensionMismatch,
     )
     assert issubclass(llm_ollama.OllamaUnavailable, llm_base.BackendUnavailable)
+
+
+def _diag_body(**fields: Any) -> bytes:
+    message = {"role": "assistant", "content": fields.pop("content", "hello")}
+    if "thinking" in fields:
+        message["thinking"] = fields.pop("thinking")
+    return json.dumps({"message": message, **fields}).encode()
+
+
+def test_diagnostics_sink_receives_counters_never_text() -> None:
+    seen: list[ChatDiagnostics] = []
+    body = _diag_body(
+        content="hello", thinking="abcdef", done_reason="stop", eval_count=42
+    )
+    client = OllamaClient(
+        "qwen3", urlopen=_fake_urlopen(body, []), diagnostics_sink=seen.append
+    )
+    assert client.chat([{"role": "user", "content": "x"}]) == "hello"
+    assert seen == [ChatDiagnostics("stop", 42, 6, 5)]
+
+
+def test_diagnostics_sink_sees_a_capped_call_before_it_raises() -> None:
+    seen: list[ChatDiagnostics] = []
+    body = _diag_body(content="cut", done_reason="length", eval_count=8192)
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        urlopen=_fake_urlopen(body, []),
+        diagnostics_sink=seen.append,
+    )
+    with pytest.raises(OllamaGenerationCapped):
+        client.chat([{"role": "user", "content": "x"}])
+    assert seen == [ChatDiagnostics("length", 8192, 0, 3)]
+
+
+def test_diagnostics_fail_open_on_missing_or_odd_fields() -> None:
+    seen: list[ChatDiagnostics] = []
+    body = _diag_body(content="", eval_count=True, done_reason=7, thinking=5)
+    client = OllamaClient(
+        "qwen3", urlopen=_fake_urlopen(body, []), diagnostics_sink=seen.append
+    )
+    client.chat([{"role": "user", "content": "x"}])
+    assert seen == [ChatDiagnostics(None, None, 0, 0)]
+
+
+def test_no_sink_is_the_default() -> None:
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(_diag_body(), []))
+    assert client.chat([{"role": "user", "content": "x"}]) == "hello"

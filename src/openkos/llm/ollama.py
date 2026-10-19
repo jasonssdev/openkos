@@ -25,6 +25,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from openkos.llm.base import (
@@ -102,6 +103,19 @@ DEFAULT_EMBED_RETRY_BACKOFF_BASE = 0.5
 """Default exponential-backoff base, in seconds, between `embed()` retry
 attempts: sleep duration is `base * 2 ** (attempt - 1)` for the failed
 1-indexed `attempt` (D3)."""
+
+
+@dataclass(frozen=True)
+class ChatDiagnostics:
+    """What one `chat()` response said about HOW it ended (issue #1562).
+
+    Counters and lengths only, never text, so handing it to an observer leaks
+    no content. `None` marks a field the response did not carry."""
+
+    done_reason: str | None
+    eval_count: int | None
+    thinking_chars: int
+    content_chars: int
 
 
 class OllamaError(BackendError):
@@ -201,6 +215,22 @@ def is_embedding_model(model: InstalledModel) -> bool:
     return _EMBEDDING_TAG_MARKER in model.tag.lower()
 
 
+def _diagnostics_of(data: Any, content: str) -> ChatDiagnostics:
+    """Fail-open reading of a validated response into `ChatDiagnostics`."""
+    reason = data.get("done_reason") if isinstance(data, dict) else None
+    count = data.get("eval_count") if isinstance(data, dict) else None
+    message = data.get("message") if isinstance(data, dict) else None
+    thinking = message.get("thinking") if isinstance(message, dict) else None
+    return ChatDiagnostics(
+        done_reason=reason if isinstance(reason, str) else None,
+        eval_count=count
+        if isinstance(count, int) and not isinstance(count, bool)
+        else None,
+        thinking_chars=len(thinking) if isinstance(thinking, str) else 0,
+        content_chars=len(content),
+    )
+
+
 def _normalize_host(host: str) -> str:
     """Prepend `http://` to a bare `host:port` value (D2 risk note)."""
     if host.startswith(("http://", "https://")):
@@ -225,6 +255,7 @@ class OllamaClient:
         embed_retry_attempts: int = DEFAULT_EMBED_RETRY_ATTEMPTS,
         embed_retry_backoff_base: float = DEFAULT_EMBED_RETRY_BACKOFF_BASE,
         sleep: Callable[[float], None] = time.sleep,
+        diagnostics_sink: Callable[[ChatDiagnostics], None] | None = None,
     ) -> None:
         """Resolve `host` (arg > `OLLAMA_HOST` env > default) and store config (D2).
 
@@ -262,8 +293,16 @@ class OllamaClient:
         ONLY `embed()`'s retry-with-backoff loop (D1/D3) -- `chat()` and
         `list_models()` are untouched, never retried. `sleep` defaults to
         the real `time.sleep`; tests inject a spy to prove no real sleep
-        occurs and to observe the backoff schedule."""
+        occurs and to observe the backoff schedule.
+
+        `diagnostics_sink` (issue #1562) is an opt-in observer handed one
+        `ChatDiagnostics` per parsed `chat()` response, BEFORE a length cap
+        raises, so a capped call is observable too. It is a constructor-
+        injected callable rather than instance state because `chat` must
+        stay safe under concurrent calls; `None` (the default) changes
+        nothing."""
         self._model = model
+        self._diagnostics_sink = diagnostics_sink
         self._timeout = timeout
         self._max_generation_tokens = max_generation_tokens
         self._temperature = temperature
@@ -419,6 +458,12 @@ class OllamaClient:
             raise OllamaError(
                 f"Expected message.content to be a string, got {type(content)!r}"
             )
+
+        # Bound to a local: the sink is an injected observer, not instance
+        # state, and calling it writes nothing back onto `self`.
+        sink = self._diagnostics_sink
+        if sink is not None:
+            sink(_diagnostics_of(data, content))
 
         # `done_reason` is read AFTER the malformed-response guard above, on
         # the already-validated `data` dict, so a response missing it
