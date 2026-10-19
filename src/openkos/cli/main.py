@@ -1735,14 +1735,15 @@ def init(
             "workspace's openkos.yaml later forces a full corpus re-embed the "
             "next time `openkos reindex` runs.",
         )
-    # #1334 item 7: the two judge roles ship their own, larger chat model
+    # #1334 item 7: the two judge roles (and, since #1560, `query`'s
+    # sufficiency check) ship their own, larger chat model
     # (`config.DEFAULT_TASK_MODELS`, ADR-0047), which neither picker above
     # asks about and which must be pulled separately. Informational only: no
     # prompt, and `models:` in openkos.yaml overrides it. `init` writes the
     # `ollama` backend, the only one the packaged defaults apply to.
     judge_models = [
         tag
-        for task in ("adjudication", "contradiction")
+        for task in ("adjudication", "contradiction", "sufficiency")
         if (tag := config.DEFAULT_TASK_MODELS.get(task)) is not None
         and tag != resolved_model
     ]
@@ -1751,7 +1752,8 @@ def init(
         pulls = " and ".join(f"`ollama pull {tag}`" for tag in distinct_judges)
         _advisory(
             "init",
-            "openkos init: note -- `adjudicate` and contradiction detection run "
+            "openkos init: note -- `adjudicate`, contradiction detection and "
+            "`query`'s sufficiency check run "
             f"on a separate, larger model ({', '.join(distinct_judges)}), not on "
             f"'{resolved_model}'; Ollama swaps it in by stage. Pull it before "
             f"you first need it: {pulls}.",
@@ -14276,6 +14278,11 @@ def query(
         raise typer.Exit(code=1) from exc
 
     llm = _chat_client(cfg)
+    # #1560: the pre-synthesis check runs on its own task model; synthesis
+    # keeps `model:`. `None` when the check is off or both resolve to one tag.
+    sufficiency_llm = application_query.build_sufficiency_client(
+        cfg, lambda _task: _chat_client(cfg, task="sufficiency")
+    )
     embedder = _embed_client(cfg)
     embedder_locality = cast(BackendDiagnostics, embedder).locality
     _warn_if_nonlocal_embed_host("query", embedder_locality, cfg)
@@ -14299,10 +14306,17 @@ def query(
             "workspace sends only the question you just asked.",
             err=True,
         )
-    # The CHAT client decides the exemption, not the embedder: the
-    # confidential concept bodies travel in the `llm.chat` payload (#240).
-    local_exemption = _resolve_local_exemption(
-        cast(application_backends.HasLocality, llm), cfg
+    # The CHAT clients decide the exemption, not the embedder: the
+    # confidential concept bodies travel in the `llm.chat` payload (#240) --
+    # to the sufficiency model as well as the synthesis one (#1560), so it
+    # holds only when every client that receives the context is local.
+    local_exemption = application_backends.resolve_local_exemption_all(
+        [
+            cast(application_backends.HasLocality, client)
+            for client in (llm, sufficiency_llm)
+            if client is not None
+        ],
+        cfg,
     )
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
@@ -14342,6 +14356,7 @@ def query(
             include_deprecated=include_deprecated,
             include_confidential=include_confidential,
             local_exemption=local_exemption,
+            sufficiency_llm=sufficiency_llm,
         )
     except BackendUnavailable as exc:
         typer.echo(
@@ -14481,7 +14496,21 @@ def query(
             "shown; the answer did not see the rest.",
             err=True,
         )
-    if result.sufficiency_degraded:
+    if result.sufficiency_model_missing:
+        # #1560: the check's own model is not installed. Fails open like any
+        # check error (the answer was synthesised), but the operator must be
+        # able to tell WHICH model is missing and how to fix or decline it.
+        check_model = config.resolve_task_model(cfg, "sufficiency")
+        typer.echo(
+            "openkos query: notice -- the sufficiency check could not run "
+            f"because its model '{check_model}' is not available, so this "
+            "answer was not checked against the retrieved context before it "
+            f"was written. {application_backends.install_hint(cfg, check_model)}, "
+            "or set `models: {sufficiency: null}` in openkos.yaml to run the "
+            "check on the answer model instead.",
+            err=True,
+        )
+    elif result.sufficiency_degraded:
         # #764: the check failed OPEN, which is deliberate -- a backend error
         # is not evidence that the bundle cannot answer. But an operator whose
         # backend has been flaky has no other way to learn that the guard they

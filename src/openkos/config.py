@@ -28,10 +28,13 @@ TASK_MODEL_KEYS = frozenset(
         "edge_typing",
         "volatility_typing",
         "contradiction",
+        "sufficiency",
     }
 )
 """Every task `models:` may name (issue #515), keyed by TASK rather than by
 verb -- see `Config.models` for why that distinction is load-bearing.
+`sufficiency` (issue #1560) is the pre-synthesis check of `query`; the
+synthesis call itself is not a task key and follows `model:`.
 
 Only `edge_typing` has a harness behind it today (`evals/edge_typing/`, the
 sweep in #516). The other four are accepted because restricting the schema
@@ -42,9 +45,10 @@ which; the schema does not pretend to."""
 
 DEFAULT_JUDGE_MODEL = "gemma4:26b-a4b"
 """The packaged chat model for the two judge roles, `contradiction` and
-`adjudication` (issue #1269, ADR-0047). It met every pre-registered bar on
-those two roles and no other; Label and Generate had no winner, so every
-other task stays on `DEFAULT_MODEL`. It is a 26B-parameter mixture-of-
+`adjudication` (issue #1269, ADR-0047), and for Ask's `sufficiency` check
+(issue #1560, ADR-0076). It met every pre-registered bar on those roles and
+no other; Label, Generate, and Ask's answer and citation had no winner, so
+every other task stays on `DEFAULT_MODEL`. It is a 26B-parameter mixture-of-
 experts model (about 21.5 GB resident with `bge-m3` at `num_ctx` 12288), so
 it does not co-reside with `qwen3:8b` inside the 24 GB budget of the 32 GB hardware
 floor: the engine runs one chat model at a time and Ollama swaps them by
@@ -53,11 +57,14 @@ DEFAULT_TASK_MODELS: dict[str, str | None] = {
     "edge_typing": None,
     "adjudication": DEFAULT_JUDGE_MODEL,
     "contradiction": DEFAULT_JUDGE_MODEL,
+    "sufficiency": DEFAULT_JUDGE_MODEL,
 }
 """Packaged per-task model defaults (issue #513), overriding `DEFAULT_MODEL`
 for the tasks listed here and no others, on the `ollama` backend only (see
 `resolve_task_model`). Since #1269 the two judge roles ship
-`DEFAULT_JUDGE_MODEL`; `edge_typing`'s key stays listed so the opt-in
+`DEFAULT_JUDGE_MODEL`, and since #1560 so does the Ask sufficiency check
+(and only the check: synthesis had no winner and follows `model:`);
+`edge_typing`'s key stays listed so the opt-in
 surface remains visible, and its `None` means `resolve_task_model` follows
 the global `model:`.
 
@@ -2101,8 +2108,9 @@ def resolve_task_model(cfg: Config, task: str | None) -> str:
        explicit YAML null here DECLINES a packaged default and falls to
        `cfg.model`, which is the only way to opt out of one.
     2. `DEFAULT_TASK_MODELS[task]` -- the packaged per-task default, on the
-       `ollama` backend only: the two judge roles ship `DEFAULT_JUDGE_MODEL`
-       (#1269) and `edge_typing`'s value is `None`. Another backend skips
+       `ollama` backend only: the two judge roles and the Ask sufficiency
+       check ship `DEFAULT_JUDGE_MODEL` (#1269, #1560) and `edge_typing`'s
+       value is `None`. Another backend skips
        this rung, since a model tag is meaningful only to its own provider.
     3. `cfg.model` -- the global default.
 

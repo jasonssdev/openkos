@@ -104,7 +104,12 @@ def test_the_models_are_listed_in_order_with_their_roles(tmp_path: Path) -> None
     assert [(m.tag, m.roles, m.required, m.pullable) for m in got.models] == [
         (config.DEFAULT_MODEL, ("chat",), True, True),
         (config.DEFAULT_EMBEDDING_MODEL, ("embedding",), True, True),
-        (config.DEFAULT_JUDGE_MODEL, ("adjudication", "contradiction"), False, True),
+        (
+            config.DEFAULT_JUDGE_MODEL,
+            ("adjudication", "contradiction", "sufficiency"),
+            False,
+            True,
+        ),
     ]
 
 
@@ -166,7 +171,9 @@ def test_a_latest_qualified_tag_counts_as_installed(tmp_path: Path) -> None:
 def test_a_task_model_equal_to_the_chat_model_is_not_listed_twice(
     tmp_path: Path,
 ) -> None:
-    extra = "models:\n  adjudication: null\n  contradiction: null\n"
+    extra = (
+        "models:\n  adjudication: null\n  contradiction: null\n  sufficiency: null\n"
+    )
     client = _Runtime(tags=list(_ALL))
 
     got = setup.setup_readiness(_workspace(tmp_path, extra), ports=_ports(client))

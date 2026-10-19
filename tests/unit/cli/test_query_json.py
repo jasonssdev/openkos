@@ -197,6 +197,7 @@ def test_llm_section_reports_what_is_sent_and_null_for_what_is_not(
     assert list(llm) == [
         "backend",
         "model",
+        "sufficiency_model",
         "embedding_model",
         "num_ctx",
         "num_predict",
@@ -207,6 +208,7 @@ def test_llm_section_reports_what_is_sent_and_null_for_what_is_not(
     assert llm["temperature"] is None
     assert llm["seed"] is None
     assert llm["model"]
+    assert llm["sufficiency_model"] == "gemma4:26b-a4b"
     assert llm["embedding_model"]
 
 

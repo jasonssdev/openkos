@@ -51,6 +51,13 @@ def _llm_section(cfg: config.Config) -> dict[str, object]:
     return {
         "backend": cfg.backend,
         "model": config.resolve_task_model(cfg, None),
+        # The pre-synthesis check runs on its own task model (#1560); `null`
+        # when the check is off and so sends nothing.
+        "sufficiency_model": (
+            config.resolve_task_model(cfg, "sufficiency")
+            if cfg.sufficiency_check
+            else None
+        ),
         "embedding_model": cfg.embedding_model,
         "num_ctx": None if openai else cfg.context_window,
         "num_predict": cfg.max_generation_tokens,

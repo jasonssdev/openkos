@@ -393,3 +393,112 @@ def test_query_tool_omitted_limit_uses_the_shared_default(
             None,
         )
     assert seen == [DEFAULT_QUERY_LIMIT] == [8]
+
+
+# --- the sufficiency client (#1560) -------------------------------------------
+
+
+def _capture_run_query(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    def _record(question: str, **kwargs: object) -> object:
+        captured.update(kwargs)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr("openkos.application.query.run_query", _record)
+    return captured
+
+
+def _sufficiency_ctx(
+    layout: config.WorkspaceLayout,
+    llm: LLMBackend,
+    check_llm: LLMBackend,
+    *,
+    expose_confidential: bool,
+) -> tools.ToolContext:
+    def _local_exemption_for(client: LLMBackend, cfg: config.Config) -> bool:
+        assert isinstance(client, _RecordingLLM)
+        return client.locality.is_local and cfg.confidential_local_exemption
+
+    def _make_task_llm(cfg: config.Config, task: str) -> LLMBackend:
+        assert task == "sufficiency"
+        return check_llm
+
+    return tools.ToolContext(
+        layout=layout,
+        expose_confidential=expose_confidential,
+        make_llm=lambda cfg: llm,
+        make_embedder=lambda cfg: _NeverCalledEmbedder(),
+        local_exemption_for=_local_exemption_for,
+        make_task_llm=_make_task_llm,
+    )
+
+
+def test_query_threads_the_sufficiency_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = _build_query_fixture(tmp_path)
+    (tmp_path / "openkos.yaml").write_text(
+        "sufficiency_check: true\n", encoding="utf-8"
+    )
+    captured = _capture_run_query(monkeypatch)
+    llm, check = _RecordingLLM(is_local=True), _RecordingLLM(is_local=True)
+
+    with pytest.raises(RuntimeError):
+        tools.REGISTRY["query"].run(
+            {"question": "marker value"},
+            _sufficiency_ctx(layout, llm, check, expose_confidential=False),
+            None,
+        )
+
+    assert captured["sufficiency_llm"] is check
+    assert captured["llm"] is llm
+
+
+def test_query_builds_no_sufficiency_client_when_the_check_is_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = _build_query_fixture(tmp_path)  # writes sufficiency_check: false
+    captured = _capture_run_query(monkeypatch)
+
+    with pytest.raises(RuntimeError):
+        tools.REGISTRY["query"].run(
+            {"question": "marker value"},
+            _sufficiency_ctx(
+                layout,
+                _RecordingLLM(is_local=True),
+                _RecordingLLM(is_local=True),
+                expose_confidential=False,
+            ),
+            None,
+        )
+
+    assert captured["sufficiency_llm"] is None
+
+
+@pytest.mark.parametrize(("check_local", "expected"), [(True, True), (False, False)])
+def test_query_exemption_needs_the_sufficiency_client_to_be_local_too(
+    check_local: bool,
+    expected: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = _build_query_fixture(tmp_path)
+    (tmp_path / "openkos.yaml").write_text(
+        "sufficiency_check: true\n", encoding="utf-8"
+    )
+    captured = _capture_run_query(monkeypatch)
+
+    with pytest.raises(RuntimeError):
+        tools.REGISTRY["query"].run(
+            {"question": "marker value"},
+            _sufficiency_ctx(
+                layout,
+                _RecordingLLM(is_local=True),
+                _RecordingLLM(is_local=check_local),
+                expose_confidential=True,
+            ),
+            None,
+        )
+
+    assert captured["local_exemption"] is expected

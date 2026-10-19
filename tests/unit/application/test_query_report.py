@@ -3,6 +3,7 @@ cannot reach -- a result without a trace, and the OpenAI-compatible `llm` rule."
 
 import dataclasses
 from pathlib import Path
+from typing import cast
 
 import pytest
 from typer.testing import CliRunner
@@ -87,3 +88,49 @@ def test_the_openai_compatible_backend_never_reports_num_ctx(
     assert llm["num_ctx"] is None
     assert llm["num_predict"] == openai.max_generation_tokens
     assert llm["temperature"] == 0.3
+
+
+def _llm_section_for(cfg: config.Config) -> dict[str, object]:
+    result = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=0,
+        llm_invoked=False,
+        no_match_cause="zero_hits",
+        skip_notices=[],
+    )
+    llm = query_report.build_query_report(
+        _outcome(result),
+        question="q",
+        limit=5,
+        cfg=cfg,
+        openkos_version="x",
+        disclosable=frozenset(),
+    )["llm"]
+    assert isinstance(llm, dict)
+    return llm
+
+
+def test_llm_section_names_the_sufficiency_model_beside_the_synthesis_model(
+    cfg: config.Config,
+) -> None:
+    """The check runs on its own task model (#1560), so the report names it
+    next to `model`, which stays the synthesis model."""
+    llm = _llm_section_for(dataclasses.replace(cfg, sufficiency_check=True))
+
+    assert llm["model"] == cfg.model
+    assert llm["sufficiency_model"] == "gemma4:26b-a4b"
+
+
+def test_llm_section_sufficiency_model_follows_the_opt_out_and_is_null_when_off(
+    cfg: config.Config,
+) -> None:
+    declined = dataclasses.replace(
+        cfg,
+        sufficiency_check=True,
+        models=cast("dict[str, str]", {"sufficiency": None}),
+    )
+    off = dataclasses.replace(cfg, sufficiency_check=False)
+
+    assert _llm_section_for(declined)["sufficiency_model"] == cfg.model
+    assert _llm_section_for(off)["sufficiency_model"] is None
