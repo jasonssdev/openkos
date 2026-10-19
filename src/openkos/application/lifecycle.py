@@ -441,7 +441,9 @@ def prepare_merge(
         survivor_text=survivor_text,
         absorbed_text=absorbed_text,
         index_text=index_text,
-        merged_at=now.isoformat(),
+        # Fixed-width: a bare `isoformat()` drops the fraction on a whole-second
+        # tick, which made the sidecar's size depend on the clock (#1553).
+        merged_at=now.isoformat(timespec="microseconds"),
         existing_entries=existing_entries,
         link_rewrites=link_rewrites,
         relation_rewrites=relation_rewrites,

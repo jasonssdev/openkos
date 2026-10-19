@@ -304,7 +304,7 @@ def test_merge_core_writes_index_log_touched_files_survivor_last_and_ledger(
     assert "Absorbed body" not in survivor_text or "Absorbed" in survivor_text
     entries = bundle_ledger.read_entries(survivor_canonical, bundle_dir)
     assert len(entries) == 1
-    assert now.isoformat() in entries[0].merged_at
+    assert now.isoformat(timespec="microseconds") in entries[0].merged_at
 
     other_text = (bundle_dir / "concepts" / "other.md").read_text(encoding="utf-8")
     assert "/concepts/survivor.md" in other_text
