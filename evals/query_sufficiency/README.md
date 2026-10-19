@@ -108,3 +108,13 @@ cannot catch this and did not (#895, the same defect #887 fixed in
 
 Anything re-run from here indexes 14 documents, so a new figure is not
 comparable with the ones above.
+
+## Spanish questions over an English bundle (#1560)
+
+This probe's 20 questions are asked only over the Spanish bundle. The
+cross-lingual case, the same questions plus 12 anchored ones over
+`query_attribution`'s English mirror, with gold derived from the bundle
+bodies rather than annotated, lives in
+`evals/query_grounding/crosslingual_corpus.py` and is run by
+`evals/ask_model_screen/`, which also adds the cache, the per-call timeout
+and the paired comparison this single-model probe does not have.
