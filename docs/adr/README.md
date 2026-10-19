@@ -114,3 +114,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0073](0073-adding-files-through-the-api-is-consented-against-a-worst-case-call-bound.md) | Adding files through the API is consented against a worst-case call bound | Accepted | 2026-10-17 |
 | [0074](0074-undoing-a-reconcile-removes-what-reconcile-wrote-keyed-by-the-pair.md) | Undoing a reconcile removes what reconcile wrote, keyed by the pair | Accepted | 2026-10-17 |
 | [0075](0075-the-ask-screen-offers-the-confidential-consent-per-question-and-only-while-the-ai-model-runs-on-this-mac.md) | The Ask screen offers the confidential consent per question, and only while the AI model runs on this Mac | Accepted | 2026-10-17 |
+| [0076](0076-the-ask-sufficiency-check-defaults-to-gemma4-26b-a4b-and-synthesis-stays-on-the-global-model.md) | The Ask sufficiency check defaults to gemma4:26b-a4b, and synthesis stays on the global model | Proposed | 2026-10-19 |
