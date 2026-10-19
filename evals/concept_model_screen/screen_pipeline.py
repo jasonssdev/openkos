@@ -373,7 +373,10 @@ def capture_stages(rec: StageRecorder) -> Iterator[None]:
 
     def dedup(results: Any) -> Any:
         out = o_dedup(results)
-        rec.dedup = list(out)
+        if rec.dedup is None:
+            # First call only: the re-ask and participant capture call it
+            # again on the merged list plus their additions.
+            rec.dedup = list(out)
         return out
 
     def twins(results: Any, **kwargs: Any) -> Any:
