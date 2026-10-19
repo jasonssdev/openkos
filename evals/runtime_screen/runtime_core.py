@@ -111,7 +111,7 @@ def stream_rates(
 
 
 def ollama_rates(final: Mapping[str, Any]) -> dict[str, Any]:
-    """Ollama's own report in its final `/api/chat` chunk (nanoseconds)."""
+    """Ollama's own report in the final chunk of its native chat reply (nanoseconds)."""
     prompt = int(final["prompt_eval_count"])
     completion = int(final["eval_count"])
     return {

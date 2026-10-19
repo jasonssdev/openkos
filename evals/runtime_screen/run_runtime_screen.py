@@ -36,7 +36,10 @@ from typing import Any, Final
 _HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
+sys.path.append(str(_HERE.parent))
+
 import runtime_core as core  # noqa: E402
+from harness_stamp import build_stamp  # noqa: E402
 
 PREFILL_WORDS: Final = 9_000
 """About 10,000 `qwen3:8b` tokens: production context (12,288) minus the
@@ -317,6 +320,24 @@ def _median(values: Sequence[float | None]) -> float | None:
     return statistics.median(real) if real else None
 
 
+def runtime_stamp(args: argparse.Namespace) -> dict[str, Any]:
+    """`harness_stamp`'s identity, with the model entry naming the runtime,
+    what it was asked for and the weights digest given (no Ollama reports
+    one for another runtime)."""
+    stamp = build_stamp(
+        model=args.label,
+        prompts={"runtime/bench": _bench_messages("stamp")[0]["content"] + INSTRUCTION},
+    )
+    if args.runtime != "ollama":
+        stamp["model"] = {
+            "name": args.label,
+            "digest": args.digest,
+            "backend": args.runtime,
+            "served_model": args.model_ref,
+        }
+    return stamp
+
+
 def cmd_perf(args: argparse.Namespace) -> int:
     out_dir: pathlib.Path = args.out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -329,6 +350,7 @@ def cmd_perf(args: argparse.Namespace) -> int:
         "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "loads": [],
         "bench": [],
+        "stamp": runtime_stamp(args),
     }
     server: Server | None = None
     base_url = f"http://127.0.0.1:{args.port}"
@@ -641,6 +663,7 @@ def build_parser() -> argparse.ArgumentParser:
     perf.add_argument("--label", required=True)
     perf.add_argument("--model-ref", required=True, help="Ollama tag or served model")
     perf.add_argument("--reps", type=int, default=REPS)
+    perf.add_argument("--digest", default=None, help="weights digest (not Ollama)")
     perf.add_argument("--loads", type=int, default=LOADS)
     swap = sub.choices["swap"]
     swap.add_argument("--first", required=True)
