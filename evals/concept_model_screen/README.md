@@ -34,6 +34,7 @@ fixed in [`PREREGISTRATION.md`](PREREGISTRATION.md); the outcome is in
 | `screen_pipeline.py` | Cached, timed backend; per-stage capture of production `extract_concept_union` |
 | `screen_judge.py` | The `gpt-oss:20b` prompts and fail-closed label parsing |
 | `windows.json` | Registered window hashes (no text) and gold counts per meeting |
+| `drop_ablation.py` | #1572: per-rule L6/L7 drop ablation on the cached records, cache-only embeddings (`list`, `score`, `--self-test`); rules in `DROP_ABLATION_PREREGISTRATION.md`, outcome in `DROP_ABLATION_RESULTS.md` |
 
 ## Data stays outside the repository
 
