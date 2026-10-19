@@ -1,9 +1,9 @@
 # Ask model screen (#1560): design note
 
 Which chat model should Ask use for each of its roles? This directory holds the
-harness that measures it and the pre-registration (`PREREGISTRATION.md`). No
-default, prompt or `TASK_MODEL_KEYS` entry changes because of it; a new task
-key would need its own ADR, decided after the results.
+harness that measures it, the pre-registration (`PREREGISTRATION.md`) and the
+results (`RESULTS.md`). No default, prompt or `TASK_MODEL_KEYS` entry changes
+because of it; a new task key needs its own ADR, decided after the results.
 
 ```
 uv run python -u evals/ask_model_screen/run_ask_model_screen.py --self-test
