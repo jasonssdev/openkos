@@ -26,5 +26,5 @@ Strict TDD is ON, runner `uv run pytest`. No test reaches Ollama.
   `sufficiency_model`.
 - [x] 10. [DOC] ADR-0076 and its index row, `docs/cli.md`, README, template,
   canonical example, `docs/tech_stack.md`.
-- [ ] 11. [GATE] ruff check, ruff format --check, mypy, pytest --cov, eval
+- [x] 11. [GATE] ruff check, ruff format --check, mypy, pytest --cov, eval
   self-tests.
