@@ -152,3 +152,11 @@ The guardrails and vetoes are in the pre-registration.
 synthesis call and writes its own projection (`runs-<model>-arm-NAME.json`); the
 control keeps its file and its cache keys. `--stage compare-prompt --arm NAME` pairs the
 two arms item by item and applies the rule in `PREREGISTRATION-1583.md`.
+
+## English questions (#1581)
+
+`--questions en` builds (`--stage contexts`) and runs (`--stage generate`) the English twins of the 32 questions
+(`crosslingual_corpus.EN_QUESTIONS`) as the `en-en` and, with `--built-bundle`, `en-built` sets, in their own
+`contexts-en.json` and `runs-<model>-en.json`. `--stage compare-language --arm NAME` reports each model's language
+penalty (Spanish question minus English question over the same bundle, paired per question) and the candidate minus
+baseline delta on the English sets. See `PREREGISTRATION-1581.md` and `RESULTS-1581.md`.
