@@ -85,6 +85,8 @@ from openkos.llm.ollama import OllamaClient  # noqa: E402
 from openkos.llm.openai_compatible import OpenAICompatibleClient  # noqa: E402
 from openkos.model import okf  # noqa: E402
 from openkos.retrieval.answer import (  # noqa: E402
+    _ATTRIBUTION_KEYWORD,
+    _ATTRIBUTION_NONE,
     _SUFFICIENCY_PROMPT,
     _SYSTEM_PROMPT,
     DEFAULT_QUERY_LIMIT,
@@ -390,6 +392,32 @@ def identity_for(model: str, digest: str, run: int) -> dict[str, Any]:
     }
 
 
+def synthesis_messages(user_content: str, system_prompt: str | None) -> list[Message]:
+    """The production synthesis prompt, or the same two messages with an
+    arm's system prompt in place of `answer/system` (#1583)."""
+    if system_prompt is None:
+        return _build_messages(user_content)
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def arm_system_prompt(path: pathlib.Path) -> str:
+    """Render an arm's `answer/system` file the way `load_prompt` renders the
+    production one: bytes exact, the two placeholders production fills."""
+    text = path.read_bytes().decode("utf-8")
+    values = {
+        "attribution_keyword": _ATTRIBUTION_KEYWORD,
+        "attribution_none": _ATTRIBUTION_NONE,
+    }
+    for name, value in values.items():
+        text = text.replace("{{" + name + "}}", value)
+    if "{{" in text:
+        raise SystemExit(f"{path}: unfilled placeholder left in the arm prompt")
+    return text
+
+
 def score_item(
     *,
     model: str,
@@ -398,6 +426,7 @@ def score_item(
     item: Mapping[str, Any],
     chat: Any,
     calls: Sequence[str],
+    system_prompt: str | None = None,
 ) -> Row:
     """Make (or replay) both calls for one item and record what happened.
 
@@ -445,7 +474,7 @@ def score_item(
         row.suff_elapsed_s = chat.last_record.elapsed_s if chat.last_record else None
     if "answer" in calls:
         try:
-            reply = chat.chat(_build_messages(user_content))
+            reply = chat.chat(synthesis_messages(user_content, system_prompt))
         except core.ScreenCallFailed as failed:
             row.ans_outcome = failed.outcome
         else:
@@ -476,6 +505,7 @@ def generate(
     make_inner: Callable[[int], Any],
     offline: bool = False,
     log: Callable[[str], None] = print,
+    system_prompt: str | None = None,
 ) -> tuple[list[Row], dict[str, int]]:
     """Every item of every set, for each run in `runs` (seed = run number)."""
     rows: list[Row] = []
@@ -499,6 +529,7 @@ def generate(
                     item=item,
                     chat=chat,
                     calls=calls,
+                    system_prompt=system_prompt,
                 )
                 rows.append(row)
                 outcomes = {row.suff_outcome, row.ans_outcome}
@@ -526,12 +557,20 @@ def run_range(first_run: int, runs: int) -> range:
     return range(first_run, first_run + runs)
 
 
-def runs_path(cache_dir: pathlib.Path, model: str, first_run: int = 1) -> pathlib.Path:
+def runs_path(
+    cache_dir: pathlib.Path,
+    model: str,
+    first_run: int = 1,
+    *,
+    arm: str | None = None,
+) -> pathlib.Path:
     """The screen's runs (from 1) keep their file; stage 0 and the
     confirmation, on seeds outside the screen's, get one of their own, so
-    neither overwrites nor mixes with the screen's projection."""
+    neither overwrites nor mixes with the screen's projection. A prompt arm
+    (#1583) adds `-arm-<name>`, so it never shares a file with the control."""
+    arm_part = "" if arm is None else f"-arm-{arm}"
     suffix = "" if first_run == 1 else f"-from{first_run}"
-    return cache_dir / "runs" / f"runs-{slug(model)}{suffix}.json"
+    return cache_dir / "runs" / f"runs-{slug(model)}{arm_part}{suffix}.json"
 
 
 def write_runs(
@@ -543,11 +582,12 @@ def write_runs(
     timeout: float,
     totals: Mapping[str, int],
     first_run: int = 1,
+    arm: str | None = None,
 ) -> pathlib.Path:
     """Rows are always regenerated from the cache for the requested runs, so
     this file is a projection of the cache, never the only copy of a
     generation."""
-    path = runs_path(cache_dir, model, first_run)
+    path = runs_path(cache_dir, model, first_run, arm=arm)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -568,9 +608,14 @@ def write_runs(
 
 
 def load_rows(
-    cache_dir: pathlib.Path, model: str, runs: int, first_run: int = 1
+    cache_dir: pathlib.Path,
+    model: str,
+    runs: int,
+    first_run: int = 1,
+    *,
+    arm: str | None = None,
 ) -> list[Row]:
-    path = runs_path(cache_dir, model, first_run)
+    path = runs_path(cache_dir, model, first_run, arm=arm)
     if not path.is_file():
         raise SystemExit(f"no runs for {model} at {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -838,6 +883,154 @@ def compare(
                     core.paired_bootstrap(es, en, resamples=resamples)
                 )
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Prompt A/B (#1583): the refusal wording                                      #
+# --------------------------------------------------------------------------- #
+
+GATING_MODELS: Final = ("qwen3:8b", "gemma4:26b-a4b")
+"""The models whose result decides adoption (PREREGISTRATION-1583.md): the
+default, which must not regress, and the model whose Spanish refusals the
+issue measured at 9 of 30."""
+EFFECT_MODEL: Final = "gemma4:26b-a4b"
+EFFECT_FLOOR: Final = 0.80
+"""E1: the effect model's adjacent answers in Spanish, at least this share."""
+NONINFERIORITY_MARGIN: Final = 0.05
+ENGLISH_REFUSAL_PHRASE: Final = "does not cover"
+
+
+def _answered(row: Row) -> bool:
+    return _ok(row.ans_outcome)
+
+
+def language_scores(rows: Sequence[Row], label: str) -> dict[str, float]:
+    """Per item (mean over runs): 1 when the answer's dominant language is
+    Spanish, the language of every question; a failed call scores 0."""
+    return core.item_means(
+        (row.item, 1.0 if _answered(row) and row.lang == "es" else 0.0)
+        for row in rows
+        if row.label == label and row.ans_outcome not in (None, "no_context")
+    )
+
+
+def prompt_metrics(rows: Sequence[Row]) -> dict[str, float]:
+    """The A/B quantities for one model's rows in one arm."""
+    adjacent = [r for r in rows if r.label == ADJACENT and _answered(r)]
+    guard = guardrails(rows)
+    return {
+        "adjacent": len(adjacent),
+        "adjacent_spanish": _rate(
+            rows, lambda r: r.lang == "es", lambda r: r.label == ADJACENT
+        ),
+        "adjacent_english_phrase": _rate(
+            adjacent,
+            lambda r: ENGLISH_REFUSAL_PHRASE in r.answer.lower(),
+            lambda _r: True,
+        ),
+        "grounded_spanish": _rate(
+            rows, lambda r: r.lang == "es", lambda r: r.label == GROUNDED
+        ),
+        "answer_recall": _mean_or_zero(scores_by_item(rows, "answer")),
+        "citation": _mean_or_zero(scores_by_item(rows, "citation")),
+        "ans_failure": float(guard["ans_failure"] or 0.0),
+        "compliance": float(guard["compliance"] or 0.0),
+    }
+
+
+def _mean_or_zero(values: Mapping[str, float]) -> float:
+    return sum(values.values()) / len(values) if values else 0.0
+
+
+def prompt_verdict(
+    control: Mapping[str, Sequence[Row]],
+    treated: Mapping[str, Sequence[Row]],
+    *,
+    resamples: int = core.DEFAULT_RESAMPLES,
+) -> dict[str, Any]:
+    """The pre-registered rule over the control arm and the treated arm.
+
+    E1  the effect model's adjacent answers in Spanish reach `EFFECT_FLOOR`
+        and the paired delta's 95% lower bound is above 0;
+    N1  every gating model: adjacent Spanish share >= control - margin;
+    N2  grounded Spanish share >= control - margin;
+    N3  answer-role mean (anchored facts stated) >= control - margin;
+    N4  citation-role mean (refusal and citation correctness) >=
+        control - margin;
+    N5  answer failures <= control + 0.02 and `USED:` compliance >=
+        control - margin.
+    Adopt only when every check holds. Models outside `GATING_MODELS` are
+    reported, never decisive. Unpaired arms raise, as the screen's do."""
+    out: dict[str, Any] = {"models": {}, "failed": [], "adopt": False}
+    for model in control:
+        cm, tm = prompt_metrics(control[model]), prompt_metrics(treated[model])
+        delta = core.paired_bootstrap(
+            language_scores(control[model], ADJACENT),
+            language_scores(treated[model], ADJACENT),
+            resamples=resamples,
+        )
+        out["models"][model] = {
+            "control": cm,
+            "treated": tm,
+            "adjacent_spanish_delta": asdict(delta),
+        }
+        if model not in GATING_MODELS:
+            continue
+        failed: list[str] = out["failed"]
+        if model == EFFECT_MODEL and not (
+            tm["adjacent_spanish"] >= EFFECT_FLOOR and delta.lo > 0
+        ):
+            failed.append(
+                f"E1 {model} adjacent Spanish {tm['adjacent_spanish']:.3f} "
+                f"(floor {EFFECT_FLOOR}), delta lower bound {delta.lo:+.3f}"
+            )
+        checks = (
+            ("N1", "adjacent_spanish", tm["adjacent_spanish"] - cm["adjacent_spanish"]),
+            ("N2", "grounded_spanish", tm["grounded_spanish"] - cm["grounded_spanish"]),
+            ("N3", "answer_recall", tm["answer_recall"] - cm["answer_recall"]),
+            ("N4", "citation", tm["citation"] - cm["citation"]),
+            ("N5b", "compliance", tm["compliance"] - cm["compliance"]),
+        )
+        for check_id, name, change in checks:
+            if change < -NONINFERIORITY_MARGIN:
+                failed.append(f"{check_id} {model} {name} {change:+.3f}")
+        if tm["ans_failure"] > cm["ans_failure"] + FAILURE_MARGIN:
+            failed.append(f"N5a {model} answer failures {tm['ans_failure']:.3f}")
+    missing = [m for m in GATING_MODELS if m not in control]
+    if missing:
+        raise ValueError(f"gating models missing from the arms: {missing}")
+    out["adopt"] = not out["failed"]
+    return out
+
+
+def render_prompt_ab(result: Mapping[str, Any], *, arm: str, runs: str) -> str:
+    lines = [
+        f"# Refusal wording A/B (#1583), arm `{arm}`, runs {runs}",
+        "",
+        "| model | arm | adjacent in Spanish | adjacent with the English phrase "
+        "| grounded in Spanish | answer recall | citation | `USED:` compliance "
+        "| answer failures |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for model, block in result["models"].items():
+        for name in ("control", "treated"):
+            m = block[name]
+            lines.append(
+                f"| `{model}` | {name} | {m['adjacent_spanish']:.3f} "
+                f"| {m['adjacent_english_phrase']:.3f} "
+                f"| {m['grounded_spanish']:.3f} | {m['answer_recall']:.3f} "
+                f"| {m['citation']:.3f} | {m['compliance']:.3f} "
+                f"| {m['ans_failure']:.3f} |"
+            )
+    lines += ["", "| model | adjacent-Spanish paired delta [95% CI] |", "| --- | --- |"]
+    for model, block in result["models"].items():
+        d = block["adjacent_spanish_delta"]
+        lines.append(
+            f"| `{model}` | {d['mean']:+.3f} [{d['lo']:+.3f}, {d['hi']:+.3f}] |"
+        )
+    lines += ["", f"**adopt: {result['adopt']}**"]
+    lines += [f"- failed: {f}" for f in result["failed"]]
+    return "\n".join(lines) + "\n"
 
 
 def render(result: Mapping[str, Any], *, runs: int, first_run: int = 1) -> str:
@@ -1363,7 +1556,9 @@ def _model_digest(model: str, stamp: Mapping[str, Any]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
-    parser.add_argument("--stage", choices=("contexts", "generate", "compare"))
+    parser.add_argument(
+        "--stage", choices=("contexts", "generate", "compare", "compare-prompt")
+    )
     parser.add_argument("--cache-dir", type=pathlib.Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument(
         "--built-bundle",
@@ -1396,6 +1591,17 @@ def build_parser() -> argparse.ArgumentParser:
         default="ollama",
         help="generate: the transport (#1586); --model is then a label",
     )
+    parser.add_argument(
+        "--arm",
+        default=None,
+        help="generate/compare-prompt: the prompt arm's name (#1583)",
+    )
+    parser.add_argument(
+        "--system-prompt-file",
+        type=pathlib.Path,
+        default=None,
+        help="generate: an `answer/system` file replacing production's, with --arm",
+    )
     parser.add_argument("--base-url", default=None)
     parser.add_argument("--served-model", default=None)
     parser.add_argument("--digest", default=None, help="weights digest (openai)")
@@ -1425,10 +1631,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         contexts = load_contexts(args.cache_dir)
         if args.sample is not None:
             contexts = sample_contexts(contexts, args.sample)
+        if (args.arm is None) != (args.system_prompt_file is None):
+            parser.error("--arm and --system-prompt-file go together")
+        arm_prompt = (
+            arm_system_prompt(args.system_prompt_file)
+            if args.system_prompt_file is not None
+            else None
+        )
         stamp = build_stamp(
             model=args.model,
             prompts={
-                "answer/system": _SYSTEM_PROMPT,
+                "answer/system": arm_prompt or _SYSTEM_PROMPT,
                 "answer/sufficiency": _SUFFICIENCY_PROMPT,
             },
         )
@@ -1445,6 +1658,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout=args.timeout,
             make_inner=make_inner,
             offline=args.offline,
+            system_prompt=arm_prompt,
         )
         path = write_runs(
             args.cache_dir,
@@ -1454,8 +1668,34 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout=args.timeout,
             totals=totals,
             first_run=args.first_run,
+            arm=args.arm,
         )
         print(f"wrote {path} (cache hits {totals['hits']}, misses {totals['misses']})")
+        return 0
+    if args.stage == "compare-prompt":
+        models = [m for m in args.candidates.split(",") if m]
+        if not models or not args.arm:
+            parser.error("--stage compare-prompt needs --candidates and --arm")
+        load_contexts(args.cache_dir)
+        control = {
+            m: load_rows(args.cache_dir, m, args.runs, args.first_run) for m in models
+        }
+        treated = {
+            m: load_rows(args.cache_dir, m, args.runs, args.first_run, arm=args.arm)
+            for m in models
+        }
+        # Only the answer call differs between arms; a control row without an
+        # answer call (a sufficiency-only run) cannot be paired.
+        verdict = prompt_verdict(control, treated)
+        runs_label = f"{args.first_run}..{args.first_run + args.runs - 1}"
+        report = render_prompt_ab(verdict, arm=args.arm, runs=runs_label)
+        out = args.cache_dir / f"compare-prompt-{args.arm}-runs{args.runs}.md"
+        out.write_text(report, encoding="utf-8")
+        out.with_suffix(".json").write_text(
+            json.dumps(verdict, indent=1), encoding="utf-8"
+        )
+        print(report)
+        print(f"wrote {out}")
         return 0
     if args.stage == "compare":
         candidates = [c for c in args.candidates.split(",") if c]
