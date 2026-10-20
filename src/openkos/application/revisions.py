@@ -796,6 +796,17 @@ def judge_revisions(
     decision_ids = sorted(
         {concept_id for candidate in to_judge for concept_id in candidate.pair_ids}
     )
+    # Judging holds no lock, so a page can change while the model is called. The
+    # inputs are pinned here, before anything is read for the prompt, and a verdict
+    # whose inputs moved is dropped below: a finding stamped with the new bytes
+    # would read as fresh for content it was never judged on.
+    pinned_files = _bundle_text_snapshot(layout)
+    pinned = {
+        candidate.pair_ids: revision_input_digests(
+            layout, pinned_files, candidate.pair_ids
+        )
+        for candidate in to_judge
+    }
     dates = resolve_decision_dates(layout, decision_ids)
     sides: dict[str, decision_revision.JudgeSide] = {}
     for concept_id in decision_ids:
@@ -819,6 +830,8 @@ def judge_revisions(
         )
         for verdict in batch.results
         if not verdict.malformed
+        and pinned.get(verdict.pair_ids)
+        == revision_input_digests(layout, files, verdict.pair_ids)
     ]
     if to_persist:
         conn = derived.open_derived_connection(layout.findings_db_path)
