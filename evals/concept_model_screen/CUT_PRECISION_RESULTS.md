@@ -112,6 +112,45 @@ judge's choice of which objects to cut is as noisy as the effect.
   the ceiling batch and not the final batch (absolute levels are not
   comparable to #1557's 0.927 and 0.903), a window-only source.
 
+## Deviations from the pre-registration
+
+Disclosed after the fact. The pre-registration was committed at `fc44c899`;
+`cut_precision.py` did not exist then, and the diff of the harness and of
+these results against that commit is the two files in full. The only change
+to the harness between its own first commit (`692aba70`) and the results
+commit (`ec73a85b`) is the one below. No other post-registration change was
+found: the margin, floor, minimum cut, bootstrap settings and rules in the
+code match the registered text.
+
+- **`gemma4:26b-a4b` reads its `fixed` records in the `self` arm.**
+  - What: in `gather`, an extractor equal to the fixed judge model takes its
+    kept/cut partition from the `fixed` replay records in both arms, instead
+    of from the `self` records.
+  - When: made after the labels had been seen (the `label` run had finished), in
+    the results commit, not before the first label.
+  - Why: `gemma4:26b-a4b` is both the extractor and the fixed judge, so its
+    `self` and `fixed` arms are the same sample. The pre-registration says
+    they are "reported once"; the harness as first committed did not enforce
+    that, and the fix makes the two arms share one sample for that extractor.
+  - Effect on the pooled verdict: none. Recomputed from the stored labels and
+    replay records with no model call (the same `gather` and bootstrap,
+    seed 42, over the four other extractors only), strict, primary, seed 0:
+    - `self`: kept 116 of 125 (0.928), cut 103 of 109 (0.945), kept - cut
+      -0.0170 [-0.0964, +0.0618]: rule 3, inconclusive (as registered).
+    - `fixed`: kept 110 of 120 (0.917), cut 109 of 114 (0.956), kept - cut
+      -0.0395 [-0.1336, +0.0334]: rule 2 on its own (the upper bound falls
+      under +0.05 and the cut precision is 0.956).
+    - Overall: one arm rule 2 and one rule 3, so **mixed or inconclusive**,
+      the same as the reported verdict. The `fixed` arm alone would flip from
+      inconclusive to "too strict" without `gemma4:26b-a4b`, so that arm's
+      label depends on whether this extractor is pooled. It is pooled as
+      registered ("all five extractors").
+  - The pre-fix number was not computed: it would need the pre-fix path and
+    its inputs for `self` records of an extractor whose `self` arm is not a
+    distinct sample.
+- The four-extractor figures above are a sensitivity check run from a
+  throwaway script, not a registered analysis and not stored by the harness.
+
 ## Consequence for #1579
 
 By the registered rule neither step-2 branch is established. The
