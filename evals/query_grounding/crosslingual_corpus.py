@@ -195,6 +195,56 @@ TRANSFERRED: Final = QUESTIONS
 English bundle. Labels transfer; see the module docstring."""
 
 
+EN_TRANSFERRED: Final[tuple[str, ...]] = (
+    # --- GROUNDED, in `TRANSFERRED` order ------------------------------------
+    "what decisions were made in the meetings?",
+    "who took part in the meetings?",
+    "what did Gustavo Martínez contribute to the project?",
+    "what was decided about the decision history?",
+    "why are verbatim citations required?",
+    "what happens if I ingest the same file twice?",
+    "who was put in charge of the migration?",
+    "what is the scope of deleting a concept?",
+    "is the bundle or the index the source of truth?",
+    "how are changes approved during curation?",
+    # --- ADJACENT ------------------------------------------------------------
+    "what is the relationship between traceability and contextual truth in RAG systems?",
+    "what are the best chunking practices in RAG systems?",
+    "how is the quality of a retrieval-augmented system evaluated?",
+    "what is language model distillation?",
+    "how does weight quantization work in an LLM?",
+    "what advantages does an HNSW index have over exhaustive search?",
+    "how is a hexagonal architecture designed in a web service?",
+    "what is the difference between fine-tuning and in-context learning?",
+    "what is the state of the art in neural reranking?",
+    "how is model drift measured in production?",
+)
+"""The 20 `TRANSFERRED` questions in English, one to one and in the same order,
+so a label carries over by position (#1581)."""
+
+EN_ANCHORED: Final[tuple[str, ...]] = (
+    "who was put in charge of migrating the old corpus?",
+    "who proposed keeping the sequential history of decisions?",
+    "who set the condition that every answer carry verbatim citations?",
+    "in which meeting was explicit curation with consent decided?",
+    "in which meeting was it agreed that deletion should reach the merge snapshots?",
+    "who warned that you cannot reconstruct why something was decided months ago?",
+    "who processed the transcripts of the latest sessions?",
+    "who asked that ingestion not duplicate objects when repeated?",
+    "who pointed out that there is personal data in the transcripts?",
+    "who said that what each merge stores had to be reviewed?",
+    "who asked for deletion to be irreversible?",
+    "who opened the first session on the knowledge compiler?",
+)
+"""The 12 `ANCHORED` questions in English, one to one and in the same order.
+The gold tokens and the English evidence phrases already exist on each
+`AnchoredItem`; only the question text is new."""
+
+EN_QUESTIONS: Final[tuple[str, ...]] = EN_TRANSFERRED + EN_ANCHORED
+"""All 32 English questions, in the screen's order (transferred, then
+anchored)."""
+
+
 def _squash(text: str) -> str:
     """Whitespace runs to one space: bodies are hard-wrapped, phrases are not."""
     return " ".join(text.split())
@@ -274,4 +324,33 @@ def check_items(
                 )
         if item.question in transferred:
             problems.append(f"{item.question!r}: duplicates a transferred question")
+    return problems
+
+
+def check_english_questions(
+    transferred: tuple[str, ...] = EN_TRANSFERRED,
+    anchored: tuple[str, ...] = EN_ANCHORED,
+) -> list[str]:
+    """Every way the English questions could break the pairing or leak the
+    gold, as messages; empty is clean.
+
+    - the English tuples have the same length as the Spanish ones they mirror;
+    - no English question repeats another;
+    - no answer token of an anchored item occurs in its English question (no
+      free credit for an echo, the same rule `check_items` applies to the
+      Spanish text)."""
+    problems: list[str] = []
+    if len(transferred) != len(TRANSFERRED):
+        problems.append(f"{len(transferred)} English transferred, {len(TRANSFERRED)}")
+    if len(anchored) != len(ANCHORED):
+        problems.append(f"{len(anchored)} English anchored, {len(ANCHORED)}")
+    seen: set[str] = set()
+    for question in (*transferred, *anchored):
+        if question in seen:
+            problems.append(f"{question!r}: duplicate English question")
+        seen.add(question)
+    for item, question in zip(ANCHORED, anchored, strict=False):
+        for token in item.answer_tokens:
+            if token_found(token, question):
+                problems.append(f"{question!r}: token {token!r} is in the question")
     return problems
