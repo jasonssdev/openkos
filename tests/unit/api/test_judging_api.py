@@ -353,7 +353,7 @@ def test_a_quote_without_an_insecure_key_carries_no_advisory(
 
 @pytest.mark.parametrize("kind", ["identity", "relation_type", "volatility"])
 def test_every_kind_of_quote_carries_the_insecure_key_advisory(
-    root: Path, monkeypatch: pytest.MonkeyPatch, kind: judging.JudgingKind
+    root: Path, monkeypatch: pytest.MonkeyPatch, kind: judging.BatchJudgingKind
 ) -> None:
     _use_remote_backend(root, "http://llm.example.test/v1")
     monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", _KEY)

@@ -96,8 +96,14 @@ JudgingKind = Literal[
     "identity", "relation_type", "volatility", "contradiction", "revision"
 ]
 """What a quote is about. The quote carries its kind, so a later kind is
-additive. `contradiction` and `revision` re-check the one pair behind a changed
-queue row and are quoted and run by `finding_recheck`, not by this module."""
+additive."""
+
+BatchJudgingKind = Literal["identity", "relation_type", "volatility"]
+"""The kinds this module quotes and runs: each judges a batch of the workspace."""
+
+FindingKind = Literal["contradiction", "revision"]
+"""The kinds `finding_recheck` quotes and runs: each re-checks the one pair
+behind a changed queue row."""
 
 ChangedField = Literal["model", "backend", "locality", "confidential", "rubric"]
 """The binding fields `QuoteStale` names when they moved."""

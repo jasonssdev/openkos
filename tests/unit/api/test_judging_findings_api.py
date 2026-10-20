@@ -15,10 +15,17 @@ from openkos.api import (
     JudgingOutcome,
     QuoteStale,
     Workspace,
+    quote_finding_recheck,
     quote_judging,
     run_judging,
 )
 from openkos.application import curate_decisions
+from tests.unit.application.test_finding_recheck_contradiction import (
+    _A as A,
+)
+from tests.unit.application.test_finding_recheck_contradiction import (
+    _B as B,
+)
 from tests.unit.application.test_finding_recheck_contradiction import (
     CONSISTENT,
     Judge,
@@ -27,12 +34,8 @@ from tests.unit.application.test_finding_recheck_contradiction import (
     _write,
 )
 from tests.unit.application.test_finding_recheck_contradiction import (
-    _A as A,
+    root as root,
 )
-from tests.unit.application.test_finding_recheck_contradiction import (
-    _B as B,
-)
-from tests.unit.application.test_finding_recheck_contradiction import root as root  # noqa: F401
 
 
 class Factory:
@@ -48,23 +51,21 @@ class Factory:
 
 
 @pytest.fixture
-def key(root: Path) -> str:  # noqa: F811
+def key(root: Path) -> str:
     key = _enqueue(root, (A, B))
     _write(root, B, "The date is June.")
     return key
 
 
 def test_a_contradiction_is_quoted_and_run_through_the_api(
-    root: Path,  # noqa: F811
+    root: Path,
     key: str,
 ) -> None:
     client = Judge()
     factory = Factory(client)
     workspace = Workspace.open(root)
 
-    quote = quote_judging(
-        workspace, "contradiction", decision_key=key, chat_client=factory
-    )
+    quote = quote_finding_recheck(workspace, "contradiction", key, chat_client=factory)
     result = run_judging(workspace, quote.token, chat_client=factory)
 
     assert (quote.kind, quote.to_judge, quote.calls) == ("contradiction", 1, 1)
@@ -80,14 +81,12 @@ def test_a_contradiction_is_quoted_and_run_through_the_api(
 
 
 def test_a_run_that_finds_no_disagreement_retires_the_row(
-    root: Path,  # noqa: F811
+    root: Path,
     key: str,
 ) -> None:
     factory = Factory(Judge(CONSISTENT))
     workspace = Workspace.open(root)
-    quote = quote_judging(
-        workspace, "contradiction", decision_key=key, chat_client=factory
-    )
+    quote = quote_finding_recheck(workspace, "contradiction", key, chat_client=factory)
 
     run_judging(workspace, quote.token, chat_client=factory)
 
@@ -95,14 +94,12 @@ def test_a_run_that_finds_no_disagreement_retires_the_row(
 
 
 def test_a_moved_model_is_a_stale_quote(
-    root: Path,  # noqa: F811
+    root: Path,
     key: str,
 ) -> None:
     factory = Factory(Judge())
     workspace = Workspace.open(root)
-    quote = quote_judging(
-        workspace, "contradiction", decision_key=key, chat_client=factory
-    )
+    quote = quote_finding_recheck(workspace, "contradiction", key, chat_client=factory)
     yaml = root / "openkos.yaml"
     yaml.write_text(
         yaml.read_text(encoding="utf-8") + "\nmodels:\n  contradiction: other:1b\n",
@@ -114,18 +111,30 @@ def test_a_moved_model_is_a_stale_quote(
     assert isinstance(result, QuoteStale)
 
 
-def test_a_finding_kind_needs_the_decision_key(root: Path) -> None:  # noqa: F811
-    with pytest.raises(ValueError, match="decision_key"):
-        quote_judging(
-            Workspace.open(root), "contradiction", chat_client=Factory(Judge())
+@pytest.mark.parametrize(
+    ("kind", "key"),
+    [
+        ("identity", "identity:abc"),  # not a finding kind
+        ("contradiction", "revision:abc"),  # another kind's key
+        ("revision", "not-a-key"),
+    ],
+)
+def test_a_recheck_names_a_finding_kind_and_a_key_of_that_kind(
+    root: Path, kind: str, key: str
+) -> None:
+    with pytest.raises(ValueError, match=r"kind|decision_key"):
+        quote_finding_recheck(
+            Workspace.open(root),
+            kind,  # type: ignore[arg-type]
+            key,
+            chat_client=Factory(Judge()),
         )
 
 
-def test_a_decision_key_belongs_only_to_a_finding_kind(root: Path) -> None:  # noqa: F811
-    with pytest.raises(ValueError, match="decision_key"):
+def test_the_batch_quote_does_not_take_a_finding_kind(root: Path) -> None:
+    with pytest.raises(ValueError, match="kind"):
         quote_judging(
             Workspace.open(root),
-            "identity",
-            decision_key="identity:abc",
+            "contradiction",  # type: ignore[arg-type]
             chat_client=Factory(Judge()),
         )

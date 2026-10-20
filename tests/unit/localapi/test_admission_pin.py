@@ -20,7 +20,7 @@ from tests.unit.api import support
 from tests.unit.application.curation_support import make_workspace
 from tests.unit.cli.commit_phase_support import write_doc
 
-KINDS: list[api.JudgingKind] = ["identity", "relation_type", "volatility"]
+KINDS: list[api.BatchJudgingKind] = ["identity", "relation_type", "volatility"]
 
 # The task whose configured model each kind binds.
 TASK_OF_KIND = {
@@ -72,7 +72,7 @@ class RecordingChat:
         return self._reply
 
 
-def _seed(root: Path, kind: api.JudgingKind) -> None:
+def _seed(root: Path, kind: api.BatchJudgingKind) -> None:
     if kind == "identity":
         support.write_identity_groups(root)
     elif kind == "volatility":
@@ -107,7 +107,7 @@ def trace() -> Trace:
 def _setup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    kind: api.JudgingKind,
+    kind: api.BatchJudgingKind,
     trace: Trace,
 ) -> tuple[api.Workspace, api.QuoteToken, Callable[[str], RecordingChat]]:
     root = make_workspace(tmp_path, monkeypatch)
@@ -123,7 +123,10 @@ def _setup(
 
 @pytest.mark.parametrize("kind", KINDS)
 def test_the_first_stop_check_comes_before_the_first_chat_call(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: api.JudgingKind, trace: Trace
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: api.BatchJudgingKind,
+    trace: Trace,
 ) -> None:
     workspace, token, chats = _setup(tmp_path, monkeypatch, kind, trace)
 
@@ -139,7 +142,10 @@ def test_the_first_stop_check_comes_before_the_first_chat_call(
 
 @pytest.mark.parametrize("kind", KINDS)
 def test_a_moved_binding_returns_stale_before_any_stop_check_or_chat_call(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: api.JudgingKind, trace: Trace
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: api.BatchJudgingKind,
+    trace: Trace,
 ) -> None:
     workspace, token, chats = _setup(tmp_path, monkeypatch, kind, trace)
     config_path = workspace.root / "openkos.yaml"

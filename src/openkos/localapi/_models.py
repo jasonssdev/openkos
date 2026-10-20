@@ -218,15 +218,32 @@ class PreviewRequest(_EchoRequest):
     selection: api.GroupSelection | None = None
 
 
+_FINDING_KINDS = ("contradiction", "revision")
+
+
 class QuoteRequest(BaseModel):
     """Which judging to price, and whether the quote may include what the run
-    needs consent for."""
+    needs consent for.
+
+    `contradiction` and `revision` re-check the one pair behind a changed
+    decision, so they name it by `decision_key` (a key of that kind); the other
+    kinds judge the whole workspace and take none."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: api.JudgingKind
     include_confidential: bool = False
     include_uncertain: bool = False
+    decision_key: str | None = None
+
+    @model_validator(mode="after")
+    def _key_matches_kind(self) -> QuoteRequest:
+        finding = self.kind in _FINDING_KINDS
+        if finding != (self.decision_key is not None) or (
+            finding and not str(self.decision_key).startswith(f"{self.kind}:")
+        ):
+            raise ValueError("decision_key must name a decision of a re-checked kind")
+        return self
 
 
 class RunRequest(_EchoRequest):

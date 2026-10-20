@@ -1578,7 +1578,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "identity" | "relation_type" | "volatility";
+            kind: "identity" | "relation_type" | "volatility" | "contradiction" | "revision";
             /** Not In Quote */
             not_in_quote: string[];
             /** Observer Failed */
@@ -1606,7 +1606,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "identity" | "relation_type" | "volatility";
+            kind: "identity" | "relation_type" | "volatility" | "contradiction" | "revision";
             /** Notices */
             notices: components["schemas"]["QuoteNotice"][];
             /** Served */
@@ -2155,7 +2155,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "identity" | "relation_type" | "volatility";
+            kind: "identity" | "relation_type" | "volatility" | "contradiction" | "revision";
             /** Model */
             model: string;
             /** Rubric Digest */
@@ -2185,8 +2185,14 @@ export interface components {
          * QuoteRequest
          * @description Which judging to price, and whether the quote may include what the run
          *     needs consent for.
+         *
+         *     `contradiction` and `revision` re-check the one pair behind a changed
+         *     decision, so they name it by `decision_key` (a key of that kind); the other
+         *     kinds judge the whole workspace and take none.
          */
         QuoteRequest: {
+            /** Decision Key */
+            decision_key?: string | null;
             /**
              * Include Confidential
              * @default false
@@ -2201,7 +2207,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "identity" | "relation_type" | "volatility";
+            kind: "identity" | "relation_type" | "volatility" | "contradiction" | "revision";
         };
         /**
          * QuoteToken
@@ -2550,7 +2556,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "identity" | "relation_type" | "volatility";
+            kind: "identity" | "relation_type" | "volatility" | "contradiction" | "revision";
             outcome: components["schemas"]["JudgingOutcomeBody"] | null;
             /** Persisted */
             persisted: number;
