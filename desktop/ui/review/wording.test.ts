@@ -7,6 +7,8 @@ import {
   checkConsent,
   checkProgress,
   checkResult,
+  findingCheckResult,
+  recheckable,
   confirmation,
   addRefusedOption,
   describeDecision,
@@ -921,16 +923,66 @@ describe("a newer decision", () => {
 
 describe("a changed disagreement or newer decision", () => {
   it.each([["contradiction", contradiction({}, { fresh: false })], ["revision", { ...revision(), fresh: false }]] as const)(
-    "a changed %s offers only Decide later, never Check again",
+    "a changed %s offers Check again and Decide later",
     (_kind, decision) => {
       const view = describeDecision(decision, FINDING_PAGES, NOW);
       expect(view.changed).toBe(
-        "Something about these pages changed since this was found, so it can't be settled as it was. The app can't look at them again yet.",
+        "Something about these pages changed since this was found, so it can't be settled as it was. Check them again before you decide.",
       );
-      expect(view.options.map((o) => o.choice)).toEqual(["later"]);
+      expect(view.options.map((o) => o.choice)).toEqual(["recheck", "later"]);
+      expect(view.next).toBeNull();
       expect(listEntry(decision, FINDING_PAGES).changed).toBe(true);
     },
   );
+
+  it("can check again every kind the check quotes, and no other", () => {
+    for (const kind of ["identity", "relation_type", "volatility", "contradiction", "revision"] as const) {
+      expect(recheckable({ ...contradiction(), kind })).toBe(true);
+    }
+    expect(recheckable({ ...contradiction(), kind: "watch_refusal" })).toBe(false);
+  });
+
+  it("words what the check of one pair asks, and what it did", () => {
+    const quote = (kind: "contradiction" | "revision", to_judge = 1): Schemas["JudgingQuote"] => {
+      const binding = { backend: "ollama", model: "llama3", is_local: true, kind, effective_confidential: false, rubric_digest: null };
+      return {
+        kind,
+        total: 1,
+        served: 0,
+        uncertain: 0,
+        to_judge,
+        calls: to_judge,
+        binding,
+        notices: [],
+        token: { binding, calls: to_judge, include_confidential: false, include_uncertain: false, work: [] },
+      };
+    };
+    for (const kind of ["contradiction", "revision"] as const) {
+      expect(checkConsent(quote(kind))).toEqual({
+        heading: "Check these two again?",
+        lines: [
+          "The AI model on this Mac will compare them. Nothing leaves this Mac.",
+          "If these pages no longer need a decision, this leaves To review. Otherwise you'll still decide.",
+        ],
+        agree: "Check 1",
+        decline: "Not now",
+      });
+      expect(checkConsent(quote(kind, 0))).toEqual({
+        heading: "These can't be checked again right now.",
+        lines: ["Nothing was sent to an AI model."],
+        agree: null,
+        decline: "OK",
+      });
+    }
+    expect(findingCheckResult("contradiction", "ready")).toBe("Checked. This is ready for you to decide.");
+    expect(findingCheckResult("contradiction", "gone")).toBe(
+      "Checked. These pages don't disagree any more, so this is no longer in To review.",
+    );
+    expect(findingCheckResult("revision", "gone")).toBe(
+      "Checked. The newer decision no longer replaces the earlier one, so this is no longer in To review.",
+    );
+    expect(findingCheckResult("revision", "changed")).toBe("Checked, but these pages changed again meanwhile. Check them again.");
+  });
 });
 
 describe("a file that wasn't added", () => {

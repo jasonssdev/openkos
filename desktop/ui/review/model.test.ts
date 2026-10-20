@@ -951,6 +951,124 @@ describe("a changed decision", () => {
   });
 });
 
+describe("checking a changed finding again", () => {
+  const FINDING_QUOTE = (kind: "contradiction" | "revision", to_judge = 1): Schemas["JudgingQuote"] => ({
+    ...QUOTE,
+    kind,
+    to_judge,
+    calls: to_judge,
+    binding: { ...BINDING, kind },
+  });
+  const CHANGED_REVISION: Decision = { ...REVISION, fresh: false };
+  const CHANGED_CONTRADICTION: Decision = { ...CONTRADICTION, fresh: false };
+  const recheck = { choice: "recheck", label: "", does: "" } as const;
+
+  it.each([
+    ["contradiction", "c1", CHANGED_CONTRADICTION],
+    ["revision", "r1", CHANGED_REVISION],
+  ] as const)("asks agreement to check the one %s again, naming its decision, and runs nothing", async (kind, key, decision) => {
+    const { model, client } = await opened([decision], key);
+    client.quoteJudging.mockResolvedValue(FINDING_QUOTE(kind));
+    await model.choose(recheck);
+    expect(client.refreshQueue).toHaveBeenCalledTimes(1);
+    expect(client.quoteJudging).toHaveBeenCalledWith({ kind, decision_key: key });
+    expect(model.state.check?.phase).toBe("consent");
+    expect(client.startJudgingRun).not.toHaveBeenCalled();
+  });
+
+  it("makes the row current: the run's token is the quote's, and the decision is shown as it now is", async () => {
+    const { model, client } = await opened([CHANGED_CONTRADICTION], "c1");
+    client.quoteJudging.mockResolvedValue(FINDING_QUOTE("contradiction"));
+    await model.choose(recheck);
+    client.decisions.mockResolvedValue({ decisions: [CONTRADICTION] });
+    await model.agreeCheck();
+    expect(client.startJudgingRun).toHaveBeenCalledWith({ token: TOKEN });
+    expect(model.state.check).toMatchObject({ phase: "done", text: "Checked. This is ready for you to decide." });
+    expect(model.state.open).toMatchObject({ decision: CONTRADICTION, changed: null, step: { name: "choosing" } });
+    expect(client.refreshQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it("says so when the check retired the row, and closes the decision", async () => {
+    const { model, client } = await opened([CHANGED_REVISION], "r1");
+    client.quoteJudging.mockResolvedValue(FINDING_QUOTE("revision"));
+    await model.choose(recheck);
+    client.decisions.mockResolvedValue({ decisions: [] });
+    await model.agreeCheck();
+    expect(model.state.check?.text).toBe(
+      "Checked. The newer decision no longer replaces the earlier one, so this is no longer in To review.",
+    );
+    expect(model.state.open).toBeNull();
+  });
+
+  it("says so when the pages changed again meanwhile, and keeps it checkable", async () => {
+    const { model, client } = await opened([CHANGED_CONTRADICTION], "c1");
+    client.quoteJudging.mockResolvedValue(FINDING_QUOTE("contradiction"));
+    await model.choose(recheck);
+    await model.agreeCheck();
+    expect(model.state.check?.text).toBe("Checked, but these pages changed again meanwhile. Check them again.");
+    expect(model.state.open?.changed).toBe(CHANGED_FINDING);
+  });
+
+  it("does not offer to run when there is nothing to judge", async () => {
+    const { model, client } = await opened([CHANGED_CONTRADICTION], "c1");
+    client.quoteJudging.mockResolvedValue(FINDING_QUOTE("contradiction", 0));
+    await model.choose(recheck);
+    expect(model.state.check?.consent?.agree).toBeNull();
+    await model.agreeCheck();
+    expect(client.startJudgingRun).not.toHaveBeenCalled();
+  });
+
+  it("quotes the same decision again when the quote went stale, never the batch", async () => {
+    const { model, client } = await opened([CHANGED_CONTRADICTION], "c1");
+    client.quoteJudging.mockResolvedValue(FINDING_QUOTE("contradiction"));
+    await model.choose(recheck);
+    client.startJudgingRun.mockRejectedValueOnce(apiError("quote_stale"));
+    await model.agreeCheck();
+    expect(client.quoteJudging).toHaveBeenCalledTimes(2);
+    expect(client.quoteJudging).toHaveBeenLastCalledWith({ kind: "contradiction", decision_key: "c1" });
+    expect(model.state.check?.phase).toBe("consent");
+  });
+
+  it("tries a failed quote again for the same decision", async () => {
+    const { model, client } = await opened([CHANGED_REVISION], "r1");
+    client.quoteJudging.mockRejectedValueOnce(apiError("backend_unavailable", 503));
+    await model.choose(recheck);
+    expect(model.state.check?.phase).toBe("problem");
+    client.quoteJudging.mockResolvedValue(FINDING_QUOTE("revision"));
+    await model.resolveCheckProblem();
+    expect(client.quoteJudging).toHaveBeenLastCalledWith({ kind: "revision", decision_key: "r1" });
+  });
+
+  it("says the question no longer applies when it left the list before the quote", async () => {
+    const { model, client } = await opened([CHANGED_CONTRADICTION], "c1");
+    client.decisions.mockResolvedValue({ decisions: [] });
+    await model.choose(recheck);
+    expect(client.quoteJudging).not.toHaveBeenCalled();
+    expect(model.state.open).toBeNull();
+    expect(model.state.notice).toEqual({ tone: "warning", text: "These pages changed, and this question no longer applies." });
+  });
+
+  it("does not check a current finding again: it is shown as it is", async () => {
+    const { model, client } = await opened([CHANGED_CONTRADICTION], "c1");
+    client.decisions.mockResolvedValue({ decisions: [CONTRADICTION] });
+    await model.choose(recheck);
+    expect(client.quoteJudging).not.toHaveBeenCalled();
+    expect(model.state.open).toMatchObject({ decision: CONTRADICTION, changed: null });
+  });
+
+  it("never checks again a decision that is not about two pages", async () => {
+    const { model, client } = await opened([REFUSED_FILE], "w1");
+    await model.choose(recheck);
+    expect(client.refreshQueue).not.toHaveBeenCalled();
+    expect(client.quoteJudging).not.toHaveBeenCalled();
+    expect(model.state.check).toBeNull();
+  });
+
+  it("does not count a changed finding as waiting for the batch check", async () => {
+    expect(offersCheckAll([CHANGED_CONTRADICTION, CHANGED_REVISION])).toBe(false);
+  });
+});
+
 describe("Check all", () => {
   it("is offered for an unjudged pair and for a changed one, and not otherwise", () => {
     expect(offersCheckAll([UNJUDGED])).toBe(true);
@@ -1432,14 +1550,6 @@ describe("a disagreement or a newer decision", () => {
 
   it("opens a changed finding with its own notice", async () => {
     const { model } = await opened([{ ...CONTRADICTION, fresh: false }], "c1");
-    expect(model.state.open?.changed).toBe(CHANGED_FINDING);
-  });
-
-  it("never quotes a check for a changed finding", async () => {
-    const { model, client } = await opened([{ ...CONTRADICTION, fresh: false }], "c1");
-    await model.choose({ choice: "recheck", label: "", does: "" });
-    expect(client.quoteJudging).not.toHaveBeenCalled();
-    expect(model.state.check).toBeNull();
     expect(model.state.open?.changed).toBe(CHANGED_FINDING);
   });
 

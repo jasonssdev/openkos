@@ -504,13 +504,17 @@ describe("a disagreement, a newer decision and a refused file", () => {
     expect(answers(root).map(([label]) => label)).toEqual(["Yes, it replaces it", "Both still stand", "Decide later"]);
   });
 
-  it("says a changed finding can only wait, with no Check again", async () => {
-    const { root, model } = await loaded([{ ...CONTRADICTION, fresh: false }]);
+  it("offers a changed finding Check again, under its own notice, and asks before checking", async () => {
+    const { root, model, client } = await loaded([{ ...CONTRADICTION, fresh: false }]);
     model.open("c1");
     expect(detail(root).querySelector(".ui-callout--warning .ui-callout__text")?.textContent).toBe(
-      "Something about these pages changed since this was found, so it can't be settled as it was. The app can't look at them again yet.",
+      "Something about these pages changed since this was found, so it can't be settled as it was. Check them again before you decide.",
     );
-    expect(answers(root).map(([label]) => label)).toEqual(["Decide later"]);
+    expect(answers(root).map(([label]) => label)).toEqual(["Check again", "Decide later"]);
+    client.quoteJudging.mockResolvedValue({ ...QUOTE, kind: "contradiction", binding: { ...QUOTE.binding, kind: "contradiction" } });
+    await model.choose({ choice: "recheck", label: "", does: "" });
+    expect(client.quoteJudging).toHaveBeenCalledWith({ kind: "contradiction", decision_key: "c1" });
+    expect(detail(root).querySelector("h2")?.textContent).toBe("Check these two again?");
   });
 
   it("says why a file wasn't added and what to do in the folder, with no action", async () => {

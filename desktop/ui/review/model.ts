@@ -12,12 +12,14 @@ import {
   checkProgress,
   checkResult,
   confirmation,
+  findingCheckResult,
   findingPages,
   historyLine,
   identityShape,
   isFinding,
   previewLines,
   problemFor,
+  recheckable,
   splitDone,
   splitQuestion,
   titleOf,
@@ -31,6 +33,12 @@ type Decision = Schemas["Decision"];
 type Page = Schemas["Page"];
 type Action = Schemas["Action"];
 type CheckKind = Schemas["QuoteRequest"]["kind"];
+
+/** What a check is for: a batch of `kind`, or the one pair behind the decision `decisionKey`. */
+interface CheckTarget {
+  kind: CheckKind;
+  decisionKey: string | null;
+}
 
 export type ReviewClient = Pick<
   Client,
@@ -226,6 +234,7 @@ export class ReviewModel {
   readonly #openSetup: () => void;
   #lastOp: Operation | null = null;
   #quote: Schemas["JudgingQuote"] | null = null;
+  #target: CheckTarget = { kind: "identity", decisionKey: null };
   #runId: string | null = null;
   #splitPreview: Schemas["UnmergePreview"] | null = null;
 
@@ -645,13 +654,17 @@ export class ReviewModel {
     await this.#refreshQueue();
     await this.load();
     this.#refreshOpen();
-    await this.#quoteCheck(text, kind);
+    await this.#quoteCheck(text, { kind, decisionKey: null });
   }
 
-  async #quoteCheck(text: string | null, kind: CheckKind): Promise<void> {
+  async #quoteCheck(text: string | null, target: CheckTarget): Promise<void> {
+    this.#target = target;
     this.#set({ check: { phase: "quoting", consent: null, text, problem: null } });
     try {
-      this.#quote = await this.#client.quoteJudging({ kind });
+      const { kind, decisionKey } = target;
+      this.#quote = await this.#client.quoteJudging(
+        decisionKey === null ? { kind } : { kind, decision_key: decisionKey },
+      );
       this.#set({ check: { phase: "consent", consent: checkConsent(this.#quote), text, problem: null } });
     } catch (error) {
       this.#checkProblem(problemFor(error, "before"));
@@ -661,14 +674,17 @@ export class ReviewModel {
   /**
    * Check again, for the changed decision on screen: refresh the queue and list
    * again, which costs nothing. Gone, it is said so; current, it is shown as it
-   * now is; still changed, its kind is quoted and the person is asked first.
+   * now is; still changed, it is quoted and the person is asked first: its kind
+   * as a batch, or, for a disagreement or a newer decision, its one pair.
    */
   async recheck(): Promise<void> {
     const open = this.#state.open;
-    // Only a kind the check covers is checked again; a changed finding waits.
-    if (open === null || !checkable(open.decision)) return;
-    const key = open.key;
-    this.#set({ check: { phase: "quoting", consent: null, text: null, problem: null } });
+    if (open === null || !recheckable(open.decision)) return;
+    await this.#recheck(open.key, null);
+  }
+
+  async #recheck(key: string, text: string | null): Promise<void> {
+    this.#set({ check: { phase: "quoting", consent: null, text, problem: null } });
     await this.#refreshQueue();
     await this.load();
     const decision = this.#state.decisions.find((d) => d.decision_key === key);
@@ -681,7 +697,15 @@ export class ReviewModel {
       this.#set({ check: null });
       return;
     }
-    await this.#quoteCheck(null, decision.kind as CheckKind);
+    const kind = decision.kind as CheckKind;
+    await this.#quoteCheck(text, { kind, decisionKey: checkable(decision) ? null : key });
+  }
+
+  /** Quotes again what was last quoted: the same batch, or the same decision's pair. */
+  async #requote(text: string | null): Promise<void> {
+    const { kind, decisionKey } = this.#target;
+    if (decisionKey === null) await this.startCheck(text, kind);
+    else await this.#recheck(decisionKey, text);
   }
 
   #checkProblem(problem: Problem): void {
@@ -703,7 +727,7 @@ export class ReviewModel {
       status = await this.#client.startJudgingRun({ token: quote.token });
     } catch (error) {
       if (error instanceof ApiError && error.code === "quote_stale") {
-        await this.startCheck(problemFor(error, "before").message);
+        await this.#requote(problemFor(error, "before").message);
         return;
       }
       this.#checkProblem(problemFor(error, "before"));
@@ -736,11 +760,30 @@ export class ReviewModel {
       this.#checkProblem(problemFor(new ApiError({ status: 0, ...error, retryAfterSeconds: null }), "after"));
       return;
     }
+    const target = this.#target;
+    if (target.decisionKey !== null) {
+      this.#checkText("done", this.#findingResult(target.kind, target.decisionKey));
+      return;
+    }
     const ready = unjudged.filter((key) => {
       const now = this.#state.decisions.find((d) => d.decision_key === key);
       return now !== undefined && !waitsForCheck(now);
     }).length;
     this.#checkText("done", checkResult(status.outcome.judged, ready));
+  }
+
+  /**
+   * How a finding stands after its check: current, retired (it no longer holds,
+   * so it leaves the list and nothing is left open), or still changed.
+   */
+  #findingResult(kind: CheckKind, key: string): string {
+    const now = this.#state.decisions.find((d) => d.decision_key === key);
+    const finding = kind as "contradiction" | "revision";
+    if (now === undefined) {
+      this.#set({ open: null });
+      return findingCheckResult(finding, "gone");
+    }
+    return findingCheckResult(finding, now.fresh === false ? "changed" : "ready");
   }
 
   #checkPhase(): CheckState["phase"] | undefined {
@@ -762,7 +805,7 @@ export class ReviewModel {
   async resolveCheckProblem(): Promise<void> {
     const problem = this.#state.check?.problem;
     if (problem == null) return;
-    if (problem.action === "try_again" || problem.action === "requote") await this.startCheck();
+    if (problem.action === "try_again" || problem.action === "requote") await this.#requote(null);
     else {
       this.closeCheck();
       if (problem.action === "set_up") this.#openSetup();
