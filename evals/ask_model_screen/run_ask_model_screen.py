@@ -1146,6 +1146,7 @@ def compare_language(
     es_ans: Mapping[str, Sequence[Row]],
     en: Mapping[str, Sequence[Row]],
     *,
+    baseline: str = BASELINE,
     resamples: int = core.DEFAULT_RESAMPLES,
 ) -> dict[str, Any]:
     """Per model: the language penalty per role and bundle pair, each set's
@@ -1155,7 +1156,7 @@ def compare_language(
     the answer prompt, so its rows come from the control run, while the answer
     and citation rows come from the run under the shipping prompt (#1583),
     the one the English questions are measured under."""
-    out: dict[str, Any] = {"models": {}}
+    out: dict[str, Any] = {"models": {}, "english_delta": {}}
     for model, en_rows in en.items():
         block: dict[str, Any] = {"penalty": {}, "means": {}, "in_language": {}}
         for role in ROLES:
@@ -1163,6 +1164,10 @@ def compare_language(
             for es_set, en_set in LANGUAGE_PAIRS:
                 if not any(r.set == en_set for r in en_rows):
                     continue
+                if not scores_by_item(es_rows, role) or not scores_by_item(
+                    en_rows, role
+                ):
+                    continue  # the role is not measured in these rows
                 delta = language_penalty(
                     es_rows,
                     en_rows,
@@ -1203,6 +1208,27 @@ def compare_language(
                 }
         block["english_guardrails"] = guardrails(en_rows)
         out["models"][model] = block
+        if model != baseline and baseline in en:
+            deltas: dict[str, Any] = {}
+            for role in ROLES:
+                base_scores = scores_by_item(en[baseline], role)
+                cand_scores = scores_by_item(en_rows, role)
+                if not base_scores or set(base_scores) != set(cand_scores):
+                    continue
+                deltas[role] = {
+                    "pooled": asdict(
+                        core.paired_bootstrap(
+                            base_scores, cand_scores, resamples=resamples
+                        )
+                    ),
+                    **{
+                        name: asdict(d)
+                        for name, d in per_set_deltas(
+                            base_scores, cand_scores, resamples=resamples
+                        ).items()
+                    },
+                }
+            out["english_delta"][model] = deltas
     return out
 
 
@@ -1251,6 +1277,20 @@ def render_language(result: Mapping[str, Any], *, runs: int) -> str:
             f"{g['compliance']:.3f}.",
             "",
         ]
+    for model, roles in result.get("english_delta", {}).items():
+        lines += [
+            f"## `{model}` minus the baseline, English questions",
+            "",
+            "| role | set | n of items | delta | 95% CI |",
+            "| --- | --- | ---: | ---: | --- |",
+        ]
+        for role, sets in roles.items():
+            for set_name, d in sets.items():
+                lines.append(
+                    f"| {role} | {set_name} | {d['n']} | {d['mean']:+.3f} "
+                    f"| [{d['lo']:+.3f}, {d['hi']:+.3f}] |"
+                )
+        lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -1963,6 +2003,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             {m: load_rows(args.cache_dir, m, args.runs) for m in models},
             {m: load_rows(args.cache_dir, m, args.runs, arm=args.arm) for m in models},
             {m: load_rows(args.cache_dir, m, args.runs, english=True) for m in models},
+            baseline=args.baseline,
         )
         report = render_language(lang_result, runs=args.runs)
         out = args.cache_dir / f"compare-language-runs{args.runs}.md"

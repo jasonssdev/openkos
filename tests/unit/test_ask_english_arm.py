@@ -155,3 +155,37 @@ def test_in_language_share_counts_the_questions_own_language() -> None:
     ]
     assert ask.in_language_share(rows, "en", ask.ADJACENT) == 0.5
     assert ask.in_language_share(rows, "en", ask.GROUNDED) == 1.0
+
+
+def test_compare_language_reports_the_candidate_minus_baseline_in_english() -> None:
+    def rows(model: str, sufficient: bool) -> tuple[list[Any], list[Any]]:
+        en = [
+            replace(
+                _row("en-en", q, lbl, lang="en", sufficient=sufficient), model=model
+            )
+            for lbl, q, _a in ask.questions_en()
+        ]
+        sp = [
+            replace(
+                _row("es-en", q, lbl, lang="es", sufficient=sufficient), model=model
+            )
+            for lbl, q, _a in ask.questions()
+        ]
+        return sp, en
+
+    b_es, b_en = rows("base", True)
+    c_es, c_en = rows("cand", False)
+    out = ask.compare_language(
+        {"base": b_es, "cand": c_es},
+        {"base": b_es, "cand": c_es},
+        {"base": b_en, "cand": c_en},
+        baseline="base",
+        resamples=100,
+    )
+    pooled = out["english_delta"]["cand"]["sufficiency"]["pooled"]
+    # The baseline accepts everything, the candidate refuses everything: they
+    # differ on the 22 grounded questions and agree on the 10 adjacent ones
+    # (an acceptance is wrong there, a refusal right) -- 32 of 32 differ in
+    # score, so the delta is -1 on grounded and +1 on adjacent.
+    assert pooled["n"] == 32
+    assert abs(pooled["mean"] - (10 - 22) / 32) < 1e-9
