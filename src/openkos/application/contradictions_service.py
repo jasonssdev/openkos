@@ -165,8 +165,9 @@ class ContradictionsPorts:
     plan_candidates: Callable[..., CandidatePlan]
     find_contradictions: Callable[..., tuple[ContradictionBatch, int]]
     persist_findings: Callable[
-        [config.WorkspaceLayout, CandidatePlan, Sequence[ContradictionVerdict]], None
+        [config.WorkspaceLayout, CandidatePlan, Sequence[ContradictionVerdict]], object
     ]
+    """Stores the fresh verdicts; what it returns (a count, today) is not read."""
     finding_input_digests: Callable[[Path, Any], tuple[findings.InputDigest, ...]]
     zero_state_message: Callable[[config.WorkspaceLayout, GraphStore, bool], str]
     """The state-message text for a run with no candidates: the layout, the

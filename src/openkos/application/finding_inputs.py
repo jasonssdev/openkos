@@ -97,7 +97,7 @@ def persist_findings(
     *,
     judged_inputs: Sequence[tuple[findings.InputDigest, ...]] | None = None,
     commit_section: CommitSection = contextlib.nullcontext,
-) -> None:
+) -> int:
     """Record every judged verdict to `.openkos/findings.db` (pending-work
     spec: "Contradiction Findings Are Persisted With Provenance"; curate-
     command spec delta: "Persisting a finding is not a bundle write" -- this
@@ -120,9 +120,12 @@ def persist_findings(
     meanwhile is DROPPED, never stored against content nobody judged, and no
     row names a concept that no longer exists. Without it the digests are
     read here, at persist time, as a caller holding the lock throughout
-    always did."""
+    always did.
+
+    Returns how many findings were stored: fewer than `verdicts` when a verdict
+    was dropped for the reason above."""
     if not verdicts:
-        return
+        return 0
     with commit_section():
         batch: list[findings.Finding] = []
         for index, (spec, verdict) in enumerate(
@@ -146,9 +149,10 @@ def persist_findings(
                 )
             )
         if not batch:
-            return
+            return 0
         conn = derived.open_derived_connection(layout.findings_db_path)
         try:
             findings.record_findings(conn, batch)
         finally:
             conn.close()
+    return len(batch)
