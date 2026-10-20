@@ -34,7 +34,7 @@ RENDERED_HASHES: dict[tuple[str, str], str] = {
     ("openkos.resolution.decision_revision", "_JUDGE_SYSTEM_PROMPT"): (
         "d8238af6410ac31d"
     ),
-    ("openkos.retrieval.answer", "_SYSTEM_PROMPT"): "65e8c9000da5f64f",
+    ("openkos.retrieval.answer", "_SYSTEM_PROMPT"): "e0ba5833e90054fa",
     ("openkos.retrieval.answer", "_SUFFICIENCY_PROMPT"): "3e2b44fcf3e8477f",
     ("openkos.llm.prompting", "RATIONALE_LANGUAGE_TEMPLATE"): "9e23dd811331f0c1",
 }

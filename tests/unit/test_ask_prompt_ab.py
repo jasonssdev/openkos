@@ -194,3 +194,15 @@ def test_verdict_refuses_unpaired_arms() -> None:
     treated = {"qwen3:8b": _arm(9, n=9), "gemma4:26b-a4b": _arm(9)}
     with pytest.raises(ValueError, match="not paired"):
         ask.prompt_verdict(control, treated, resamples=500)
+
+
+def test_production_prompt_is_the_adopted_arm_byte_for_byte() -> None:
+    arm = _EVALS / "ask_model_screen" / "candidate-answer-system-1583.md"
+    shipped = _REPO_ROOT / "src/openkos/prompts/answer/system.md"
+    assert shipped.read_bytes() == arm.read_bytes()
+
+
+def test_the_refusal_asks_for_the_questions_language_and_quotes_no_sentence() -> None:
+    text = ask._SYSTEM_PROMPT
+    assert "in the language of the question" in text
+    assert 'an honest "the compiled bundle' not in text
