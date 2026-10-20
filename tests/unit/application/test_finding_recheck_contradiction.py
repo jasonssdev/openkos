@@ -9,8 +9,9 @@ quote's client must never be asked anything.
 """
 
 import contextlib
+import dataclasses
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -442,3 +443,85 @@ def test_a_missing_token_is_refused(root: Path) -> None:
     )
 
     assert isinstance(result, judging.RunRefused)
+
+
+def test_a_token_naming_another_kinds_row_is_refused_before_any_call(
+    root: Path, key: str
+) -> None:
+    """A hand-forged token (the wire form is echoed, not signed) whose work key is
+    a revision row must not make a contradiction run judge, replace or retire it."""
+    revision_key = pq.stored_decision_key("revision", pq.revision_key((_A, _B)))
+    conn = derived.open_derived_connection(_layout(root).findings_db_path)
+    try:
+        pq.upsert_proposal(
+            conn,
+            pq.Proposal(
+                kind="revision",
+                key_body=pq.revision_key((_A, _B)),
+                producer="revisions/1",
+                payload=json.dumps({"pair_ids": [_A, _B]}),
+                targets=(_A, _B),
+                input_digests=(),
+            ),
+            commit_section=contextlib.nullcontext,
+            bundle_dir=_layout(root).bundle_dir,
+        )
+    finally:
+        conn.close()
+    client = Judge()
+    quote = _quote(root, key, client)
+    [item] = quote.token.work
+    forged = dataclasses.replace(
+        quote.token,
+        work=(dataclasses.replace(item, work_key=revision_key),),
+    )
+
+    with pytest.raises(ValueError, match="decision_key"):
+        _run(root, forged, client)
+
+    assert client.calls == []
+    assert _status_of(root, revision_key) == ["pending"]
+
+
+class _EditAfterFirstSection:
+    """A commit section that edits a page as the first one (the findings persist)
+    closes: the window between storing a verdict and publishing its row."""
+
+    def __init__(self, edit: Path) -> None:
+        self._edit = edit
+        self._entered = 0
+
+    @contextlib.contextmanager
+    def __call__(self) -> Iterator[None]:
+        self._entered += 1
+        first = self._entered == 1
+        yield
+        if first:
+            self._edit.write_text(
+                "---\ntype: Concept\n---\nEdited.\n", encoding="utf-8"
+            )
+
+
+def test_the_row_is_stamped_with_the_inputs_the_pair_was_judged_on(
+    root: Path, key: str
+) -> None:
+    """A page edited between the store and the publish must not leave a row
+    stamped with the new bytes, which would list as current for a verdict about
+    the old ones."""
+    client = Judge()
+    quote = _quote(root, key, client)
+    section = _EditAfterFirstSection(root / "bundle" / f"{_B}.md")
+
+    outcome = _outcome(_run(root, quote.token, client, commit_section=section))
+
+    assert outcome.persisted == 1
+    [row] = [i for i in _items(root) if i.decision_key == key and i.status == "pending"]
+    conn = derived.open_derived_connection(_layout(root).findings_db_path)
+    try:
+        stamped = {d.input_ref: d.digest for d in pq.item_input_digests(conn, row.id)}
+    finally:
+        conn.close()
+    [item] = quote.token.work
+    assert stamped[_B] == dict(item.member_digests)[_B]
+    [listed] = curate_decisions.list_open_decisions(_layout(root))
+    assert listed.fresh is False

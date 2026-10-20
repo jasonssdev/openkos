@@ -78,10 +78,13 @@ job, and the free refresh, the identity producer, cannot recompute these kinds.
 - A revision's candidate plan reads the vectors the last reindex stored, so a
   decision edited since then has no candidate until it is reindexed: its quote
   says there is nothing to check yet. The check never embeds.
-- `judge_revisions` stores its finding itself, with digests taken after the call,
-  as the `revisions` verb always has; a page edited during the call leaves a
-  stored finding stamped with the newer bytes. The run publishes nothing then,
-  but the stored row is the verb's existing behaviour and is not changed here.
+- `judge_revisions` used to stamp its stored finding with digests taken after
+  the model call, so a page edited during it left a finding that read as fresh
+  for bytes it was never judged on. It now pins the pair's digests before the
+  call and drops the finding if they moved, as contradictions do through
+  `persist_findings`. The fix is in `judge_revisions` itself, so the `revisions`
+  verb and the daemon get it too; a verdict dropped this way is judged again on
+  the next run.
 - The run is a second producer of these two kinds' rows, beside the daemon's
   pass; both go through `queue_producers.publish`, so the statistics stay one
   vocabulary.

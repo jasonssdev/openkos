@@ -71,7 +71,7 @@ from openkos.llm.base import (
     BackendUnavailable,
 )
 from openkos.resolution import contradiction
-from openkos.state import derived
+from openkos.state import derived, findings
 from openkos.state import pending_queue as pq
 
 FINDING_KINDS: Final = ("contradiction", "revision")
@@ -360,6 +360,7 @@ def _publish_contradiction(
     target: _Target,
     spec: contradiction._CandidateSpec,
     verdict: contradiction.ContradictionVerdict,
+    pinned: tuple[findings.InputDigest, ...],
     section: _RetryingSection,
 ) -> None:
     """Replace the open row with the new verdict, or retire it when the
@@ -370,7 +371,9 @@ def _publish_contradiction(
             proposal = queue_producers.contradiction_proposal(
                 verdict,
                 spec,
-                input_digests=finding_inputs.finding_input_digests,
+                # The digests the pair was judged on, not a fresh read: a page
+                # edited since would otherwise stamp the row current.
+                input_digests=lambda _bundle_dir, _spec: pinned,
                 bundle_dir=layout.bundle_dir,
             )
             queue_producers.publish(
@@ -432,7 +435,9 @@ def _run_contradiction(run: _Run, item: WorkItem) -> None:
             commit_section=section,
         )
         if stored:
-            _publish_contradiction(layout, target, spec, batch.results[0], section)
+            _publish_contradiction(
+                layout, target, spec, batch.results[0], pinned, section
+            )
         return stored
 
     run.store(store, len(batch.results))
@@ -531,6 +536,10 @@ def run_finding(
     context = _context(
         cfg, kind, include_confidential=token.include_confidential, ports=ports
     )
+    for item in token.work:
+        # The token is echoed over the wire, not signed: a forged work key naming
+        # another kind's row must not be judged, replaced or retired here.
+        _check_kind(kind, item.work_key)
     moved = changed_fields(token.binding, context.binding)
     if moved:
         return QuoteStale(kind, moved)
