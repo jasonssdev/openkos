@@ -893,3 +893,46 @@ def test_retiring_rows_naming_an_absent_concept_refuses_an_unknown_kind(
         pq.retire_open_naming_absent(
             conn, ("identity", "nonsense"), lambda _: True, commit_section=section
         )
+
+
+# -- retire_open_by_key ---------------------------------------------------------
+
+
+def test_retiring_one_open_row_by_key_moves_only_that_row(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    first = _proposal(targets=("concepts/a", "concepts/b"))
+    second = _proposal(targets=("concepts/c", "concepts/d"))
+    _upsert(conn, first, section, bundle_dir)
+    _upsert(conn, second, section, bundle_dir)
+
+    moved = pq.retire_open_by_key(
+        conn, first.decision_key, commit_section=section, clock=lambda: T0
+    )
+
+    assert moved is True
+    assert [row[1] for row in _rows(conn)] == ["stale", "pending"]
+    again = pq.retire_open_by_key(conn, first.decision_key, commit_section=section)
+    assert again is False  # a stale row is not moved twice
+
+
+def test_retiring_a_row_by_key_leaves_a_resolved_row_and_creates_no_queue(
+    conn: sqlite3.Connection, section: _Section, bundle_dir: Path
+) -> None:
+    assert not pq.retire_open_by_key(conn, "relation_type:x", commit_section=section)
+    assert not pq.queue_exists(conn)
+    assert section.entered == 0
+    proposal = _proposal()
+    _upsert(conn, proposal, section, bundle_dir)
+    pq.resolve_open_by_key(
+        conn,
+        proposal.decision_key,
+        resolution=lambda item: "declined",
+        resolved_by="test",
+        commit_section=section,
+    )
+
+    assert not pq.retire_open_by_key(
+        conn, proposal.decision_key, commit_section=section
+    )
+    assert [row[1] for row in _rows(conn)] == ["declined"]

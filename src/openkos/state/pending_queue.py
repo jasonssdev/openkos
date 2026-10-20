@@ -639,6 +639,33 @@ def retire_open_by_input_ref(
     return len(ids)
 
 
+def retire_open_by_key(
+    conn: sqlite3.Connection,
+    decision_key: str,
+    *,
+    commit_section: CommitSection,
+    clock: Callable[[], datetime] | None = None,
+) -> bool:
+    """Retire as `stale` the open row (at most one: the unique partial index)
+    whose stored `decision_key` is `decision_key`, and say whether one moved.
+
+    For a judge that re-examined the one pair behind a row and found the finding
+    no longer holds: a stale row is a proposal nobody will make again, not a
+    human's resolution. A resolved row keeps its state; an absent queue answers
+    `False` and is never created."""
+    if not queue_exists(conn):
+        return False
+    now = (clock or _now)().isoformat()
+    with _transaction(conn, commit_section):
+        cursor = conn.execute(
+            "UPDATE pending_items SET status='stale', resolution='stale',"
+            " claimed_by=NULL, resolved_at=?"
+            " WHERE decision_key = ? AND status IN ('pending','claimed')",
+            (now, decision_key),
+        )
+    return cursor.rowcount > 0
+
+
 def retire_open_naming(
     conn: sqlite3.Connection,
     concept_ids: Iterable[str],
