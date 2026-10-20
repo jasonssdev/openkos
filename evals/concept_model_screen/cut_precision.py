@@ -280,7 +280,11 @@ def gather(
                 lab = _load(label_path(out_dir, model, meeting, run))
                 base = _load(js.replay_path(study_dir, "self", model, meeting, run, 0))
                 ceiling = base["stages"]["ceiling"] or []
-                rec = _load(js.replay_path(study_dir, arm, model, meeting, run, seed))
+                # gemma4:26b-a4b judges itself and is the fixed judge: one sample.
+                judge_arm = "fixed" if model == js.JUDGE_MODEL else arm
+                rec = _load(
+                    js.replay_path(study_dir, judge_arm, model, meeting, run, seed)
+                )
                 if not js.same_objects(rec["stages"]["ceiling"], ceiling):
                     counts["records_skipped"] += 1
                     continue
