@@ -26,13 +26,12 @@ row no longer open, is a quote with nothing to judge: it is never an error.
 Like the rest of the judging surface it is OWNER-LOCAL and plain data.
 """
 
-import contextlib
 import dataclasses
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from openkos import config, lock
 from openkos.application import (
@@ -40,6 +39,7 @@ from openkos.application import (
     curate_queue,
     finding_inputs,
     queue_producers,
+    revisions,
 )
 from openkos.application.contradictions_service import contradiction_spec_key
 from openkos.application.judging import (
@@ -77,8 +77,6 @@ from openkos.state import pending_queue as pq
 FINDING_KINDS: Final = ("contradiction", "revision")
 """The kinds this module quotes and runs: the two whose rows record a finding."""
 
-_RUNNABLE: Final = ("contradiction",)
-
 
 @dataclass(frozen=True)
 class _Target:
@@ -92,16 +90,16 @@ class _Target:
 
 @dataclass(frozen=True)
 class _Found:
-    """What the LLM-free plan holds for a target: its work item and the
-    candidate the judge is handed."""
+    """What the LLM-free plan holds for a target: its work item, and the plan
+    narrowed to that one candidate, which is all the judge is ever handed."""
 
     item: WorkItem
-    spec: contradiction._CandidateSpec
-    plan: contradiction.CandidatePlan
+    plan: Any
+    """A `contradiction.CandidatePlan` or a `revisions.RevisionPlan`."""
 
 
 def _check_kind(kind: str, decision_key: str) -> None:
-    if kind not in _RUNNABLE:
+    if kind not in FINDING_KINDS:
         raise ValueError(f"judging kind {kind!r} is not a kind this surface re-checks")
     if decision_key.partition(":")[0] != kind:
         raise ValueError(f"decision_key must name a {kind} decision")
@@ -115,6 +113,16 @@ def _target(
     row = curate_queue.open_row_by_key(layout, decision_key)
     if row is None:
         return None
+    if kind == "revision":
+        pair = row.payload.get("pair_ids")
+        if not (
+            isinstance(pair, list)
+            and len(pair) == 2
+            and all(isinstance(member, str) and member for member in pair)
+        ):
+            return None
+        first, second = sorted(str(member) for member in pair)
+        return _Target(decision_key, (first, second))
     fields = curate_decisions.contradiction_fields(row.payload)
     if fields is None:
         return None
@@ -157,8 +165,68 @@ def _find_contradiction(
                 work_key=target.key,
                 member_digests=tuple((row.input_ref, row.digest) for row in rows),
             )
-            return _Found(item, spec, dataclasses.replace(plan, specs=(spec,)))
+            return _Found(item, dataclasses.replace(plan, specs=(spec,)))
     return None
+
+
+def _find_revision(
+    layout: config.WorkspaceLayout,
+    cfg: config.Config,
+    context: _Context,
+    target: _Target,
+    *,
+    ports: JudgingPorts,
+) -> _Found | None:
+    """The target's candidate in the revisions plan, or `None` when the plan does
+    not hold it. The plan reads the vectors the last reindex stored and embeds
+    nothing, so a decision edited since then has no vector and no candidate until
+    it is reindexed."""
+    effective = context.binding.effective_confidential
+    decisions = revisions.load_decisions(
+        layout, include_confidential=effective, local_exemption=context.local_exemption
+    )
+    if not decisions.decisions:
+        return None
+    plan = ports.plan_revisions(
+        layout,
+        decisions,
+        embedding_model=cfg.embedding_model,
+        effective_confidential=effective,
+        fresh=True,
+        backend=cfg.backend,
+    )
+    if plan.coverage.store != "ok":
+        return None
+    for candidate in plan.candidate_plan.candidates:
+        if candidate.pair_ids == target.pair:
+            rows = revisions.current_input_digests(layout, target.pair)
+            item = WorkItem(
+                work_key=target.key,
+                member_digests=tuple((row.input_ref, row.digest) for row in rows),
+            )
+            return _Found(item, dataclasses.replace(plan, to_judge=(candidate,)))
+    return None
+
+
+def _find(
+    layout: config.WorkspaceLayout,
+    cfg: config.Config,
+    context: _Context,
+    kind: JudgingKind,
+    target: _Target,
+    *,
+    include_confidential: bool,
+    ports: JudgingPorts,
+) -> _Found | None:
+    if kind == "revision":
+        return _find_revision(layout, cfg, context, target, ports=ports)
+    return _find_contradiction(
+        layout,
+        context,
+        target,
+        include_confidential=include_confidential,
+        ports=ports,
+    )
 
 
 def quote_finding(
@@ -184,9 +252,11 @@ def quote_finding(
     found = (
         None
         if target is None
-        else _find_contradiction(
+        else _find(
             layout,
+            cfg,
             context,
+            kind,
             target,
             include_confidential=include_confidential,
             ports=ports,
@@ -237,12 +307,60 @@ class _Tally:
     failed_at: int | None = None
 
 
+@dataclass(frozen=True)
+class _Run:
+    """What judging one quoted pair needs: the run's resolved state, the ceiling
+    client and the tally the pair's outcome is added to."""
+
+    layout: config.WorkspaceLayout
+    cfg: config.Config
+    token: QuoteToken
+    context: _Context
+    counted: _CeilingClient
+    ports: JudgingPorts
+    guard: _ObserverGuard
+    tally: _Tally
+    index: int
+    total: int
+
+    def progress(self, key: str, verdict: str) -> None:
+        self.guard.progress(
+            JudgingProgress(
+                index=self.index, total=self.total, work_key=key, verdict=verdict
+            )
+        )
+
+    def fail(self, failure: BackendError | None) -> None:
+        if failure is not None:
+            self.tally.failure = failure
+            self.tally.failed_at = self.index
+
+    def store(self, stored: Callable[[_RetryingSection], int], judged: int) -> None:
+        """Run the write that stores and publishes a verdict, in commit sections
+        that retry a busy workspace, and add its outcome to the tally. `stored`
+        returns how many verdicts it stored; a verdict it did not store was
+        dropped on purpose."""
+        section = _RetryingSection(self.ports)
+        try:
+            count = stored(section)
+        except lock.WorkspaceBusyError:
+            self.tally.unpersisted += judged
+            self.tally.cause = "workspace_busy"
+            return
+        except sqlite3.Error, OSError:
+            self.tally.unpersisted += judged
+            self.tally.cause = "store_error"
+            return
+        self.tally.persisted += count
+        self.tally.dropped += judged - count
+
+
 def _publish_contradiction(
     layout: config.WorkspaceLayout,
     target: _Target,
-    found: _Found,
+    spec: contradiction._CandidateSpec,
     verdict: contradiction.ContradictionVerdict,
-    section: Callable[[], contextlib.AbstractContextManager[None]],
+    section: _RetryingSection,
 ) -> None:
     """Replace the open row with the new verdict, or retire it when the
     disagreement no longer holds."""
@@ -251,7 +369,7 @@ def _publish_contradiction(
         if verdict.verdict is contradiction.Verdict.CONTRADICTS:
             proposal = queue_producers.contradiction_proposal(
                 verdict,
-                found.spec,
+                spec,
                 input_digests=finding_inputs.finding_input_digests,
                 bundle_dir=layout.bundle_dir,
             )
@@ -269,66 +387,43 @@ def _publish_contradiction(
         conn.close()
 
 
-def _run_contradiction(
-    layout: config.WorkspaceLayout,
-    token: QuoteToken,
-    context: _Context,
-    item: WorkItem,
-    *,
-    counted: _CeilingClient,
-    ports: JudgingPorts,
-    guard: _ObserverGuard,
-    tally: _Tally,
-    index: int,
-    total: int,
-) -> None:
+def _run_contradiction(run: _Run, item: WorkItem) -> None:
     """Judge one quoted pair, store its verdict and publish the row."""
+    layout, token = run.layout, run.token
     target = _target(layout, "contradiction", item.work_key)
     found = (
         None
         if target is None
         else _find_contradiction(
             layout,
-            context,
+            run.context,
             target,
             include_confidential=token.include_confidential,
-            ports=ports,
+            ports=run.ports,
         )
     )
     if target is None or found is None or found.item != item:
-        tally.settled += 1
+        run.tally.settled += 1
         return
-    pinned = finding_inputs.finding_input_digests(layout.bundle_dir, found.spec)
-
-    def on_progress(
-        done: int, count: int, verdict: contradiction.ContradictionVerdict
-    ) -> None:
-        guard.progress(
-            JudgingProgress(
-                index=index,
-                total=total,
-                work_key=item.work_key,
-                verdict=verdict.verdict.value,
-            )
-        )
-
-    batch, _pairs = ports.find_contradictions(
+    [spec] = found.plan.specs
+    pinned = finding_inputs.finding_input_digests(layout.bundle_dir, spec)
+    batch, _pairs = run.ports.find_contradictions(
         layout.bundle_dir,
-        llm=counted,
+        llm=run.counted,
         include_deprecated=False,
         include_confidential=token.include_confidential,
-        local_exemption=context.local_exemption,
+        local_exemption=run.context.local_exemption,
         plan=found.plan,
-        on_progress=on_progress,
+        on_progress=lambda done, count, verdict: run.progress(
+            item.work_key, verdict.verdict.value
+        ),
     )
-    tally.judged += len(batch.results)
-    if batch.failure is not None:
-        tally.failure = batch.failure
-        tally.failed_at = index
+    run.tally.judged += len(batch.results)
+    run.fail(batch.failure)
     if not batch.results:
         return
-    section = _RetryingSection(ports)
-    try:
+
+    def store(section: _RetryingSection) -> int:
         stored = finding_inputs.persist_findings(
             layout,
             found.plan,
@@ -337,17 +432,76 @@ def _run_contradiction(
             commit_section=section,
         )
         if stored:
-            _publish_contradiction(layout, target, found, batch.results[0], section)
-    except lock.WorkspaceBusyError:
-        tally.unpersisted += 1
-        tally.cause = "workspace_busy"
+            _publish_contradiction(layout, target, spec, batch.results[0], section)
+        return stored
+
+    run.store(store, len(batch.results))
+
+
+def _publish_revision(
+    layout: config.WorkspaceLayout, target: _Target, section: _RetryingSection
+) -> None:
+    """Replace the open row with the pair's persisted finding when it is still
+    fresh and actionable, or retire it when the revision no longer holds."""
+    held = [
+        finding
+        for finding in revisions.actionable_revision_findings(layout)
+        if finding.pair_ids == target.pair
+    ]
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        if held:
+            queue_producers.publish(
+                conn,
+                "revision",
+                queue_producers.revision_proposals(held),
+                complete=False,
+                commit_section=section,
+                bundle_dir=layout.bundle_dir,
+            )
+        else:
+            pq.retire_open_by_key(conn, target.key, commit_section=section)
+    finally:
+        conn.close()
+
+
+def _run_revision(run: _Run, item: WorkItem) -> None:
+    """Judge one quoted pair, which stores its finding, and publish the row."""
+    layout = run.layout
+    target = _target(layout, "revision", item.work_key)
+    found = (
+        None
+        if target is None
+        else _find_revision(layout, run.cfg, run.context, target, ports=run.ports)
+    )
+    if target is None or found is None or found.item != item:
+        run.tally.settled += 1
         return
-    except sqlite3.Error, OSError:
-        tally.unpersisted += 1
-        tally.cause = "store_error"
+    outcome = run.ports.judge_revisions(
+        layout,
+        found.plan,
+        llm=run.counted,
+        effective_confidential=run.context.binding.effective_confidential,
+        on_progress=lambda done, count, verdict: run.progress(
+            item.work_key, verdict.verdict.value
+        ),
+    )
+    run.tally.judged += len(outcome.results)
+    run.fail(outcome.failure)
+    if not outcome.results:
         return
-    tally.persisted += stored
-    tally.dropped += len(batch.results) - stored
+
+    def store(section: _RetryingSection) -> int:
+        # A malformed verdict is not stored, and one about pages that moved
+        # during the call is not a verdict about the pages now on disk.
+        if outcome.results[0].malformed or not revisions.recorded_inputs_fresh(
+            layout, target.pair, item.member_digests
+        ):
+            return 0
+        _publish_revision(layout, target, section)
+        return 1
+
+    run.store(store, len(outcome.results))
 
 
 def run_finding(
@@ -371,8 +525,8 @@ def run_finding(
     if token is None:
         return RunRefused("no_quote_token")
     kind = token.binding.kind
-    if kind not in _RUNNABLE:
-        raise ValueError(f"judging kind {kind!r} cannot be re-checked yet")
+    if kind not in FINDING_KINDS:
+        raise ValueError(f"judging kind {kind!r} is not a kind this surface re-checks")
     layout, cfg = _open_workspace(root, "run")
     context = _context(
         cfg, kind, include_confidential=token.include_confidential, ports=ports
@@ -384,6 +538,7 @@ def run_finding(
     guard = _ObserverGuard(observer if observer is not None else JudgingObserver())
     counted = _CeilingClient(context.client, token.calls)
     tally = _Tally()
+    judge = _run_revision if kind == "revision" else _run_contradiction
     status: Literal["completed", "stopped", "failed", "unpersisted"] = "completed"
     reached = 0
     for index, item in enumerate(token.work, start=1):
@@ -391,18 +546,19 @@ def run_finding(
             status = "stopped"
             break
         reached = index
-        _run_contradiction(
+        run = _Run(
             layout,
+            cfg,
             token,
             context,
-            item,
-            counted=counted,
-            ports=ports,
-            guard=guard,
-            tally=tally,
-            index=index,
-            total=len(token.work),
+            counted,
+            ports,
+            guard,
+            tally,
+            index,
+            len(token.work),
         )
+        judge(run, item)
         if tally.cause is not None:
             status = "unpersisted"
             break

@@ -439,6 +439,14 @@ def revision_input_digests(
     return tuple(digests)
 
 
+def current_input_digests(
+    layout: config.WorkspaceLayout, pair_ids: tuple[str, str]
+) -> tuple[revision_findings.InputDigest, ...]:
+    """`revision_input_digests` for `pair_ids` over the bundle as it stands now:
+    what a judge pins before its call, and what a quote binds a re-check to."""
+    return revision_input_digests(layout, _bundle_text_snapshot(layout), pair_ids)
+
+
 def is_fresh(
     layout: config.WorkspaceLayout,
     finding: revision_findings.RevisionFinding,
