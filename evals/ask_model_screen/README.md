@@ -145,3 +145,10 @@ The guardrails and vetoes are in the pre-registration.
   model, so the comparison is still paired, but its absolute rates mean less.
 - Ollama may keep generating after a client timeout, so the next call would
   queue behind it. Stage 0 checks this before any timed round.
+
+## Prompt arms (#1583)
+
+`--stage generate --arm NAME --system-prompt-file FILE` replaces `answer/system` for the
+synthesis call and writes its own projection (`runs-<model>-arm-NAME.json`); the
+control keeps its file and its cache keys. `--stage compare-prompt --arm NAME` pairs the
+two arms item by item and applies the rule in `PREREGISTRATION-1583.md`.

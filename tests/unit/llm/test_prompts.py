@@ -18,7 +18,7 @@ from openkos.llm import prompts
 PINNED: dict[str, str] = {
     "adjudication/system": "aaed5c3e06569c83",
     "answer/sufficiency": "afc4644b27500c2c",
-    "answer/system": "9cbf11e8ac9f8220",
+    "answer/system": "ec8a87ca28585d9e",
     "contradiction/system": "bb3180dfc98729c6",
     "decision_revision/judge": "d8238af6410ac31d",
     "decision_subject/system": "b105cbe9f130b62d",
