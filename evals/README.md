@@ -76,3 +76,4 @@ of a harness's own scoring code.
 - [`stage_attrition`](stage_attrition/README.md) — which pipeline stage removes the subjects.
 - [`title_first`](title_first/README.md) — costing an earlier framing gate before body generation.
 - [`type_restatement`](type_restatement/README.md) — titles that restate their own type.
+- [`volatility_typing_screen`](volatility_typing_screen/README.md) — a model-screen harness for the volatility-tier suggester: labelled fixture, anchoring probe and forecast; draft pre-registration, no model run yet.

@@ -1,0 +1,887 @@
+{
+ "version": 1,
+ "items": [
+  {
+   "id": "v01",
+   "type": "Concept",
+   "language": "en",
+   "docs": [
+    {
+     "id": "stoicism",
+     "title": "Stoicism",
+     "text": "A Hellenistic school that holds virtue to be the only good. Its practical core is the **dichotomy of control** (*Enchiridion* 1): some things are up to us — judgement, impulse, desire, aversion — and some are not — the body, reputation, office. Suffering comes from wanting what was never ours to govern [1].\n\n**Apatheia** is freedom from the *pathē*, the destructive passions — not the absence of feeling. The Stoics kept the *eupatheiai*, the \"good feelings\": joy, caution, wishing. The goal is not to stop feeling but to stop being ruled by it [2].\n\nThe term is commonly misread as \"indifference to emotion\", by analogy with the English cognate *apathy*. That reading makes the school sound colder than it is, and it is worth disarming before using the word in front of a general reader [2].\n\n## Related\n\n- [Epicureanism](/concepts/epicureanism.md) — contrasted with; both ask how to live and disagree on what the good is\n- [Maria Salazar](/people/maria-salazar.md) — corrected the apatheia reading here\n- [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md) — cited in\n\n# Citations\n\n[1] [Reading notes — Enchiridion, 2026-07-05](/sources/notes-on-the-enchiridion-2026-07-05.md)\n[2] [Call with Maria Salazar — 2026-07-14](/sources/call-with-maria-2026-07-14.md)",
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/concepts/stoicism.md"
+     }
+    },
+    {
+     "id": "epicureanism",
+     "title": "Epicureanism",
+     "text": "A Hellenistic school that holds pleasure to be the good — where \"pleasure\" means *ataraxia*, the absence of disturbance, rather than indulgence. The reputation for hedonism is a later distortion [1].\n\n## Related\n\n- [Stoicism](/concepts/stoicism.md) — contrasted with; both take tranquillity seriously, and disagree on whether the good is virtue or pleasure\n\n# Citations\n\n[1] [Reading notes — Enchiridion, 2026-07-05](/sources/notes-on-the-enchiridion-2026-07-05.md)",
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/concepts/epicureanism.md"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": "static",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "Doctrine definitions: durable, but the bundle's own log shows this very concept corrected v1 to v2 (interpretation is refined), so slow. A static reading (millennia-old doctrine) is defensible."
+  },
+  {
+   "id": "v02",
+   "type": "Decision",
+   "language": "en",
+   "docs": [
+    {
+     "id": "frame-the-essay-on-the-dichotomy-of-control",
+     "title": "Frame the essay on the dichotomy of control",
+     "text": "On 2026-07-14 I decided to organise the essay around the dichotomy of control from [Stoicism](/concepts/stoicism.md) rather than around *apatheia*.\n\n**Rationale:** the dichotomy lands immediately with a reader who has never opened a Stoic text, while *apatheia* needs a paragraph of disambiguation every time it appears — I misread it myself on the first pass [1], and had to be corrected [2]. An idea that must be defended before it can be used is the wrong load-bearing beam for a short essay.\n\n**Alternatives:** frame it on *apatheia* — richer, and closer to what the Stoics were actually arguing about, but it spends the reader's attention on a correction instead of on the argument. Frame it on the [Epicurean](/concepts/epicureanism.md) contrast — interesting, but it makes the essay comparative rather than practical.\n\n**Status:** active. Revisit if the essay grows long enough to afford the disambiguation.\n\n# Citations\n\n[1] [Reading notes — Enchiridion, 2026-07-05](/sources/notes-on-the-enchiridion-2026-07-05.md)\n[2] [Call with Maria Salazar — 2026-07-14](/sources/call-with-maria-2026-07-14.md)",
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/decisions/frame-the-essay-on-the-dichotomy-of-control.md"
+     }
+    }
+   ],
+   "label": "static",
+   "alt_label": "slow",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "A decision taken on a stated date is a fixed historical fact. The body ends 'Revisit if the essay grows long enough', a standing-review clause, hence the slow alternative."
+  },
+  {
+   "id": "v03",
+   "type": "Person",
+   "language": "en",
+   "docs": [
+    {
+     "id": "maria-salazar",
+     "title": "Maria Salazar",
+     "text": "Studies Hellenistic ethics. Teaches the Hellenistic ethics seminar this term (as of 2026-07-14) — a post is a volatile fact, so the faculty page linked in `resource` is the source of truth here, not this page [1].\n\nCorrected the *apatheia* reading in [Stoicism](/concepts/stoicism.md), and argued for the framing recorded in [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md) [1].\n\nQuietly looking to move departments (as of 2026-07-14); asked that it not be spread [1].\n\n## Related\n\n- [Stoicism](/concepts/stoicism.md) — corrected the apatheia reading in\n- [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md) — argued for\n\n# Citations\n\n[1] [Call with Maria Salazar — 2026-07-14](/sources/call-with-maria-2026-07-14.md)",
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/people/maria-salazar.md"
+     }
+    }
+   ],
+   "label": "volatile",
+   "alt_label": "slow",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "The body is dominated by claims it dates itself ('as of 2026-07-14': current post, a plan to move departments) and states that 'a post is a volatile fact'. The registry default for Person is slow; the label follows the content."
+  },
+  {
+   "id": "v04",
+   "type": "Source",
+   "language": "en",
+   "docs": [
+    {
+     "id": "notes-on-the-enchiridion-2026-07-05",
+     "title": "Reading notes — Enchiridion, 2026-07-05",
+     "text": "Notes from a first pass through Epictetus's *Enchiridion* and the translator's introduction. They cover the dichotomy of control, the Stoic/Epicurean contrast the introduction draws, and a first reading of *apatheia* as \"indifference to emotion\" — flagged at the time as something to ask about, and later corrected.\n\nCompiled into: [Stoicism](/concepts/stoicism.md), [Epicureanism](/concepts/epicureanism.md), [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md).",
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/sources/notes-on-the-enchiridion-2026-07-05.md"
+     }
+    },
+    {
+     "id": "call-with-maria-2026-07-14",
+     "title": "Call with Maria Salazar — 2026-07-14",
+     "text": "Maria corrected the *apatheia* reading: it is freedom from the *pathē*, the destructive passions, not the absence of feeling — the Stoics kept the *eupatheiai*. The misreading comes from the English cognate *apathy*. She argued for framing the essay on the dichotomy of control instead, mentioned her current teaching, and shared a plan she asked me not to spread.\n\nCompiled into: [Stoicism](/concepts/stoicism.md), [Maria Salazar](/people/maria-salazar.md), [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md).",
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/sources/call-with-maria-2026-07-14.md"
+     }
+    }
+   ],
+   "label": "static",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": false,
+   "how": "A source records what was said or read on a date; immutable by construction (raw/ is read-only)."
+  },
+  {
+   "id": "v05",
+   "type": "Concept",
+   "language": "en",
+   "docs": [
+    {
+     "id": "sequential-decision-history",
+     "title": "Sequential decision history",
+     "text": "The compiler keeps the sequential history of every decision taken, not just the bundle's final state. It lets you reconstruct why the knowledge ended up the way it did, and audit the path as well as the result.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "concepts/sequential-decision-history"
+     }
+    },
+    {
+     "id": "mandatory-verbatim-citations",
+     "title": "Mandatory verbatim citations",
+     "text": "Every answer the engine gives attaches verbatim citations to the documents that support it. It is the defense against hallucination: a claim with no document behind it must not be presented as bundle knowledge.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "concepts/mandatory-verbatim-citations"
+     }
+    },
+    {
+     "id": "bundle-as-canonical-source",
+     "title": "The bundle as canonical source",
+     "text": "The file bundle is the canonical source. Derived indexes — lexical search, vectors, graph — are rebuildable cache and never the truth. Any of them can be deleted and regenerated without loss.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "concepts/bundle-as-canonical-source"
+     }
+    },
+    {
+     "id": "curation-with-consent",
+     "title": "Curation with per-item consent",
+     "text": "Curation is an explicit step. Every proposed write is confirmed separately; there is no silent mass application of changes to the bundle.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "concepts/curation-with-consent"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": false,
+   "how": "Durable design principles of one system: stable across months, revisable across years."
+  },
+  {
+   "id": "v06",
+   "type": "Concept",
+   "language": "en",
+   "docs": [
+    {
+     "id": "idempotent-ingestion",
+     "title": "Idempotent ingestion per origin",
+     "text": "Ingesting the same file twice does not duplicate objects. The origin's identity decides whether an ingestion is new or a repetition.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "concepts/idempotent-ingestion"
+     }
+    },
+    {
+     "id": "per-document-sensitivity",
+     "title": "Per-document sensitivity",
+     "text": "Every document carries its sensitivity level. A confidential document does not leave the team toward a remote backend except by explicit local exemption.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "concepts/per-document-sensitivity"
+     }
+    },
+    {
+     "id": "deletion-sweeps-snapshots",
+     "title": "Deletion sweeps the merge snapshots",
+     "text": "Deleting a concept is not removing its file. Merge records keep snapshots of the absorbed body, and the sweep has to reach them or the data survives where nobody looks.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "concepts/deletion-sweeps-snapshots"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": false,
+   "how": "Durable behavioural rules of one system; the deletion note was itself a correction of earlier behaviour, so not static."
+  },
+  {
+   "id": "v07",
+   "type": "Decision",
+   "language": "en",
+   "docs": [
+    {
+     "id": "sequential-history",
+     "title": "Decision: sequential decision history",
+     "text": "It was decided that the compiler keep the sequential history of decisions. Proposed by Ana Ríos in meeting 01, no objections.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "decisions/sequential-history"
+     }
+    },
+    {
+     "id": "mandatory-citations",
+     "title": "Decision: mandatory verbatim citations",
+     "text": "It was decided that every answer attach verbatim citations. Condition set by Jason Sepúlveda in meeting 01.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "decisions/mandatory-citations"
+     }
+    },
+    {
+     "id": "explicit-curation",
+     "title": "Decision: explicit curation with consent",
+     "text": "It was decided that curation be an explicit step with per-item consent before publishing derived objects. Meeting 02.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "decisions/explicit-curation"
+     }
+    },
+    {
+     "id": "real-deletion",
+     "title": "Decision: deletion sweeps the snapshots",
+     "text": "It was decided that deletion reach the merge snapshots and be logged. Meeting 03.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "decisions/real-deletion"
+     }
+    }
+   ],
+   "label": "static",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": false,
+   "how": "Each is 'It was decided that ...' in a named meeting: decision records, fixed once made."
+  },
+  {
+   "id": "v08",
+   "type": "Source",
+   "language": "en",
+   "docs": [
+    {
+     "id": "meeting-01-traceability",
+     "title": "Meeting 01 — compiler traceability",
+     "text": "Ana Ríos: Opening the first session. The topic is the knowledge compiler. Gustavo Martínez: My concern is that today we cannot reconstruct why something was decided three months ago. The why gets lost. Ana Ríos: Then I propose the compiler keep the sequential history of every decision, not just the final state. Jason Sepúlveda: I agree, but I add one condition: every answer the engine gives must carry verbatim citations to the documents that support it. Without that we cannot tell a grounded answer from a hallucination. Ana Ríos: Let the decision stand: sequential decision history, and mandatory verbatim citations on every answer. Gustavo Martínez: I also note that the bundle remains the canonical source. No derived index gets to become the truth.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "sources/meeting-01-traceability"
+     }
+    },
+    {
+     "id": "meeting-02-ingestion",
+     "title": "Meeting 02 — ingestion and curation",
+     "text": "Gustavo Martínez: I processed the transcripts from the last four sessions and they are loaded into the bundle. Ana Ríos: And the quality review? Gustavo Martínez: Missing. I propose curation be an explicit step, with per-item consent, before publishing any derived object. Jason Sepúlveda: I add that ingestion has to be idempotent. If I run the same file twice it must not duplicate objects. Ana Ríos: Decided: explicit curation with per-item consent, and idempotent ingestion per origin. Gustavo Martínez: Bruno is assigned as the owner of the old corpus migration.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "sources/meeting-02-ingestion"
+     }
+    },
+    {
+     "id": "meeting-03-privacy",
+     "title": "Meeting 03 — sensitivity and deletion",
+     "text": "Jason Sepúlveda: We have personal data in the transcripts. We need a sensitivity level per document. Ana Ríos: And deletion that is real. If someone asks to be forgotten, removing the file is not enough: the traces in the merge records must be swept too. Gustavo Martínez: That means reviewing the snapshots each merge keeps. Ana Ríos: Decision: per-document sensitivity, and deletion also sweeps the merge snapshots. Jason Sepúlveda: And deletion must be irreversible and logged.",
+     "source": {
+      "kind": "attribution_en",
+      "ref": "sources/meeting-03-privacy"
+     }
+    }
+   ],
+   "label": "static",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": false,
+   "how": "Meeting transcripts: records of what was said."
+  },
+  {
+   "id": "v09",
+   "type": "Concept",
+   "language": "en",
+   "docs": [
+    {
+     "id": "request-scheduler",
+     "title": "Request Scheduler",
+     "text": "The request scheduler is a single subsystem that owns queueing, admission and retry. It is built from several internal components, one of which is the retry budget.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/request-scheduler"
+     }
+    },
+    {
+     "id": "retry-budget",
+     "title": "Retry Budget",
+     "text": "The retry budget is one component inside the request scheduler. It lives in the scheduler's own module and is constructed by the scheduler at startup; nothing outside the scheduler can hold one.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/retry-budget"
+     }
+    },
+    {
+     "id": "nightly-backup-job",
+     "title": "Nightly Backup Job",
+     "text": "The nightly backup job is one of the scheduled maintenance jobs. It is listed alongside the log-rotation job and the index-vacuum job, and each of them is registered the same way.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/nightly-backup-job"
+     }
+    },
+    {
+     "id": "scheduled-maintenance-jobs",
+     "title": "Scheduled Maintenance Jobs",
+     "text": "Scheduled maintenance jobs is the collection of recurring jobs the operator can enable. Its members are alike in kind: each is a periodic task with a cron expression and a retention policy.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/scheduled-maintenance-jobs"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": false,
+   "how": "Descriptions of how a system is built; architecture drifts over months, not weeks."
+  },
+  {
+   "id": "v10",
+   "type": "Concept",
+   "language": "en",
+   "docs": [
+    {
+     "id": "read-replicas",
+     "title": "Read Replicas",
+     "text": "Read replicas is the set of standby copies serving read traffic. Every member is alike in kind: a follower with the same schema and its own region.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/read-replicas"
+     }
+    },
+    {
+     "id": "eu-west-replica",
+     "title": "EU West Replica",
+     "text": "The EU West replica is one of the read replicas. It sits beside the US East and AP South replicas, and all of them are provisioned from the same template.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/eu-west-replica"
+     }
+    },
+    {
+     "id": "search-api",
+     "title": "Search API",
+     "text": "The search API requires the ranking service to answer a query. The ranking service is deployed separately and is not contained in the API; without it the API returns an error.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/search-api"
+     }
+    },
+    {
+     "id": "ranking-service",
+     "title": "Ranking Service",
+     "text": "The ranking service scores documents. It runs as its own process and does not know which callers depend on it.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/ranking-service"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": "volatile",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "Deployment topology and service dependencies: usually stable for months, but regional replicas and dependencies are the kind of fact that moves with an infra change."
+  },
+  {
+   "id": "v11",
+   "type": "Concept",
+   "language": "en",
+   "docs": [
+    {
+     "id": "human-heart",
+     "title": "Human Heart",
+     "text": "The human heart is a single muscular organ. Its interior comprises chambers and valves, the aortic valve among the structures it contains.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/human-heart"
+     }
+    },
+    {
+     "id": "aortic-valve",
+     "title": "Aortic Valve",
+     "text": "The aortic valve forms the outflow gate of the heart. Anatomically it is situated within that organ and cannot be described apart from the chamber it seals.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/aortic-valve"
+     }
+    }
+   ],
+   "label": "static",
+   "alt_label": "slow",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "Anatomy: time does not change the facts. By the rule that is static, though the registry default for Concept is slow, which is the point of flagging it."
+  },
+  {
+   "id": "v12",
+   "type": "Concept",
+   "language": "en",
+   "docs": [
+    {
+     "id": "voice-parts",
+     "title": "Voice Parts",
+     "text": "Voice parts is a roster whose entries are peers. Enrollment means being a part on that roster, and no entry contains any other.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/voice-parts"
+     }
+    },
+    {
+     "id": "soprano-line",
+     "title": "Soprano Line",
+     "text": "The soprano line belongs to the choir's roster of voice parts. It is enrolled there on the same footing as alto, tenor and bass, each an entry of equal standing.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/soprano-line"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": "static",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "A choir's roster of voice parts: a convention that rarely changes. Slow because a roster is organisational, static because the four parts are a fixed musical convention."
+  },
+  {
+   "id": "v13",
+   "type": "Concept",
+   "language": "en",
+   "docs": [
+    {
+     "id": "write-ahead-log",
+     "title": "Write-Ahead Log",
+     "text": "The write-ahead log is one durable structure guaranteeing ordering. Internally it is divided into segments, each a component of the same whole.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/write-ahead-log"
+     }
+    },
+    {
+     "id": "wal-segment",
+     "title": "WAL Segment",
+     "text": "A WAL segment is one file inside the write-ahead log. The log is a single ordered structure and the segment is a piece of it; a segment has no meaning outside its log.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/wal-segment"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": "static",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "Database-internals definitions: stable for years; an implementation-specific segment layout can change, so slow, with static defensible."
+  },
+  {
+   "id": "v14",
+   "type": "Person",
+   "language": "en",
+   "docs": [
+    {
+     "id": "dana-reyes",
+     "title": "Dana Reyes",
+     "text": "Dana Reyes is one of the platform guild's members. She joined it the same way the other members did, and the guild lists her alongside them; nothing about her membership differs in kind from theirs.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "people/dana-reyes"
+     }
+    },
+    {
+     "id": "marcus-oyelaran",
+     "title": "Marcus Oyelaran",
+     "text": "Marcus Oyelaran is an on-call engineer. He wrote the escalation ladder, and is the author of it rather than anything it contains.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "people/marcus-oyelaran"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": "volatile",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "Membership and a standing role (on-call engineer). Roles change over months to years, so slow; an on-call duty can rotate, so volatile is defensible."
+  },
+  {
+   "id": "v15",
+   "type": "Organization",
+   "language": "en",
+   "docs": [
+    {
+     "id": "platform-guild",
+     "title": "Platform Guild",
+     "text": "The platform guild is a standing group of engineers. Its members are alike in kind -- each joins by the same route, holds the same standing, and can leave without the guild ceasing to be itself.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "organizations/platform-guild"
+     }
+    },
+    {
+     "id": "platform-team",
+     "title": "Platform Team",
+     "text": "The platform team is a group of engineers owning shared infrastructure. Among its outputs it authors architecture decision records.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/platform-team"
+     }
+    },
+    {
+     "id": "risk-committee",
+     "title": "Risk Committee",
+     "text": "The risk committee is a standing group of five people. Among other duties it authors the quarterly risk report.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/risk-committee"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": true,
+   "how": "Standing groups of people: composition and remit change over months to years. The platform-team and risk-committee documents are typed Concept in their source fixture; their type here is assigned by the author because each describes a standing group."
+  },
+  {
+   "id": "v16",
+   "type": "Project",
+   "language": "en",
+   "docs": [
+    {
+     "id": "telemetry-rewrite",
+     "title": "Telemetry Rewrite",
+     "text": "The telemetry rewrite is a project that ran for two quarters. Among the things it produced is the sampling policy, which it wrote to record its own decisions.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "projects/telemetry-rewrite"
+     }
+    }
+   ],
+   "label": "static",
+   "alt_label": "volatile",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "The body is in the past tense ('ran for two quarters'): a completed project is a historical record. Live projects are volatile; the registry default for Project is volatile, so this item tests whether the model reads the content or the type."
+  },
+  {
+   "id": "v17",
+   "type": "Procedure",
+   "language": "en",
+   "docs": [
+    {
+     "id": "migration-runbook",
+     "title": "Migration Runbook",
+     "text": "The migration runbook is a set of operator steps. Step four explicitly cites the rollback policy by name and tells the reader to consult it before proceeding.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/migration-runbook"
+     }
+    },
+    {
+     "id": "deploy-guide",
+     "title": "Deploy Guide",
+     "text": "The deploy guide walks an operator through a release. Its final section names the incident severity matrix explicitly and tells the reader to consult that document when a deploy goes wrong.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/deploy-guide"
+     }
+    },
+    {
+     "id": "onboarding-checklist",
+     "title": "Onboarding Checklist",
+     "text": "The onboarding checklist covers the first week for a new engineer: accounts, environment, and a first small change.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/onboarding-checklist"
+     }
+    }
+   ],
+   "label": "volatile",
+   "alt_label": "slow",
+   "ambiguous": true,
+   "type_assigned": true,
+   "how": "Operator steps and checklists: they change with each tooling change. The type is assigned by the author (typed Concept in the source fixture); each is plainly a procedure."
+  },
+  {
+   "id": "v18",
+   "type": "Event",
+   "language": "en",
+   "docs": [
+    {
+     "id": "checkout-outage",
+     "title": "Checkout Outage",
+     "text": "The checkout outage was a two-hour period in which no order could be placed. It happened because the payment gateway migration removed a header the checkout service required.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/checkout-outage"
+     }
+    },
+    {
+     "id": "data-loss-incident",
+     "title": "Data Loss Incident",
+     "text": "The data loss incident destroyed six hours of writes. It occurred because the storage upgrade disabled fsync without anyone noticing.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/data-loss-incident"
+     }
+    }
+   ],
+   "label": "static",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": true,
+   "how": "Bounded past incidents with duration and cause. The type is assigned by the author (typed Concept in the source fixture)."
+  },
+  {
+   "id": "v19",
+   "type": "Concept",
+   "language": "en",
+   "docs": [
+    {
+     "id": "hiring-loop",
+     "title": "Hiring Loop",
+     "text": "The hiring loop describes the interview stages a candidate goes through and who runs each one.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/hiring-loop"
+     }
+    },
+    {
+     "id": "documentation-style",
+     "title": "Documentation Style",
+     "text": "Documentation style covers tone, heading conventions and how much context a page should assume of its reader.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/documentation-style"
+     }
+    },
+    {
+     "id": "incident-review-culture",
+     "title": "Incident Review Culture",
+     "text": "Incident review culture describes how the team talks about failure after the fact, and what it expects from a written review.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/incident-review-culture"
+     }
+    },
+    {
+     "id": "incident-severity-matrix",
+     "title": "Incident Severity Matrix",
+     "text": "The incident severity matrix defines severity levels and the response each one requires. It stands on its own.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/incident-severity-matrix"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": false,
+   "how": "Team conventions: change over months."
+  },
+  {
+   "id": "v20",
+   "type": "Concept",
+   "language": "en",
+   "docs": [
+    {
+     "id": "cost-dashboard",
+     "title": "Cost Dashboard",
+     "text": "The cost dashboard shows monthly spend per service and highlights the largest movers week over week.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/cost-dashboard"
+     }
+    },
+    {
+     "id": "oncall-rotation",
+     "title": "On-call Rotation",
+     "text": "The on-call rotation lists who carries the pager each week and how handover happens between shifts.",
+     "source": {
+      "kind": "edge_fixtures",
+      "ref": "concepts/oncall-rotation"
+     }
+    }
+   ],
+   "label": "volatile",
+   "alt_label": "slow",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "Both describe a rolling, current-state view (monthly spend, who carries the pager each week). Their subject changes weekly, though the description of the artifact itself could be called slow."
+  },
+  {
+   "id": "v21",
+   "type": "Person",
+   "language": "es",
+   "docs": [
+    {
+     "id": "elena-vidal",
+     "title": "Elena Vidal",
+     "text": "Elena Vidal: Buenos días. Partimos con la revisión quincenal de plataforma. Yo coordino el equipo de infraestructura y voy a llevar la minuta hoy.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    },
+    {
+     "id": "marcos-iturra",
+     "title": "Marcos Iturra",
+     "text": "Marcos Iturra: Buenos días. Marcos, ingeniero de datos, a cargo del almacenamiento y de los respaldos desde el trimestre pasado.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    },
+    {
+     "id": "paula-cifuentes",
+     "title": "Paula Cifuentes",
+     "text": "Paula Cifuentes: Hola. Paula, encargada de seguridad de la información. Vengo del área de cumplimiento y me sumé al equipo en marzo.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    },
+    {
+     "id": "tomas-reyes",
+     "title": "Tomás Reyes",
+     "text": "Tomás Reyes: Buenos días a todos. Tomás, desarrollador del motor de búsqueda. Trabajo la parte de recuperación e índices.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": "volatile",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "The four participants of the corpus's committed meeting, bodies = their own introduction turns (role, affiliation, since-when). Roles last months to years. Type per the corpus ground truth."
+  },
+  {
+   "id": "v22",
+   "type": "Event",
+   "language": "es",
+   "docs": [
+    {
+     "id": "incidente-indisponibilidad",
+     "title": "Incidente de indisponibilidad del servicio",
+     "text": "Marcos Iturra: El martes pasado el servicio estuvo caído dos horas y cuarenta minutos, entre las nueve y las once cuarenta de la mañana. Afectó a todas las consultas de los usuarios, no solo a las escrituras.\n\nTomás Reyes: La causa fue el disco de la máquina que hospeda el índice. Se llenó porque los archivos temporales de la reconstrucción no se estaban borrando después de cada corrida.\n\nMarcos Iturra: Confirmo. Encontramos ciento ochenta gigabytes de temporales acumulados de tres meses. El proceso los creaba y nunca los limpiaba, y nadie miraba ese volumen porque no estaba en el panel.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    }
+   ],
+   "label": "static",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": false,
+   "how": "A bounded past event with duration, cause and impact (corpus ground truth type Event)."
+  },
+  {
+   "id": "v23",
+   "type": "Concept",
+   "language": "es",
+   "docs": [
+    {
+     "id": "latencia-busqueda-vectorial",
+     "title": "Latencia de la búsqueda vectorial",
+     "text": "Tomás Reyes: La búsqueda vectorial está tardando bastante más de lo que debería. La mediana de una consulta está en ochocientos milisegundos y el percentil noventa y cinco se va a los tres segundos.\n\nTomás Reyes: Contra lo que medimos en enero, que era ciento veinte milisegundos de mediana con el mismo corpus. El corpus creció, sí, pero creció al doble y la latencia se multiplicó por siete.\n\nElena Vidal: Hagámoslo así. La latencia queda como problema abierto con una medición pendiente, no como decisión tomada hoy.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    }
+   ],
+   "label": "volatile",
+   "alt_label": "slow",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "A characterised problem with measurements at a point in time and an open follow-up. The figures are what a reader would need to re-check within weeks. Type per the corpus ground truth."
+  },
+  {
+   "id": "v24",
+   "type": "Concept",
+   "language": "es",
+   "docs": [
+    {
+     "id": "deriva-modelo-embeddings",
+     "title": "Deriva del modelo de embeddings",
+     "text": "Paula Cifuentes: Quiero levantar algo relacionado pero distinto. El modelo de embeddings que usamos cambió de versión en junio y nadie volvió a generar los vectores antiguos.\n\nTomás Reyes: Alrededor del cuarenta por ciento del corpus. Los que se ingirieron antes de junio.\n\nElena Vidal: Entonces la deriva del modelo de embeddings tiene dos mitades: la limpieza de lo que ya está mal, que son seis horas de cómputo, y la prevención, que es guardar la versión. La segunda es la que evita que se repita.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    }
+   ],
+   "label": "volatile",
+   "alt_label": "slow",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "A state-of-affairs report (share of vectors on an old version, regeneration not yet done). Mechanism is durable, status is not. Type per the corpus ground truth."
+  },
+  {
+   "id": "v25",
+   "type": "Concept",
+   "language": "es",
+   "docs": [
+    {
+     "id": "duplicacion-por-trozos",
+     "title": "Duplicación de objetos por procesamiento en trozos",
+     "text": "Tomás Reyes: Sí, gracias. Es sobre los documentos duplicados en el corpus. Cuando ingerimos un documento largo, el sistema lo parte en trozos y cada trozo se procesa por separado.\n\nTomás Reyes: No exactamente. Es que cada trozo se procesa a ciegas respecto de los demás. El que procesa el segundo trozo no sabe qué nombres puso el primero, así que inventa el suyo. Es estructural, no es ruido del modelo.\n\nElena Vidal: Suena razonable, pero otra vez: hay que medirlo antes de cambiarlo. Anotado como trabajo propuesto, sin decisión.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    }
+   ],
+   "label": "slow",
+   "alt_label": "volatile",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "The core claim is a structural mechanism ('es estructural, no es ruido del modelo'), durable; the tail records a proposed, unmeasured fix, which is status. Type per the corpus ground truth."
+  },
+  {
+   "id": "v26",
+   "type": "Decision",
+   "language": "es",
+   "docs": [
+    {
+     "id": "cifrado-respaldos",
+     "title": "Cifrado de los respaldos en reposo",
+     "text": "Elena Vidal: Entonces queda decidido: los respaldos del bundle se cifran en reposo y la llave se custodia en el gestor de secretos corporativo, no en la máquina de respaldo. Marcos lo implementa esta semana.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    },
+    {
+     "id": "retencion-registros",
+     "title": "Retención de los registros de acceso a noventa días",
+     "text": "Elena Vidal: Me parece razonable y está alineado con lo que hace el resto de la organización. Queda decidido: los registros de acceso se conservan noventa días y después se eliminan, y los agregados sin identificadores se mantienen sin plazo.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    }
+   ],
+   "label": "static",
+   "alt_label": "slow",
+   "ambiguous": true,
+   "type_assigned": false,
+   "how": "Two explicit 'queda decidido' decisions. Decisions are fixed once taken; both are standing policies, which makes slow defensible. Type per the corpus ground truth."
+  },
+  {
+   "id": "v27",
+   "type": "Procedure",
+   "language": "es",
+   "docs": [
+    {
+     "id": "rotacion-credenciales",
+     "title": "Procedimiento de rotación de credenciales",
+     "text": "Paula Cifuentes: El procedimiento que propongo tiene cuatro pasos y el orden importa. Primero se genera la credencial nueva y se deja activa en paralelo con la anterior.\n\nPaula Cifuentes: Segundo, se actualiza cada componente consumidor uno por uno, verificando después de cada uno que sigue respondiendo.\n\nPaula Cifuentes: Tercero, se espera un ciclo completo de veinticuatro horas con las dos credenciales activas, para que cualquier proceso programado que corra una vez al día también se haya actualizado.\n\nPaula Cifuentes: Y cuarto, recién ahí se revoca la credencial anterior. Nunca antes.",
+     "source": {
+      "kind": "file",
+      "ref": "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md"
+     }
+    }
+   ],
+   "label": "volatile",
+   "alt_label": null,
+   "ambiguous": false,
+   "type_assigned": false,
+   "how": "Four ordered operational steps; the registry default and the content agree. Type per the corpus ground truth."
+  }
+ ]
+}
