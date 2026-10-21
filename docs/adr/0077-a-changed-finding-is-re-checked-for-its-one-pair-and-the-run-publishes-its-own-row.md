@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0077: A changed finding is re-checked for its one pair, and the run publishes its own row"
 description: A changed contradiction or revision is made current from the app by a cost-consented re-detection of that one pair, quoted by its decision key through a new openkos.api function (not a widened quote_judging), whose run replaces or retires the open row itself instead of waiting for the free refresh.
-status: Proposed
+status: Accepted
 date: 2026-10-20
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0077: A changed finding is re-checked for its one pair, and the run publishes its own row
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-20
 
 ## Context
