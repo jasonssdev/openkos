@@ -66,7 +66,9 @@ import ask_screen_core as core  # noqa: E402
 from attribution_corpus import EN_DOCS  # noqa: E402
 from crosslingual_corpus import (  # noqa: E402
     ANCHORED,
+    EN_QUESTIONS,
     TRANSFERRED,
+    check_english_questions,
     check_items,
     fact_recall,
     gold_docs,
@@ -140,6 +142,30 @@ def questions() -> list[tuple[str, str, int | None]]:
     return rows
 
 
+def questions_en() -> list[tuple[str, str, int | None]]:
+    """The same 32 questions in English (#1581), label and anchored index
+    carried over by position."""
+    return [
+        (label, english, anchored)
+        for (label, _es, anchored), english in zip(
+            questions(), EN_QUESTIONS, strict=True
+        )
+    ]
+
+
+def question_index(item_id: str) -> int:
+    """The position of an item's question among the 32, whatever its language:
+    the key that pairs a Spanish item with its English twin."""
+    question = item_id.split("|", 1)[1]
+    return _QUESTION_INDEX[question]
+
+
+_QUESTION_INDEX: Final[dict[str, int]] = {
+    **{q: i for i, (_l, q, _a) in enumerate(questions())},
+    **{q: i for i, (_l, q, _a) in enumerate(questions_en())},
+}
+
+
 def write_bundle(
     root: pathlib.Path, docs: Mapping[str, tuple[str, str]]
 ) -> pathlib.Path:
@@ -162,7 +188,14 @@ def write_bundle(
     return bundle
 
 
+EN_SETS: Final[dict[str, tuple[str, Mapping[str, tuple[str, str]]]]] = {
+    "en-en": ("en", EN_DOCS),
+}
+"""The English-question sets (#1581): the same English mirror, asked in English.
+`en-built` is added over the compiled bundle, like `es-built`."""
+
 BUILT_SET: Final = "es-built"
+EN_BUILT_SET: Final = "en-built"
 """The set over a bundle COMPILED by `openkos ingest` with the extraction
 model #1557/#1558 chose (`--built-bundle`);
 see PREREGISTRATION.md."""
@@ -208,15 +241,18 @@ class _CapturingLLM:
         return "USED: none"
 
 
-def corpus_sha256() -> str:
-    """Identity of everything the contexts depend on besides the code."""
+def corpus_sha256(*, english: bool = False) -> str:
+    """Identity of everything the contexts depend on besides the code. The
+    English contexts (#1581) hash their own questions; the Spanish hash is
+    unchanged, so the stored Spanish contexts stay valid."""
+    identity: dict[str, Any] = {
+        "es": ES_DOCS,
+        "en": EN_DOCS,
+        "questions": questions_en() if english else questions(),
+        "anchored": [asdict(item) for item in ANCHORED],
+    }
     payload = json.dumps(
-        {
-            "es": ES_DOCS,
-            "en": EN_DOCS,
-            "questions": questions(),
-            "anchored": [asdict(item) for item in ANCHORED],
-        },
+        identity,
         sort_keys=True,
         ensure_ascii=False,
         default=dict,
@@ -225,7 +261,10 @@ def corpus_sha256() -> str:
 
 
 def build_contexts(
-    timeout: float, built_bundle: pathlib.Path | None = None
+    timeout: float,
+    built_bundle: pathlib.Path | None = None,
+    *,
+    english: bool = False,
 ) -> dict[str, Any]:
     """Retrieve and assemble every item through the PRODUCTION `answer()`.
 
@@ -235,21 +274,28 @@ def build_contexts(
 
     `built_bundle` adds the `es-built` set: a bundle `openkos ingest` compiled
     from the English sources with the chosen extraction model. It is copied,
-    never indexed in place, so the screen writes nothing into it."""
+    never indexed in place, so the screen writes nothing into it.
+
+    `english` builds the English-question sets (#1581) instead: `en-en` over
+    the English mirror and, with `built_bundle`, `en-built`."""
     from openkos.state import reindex as reindex_module
     from openkos.state.fts import open_fts_index_readonly
     from openkos.state.vectorstore import open_vector_store
 
     embedder = OllamaClient(model=EMBED_MODEL, timeout=timeout)
     sets: dict[str, Any] = {}
-    plan: dict[str, tuple[str, Mapping[str, tuple[str, str]]]] = dict(SETS)
+    plan: dict[str, tuple[str, Mapping[str, tuple[str, str]]]] = dict(
+        EN_SETS if english else SETS
+    )
+    built_name = EN_BUILT_SET if english else BUILT_SET
+    asked = questions_en() if english else questions()
     if built_bundle is not None:
-        plan[BUILT_SET] = ("en", load_bundle_docs(built_bundle))
+        plan[built_name] = ("en", load_bundle_docs(built_bundle))
     for set_name, (language, docs) in plan.items():
         items: list[dict[str, Any]] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            if set_name == BUILT_SET and built_bundle is not None:
+            if set_name == built_name and built_bundle is not None:
                 bundle = root / "bundle"
                 shutil.copytree(built_bundle, bundle)
             else:
@@ -268,7 +314,7 @@ def build_contexts(
             fts_index = open_fts_index_readonly(fts_path)
             try:
                 with open_vector_store(vectors_path) as db:
-                    for label, question, anchored in questions():
+                    for label, question, anchored in asked:
                         stub = _CapturingLLM()
                         result = answer(
                             question,
@@ -312,7 +358,7 @@ def build_contexts(
         "version": CONTEXTS_VERSION,
         "limit": DEFAULT_QUERY_LIMIT,
         "embed_model": EMBED_MODEL,
-        "corpus_sha256": corpus_sha256(),
+        "corpus_sha256": corpus_sha256(english=english),
         "built_bundle_sha256": tree_sha256(built_bundle) if built_bundle else None,
         "stamp": build_stamp(
             model=EMBED_MODEL,
@@ -325,18 +371,18 @@ def build_contexts(
     }
 
 
-def contexts_path(cache_dir: pathlib.Path) -> pathlib.Path:
-    return cache_dir / "contexts.json"
+def contexts_path(cache_dir: pathlib.Path, *, english: bool = False) -> pathlib.Path:
+    return cache_dir / ("contexts-en.json" if english else "contexts.json")
 
 
-def load_contexts(cache_dir: pathlib.Path) -> dict[str, Any]:
-    path = contexts_path(cache_dir)
+def load_contexts(cache_dir: pathlib.Path, *, english: bool = False) -> dict[str, Any]:
+    path = contexts_path(cache_dir, english=english)
     if not path.is_file():
         raise SystemExit(f"no contexts at {path}: run --stage contexts first")
     payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("version") != CONTEXTS_VERSION:
         raise SystemExit(f"{path}: contexts version {payload.get('version')!r}")
-    if payload.get("corpus_sha256") != corpus_sha256():
+    if payload.get("corpus_sha256") != corpus_sha256(english=english):
         raise SystemExit(
             f"{path} was built from a different corpus: rebuild it, or every "
             "model would be scored on stale items"
@@ -563,6 +609,7 @@ def runs_path(
     first_run: int = 1,
     *,
     arm: str | None = None,
+    english: bool = False,
 ) -> pathlib.Path:
     """The screen's runs (from 1) keep their file; stage 0 and the
     confirmation, on seeds outside the screen's, get one of their own, so
@@ -570,7 +617,8 @@ def runs_path(
     (#1583) adds `-arm-<name>`, so it never shares a file with the control."""
     arm_part = "" if arm is None else f"-arm-{arm}"
     suffix = "" if first_run == 1 else f"-from{first_run}"
-    return cache_dir / "runs" / f"runs-{slug(model)}{arm_part}{suffix}.json"
+    lang_part = "-en" if english else ""
+    return cache_dir / "runs" / f"runs-{slug(model)}{arm_part}{lang_part}{suffix}.json"
 
 
 def write_runs(
@@ -583,11 +631,12 @@ def write_runs(
     totals: Mapping[str, int],
     first_run: int = 1,
     arm: str | None = None,
+    english: bool = False,
 ) -> pathlib.Path:
     """Rows are always regenerated from the cache for the requested runs, so
     this file is a projection of the cache, never the only copy of a
     generation."""
-    path = runs_path(cache_dir, model, first_run, arm=arm)
+    path = runs_path(cache_dir, model, first_run, arm=arm, english=english)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -614,8 +663,9 @@ def load_rows(
     first_run: int = 1,
     *,
     arm: str | None = None,
+    english: bool = False,
 ) -> list[Row]:
-    path = runs_path(cache_dir, model, first_run, arm=arm)
+    path = runs_path(cache_dir, model, first_run, arm=arm, english=english)
     if not path.is_file():
         raise SystemExit(f"no runs for {model} at {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1033,6 +1083,217 @@ def render_prompt_ab(result: Mapping[str, Any], *, arm: str, runs: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# --------------------------------------------------------------------------- #
+# English questions (#1581): the language penalty                              #
+# --------------------------------------------------------------------------- #
+
+LANGUAGE_PAIRS: Final = (("es-en", "en-en"), ("es-built", "en-built"))
+"""(Spanish-question set, English-question set) over the same bundle."""
+_SET_LANGUAGE: Final = {"es-es": "es", "es-en": "es", "es-built": "es"} | {
+    "en-en": "en",
+    "en-built": "en",
+}
+
+
+def _by_question(scores: Mapping[str, float], set_name: str) -> dict[int, float]:
+    return {
+        question_index(k): v for k, v in scores.items() if k.startswith(f"{set_name}|")
+    }
+
+
+def language_penalty(
+    es_rows: Sequence[Row],
+    en_rows: Sequence[Row],
+    role: str,
+    *,
+    es_set: str,
+    en_set: str,
+    resamples: int = core.DEFAULT_RESAMPLES,
+) -> core.PairedDelta:
+    """The cost of asking in Spanish: the Spanish question's per-question score
+    minus its English twin's, over the same bundle, paired by question
+    position and bootstrapped over questions. Negative means Spanish costs.
+
+    Only questions scored in both languages are paired (a question whose
+    retrieval returned no context in one language has no score there); the
+    delta's `n` says how many of the 32 that was."""
+    es = _by_question(scores_by_item(es_rows, role), es_set)
+    en = _by_question(scores_by_item(en_rows, role), en_set)
+    both = sorted(set(es) & set(en))
+    return core.paired_bootstrap(
+        {str(i): en[i] for i in both},
+        {str(i): es[i] for i in both},
+        resamples=resamples,
+    )
+
+
+def in_language_share(rows: Sequence[Row], language: str, label: str) -> float:
+    """Share of answered `label` items whose dominant answer language is
+    `language`, the language the question was asked in."""
+    return _rate(
+        rows,
+        lambda r: r.lang == language,
+        lambda r: r.label == label and _ok(r.ans_outcome),
+    )
+
+
+def _mean(values: Mapping[str, float]) -> float | None:
+    return sum(values.values()) / len(values) if values else None
+
+
+def compare_language(
+    es_suff: Mapping[str, Sequence[Row]],
+    es_ans: Mapping[str, Sequence[Row]],
+    en: Mapping[str, Sequence[Row]],
+    *,
+    baseline: str = BASELINE,
+    resamples: int = core.DEFAULT_RESAMPLES,
+) -> dict[str, Any]:
+    """Per model: the language penalty per role and bundle pair, each set's
+    absolute means, and the share of answers in the question's own language.
+
+    The Spanish side reads two projections: the sufficiency call does not see
+    the answer prompt, so its rows come from the control run, while the answer
+    and citation rows come from the run under the shipping prompt (#1583),
+    the one the English questions are measured under."""
+    out: dict[str, Any] = {"models": {}, "english_delta": {}}
+    for model, en_rows in en.items():
+        block: dict[str, Any] = {"penalty": {}, "means": {}, "in_language": {}}
+        for role in ROLES:
+            es_rows = es_suff[model] if role == "sufficiency" else es_ans[model]
+            for es_set, en_set in LANGUAGE_PAIRS:
+                if not any(r.set == en_set for r in en_rows):
+                    continue
+                if not scores_by_item(es_rows, role) or not scores_by_item(
+                    en_rows, role
+                ):
+                    continue  # the role is not measured in these rows
+                delta = language_penalty(
+                    es_rows,
+                    en_rows,
+                    role,
+                    es_set=es_set,
+                    en_set=en_set,
+                    resamples=resamples,
+                )
+                block["penalty"][f"{role}|{es_set} - {en_set}"] = asdict(delta)
+            for rows, sets in (
+                (es_rows, [a for a, _b in LANGUAGE_PAIRS]),
+                (en_rows, [b for _a, b in LANGUAGE_PAIRS]),
+            ):
+                for set_name in sets:
+                    scores = {
+                        k: v
+                        for k, v in scores_by_item(rows, role).items()
+                        if k.startswith(f"{set_name}|")
+                    }
+                    if scores:
+                        block["means"][f"{role}|{set_name}"] = {
+                            "mean": _mean(scores),
+                            "n": len(scores),
+                        }
+        for rows, sets in (
+            (es_ans[model], [a for a, _b in LANGUAGE_PAIRS]),
+            (en_rows, [b for _a, b in LANGUAGE_PAIRS]),
+        ):
+            for set_name in sets:
+                set_rows = [r for r in rows if r.set == set_name]
+                if not set_rows:
+                    continue
+                language = _SET_LANGUAGE[set_name]
+                block["in_language"][set_name] = {
+                    "adjacent": in_language_share(set_rows, language, ADJACENT),
+                    "grounded": in_language_share(set_rows, language, GROUNDED),
+                    "rows": len(set_rows),
+                }
+        block["english_guardrails"] = guardrails(en_rows)
+        out["models"][model] = block
+        if model != baseline and baseline in en:
+            deltas: dict[str, Any] = {}
+            for role in ROLES:
+                base_scores = scores_by_item(en[baseline], role)
+                cand_scores = scores_by_item(en_rows, role)
+                if not base_scores or set(base_scores) != set(cand_scores):
+                    continue
+                deltas[role] = {
+                    "pooled": asdict(
+                        core.paired_bootstrap(
+                            base_scores, cand_scores, resamples=resamples
+                        )
+                    ),
+                    **{
+                        name: asdict(d)
+                        for name, d in per_set_deltas(
+                            base_scores, cand_scores, resamples=resamples
+                        ).items()
+                    },
+                }
+            out["english_delta"][model] = deltas
+    return out
+
+
+def render_language(result: Mapping[str, Any], *, runs: int) -> str:
+    lines = [
+        f"# English-question arm (#1581), runs 1..{runs}",
+        "",
+        "Penalty = Spanish question minus English question, same bundle, paired "
+        "per question (negative: Spanish costs), 95% percentile bootstrap over "
+        "questions. `n` is questions paired of 32.",
+        "",
+    ]
+    for model, block in result["models"].items():
+        lines += [
+            f"## `{model}`",
+            "",
+            "| role | pair | n of 32 | penalty | 95% CI |",
+            "| --- | --- | ---: | ---: | --- |",
+        ]
+        for key, d in block["penalty"].items():
+            role, pair = key.split("|", 1)
+            lines.append(
+                f"| {role} | {pair} | {d['n']} of 32 | {d['mean']:+.3f} "
+                f"| [{d['lo']:+.3f}, {d['hi']:+.3f}] |"
+            )
+        lines += ["", "| role | set | mean | n of 32 |", "| --- | --- | ---: | ---: |"]
+        for key, m in block["means"].items():
+            role, set_name = key.split("|", 1)
+            lines.append(f"| {role} | {set_name} | {m['mean']:.3f} | {m['n']} of 32 |")
+        lines += [
+            "",
+            "| set | adjacent answered in the question's language "
+            "| grounded answered in it | rows |",
+            "| --- | ---: | ---: | ---: |",
+        ]
+        for set_name, v in block["in_language"].items():
+            lines.append(
+                f"| {set_name} | {v['adjacent']:.3f} | {v['grounded']:.3f} "
+                f"| {v['rows']} |"
+            )
+        g = block["english_guardrails"]
+        lines += [
+            "",
+            f"English sets: answer failures {g['ans_failure']:.3f}, sufficiency "
+            f"failures {g['suff_failure']:.3f}, `USED:` compliance "
+            f"{g['compliance']:.3f}.",
+            "",
+        ]
+    for model, roles in result.get("english_delta", {}).items():
+        lines += [
+            f"## `{model}` minus the baseline, English questions",
+            "",
+            "| role | set | n of items | delta | 95% CI |",
+            "| --- | --- | ---: | ---: | --- |",
+        ]
+        for role, sets in roles.items():
+            for set_name, d in sets.items():
+                lines.append(
+                    f"| {role} | {set_name} | {d['n']} | {d['mean']:+.3f} "
+                    f"| [{d['lo']:+.3f}, {d['hi']:+.3f}] |"
+                )
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def render(result: Mapping[str, Any], *, runs: int, first_run: int = 1) -> str:
     lines = [
         f"# Ask model screen (#1560), runs {first_run}..{first_run + runs - 1}",
@@ -1196,6 +1457,21 @@ def _self_test() -> int:
         )
     check("32 questions, 12 anchored", len(questions()) == 32 and len(ANCHORED) == 12)
     check("questions are unique", len({q for _l, q, _a in questions()}) == 32)
+    english_problems = check_english_questions()
+    check(
+        f"the English questions leak no gold token {english_problems}",
+        not english_problems,
+    )
+    check(
+        "the English questions keep the Spanish labels and anchored indices",
+        [(lbl, a) for lbl, _q, a in questions_en()]
+        == [(lbl, a) for lbl, _q, a in questions()]
+        and len({q for _l, q, _a in questions_en()}) == 32,
+    )
+    check(
+        "the English corpus hash is its own; the Spanish one is untouched",
+        corpus_sha256(english=True) != corpus_sha256(),
+    )
     check(
         "the English bundle mirrors the Spanish one document for document",
         len(EN_DOCS) == len(ES_DOCS)
@@ -1557,7 +1833,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
-        "--stage", choices=("contexts", "generate", "compare", "compare-prompt")
+        "--stage",
+        choices=(
+            "contexts",
+            "generate",
+            "compare",
+            "compare-prompt",
+            "compare-language",
+        ),
+    )
+    parser.add_argument(
+        "--questions",
+        choices=("es", "en"),
+        default="es",
+        help="contexts/generate: ask the Spanish questions (default) or their "
+        "English twins (#1581)",
     )
     parser.add_argument("--cache-dir", type=pathlib.Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument(
@@ -1615,12 +1905,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.self_test:
         return _self_test()
     if args.stage == "contexts":
-        payload = build_contexts(args.timeout, built_bundle=args.built_bundle)
+        english = args.questions == "en"
+        payload = build_contexts(
+            args.timeout, built_bundle=args.built_bundle, english=english
+        )
         args.cache_dir.mkdir(parents=True, exist_ok=True)
-        contexts_path(args.cache_dir).write_text(
+        target = contexts_path(args.cache_dir, english=english)
+        target.write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
         )
-        print(f"wrote {contexts_path(args.cache_dir)}")
+        print(f"wrote {target}")
         return 0
     if args.stage == "generate":
         if not args.model:
@@ -1628,7 +1922,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         calls = [c for c in args.calls.split(",") if c]
         if not set(calls) <= set(CALLS):
             parser.error(f"--calls takes {CALLS}")
-        contexts = load_contexts(args.cache_dir)
+        english = args.questions == "en"
+        contexts = load_contexts(args.cache_dir, english=english)
         if args.sample is not None:
             contexts = sample_contexts(contexts, args.sample)
         if (args.arm is None) != (args.system_prompt_file is None):
@@ -1669,6 +1964,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             totals=totals,
             first_run=args.first_run,
             arm=args.arm,
+            english=english,
         )
         print(f"wrote {path} (cache hits {totals['hits']}, misses {totals['misses']})")
         return 0
@@ -1693,6 +1989,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         out.write_text(report, encoding="utf-8")
         out.with_suffix(".json").write_text(
             json.dumps(verdict, indent=1), encoding="utf-8"
+        )
+        print(report)
+        print(f"wrote {out}")
+        return 0
+    if args.stage == "compare-language":
+        models = [m for m in args.candidates.split(",") if m]
+        if not models or not args.arm:
+            parser.error("--stage compare-language needs --candidates and --arm")
+        load_contexts(args.cache_dir)
+        load_contexts(args.cache_dir, english=True)
+        lang_result = compare_language(
+            {m: load_rows(args.cache_dir, m, args.runs) for m in models},
+            {m: load_rows(args.cache_dir, m, args.runs, arm=args.arm) for m in models},
+            {m: load_rows(args.cache_dir, m, args.runs, english=True) for m in models},
+            baseline=args.baseline,
+        )
+        report = render_language(lang_result, runs=args.runs)
+        out = args.cache_dir / f"compare-language-runs{args.runs}.md"
+        out.write_text(report, encoding="utf-8")
+        out.with_suffix(".json").write_text(
+            json.dumps(lang_result, indent=1), encoding="utf-8"
         )
         print(report)
         print(f"wrote {out}")
