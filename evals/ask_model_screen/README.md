@@ -160,3 +160,9 @@ two arms item by item and applies the rule in `PREREGISTRATION-1583.md`.
 `contexts-en.json` and `runs-<model>-en.json`. `--stage compare-language --arm NAME` reports each model's language
 penalty (Spanish question minus English question over the same bundle, paired per question) and the candidate minus
 baseline delta on the English sets. See `PREREGISTRATION-1581.md` and `RESULTS-1581.md`.
+
+## Answer-role re-screen (#1596)
+
+The #1560 answer role re-measured under the shipped prompt, with the harness unchanged: `--stage generate --calls answer`
+and `--stage compare` over a copy of the cache directory (`--cache-dir`), so the earlier projections stay intact and the
+#1583 treated-arm generations are cache hits. See `PREREGISTRATION-1596.md` and `RESULTS-1596.md`.
