@@ -423,18 +423,38 @@ still changed, the app MUST quote the decision's kind and show the check's
 consent, and MUST NOT start a run until the person agrees. The app MUST refresh
 the decision queue on each visit to To review, before it lists the decisions.
 
-A changed `contradiction` or `revision` cannot be checked again: the quote does
-not cover its kind and the refresh does not recompute it. It MUST be shown
-with "Something about these pages changed since this was found, so it can't be
-settled as it was. The app can't look at them again yet.", MUST offer only
-Decide later, and MUST NOT be counted as waiting for a check, so a check's
-"ready" count never includes one.
+A changed `contradiction` or `revision` MUST be shown with "Something about
+these pages changed since this was found, so it can't be settled as it was.
+Check them again before you decide." and MUST offer **Check again** and
+**Decide later**. Check again MUST refresh the queue and list To review as for
+any changed decision and, when the decision is still changed, MUST quote the
+one pair behind it (`POST /v1/judging/quote` with its `kind` and its
+`decision_key`, never the batch) and show a consent for that pair, "Check these
+two again?", whose last line says the decision leaves To review when the pages
+no longer need one. A quote with nothing to judge MUST say "These can't be
+checked again right now." and offer no agreement. Agreeing MUST start a run
+bound to that quote and, when it ends, refresh the queue and list again; the
+result MUST say that the decision is ready to decide, that it is no longer in
+To review, or that the pages changed again meanwhile. A stale quote or a retry
+after a failed quote MUST quote the same decision again. A changed finding MUST
+NOT be counted as waiting for the batch check, so a batch check's "ready" count
+never includes one.
 
-#### Scenario: A changed contradiction can only wait
+#### Scenario: A changed contradiction is checked again for its one pair
 
-- GIVEN a contradiction whose `fresh` is false
-- WHEN it is opened
-- THEN its only option is Decide later, and no quote is requested
+- GIVEN a contradiction whose `fresh` is false and that is still changed after
+  the queue refresh
+- WHEN Check again is chosen
+- THEN a quote of kind `contradiction` naming its `decision_key` is requested
+  and the consent is shown, and no run is started
+
+#### Scenario: A finding that no longer holds leaves To review
+
+- GIVEN the person agreed to check a changed revision and the run retired its
+  row
+- WHEN the run ends
+- THEN the app says the newer decision no longer replaces the earlier one, so
+  it is no longer in To review, and closes the decision
 
 #### Scenario: A check never counts a finding as made ready
 

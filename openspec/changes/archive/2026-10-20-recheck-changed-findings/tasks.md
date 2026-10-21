@@ -17,5 +17,5 @@ model.
 - [x] 6. [TEST+IMPL] To review: Check again, consent and result for a changed
   finding. RED observed; mutations killed.
 - [x] 7. [DOC] ADR-0077 and its index row, `docs/decision-wording.md`, CHANGELOG.
-- [ ] 8. [GATE] ruff check, ruff format --check, mypy, pytest --cov, eval
+- [x] 8. [GATE] ruff check, ruff format --check, mypy, pytest --cov, eval
   self-tests, desktop tests and typecheck.
