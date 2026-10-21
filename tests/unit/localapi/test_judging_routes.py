@@ -25,6 +25,13 @@ from openkos.localapi import _runs
 from openkos.localapi._app import ServerSettings, create_app
 from openkos.localapi._runs import RunRegistry
 from tests.unit.api import support
+from tests.unit.application.test_finding_recheck_contradiction import (
+    _A,
+    _B,
+    Judge,
+    _enqueue,
+    _write,
+)
 from tests.unit.localapi.conftest import AUTH, PORT
 from tests.unit.localapi.test_runs_registry import WAIT, Stub, make_outcome
 
@@ -259,6 +266,13 @@ def test_the_booleans_are_forwarded_when_set(
         {},
         {"kind": "identity", "include_confidential": "perhaps"},
         {"kind": "identity", "extra": 1},
+        # A changed finding is re-checked by its decision: the key is required for
+        # those kinds, must name a decision of the kind, and means nothing else.
+        {"kind": "contradiction"},
+        {"kind": "revision", "decision_key": ""},
+        {"kind": "contradiction", "decision_key": "revision:abc"},
+        {"kind": "revision", "decision_key": "identity:abc"},
+        {"kind": "identity", "decision_key": "identity:abc"},
     ],
 )
 def test_an_invalid_quote_request_is_422_and_makes_no_call(
@@ -276,6 +290,60 @@ def test_an_invalid_quote_request_is_422_and_makes_no_call(
         "message": "the request is not valid",
     }
     assert called == []
+
+
+def test_a_finding_quote_goes_to_the_recheck_with_its_key_and_not_the_batch_quote(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[tuple[str, str, dict[str, Any]]] = []
+
+    def fake(
+        workspace: api.Workspace, kind: str, decision_key: str, **kwargs: Any
+    ) -> api.JudgingQuote:
+        seen.append((kind, decision_key, kwargs))
+        return _canned(kind=kind)
+
+    def batch(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("a finding quote took the batch quote")
+
+    monkeypatch.setattr(api, "quote_finding_recheck", fake)
+    monkeypatch.setattr(api, "quote_judging", batch)
+
+    body = {"kind": "revision", "decision_key": "revision:abc"}
+    assert quote(client, body).status_code == 200
+    assert seen == [("revision", "revision:abc", {"include_confidential": False})]
+
+
+def test_a_changed_contradiction_is_quoted_and_run_over_http(
+    client: TestClient,
+    workspace: api.Workspace,
+    registry: RunRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = workspace.root
+    _write(root, _A, "The date is May.", related=_B)
+    _write(root, _B, "The date is May too.")
+    key = _enqueue(root, (_A, _B))
+    _write(root, _B, "The date is June.")  # the row's pages moved
+    monkeypatch.setattr(_wiring, "OllamaClient", lambda **kw: Judge())
+
+    response = quote(client, {"kind": "contradiction", "decision_key": key})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["kind"], body["to_judge"], body["calls"]) == ("contradiction", 1, 1)
+    assert body["token"]["work"][0]["work_key"] == key
+    started = start(client, {"token": body["token"]})
+    assert started.status_code == 202
+    run_id = started.json()["run_id"]
+    deadline = time.monotonic() + WAIT
+    while poll(client, run_id).json()["state"] in ("running", "stopping"):
+        assert time.monotonic() < deadline
+        threading.Event().wait(0.005)
+    finished = poll(client, run_id).json()
+    assert finished["kind"] == "contradiction"
+    assert finished["state"] == "finished"
+    assert finished["outcome"]["persisted"] == 1
 
 
 _KEY = "sk-test-from-the-environment"

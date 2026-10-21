@@ -22,7 +22,6 @@ import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from openkos import config
 from openkos.api._workspace import Workspace
@@ -235,9 +234,10 @@ def judging_ports(
             chat_client=default_chat_client, commit_section=section
         )
     override = chat_client
-    # Judging always names the task it needs a client for.
+    # Judging names the task it needs a client for; a revisions re-check asks
+    # for the global model, which is no measured task and is named "revision".
     return judging.JudgingPorts(
-        chat_client=lambda cfg, task: override(cast(str, task)),
+        chat_client=lambda cfg, task: override("revision" if task is None else task),
         commit_section=section,
     )
 

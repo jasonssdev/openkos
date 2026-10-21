@@ -1826,7 +1826,9 @@
             "enum": [
               "identity",
               "relation_type",
-              "volatility"
+              "volatility",
+              "contradiction",
+              "revision"
             ],
             "title": "Kind",
             "type": "string"
@@ -1912,7 +1914,9 @@
             "enum": [
               "identity",
               "relation_type",
-              "volatility"
+              "volatility",
+              "contradiction",
+              "revision"
             ],
             "title": "Kind",
             "type": "string"
@@ -3178,7 +3182,9 @@
             "enum": [
               "identity",
               "relation_type",
-              "volatility"
+              "volatility",
+              "contradiction",
+              "revision"
             ],
             "title": "Kind",
             "type": "string"
@@ -3303,8 +3309,19 @@
       },
       "QuoteRequest": {
         "additionalProperties": false,
-        "description": "Which judging to price, and whether the quote may include what the run\nneeds consent for.",
+        "description": "Which judging to price, and whether the quote may include what the run\nneeds consent for.\n\n`contradiction` and `revision` re-check the one pair behind a changed\ndecision, so they name it by `decision_key` (a key of that kind); the other\nkinds judge the whole workspace and take none.",
         "properties": {
+          "decision_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Key"
+          },
           "include_confidential": {
             "default": false,
             "title": "Include Confidential",
@@ -3319,7 +3336,9 @@
             "enum": [
               "identity",
               "relation_type",
-              "volatility"
+              "volatility",
+              "contradiction",
+              "revision"
             ],
             "title": "Kind",
             "type": "string"
@@ -4073,7 +4092,9 @@
             "enum": [
               "identity",
               "relation_type",
-              "volatility"
+              "volatility",
+              "contradiction",
+              "revision"
             ],
             "title": "Kind",
             "type": "string"

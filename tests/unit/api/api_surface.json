@@ -267,6 +267,10 @@
       "kind": "exception",
       "members": {}
     },
+    "BatchJudgingKind": {
+      "kind": "alias",
+      "value": "Literal['identity', 'relation_type', 'volatility']"
+    },
     "ChangedField": {
       "kind": "alias",
       "value": "Literal['model', 'backend', 'locality', 'confidential', 'rubric']"
@@ -587,6 +591,10 @@
     "Evaluation": {
       "kind": "alias",
       "value": "Literal['judged_same', 'judged_different', 'judged_uncertain', 'pending_evaluation', 'not_applicable']"
+    },
+    "FindingKind": {
+      "kind": "alias",
+      "value": "Literal['contradiction', 'revision']"
     },
     "FindingPreview": {
       "fields": [
@@ -1075,7 +1083,7 @@
     },
     "JudgingKind": {
       "kind": "alias",
-      "value": "Literal['identity', 'relation_type', 'volatility']"
+      "value": "Literal['identity', 'relation_type', 'volatility', 'contradiction', 'revision']"
     },
     "JudgingObserver": {
       "bases": [
@@ -1112,7 +1120,7 @@
     "JudgingOutcome": {
       "fields": [
         {
-          "annotation": "Literal['identity', 'relation_type', 'volatility']",
+          "annotation": "Literal['identity', 'relation_type', 'volatility', 'contradiction', 'revision']",
           "default": false,
           "name": "kind"
         },
@@ -1216,7 +1224,7 @@
     "JudgingQuote": {
       "fields": [
         {
-          "annotation": "Literal['identity', 'relation_type', 'volatility']",
+          "annotation": "Literal['identity', 'relation_type', 'volatility', 'contradiction', 'revision']",
           "default": false,
           "name": "kind"
         },
@@ -2160,7 +2168,7 @@
     "QuoteBinding": {
       "fields": [
         {
-          "annotation": "Literal['identity', 'relation_type', 'volatility']",
+          "annotation": "Literal['identity', 'relation_type', 'volatility', 'contradiction', 'revision']",
           "default": false,
           "name": "kind"
         },
@@ -2245,7 +2253,7 @@
     "QuoteStale": {
       "fields": [
         {
-          "annotation": "Literal['identity', 'relation_type', 'volatility']",
+          "annotation": "Literal['identity', 'relation_type', 'volatility', 'contradiction', 'revision']",
           "default": false,
           "name": "kind"
         },
@@ -4411,6 +4419,42 @@
         }
       ],
       "returns": "PullOutcome | PullRefused"
+    },
+    "quote_finding_recheck": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "Literal['contradiction', 'revision']",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "kind"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "decision_key"
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "kind": "KEYWORD_ONLY",
+          "name": "include_confidential"
+        },
+        {
+          "annotation": "Callable[[str], ChatClient] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "chat_client"
+        }
+      ],
+      "returns": "JudgingQuote"
     },
     "quote_ingest": {
       "kind": "function",

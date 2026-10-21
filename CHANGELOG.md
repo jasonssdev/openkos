@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- A changed disagreement or newer decision can be made current from the app (ADR-0077). In To review it now offers **Check again**: the app asks once, "Check these two again?", and on agreement asks the AI model about that one pair, then replaces the decision with the new finding, or takes it out of To review when it no longer holds. Nothing else in the library is re-checked. `openkos.api.quote_finding_recheck(workspace, kind, decision_key)` quotes it (`FindingKind` and `BatchJudgingKind` are exported), `run_judging` runs the token like any other, and `POST /v1/judging/quote` takes an optional `decision_key` for the two kinds. The change is additive; `API_VERSION` is unchanged. A newer decision edited since the last search rebuild has nothing to check until it is rebuilt (#1523).
+
 ## [0.6.0] - 2026-10-17
 
 The first release of MVP 6. `openkos.api` grows into the surface a desktop app needs: asking, adding files under a free quote, settling every decision the review queue holds, undoing each of them, changing the model settings, guided setup, a page's sensitivity and rebuilding search, all served by the local HTTP API and a typed TypeScript client. The desktop app itself (`desktop/`) is a developer build and is not part of the package. **Python 3.14 is now the only supported interpreter**; users on 3.12 or 3.13 stay on 0.5.5.

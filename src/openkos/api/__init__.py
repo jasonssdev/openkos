@@ -70,6 +70,7 @@ from openkos.api._judging import (
     ChatClient,
     ChatClientFactory,
     RunResult,
+    quote_finding_recheck,
     quote_judging,
     run_judging,
 )
@@ -188,7 +189,9 @@ from openkos.application.ingest_consent import (
     IngestTokenFile,
 )
 from openkos.application.judging import (
+    BatchJudgingKind,
     ChangedField,
+    FindingKind,
     JudgingKind,
     JudgingObserver,
     JudgingOutcome,
@@ -267,6 +270,7 @@ __all__ = [
     "BackendHostLocality",
     "BackendModelNotFound",
     "BackendUnavailable",
+    "BatchJudgingKind",
     "ChangedField",
     "ChatClient",
     "ChatClientFactory",
@@ -282,6 +286,7 @@ __all__ = [
     "DeclinedContradiction",
     "DriftDetected",
     "Evaluation",
+    "FindingKind",
     "FindingPreview",
     "GroupSelection",
     "HealthCounts",
@@ -435,6 +440,7 @@ __all__ = [
     "preview_unreconcile",
     "preview_unrelate",
     "pull_model",
+    "quote_finding_recheck",
     "quote_ingest",
     "quote_judging",
     "quote_refused_file",

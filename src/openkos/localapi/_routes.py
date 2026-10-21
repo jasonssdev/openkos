@@ -3,7 +3,7 @@ attribute, so a test that patches `openkos.api.<fn>` intercepts the call."""
 
 import dataclasses
 from importlib import metadata
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.security import HTTPBearer
@@ -676,10 +676,21 @@ def make_router() -> APIRouter:
         body: QuoteRequest,
         workspace: api.Workspace = Depends(_workspace),  # noqa: B008
     ) -> api.JudgingQuote:
+        # The model validated the pairing: a finding kind carries its key.
+        if body.decision_key is not None:
+            key = body.decision_key
+            return invoke(
+                lambda: api.quote_finding_recheck(
+                    workspace,
+                    cast(api.FindingKind, body.kind),
+                    key,
+                    include_confidential=body.include_confidential,
+                )
+            )
         return invoke(
             lambda: api.quote_judging(
                 workspace,
-                body.kind,
+                cast(api.BatchJudgingKind, body.kind),
                 include_confidential=body.include_confidential,
                 include_uncertain=body.include_uncertain,
             )

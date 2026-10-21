@@ -23,6 +23,7 @@ from typing import ClassVar
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos.application import finding_inputs
 from openkos.bundle import decisions as bundle_decisions
 from openkos.cli import main as contradiction_main
 from openkos.cli.main import app
@@ -2409,7 +2410,6 @@ def test_contradictions_partition_computes_digests_only_for_persisted_rows(
     hashes the pair's current bytes only when one exists -- a candidate with
     no persisted finding must not pay the per-pair digest I/O just to be
     told what `row is None` already said."""
-    from openkos.cli import curate as curate_module
 
     _init_workspace(tmp_path, monkeypatch)
     _write_related_pair(tmp_path)
@@ -2434,7 +2434,7 @@ def test_contradictions_partition_computes_digests_only_for_persisted_rows(
     finally:
         conn.close()
     digest_calls: list[object] = []
-    original = curate_module.finding_input_digests
+    original = finding_inputs.finding_input_digests
 
     def _recording(
         bundle_dir: Path, spec: _CandidateSpec
@@ -2442,7 +2442,7 @@ def test_contradictions_partition_computes_digests_only_for_persisted_rows(
         digest_calls.append(spec)
         return original(bundle_dir, spec)
 
-    monkeypatch.setattr(curate_module, "finding_input_digests", _recording)
+    monkeypatch.setattr(finding_inputs, "finding_input_digests", _recording)
     _CountingOllamaClient.calls = []
     monkeypatch.setattr("openkos.cli.main.OllamaClient", _CountingOllamaClient)
 

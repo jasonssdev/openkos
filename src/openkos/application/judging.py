@@ -65,7 +65,7 @@ from typing import Final, Literal, cast
 
 from openkos import config, lock
 from openkos.application import backends as application_backends
-from openkos.application import identity_adjudication
+from openkos.application import identity_adjudication, revisions
 from openkos.application import pending as application_pending
 from openkos.application import suggest_relations_service as relations
 from openkos.application import suggest_volatility_service as volatility
@@ -82,7 +82,7 @@ from openkos.llm.base import (
     Message,
 )
 from openkos.resolution import adjudication as leaf
-from openkos.resolution import edge_typing, volatility_typing
+from openkos.resolution import contradiction, edge_typing, volatility_typing
 from openkos.resolution.candidates import (
     CandidateGroup,
     CandidateGroupReport,
@@ -92,9 +92,18 @@ from openkos.state import adjudications as adjudications_store
 from openkos.state import edge_suggestions as edge_suggestions_store
 from openkos.state import jobs
 
-JudgingKind = Literal["identity", "relation_type", "volatility"]
+JudgingKind = Literal[
+    "identity", "relation_type", "volatility", "contradiction", "revision"
+]
 """What a quote is about. The quote carries its kind, so a later kind is
 additive."""
+
+BatchJudgingKind = Literal["identity", "relation_type", "volatility"]
+"""The kinds this module quotes and runs: each judges a batch of the workspace."""
+
+FindingKind = Literal["contradiction", "revision"]
+"""The kinds `finding_recheck` quotes and runs: each re-checks the one pair
+behind a changed queue row."""
 
 ChangedField = Literal["model", "backend", "locality", "confidential", "rubric"]
 """The binding fields `QuoteStale` names when they moved."""
@@ -336,6 +345,22 @@ class JudgingPorts:
 
     now: Callable[[], datetime] = _utc_now
 
+    plan_contradictions: Callable[..., contradiction.CandidatePlan] = (
+        contradiction.plan_candidates
+    )
+    find_contradictions: Callable[..., tuple[contradiction.ContradictionBatch, int]] = (
+        contradiction.find_contradictions
+    )
+    """The contradiction re-check's seams: the LLM-free candidate plan a quote and
+    a run look the pair up in, and the one-call-per-pair judge."""
+
+    plan_revisions: Callable[..., revisions.RevisionPlan] = revisions.plan_revisions
+    judge_revisions: Callable[..., revisions.RevisionOutcome] = (
+        revisions.judge_revisions
+    )
+    """The revision re-check's seams: the LLM-free plan (vectors read, none
+    embedded) and the judge, which persists its own finding."""
+
 
 def _digest(parts: Sequence[str]) -> str:
     return hashlib.sha256(_NUL.join(sorted(parts)).encode("utf-8")).hexdigest()
@@ -489,6 +514,13 @@ def _context(
     elif kind == "volatility":
         client = ports.chat_client(cfg, "volatility_typing")
         task = "volatility_typing"
+    elif kind == "contradiction":
+        client = ports.chat_client(cfg, "contradiction")
+        task = "contradiction"
+    elif kind == "revision":
+        # The revisions run asks for the global model: it is not a measured task.
+        client = ports.chat_client(cfg, None)
+        task = None
     else:
         client = ports.chat_client(cfg, "adjudication")
         task = "adjudication"

@@ -45,7 +45,6 @@ and are reached here by module attribute (issue #955; `cli/main.py`'s
 relocation block states why the aliases were removed).
 """
 
-import contextlib
 import functools
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -69,7 +68,15 @@ from openkos.application import lifecycle as application_lifecycle
 from openkos.application import next_action as next_action_module
 from openkos.application import pending as application_pending
 from openkos.application import suggest_volatility_service as volatility_service
-from openkos.application.lock_wait import CommitSection
+from openkos.application.finding_inputs import (
+    finding_input_digests as finding_input_digests,
+)
+from openkos.application.finding_inputs import (
+    persist_findings as persist_findings,
+)
+from openkos.application.finding_inputs import (
+    pin_finding_inputs as pin_finding_inputs,
+)
 from openkos.application.write_gate import (
     DriftDetected,
     MergeGroupInterrupted,
@@ -98,7 +105,6 @@ from openkos.resolution.candidates import CandidateGroup
 from openkos.resolution.contradiction import (
     CandidatePlan,
     ContradictionVerdict,
-    _CandidateSpec,
     contradiction_truncation_notice,
     find_contradictions,
     is_high_confidence_contradiction,
@@ -118,9 +124,7 @@ from openkos.resolution.volatility_typing import (
     unanswered_type_count,
 )
 from openkos.state import adjudications as adjudications_store
-from openkos.state import derived, findings
 from openkos.state import edge_suggestions as edge_suggestions_store
-from openkos.state.vectorstore import content_hash
 
 _DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
 """Byte-identical to `cli/main.py`'s own `_DOCTOR_HINT` (mirrors, not
@@ -3015,128 +3019,6 @@ def _contradictions_probe(ctx: CurateContext) -> StageProbe:
         empty_message="No candidate pairs found." if not plan.specs else None,
         notice=contradiction_truncation_notice(plan),
     )
-
-
-def finding_input_digests(
-    bundle_dir: Path, spec: _CandidateSpec
-) -> tuple[findings.InputDigest, ...]:
-    """Per-input `(input_ref, sha256)` rows for one judged candidate
-    (durable-pending-work design, Decision 2's input table):
-
-    - **typed-edge** (`spec.merge_entry is None`): both concept files' raw
-      bytes, plus the `relation_type` label string -- it is in the prompt
-      (`resolution.contradiction._build_messages`), so re-labelling an edge
-      must invalidate the verdict too. An unreadable concept file (a race
-      with a later mutation) simply contributes no row for that input,
-      mirroring `_load_doc`'s own degrade-not-crash posture -- this is a
-      digest computation, not a re-judgment, and must never raise.
-    - **merged-body** (`spec.merge_entry is not None`): the ledger entry's
-      OWN `survivor_before`/`absorbed_snapshot` strings, digested in
-      memory -- never a second file read, since those strings are the
-      exact bytes the verdict was computed from."""
-    if spec.merge_entry is not None:
-        survivor_id, _ = spec.pair_ids
-        entry = spec.merge_entry
-        return (
-            findings.InputDigest(
-                f"{survivor_id}:survivor_before",
-                content_hash(entry.survivor_before.encode("utf-8")),
-            ),
-            findings.InputDigest(
-                f"{entry.absorbed_id}:absorbed_snapshot",
-                content_hash(entry.absorbed_snapshot.encode("utf-8")),
-            ),
-        )
-
-    digests: list[findings.InputDigest] = []
-    for concept_id in spec.pair_ids:
-        try:
-            raw_bytes = okf.concept_path_for(concept_id, bundle_dir).read_bytes()
-        except OSError:
-            continue
-        digests.append(findings.InputDigest(concept_id, content_hash(raw_bytes)))
-    if spec.relation_type is not None:
-        digests.append(
-            findings.InputDigest(
-                "relation_type", content_hash(spec.relation_type.encode("utf-8"))
-            )
-        )
-    return tuple(digests)
-
-
-def pin_finding_inputs(
-    bundle_dir: Path, plan: CandidatePlan
-) -> tuple[tuple[findings.InputDigest, ...], ...]:
-    """Each planned candidate's input digests as they stand NOW, in plan order.
-
-    Taken BEFORE the judging call, which holds no workspace lock (#1137), so
-    `persist_findings` can tell a verdict about the content that was judged
-    from one about content edited or forgotten while the model ran."""
-    return tuple(finding_input_digests(bundle_dir, spec) for spec in plan.specs)
-
-
-def persist_findings(
-    layout: config.WorkspaceLayout,
-    plan: CandidatePlan,
-    verdicts: Sequence[ContradictionVerdict],
-    *,
-    judged_inputs: Sequence[tuple[findings.InputDigest, ...]] | None = None,
-    commit_section: CommitSection = contextlib.nullcontext,
-) -> None:
-    """Record every judged verdict to `.openkos/findings.db` (pending-work
-    spec: "Contradiction Findings Are Persisted With Provenance"; curate-
-    command spec delta: "Persisting a finding is not a bundle write" -- this
-    writes ONLY under `.openkos/`, never `bundle/`).
-
-    `plan.specs`/`verdicts` share the SAME deterministic order
-    (`find_contradictions`'s own contract), so `zip` pairs each verdict with
-    the candidate it was judged from without re-deriving anything; a
-    partial batch (#441) yields fewer `verdicts` than `specs`, and `zip`
-    stops there -- exactly the already-judged prefix, never a mismatch.
-    An empty `verdicts` list opens no connection at all.
-
-    Public since #653: the `contradictions` verb persists its own fresh
-    verdicts through this exact write path, so the store the two verbs
-    share can never diverge in shape or digest convention.
-
-    The persist is a commit phase (#1137), entered through `commit_section`.
-    `judged_inputs` (`pin_finding_inputs`, taken before the judging call) is
-    re-validated inside it: a verdict whose input was edited or forgotten
-    meanwhile is DROPPED, never stored against content nobody judged, and no
-    row names a concept that no longer exists. Without it the digests are
-    read here, at persist time, as a caller holding the lock throughout
-    always did."""
-    if not verdicts:
-        return
-    with commit_section():
-        batch: list[findings.Finding] = []
-        for index, (spec, verdict) in enumerate(
-            zip(plan.specs, verdicts, strict=False)
-        ):
-            digests = finding_input_digests(layout.bundle_dir, spec)
-            if judged_inputs is not None and (
-                tuple(judged_inputs[index]) != digests
-                or not _all_present(layout, spec.pair_ids)
-            ):
-                continue
-            batch.append(
-                findings.Finding(
-                    pair_ids=verdict.pair_ids,
-                    merged_absorbed_id=verdict.merged_absorbed_id,
-                    verdict=verdict.verdict.value,
-                    confidence=verdict.confidence,
-                    rationale=verdict.rationale,
-                    input_digests=digests,
-                    conflicting_claims=verdict.conflicting_claims,
-                )
-            )
-        if not batch:
-            return
-        conn = derived.open_derived_connection(layout.findings_db_path)
-        try:
-            findings.record_findings(conn, batch)
-        finally:
-            conn.close()
 
 
 def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:

@@ -153,16 +153,24 @@ export const CHANGED_CHECK =
   "Something about these pages changed since this was suggested. Check them again before you decide.";
 
 /**
- * A changed disagreement or newer decision. The check does not cover these
- * kinds and the free refresh does not recompute them, so nothing in the app can
- * make one current: it is listed as changed with Decide later only.
+ * A changed disagreement or newer decision. Checking it again looks at its two
+ * pages once more, which asks the AI model, so it is agreed first like any check;
+ * the batch check does not cover it.
  */
 export const CHANGED_FINDING =
-  "Something about these pages changed since this was found, so it can't be settled as it was. The app can't look at them again yet.";
+  "Something about these pages changed since this was found, so it can't be settled as it was. Check them again before you decide.";
 
-/** The kinds the check covers (`QuoteRequest.kind`): a changed one can be checked again. */
+/** The kinds the batch check covers (`QuoteRequest.kind` without a decision key). */
 export function checkable(decision: Decision): boolean {
   return decision.kind === "identity" || decision.kind === "relation_type" || decision.kind === "volatility";
+}
+
+/**
+ * The kinds a changed decision can be checked again for: the batch kinds, and a
+ * disagreement or a newer decision, whose check is for that one pair.
+ */
+export function recheckable(decision: Decision): boolean {
+  return checkable(decision) || decision.kind === "contradiction" || decision.kind === "revision";
 }
 
 /** The notice a changed decision is shown with, or null when it is current. */
@@ -677,13 +685,12 @@ export function describeDecision(decision: Decision, pages: Pages, now: Date = n
   const settle = KINDS[decision.kind] ?? null;
   const view: DecisionView = settle === null ? { ...base, question: listedOnly(decision, pages) } : { ...base, ...settle(decision, pages) };
   // A changed decision's own actions would be refused as stale: it is checked
-  // again first, and decided once it is current (#1475). A changed finding
-  // cannot be checked again in the app, so it can only wait.
+  // again first, and decided once it is current (#1475, #1523).
   // A finding with nothing to offer (no detail to word) is listed only, changed or not.
   if (addRefusedOption(decision) !== null) return view;
   if (view.options.length === 0 && !checkable(decision)) return { ...view, options: [], next: null, cannotAct: CANNOT_ACT };
   if (decision.fresh === false && settle !== null) {
-    const options = checkable(decision) ? [CHECK_AGAIN, DECIDE_LATER] : [DECIDE_LATER];
+    const options = recheckable(decision) ? [CHECK_AGAIN, DECIDE_LATER] : [DECIDE_LATER];
     return { ...view, options, next: null, after: null };
   }
   if (view.options.length === 0) return { ...view, options: [], next: null, cannotAct: CANNOT_ACT };
@@ -845,8 +852,25 @@ export interface Consent {
   decline: string;
 }
 
+/** The kinds whose check is for the one pair behind a decision. */
+function isFindingKind(kind: Schemas["JudgingQuote"]["kind"]): kind is "contradiction" | "revision" {
+  return kind === "contradiction" || kind === "revision";
+}
+
+export const FINDING_CHECK_NOTE =
+  "If these pages no longer need a decision, this leaves To review. Otherwise you'll still decide.";
+
 export function checkConsent(quote: Schemas["JudgingQuote"]): Consent {
   const n = quote.to_judge;
+  const finding = isFindingKind(quote.kind);
+  if (n === 0 && finding) {
+    return {
+      heading: "These can't be checked again right now.",
+      lines: ["Nothing was sent to an AI model."],
+      agree: null,
+      decline: "OK",
+    };
+  }
   if (n === 0) return { heading: "These are already checked.", lines: [], agree: null, decline: "OK" };
   const lines = [
     quote.binding.is_local
@@ -863,7 +887,7 @@ export function checkConsent(quote: Schemas["JudgingQuote"]): Consent {
   if (quote.notices.some((notice) => notice.code === "unattended_active")) {
     lines.push("OpenKOS is also working in the background, so this may be slower.");
   }
-  lines.push(CHECK_NEVER_COMBINES);
+  lines.push(finding ? FINDING_CHECK_NOTE : CHECK_NEVER_COMBINES);
   return { heading: checkHeading(quote.kind, n), lines, agree: `Check ${n}`, decline: "Not now" };
 }
 
@@ -873,6 +897,9 @@ function checkHeading(kind: Schemas["JudgingQuote"]["kind"], n: number): string 
       return n === 1 ? "Check this connection?" : `Check ${n} connections?`;
     case "volatility":
       return n === 1 ? "Check this suggestion?" : `Check ${n} suggestions?`;
+    case "contradiction":
+    case "revision":
+      return "Check these two again?";
     default:
       return n === 1 ? "Check these two?" : `Check ${n} pairs?`;
   }
@@ -882,6 +909,22 @@ export function checkProgress(done: number, total: number, stopping: boolean): s
   return stopping
     ? "Stopping after the current one. Everything already checked is kept."
     : `Checking ${done} of ${total}…`;
+}
+
+/** How one finding stands once its check ended: current, retired, or changed again. */
+export type FindingCheckOutcome = "ready" | "gone" | "changed";
+
+export function findingCheckResult(kind: "contradiction" | "revision", outcome: FindingCheckOutcome): string {
+  switch (outcome) {
+    case "ready":
+      return "Checked. This is ready for you to decide.";
+    case "gone":
+      return kind === "contradiction"
+        ? "Checked. These pages don't disagree any more, so this is no longer in To review."
+        : "Checked. The newer decision no longer replaces the earlier one, so this is no longer in To review.";
+    case "changed":
+      return "Checked, but these pages changed again meanwhile. Check them again.";
+  }
 }
 
 export function checkResult(checked: number, ready: number): string {

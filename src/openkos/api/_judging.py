@@ -8,7 +8,10 @@ service has just read (`_wiring.default_chat_client`), and a caller's factory
 (task name to client) replaces it.
 
 A quote builds a client to read its locality and the task model and never calls
-it. A stale quote and a missing token are returned values, never raised; a
+it. The `contradiction` and `revision` kinds re-check the one pair behind a
+changed decision row: `quote_finding_recheck` names the row by its
+`decision_key`, and `run_judging` judges that pair only, then makes the row
+current or retires it. A stale quote and a missing token are returned values, never raised; a
 backend that cannot be reached is raised unchanged as the neutral
 `BackendUnavailable` or `BackendModelNotFound`. A stop is observed between
 chunks and never preempts a model call in flight.
@@ -19,9 +22,10 @@ from typing import Protocol
 
 from openkos.api import _wiring
 from openkos.api._workspace import Workspace
-from openkos.application import judging
+from openkos.application import finding_recheck, judging
 from openkos.application.judging import (
-    JudgingKind,
+    BatchJudgingKind,
+    FindingKind,
     JudgingObserver,
     JudgingOutcome,
     JudgingQuote,
@@ -51,7 +55,7 @@ RunResult = JudgingOutcome | QuoteStale | RunRefused
 
 def quote_judging(
     workspace: Workspace,
-    kind: JudgingKind,
+    kind: BatchJudgingKind,
     *,
     include_confidential: bool = False,
     include_uncertain: bool = False,
@@ -66,6 +70,34 @@ def quote_judging(
         kind,
         include_confidential=include_confidential,
         include_uncertain=include_uncertain,
+        ports=_wiring.judging_ports(workspace, chat_client=chat_client, wait_seconds=0),
+    )
+
+
+def quote_finding_recheck(
+    workspace: Workspace,
+    kind: FindingKind,
+    decision_key: str,
+    *,
+    include_confidential: bool = False,
+    chat_client: ChatClientFactory | None = None,
+) -> JudgingQuote:
+    """Price re-checking the one pair behind the open `decision_key` row, with no
+    model call: the way a changed disagreement (`contradiction`) or newer decision
+    (`revision`), listed with `fresh=False`, is made current.
+
+    The quote is for that pair alone, never the workspace, and is run by
+    `run_judging` like any other. The run replaces the row with the new finding,
+    or retires it when the finding no longer holds. A decision that is no longer
+    open, or whose pair the detection no longer keeps, quotes no work
+    (`to_judge` 0). Raises `JudgingRefused` when the workspace cannot be read and
+    `ValueError` for a `kind` that is not a finding kind or a `decision_key` that
+    does not name a decision of `kind`."""
+    return finding_recheck.quote_finding(
+        workspace.root,
+        kind,
+        decision_key,
+        include_confidential=include_confidential,
         ports=_wiring.judging_ports(workspace, chat_client=chat_client, wait_seconds=0),
     )
 
@@ -90,6 +122,16 @@ def run_judging(
     `BackendUnavailable` and `BackendModelNotFound`, and `ValueError` for a
     `wait_seconds` out of range."""
     wait = _wiring.validated_wait(wait_seconds)
+    if token is not None and token.binding.kind in finding_recheck.FINDING_KINDS:
+        return finding_recheck.run_finding(
+            workspace.root,
+            token,
+            stop=stop if stop is not None else StopToken(),
+            ports=_wiring.judging_ports(
+                workspace, chat_client=chat_client, wait_seconds=wait
+            ),
+            observer=observer,
+        )
     return judging.run_judging(
         workspace.root,
         token,

@@ -614,13 +614,20 @@ def test_every_llm_verb_resolves_its_own_task_model() -> None:
 _EXPECTED_SERVICE_TASKS = {
     "suggest_relations_service.py": {"edge_typing"},
     "suggest_volatility_service.py": {"volatility_typing"},
-    "judging.py": {"adjudication", "edge_typing", "volatility_typing"},
+    # `None` is the revisions re-check, which asks for the global model.
+    "judging.py": {
+        "adjudication",
+        "contradiction",
+        "edge_typing",
+        "volatility_typing",
+        "None",
+    },
 }
 """The verbs whose orchestration moved into `application/` (issue #1168): the
 service names the task it runs on and hands it to the adapter's `chat_client`
 port, which forwards it to `_chat_client(cfg, task=task)`. A value is a SET
 because the judging surface names one task per kind it quotes (identity,
-relation_type and volatility)."""
+relation_type and volatility, and the contradiction and revision re-checks)."""
 
 
 def test_the_extracted_verbs_still_resolve_their_own_task_model() -> None:

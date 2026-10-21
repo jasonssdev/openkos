@@ -1393,3 +1393,47 @@ def test_resolve_decision_dates_reads_date_times_and_compares_after_parsing(
     )
     assert result["decisions/mixed"] == DecisionDate(value=None, state="multiple")
     assert result["decisions/offset"] == DecisionDate(value=None, state="missing")
+
+
+class _EditingLLM:
+    """A structural `LLMBackend` that rewrites a page while the model is called,
+    as an editor or a daemon pass can: judging holds no lock."""
+
+    def __init__(self, reply: str, edit: Path) -> None:
+        self._reply = reply
+        self._edit = edit
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self._edit.write_text(
+            self._edit.read_text(encoding="utf-8") + "\nEdited mid-call.\n",
+            encoding="utf-8",
+        )
+        return self._reply
+
+
+def test_a_page_edited_during_the_call_leaves_no_finding(tmp_path: Path) -> None:
+    """The verdict was judged on the old bytes. A finding stamped with the digests
+    of the edited page would later read as fresh (`actionable_revision_findings`),
+    so it is dropped, as contradictions drop theirs (`persist_findings`)."""
+    layout = _workspace(tmp_path)
+    _write_doc(layout.bundle_dir / "decisions" / "a.md", body="Body A.")
+    _write_doc(layout.bundle_dir / "decisions" / "b.md", body="Body B.")
+    plan = _plan_with_to_judge([("decisions/a", "decisions/b")])
+    reply = json.dumps(
+        {
+            "verdict": "reverses",
+            "confidence": 0.9,
+            "rationale": "A overturns B.",
+            "quote_first": "Body A.",
+            "quote_second": "Body B.",
+        }
+    )
+    llm = _EditingLLM(reply, layout.bundle_dir / "decisions" / "b.md")
+
+    outcome = revisions.judge_revisions(
+        layout, plan, llm=llm, effective_confidential=False
+    )
+
+    assert len(outcome.results) == 1
+    assert _open_persisted(layout) == ()
+    assert revisions.actionable_revision_findings(layout) == ()
