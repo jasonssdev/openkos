@@ -290,6 +290,7 @@ def score_records(
         "all_uncovered": 0,
     }
     skipped_chunks = 0
+    other_lifts: list[float] = []
     for meeting, _run, rec in records:
         _t, _w, gold = corpus.meeting(meeting)
         fvecs = [
@@ -313,6 +314,7 @@ def score_records(
             units[name][2] += len(sims[earlier])
         gold_windows = {v for v in gold.window_of.values() if v is not None}
         failed = failed_windows(rec) & gold_windows
+        other_lifts += [v for w, v in lifts["drops"].items() if w not in failed]
         l3["failed"] += len(failed)
         l3["gold_windows"] += len(gold_windows)
         l3["gold_sentences"] += sum(len(gold.window_sentences(w)) for w in gold_windows)
@@ -359,8 +361,11 @@ def score_records(
             da.variant_effect(per_record, later, base=earlier)
         )
     out["total"] = _interval(da.variant_effect(per_record, "final", base="raw"))
-    drops_lifts = [v for _m, lifts in per_record for v in lifts["drops"].values()]
-    out["mean_drops_lift"] = sm.mean(drops_lifts) if drops_lifts else 0.0
+    mean_other = sm.mean(other_lifts) if other_lifts else 0.0
+    out["l3"]["mean_other_drops_lift"] = mean_other
+    out["l3"]["imputed_lift"] = imputed_loss(
+        l3["failed"], l3["gold_windows"], mean_other
+    )
     return out
 
 
