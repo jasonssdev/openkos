@@ -1,12 +1,15 @@
 # Pre-registration: what to do when a whole-source call caps (#1607)
 
-**Status: REGISTERED before any generation.** This file is merged to `main`
-before the first model call. A change after that point is a new registration,
-not an edit to this one. It generates no model number itself; it fixes what
-will be generated, how it will be read, and what each outcome means. The
-model-free exposure count it relies on (`count_exposure.py`) is already
-committed and was run before this file was written; its output is in
-"Exposure, measured now".
+**Status: NOT RUN. Option 3 was chosen on the exposure evidence alone.**
+Before any generation the owner decided not to spend the GPU time. Every
+whole-source cap observed came from one source (`TS3012a`, 2 of 2 on
+`qwen3:8b`), and no other allowed source has one. Under rule 3 below, fewer
+than 10 capped events hold option 3 by default. With one capping source
+saturating at 5 seeds, that was the expected outcome of a 4.8 h run. #1607
+records the decision. This design is kept as written so that a later
+registration can reuse it if new exposure evidence appears, for example
+another source or model that caps. `count_exposure.py` stays as the tool that
+would show that evidence.
 
 ## Question
 
