@@ -166,6 +166,35 @@ five bodies) cannot tell a single outlier from the type, and the item-level
 cases here would be measuring something production does not ask. That is a
 product decision for the maintainer, not something the harness should settle.
 
+## Second adjudication
+
+The blocker above is closed by a second person labelling every item blind.
+Neither command contacts a model.
+
+```sh
+# 1. write the sheet OUTSIDE the repository (a path inside it is refused)
+uv run python evals/volatility_typing_screen/run_volatility_screen.py blind-sheet --out ~/scratch/volatility-blind-sheet.md
+# 2. the second adjudicator fills in every `Label:` line (static | slow | volatile)
+# 3. compare with the first author's labels
+uv run python evals/volatility_typing_screen/run_volatility_screen.py adjudicate --sheet ~/scratch/volatility-blind-sheet.md
+```
+
+The sheet shows opaque item ids in a seeded shuffle (`--seed`, default 1563; use
+the same seed for both commands), the concept documents, and ADR-0007's tier
+definition quoted verbatim. It withholds the primary label, the flagged
+alternative, the `how` reasoning, the document sources and ids, and the concept
+**type**: every type has a registry default, so the type would hand the
+adjudicator the very predictor the screen compares models against. The
+documents' own prose (for example a `Related` link path) can still hint at
+neighbouring types; that is residual and accepted.
+
+`adjudicate` reports raw agreement, Cohen's kappa and each disagreeing item
+(noting where the second label is the first author's flagged alternative). A
+sheet with a blank, invalid, unknown or missing item is rejected and nothing is
+scored. It writes nothing into `fixture.json`: resolving each disagreement and
+recording the outcome is a separate, human step, and the filled sheet is never
+committed.
+
 ## Usage
 
 Always with `OLLAMA_HOST` pointing nowhere unless a run is intended:

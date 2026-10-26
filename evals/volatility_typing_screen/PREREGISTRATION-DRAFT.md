@@ -10,7 +10,8 @@ default, prompt or task key.
 **Blocking before registration:** a second adjudicator labels all 27 items,
 blind to the first author's labels and to the registry defaults, and the
 disagreements are resolved and recorded (see `README.md`, "What the fixture
-cannot show"). A registration over one author's labels would repeat the
+cannot show"; the `blind-sheet` and `adjudicate` commands are described under
+"Second adjudication"). A registration over one author's labels would repeat the
 adjudication-debt mistake of #1557's Spanish fixtures.
 
 ## Question
