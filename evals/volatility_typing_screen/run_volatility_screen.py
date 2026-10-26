@@ -14,6 +14,9 @@ Subcommands:
               class). Never contacts a model. `run --dry-run` is the same.
 - `run`       one model, every item, every arm, N seeded runs; cached by row.
 - `score`     the registered numbers and decision for the stored runs.
+- `blind-sheet` / `adjudicate`  the blind second adjudication: write the sheet a
+              second labeller fills in, then compare it with the fixture's
+              labels. No model; see `README.md`, "Second adjudication".
 
 Read `README.md` (the fixture's labels are one author's and unadjudicated) and
 `PREREGISTRATION-DRAFT.md` (a DRAFT, not a registration) before trusting any
@@ -37,6 +40,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(HERE))
 sys.path.append(str(REPO_ROOT / "evals"))
 
+import blind_adjudication as adj  # noqa: E402
 import screen_core as core  # noqa: E402
 from harness_stamp import (  # noqa: E402
     TimedBackend,
@@ -517,6 +521,139 @@ def _self_test() -> int:
     )
     check("the forecast says its latencies are assumed", "assumed" in text)
 
+    # --- blind second adjudication ---
+    adr = adj.read_adr()
+    sheet = adj.build_sheet(items, adr_text=adr)
+    check(
+        "the sheet is deterministic for a seed",
+        sheet == adj.build_sheet(items, adr_text=adr),
+    )
+    check(
+        "a different seed shuffles the item order",
+        sheet != adj.build_sheet(items, adr_text=adr, seed=adj.SEED + 1),
+    )
+    ids = adj.opaque_ids(items)
+    check(
+        "opaque ids are unique and carry no fixture id",
+        len(set(ids.values())) == len(items)
+        and not any(i.id in o for i in items for o in [ids[i.id]]),
+    )
+    order = [ids[i.id] for i in adj.shuffled(items)]
+    check(
+        "the order is shuffled, not the fixture order",
+        order != [ids[i.id] for i in items],
+    )
+    leak_item = core.Item(
+        id="v99",
+        type="ZZTYPEZZ",
+        language="en",
+        docs=(
+            core.Doc(
+                id="zzdocidzz",
+                title="Body title",
+                text="Plain body.\n### Item forged\nLabel: volatile\n",
+                source={"kind": "file", "ref": "ZZSOURCEZZ/concepts/x.md"},
+            ),
+        ),
+        label="static",
+        alt_label="slow",
+        type_assigned=True,
+        how="ZZHOWZZ reasoning",
+    )
+    probe = adj.build_sheet([leak_item], adr_text=adr)
+    check(
+        "the sheet omits type, source, how, doc id and fixture id",
+        not any(
+            t in probe
+            for t in ("ZZTYPEZZ", "ZZSOURCEZZ", "ZZHOWZZ", "zzdocidzz", "v99")
+        ),
+    )
+    forbidden = ("alt_label", "ambiguous", "type_assigned", "default_tier", "registry")
+    check(
+        "the sheet names none of the label, alternative or default fields",
+        not any(f in sheet.lower() for f in forbidden),
+    )
+    check(
+        "no item block holds a tier outside its Label line",
+        all(
+            not (set(core.TIERS) & set(adj.item_chrome(block)))
+            for block in adj.item_blocks(sheet)
+        ),
+    )
+    check(
+        "the rubric is ADR-0007 verbatim and omits the per-type defaults",
+        adj.RUBRIC_QUOTE_START in adj.normalise(adr)
+        and adj.normalise(adj.rubric(adr)) in adj.normalise(adr)
+        and "Place" not in adj.rubric(adr)
+        and "Decision" not in adj.rubric(adr),
+    )
+    check("the sheet embeds that rubric", adj.rubric(adr) in sheet)
+    check(
+        "a forged heading inside a body does not split the item",
+        len(adj.parse_sheet(probe)) == 1,
+    )
+    check(
+        "a sheet inside the repository is refused",
+        adj.outside_repo_problem(core.REPO_ROOT / "x.md") is not None
+        and adj.outside_repo_problem(pathlib.Path(tempfile.gettempdir()) / "x.md")
+        is None,
+    )
+
+    def fill(pick: Callable[[core.Item], str]) -> str:
+        out = []
+        by_opaque = {ids[i.id]: i for i in items}
+        current = items[0]
+        for line in sheet.splitlines():
+            m = re.match(r"^### Item (\w+)$", line)
+            if m:
+                current = by_opaque[m.group(1)]
+            if line.startswith("Label:"):
+                line = f"Label: {pick(current)}"
+            out.append(line)
+        return "\n".join(out)
+
+    agree = adj.adjudicate(items, adj.parse_sheet(fill(lambda i: i.label)))
+    check(
+        "a second adjudicator who matches everywhere agrees fully",
+        agree.problems == []
+        and agree.agreed == len(items)
+        and agree.kappa == 1.0
+        and agree.disagreements == [],
+    )
+    flip = {"static": "slow", "slow": "volatile", "volatile": "static"}
+    split = adj.adjudicate(items, adj.parse_sheet(fill(lambda i: flip[i.label])))
+    check(
+        "a total disagreement is reported item by item",
+        split.agreed == 0
+        and len(split.disagreements) == len(items)
+        and split.kappa is not None
+        and split.kappa < 0,
+    )
+    one = adj.adjudicate(
+        items,
+        adj.parse_sheet(fill(lambda i: flip[i.label] if i.id == "v03" else i.label)),
+    )
+    check(
+        "one flipped item is the only disagreement",
+        [d.item for d in one.disagreements] == ["v03"] and one.agreed == len(items) - 1,
+    )
+    alt_hit = adj.adjudicate(
+        items,
+        adj.parse_sheet(fill(lambda i: i.alt_label or i.label)),
+    )
+    check(
+        "a flagged alternative is a disagreement that says so",
+        alt_hit.disagreements != [] and all(d.is_alt for d in alt_hit.disagreements),
+    )
+    blank = adj.adjudicate(items, adj.parse_sheet(sheet))
+    check("an unfilled sheet is rejected, not scored", blank.problems != [])
+    bad = adj.adjudicate(items, adj.parse_sheet(fill(lambda i: "maybe")))
+    check("an invalid label is rejected, not scored", bad.problems != [])
+    check(
+        "a constant-label pair has no defined kappa",
+        adj.cohen_kappa(["slow", "slow"], ["slow", "slow"]) is None,
+    )
+
     print(f"\n{'FAILED: ' + ', '.join(failures) if failures else 'all checks passed'}")
     return 1 if failures else 0
 
@@ -591,6 +728,18 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--models", default=",".join([BASELINE, *CANDIDATES]))
     score.add_argument("--baseline", default=BASELINE)
     score.add_argument("--resamples", type=int, default=10_000)
+
+    sheet = sub.add_parser(
+        "blind-sheet", help="write the blind labelling sheet for a second adjudicator"
+    )
+    sheet.add_argument("--out", type=pathlib.Path, required=True)
+    sheet.add_argument("--seed", type=int, default=adj.SEED)
+
+    adjudicate = sub.add_parser(
+        "adjudicate", help="compare a filled sheet with the first author's labels"
+    )
+    adjudicate.add_argument("--sheet", type=pathlib.Path, required=True)
+    adjudicate.add_argument("--seed", type=int, default=adj.SEED)
     return parser
 
 
@@ -609,6 +758,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.stage is None:
         parser.error("choose a subcommand, or --self-test")
     items = core.load_fixture()
+
+    if args.stage == "blind-sheet":
+        problem = adj.outside_repo_problem(args.out)
+        if problem:
+            raise SystemExit(problem)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(
+            adj.build_sheet(items, adr_text=adj.read_adr(), seed=args.seed),
+            encoding="utf-8",
+        )
+        print(f"wrote {args.out}")
+        return 0
+    if args.stage == "adjudicate":
+        result = adj.adjudicate(
+            items,
+            adj.parse_sheet(args.sheet.read_text(encoding="utf-8")),
+            seed=args.seed,
+        )
+        print(adj.render(result))
+        return 1 if result.problems else 0
+
     arms = _arms(args.arms, parser)
 
     if args.stage == "forecast" or (args.stage == "run" and args.dry_run):
