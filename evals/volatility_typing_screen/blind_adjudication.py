@@ -1,6 +1,6 @@
 """Blind second adjudication of the volatility-typing fixture (#1563).
 
-The fixture's labels are one author's. Before registration a second person
+The fixture's labels began as one author's. Before registration a second person
 labels every item without seeing the first author's labels, the flagged
 alternatives, the per-type registry defaults or the first author's reasoning;
 then the two label sets are compared. This module is the model-free half of
@@ -205,7 +205,8 @@ def cohen_kappa(first: Sequence[str], second: Sequence[str]) -> float | None:
 def adjudicate(
     items: Sequence[core.Item], labels: Mapping[str, str], seed: int = SEED
 ) -> Adjudication:
-    """Compare a parsed filled sheet with the first author's labels.
+    """Compare a parsed filled sheet with the FIRST author's labels (`first_label`,
+    not the resolved `label`, so the recorded agreement stays reproducible).
 
     Any problem (missing, unknown, blank or invalid) returns the problems and no
     score: a partial sheet must not produce a flattering number.
@@ -224,18 +225,18 @@ def adjudicate(
             )
     if problems:
         return Adjudication(problems=problems)
-    first = [i.label for i in items]
+    first = [i.first_label for i in items]
     second = [labels[ids[i.id]] for i in items]
     misses = [
         Disagreement(
             item=i.id,
             opaque=ids[i.id],
-            first=i.label,
+            first=i.first_label,
             second=labels[ids[i.id]],
             is_alt=i.alt_label == labels[ids[i.id]],
         )
         for i in items
-        if i.label != labels[ids[i.id]]
+        if i.first_label != labels[ids[i.id]]
     ]
     return Adjudication(
         n=len(items),

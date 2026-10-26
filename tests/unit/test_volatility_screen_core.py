@@ -462,3 +462,70 @@ def test_forecast_adds_the_loads_and_scales_with_the_latency() -> None:
     assert forecast["seconds"]["a"] == pytest.approx(60 * 2.0 + 60.0)
     assert forecast["seconds"]["b"] == pytest.approx(60 * 4.0 + 60.0)
     assert forecast["total_seconds"] == pytest.approx(120 + 60 + 240 + 60)
+
+
+# --- the adjudication record and the first-author sensitivity ----------------
+
+
+def _adjudicated(**over: Any) -> dict[str, Any]:
+    record = {"first": "static", "second": "slow", "resolved": "slow", "reason": "r"}
+    fields: dict[str, Any] = {
+        "label": "slow",
+        "alt_label": "static",
+        "ambiguous": True,
+        "adjudication": {**record, **over.pop("record", {})},
+    }
+    return _raw(**{**fields, **over})
+
+
+def test_an_adjudicated_item_keeps_the_first_label_recoverable(tmp_path: Path) -> None:
+    (item,) = core.load_fixture(_fixture(tmp_path, [_adjudicated()]))
+    assert (item.label, item.first_label, item.alt_label) == (
+        "slow",
+        "static",
+        "static",
+    )
+
+
+def test_an_unadjudicated_item_has_its_label_as_first_label(tmp_path: Path) -> None:
+    (item,) = core.load_fixture(_fixture(tmp_path, [_raw()]))
+    assert item.first_label == item.label
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"record": {"resolved": "volatile"}},
+        {"record": {"first": "slow"}},
+        {"alt_label": "volatile"},
+    ],
+)
+def test_load_fixture_refuses_an_incoherent_adjudication(
+    tmp_path: Path, over: dict[str, Any]
+) -> None:
+    with pytest.raises(ValueError, match=r"^\w+: "):
+        core.load_fixture(_fixture(tmp_path, [_adjudicated(**over)]))
+
+
+def test_the_first_author_sensitivity_scores_against_the_first_label() -> None:
+    item = core.Item(
+        id="a",
+        type="Person",
+        language="en",
+        docs=(core.Doc(id="d", title="t", text="x", source={}),),
+        label="volatile",
+        alt_label="slow",
+        type_assigned=False,
+        how="h",
+        adjudication={
+            "first": "slow",
+            "second": "volatile",
+            "resolved": "volatile",
+            "reason": "r",
+        },
+    )
+    rows = [_row("a", "slow", run=1), _row("a", "slow", run=2), _row("a", None, run=3)]
+    summary = core.summarize(rows, [item], "default")
+    assert summary["strict_first_accuracy"] == pytest.approx(2 / 3)
+    assert summary["strict_accuracy"] == 0.0
+    assert core.registry_baseline([item])["strict_first_accuracy"] == 1.0

@@ -18,8 +18,8 @@ Subcommands:
               second labeller fills in, then compare it with the fixture's
               labels. No model; see `README.md`, "Second adjudication".
 
-Read `README.md` (the fixture's labels are one author's and unadjudicated) and
-`PREREGISTRATION-DRAFT.md` (a DRAFT, not a registration) before trusting any
+Read `README.md`, `ADJUDICATION.md` (the labels are the resolved ones of two
+adjudicators, kappa 0.544) and `PREREGISTRATION.md` before trusting any
 number. Model-free check: `--self-test`.
 """
 
@@ -238,19 +238,23 @@ def render_report(
     resamples: int = 10_000,
 ) -> str:
     """The registered numbers for stored runs. Descriptive: the verdict lines
-    apply the DRAFT rule mechanically and adopt nothing."""
+    apply the registered rule mechanically and adopt nothing."""
     registry = core.registry_baseline(items)
     lines = [
         "# Volatility-typing screen",
         "",
-        "Labels are one author's and unadjudicated: read every number as a",
-        "measurement against that author, not as accuracy against a truth.",
+        "Labels are the RESOLVED ones of two adjudicators (kappa 0.544): read",
+        "every number as a measurement against them, not as accuracy against a",
+        "truth. `strict` and `lenient` decide; `strict (1st)` is the sensitivity",
+        "analysis against the first author's labels and decides nothing.",
         "",
         f"floors (strict): registry default {_fmt(registry['strict_accuracy'])}, "
-        f"commonest label {_fmt(core.majority_baseline(items))}",
+        f"commonest label {_fmt(core.majority_baseline(items))}; "
+        f"registry default against the first author's labels "
+        f"{_fmt(registry['strict_first_accuracy'])}",
         "",
-        "| model | strict | lenient | failures | median s | p95 s | anchor follow | stability |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| model | strict | lenient | strict (1st) | failures | median s | p95 s | anchor follow | stability |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     summaries: dict[str, dict[str, dict[str, Any]]] = {}
     for model, rows in rows_by_model.items():
@@ -258,7 +262,7 @@ def render_report(
         d, w = summaries[model]["default"], summaries[model]["wrong-anchor"]
         lines.append(
             f"| {model} | {_fmt(d['strict_accuracy'])} | {_fmt(d['lenient_accuracy'])} "
-            f"| {_fmt(d['failure_rate'])} | {_fmt(d['median_latency_s'], 2)} "
+            f"| {_fmt(d['strict_first_accuracy'])} | {_fmt(d['failure_rate'])} | {_fmt(d['median_latency_s'], 2)} "
             f"| {_fmt(d['p95_latency_s'], 2)} | {_fmt(w['anchor_follow_rate'])} "
             f"| {_fmt(d['stability'])} |"
         )
@@ -281,7 +285,7 @@ def render_report(
             f"agrees with the registry default: "
             f"{_fmt(by_arm['default']['registry_agreement'])}"
         )
-    lines += ["", "## Decision (DRAFT rule, applied mechanically)", ""]
+    lines += ["", "## Decision (registered rule, applied mechanically)", ""]
     for model, rows in rows_by_model.items():
         own = core.per_item_strict(rows, items, "default")
         gap = core.paired_bootstrap(
@@ -448,6 +452,86 @@ def _self_test() -> int:
             core.summarize(rows, items, "default")["registry_agreement"] == 1.0,
         )
 
+        # The registered floors and the adjudication record (ADJUDICATION.md).
+        check(
+            "the registered class balance is 9 static, 11 slow, 7 volatile",
+            core.class_balance(items) == {"static": 9, "slow": 11, "volatile": 7},
+        )
+        check(
+            "the registry predictor floor is 13 of 27 strict, 27 of 27 lenient",
+            registry["strict_accuracy"] == 13 / 27
+            and registry["lenient_accuracy"] == 1.0
+            and core.majority_baseline(items) == 11 / 27,
+        )
+        resolved = {
+            "v01": "static",
+            "v02": "slow",
+            "v12": "static",
+            "v17": "slow",
+            "v21": "volatile",
+            "v25": "volatile",
+            "v26": "volatile",
+            "v27": "slow",
+        }
+        by_item = {i.id: i for i in items}
+        check(
+            "exactly the eight resolved items carry an adjudication record",
+            {i.id for i in items if i.adjudication} == set(resolved),
+        )
+        check(
+            "each record keeps the first label recoverable as the alternative",
+            all(
+                by_item[k].label == v
+                and by_item[k].first_label != v
+                and by_item[k].alt_label == by_item[k].first_label
+                and by_item[k].ambiguous
+                for k, v in resolved.items()
+            ),
+        )
+        check(
+            "an item without a record has the first author's label as its label",
+            all(i.first_label == i.label for i in items if not i.adjudication),
+        )
+        # The sensitivity analysis: the same answers scored against the FIRST
+        # author's labels. The registry predictor scored 21 of 27 against them.
+        check(
+            "the registry floor against the first author's labels is 21 of 27",
+            registry["strict_first_accuracy"] == 21 / 27,
+        )
+        echo_rows = run_model(
+            lambda run: echo, "echo", items, arms=["default"], runs=[1, 2]
+        )
+        echo_default = core.summarize(echo_rows, items, "default")
+        check(
+            "an echo model scores 21 of 27 against the first author's labels",
+            abs(echo_default["strict_first_accuracy"] - 21 / 27) < 1e-12,
+        )
+        by_first = {i.id: i.first_label for i in items}
+        first_rows = [
+            {
+                "model": "first",
+                "arm": "default",
+                "item": i.id,
+                "run": 1,
+                "tier": by_first[i.id],
+                "failure": None,
+                "latency_s": 1.0,
+            }
+            for i in items
+        ]
+        first_sum = core.summarize(first_rows, items, "default")
+        check(
+            "answering every first-author label scores 1.0 on it and less on strict",
+            first_sum["strict_first_accuracy"] == 1.0
+            and abs(first_sum["strict_accuracy"] - 19 / 27) < 1e-12,
+        )
+        failed_rows = [{**r, "tier": None, "failure": "backend"} for r in first_rows]
+        check(
+            "a failed call scores zero on the first-author sensitivity too",
+            core.summarize(failed_rows, items, "default")["strict_first_accuracy"]
+            == 0.0,
+        )
+
         # Failures are rows, with their kind, never exceptions.
         modes: list[str | BaseException] = [
             BackendError("boom"),
@@ -504,6 +588,11 @@ def _self_test() -> int:
         "key justified" in report and "key NOT justified" in report,
     )
     check("the report applies the selection rule", "SELECTED" in report)
+    check(
+        "the report carries the first-author sensitivity column and floor",
+        "strict (1st)" in report
+        and "against the first author's labels 0.778" in report,
+    )
     text = render_forecast(
         items,
         models=[BASELINE],
@@ -612,7 +701,7 @@ def _self_test() -> int:
             out.append(line)
         return "\n".join(out)
 
-    agree = adj.adjudicate(items, adj.parse_sheet(fill(lambda i: i.label)))
+    agree = adj.adjudicate(items, adj.parse_sheet(fill(lambda i: i.first_label)))
     check(
         "a second adjudicator who matches everywhere agrees fully",
         agree.problems == []
@@ -621,7 +710,7 @@ def _self_test() -> int:
         and agree.disagreements == [],
     )
     flip = {"static": "slow", "slow": "volatile", "volatile": "static"}
-    split = adj.adjudicate(items, adj.parse_sheet(fill(lambda i: flip[i.label])))
+    split = adj.adjudicate(items, adj.parse_sheet(fill(lambda i: flip[i.first_label])))
     check(
         "a total disagreement is reported item by item",
         split.agreed == 0
@@ -631,7 +720,9 @@ def _self_test() -> int:
     )
     one = adj.adjudicate(
         items,
-        adj.parse_sheet(fill(lambda i: flip[i.label] if i.id == "v03" else i.label)),
+        adj.parse_sheet(
+            fill(lambda i: flip[i.label] if i.id == "v03" else i.first_label)
+        ),
     )
     check(
         "one flipped item is the only disagreement",
@@ -644,6 +735,19 @@ def _self_test() -> int:
     check(
         "a flagged alternative is a disagreement that says so",
         alt_hit.disagreements != [] and all(d.is_alt for d in alt_hit.disagreements),
+    )
+    recorded = adj.adjudicate(
+        items,
+        adj.parse_sheet(
+            fill(lambda i: i.adjudication["second"] if i.adjudication else i.label)
+        ),
+    )
+    check(
+        "the recorded second labels reproduce 19 of 27, kappa 0.544, 8 disagreements",
+        recorded.agreed == 19
+        and len(recorded.disagreements) == 8
+        and recorded.kappa is not None
+        and abs(recorded.kappa - 0.544) < 5e-4,
     )
     blank = adj.adjudicate(items, adj.parse_sheet(sheet))
     check("an unfilled sheet is rejected, not scored", blank.problems != [])

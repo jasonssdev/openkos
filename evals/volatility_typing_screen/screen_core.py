@@ -8,8 +8,8 @@ each question is asked over, the scoring of one answer, the aggregate numbers,
 the anchoring probe, the zero-model floors, the paired bootstrap, the vetoes
 and the forecast. The runner (`run_volatility_screen.py`) owns the model.
 
-Labels are one author's and are NOT adjudicated; read `README.md` before
-trusting any number computed from them.
+Labels are the resolved ones of two adjudicators (kappa 0.544); read
+`README.md` and `ADJUDICATION.md` before trusting any number computed from them.
 
 Imports only the standard library and two production modules that carry the
 vocabulary being measured (`model.types`, and the sampling constants of
@@ -54,7 +54,7 @@ FAILURE_ABS_CAP: Final = 0.05
 FAILURE_MARGIN: Final = 0.02
 LATENCY_RATIO_CAP: Final = 2.0
 ANCHOR_MARGIN: Final = 0.10
-"""The registered vetoes (see `PREREGISTRATION-DRAFT.md`)."""
+"""The registered vetoes (see `PREREGISTRATION.md`)."""
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,15 @@ class Item:
     alt_label: str | None
     type_assigned: bool
     how: str
+    adjudication: Mapping[str, str] | None = None
+    """The second-adjudication record (`first`, `second`, `resolved`, `reason`)
+    of an item whose two adjudicators disagreed; `None` otherwise."""
+
+    @property
+    def first_label(self) -> str:
+        """The first author's label: `label` is the RESOLVED one, so this differs
+        exactly on the items with an adjudication record."""
+        return self.adjudication["first"] if self.adjudication else self.label
 
     @property
     def ambiguous(self) -> bool:
@@ -115,6 +124,16 @@ def _item(raw: Mapping[str, Any]) -> Item:
         )
     if raw["type"] not in types.TYPE_TO_DEFAULT_VOLATILITY:
         raise ValueError(f"{item_id}: unknown type {raw['type']!r}")
+    record = raw.get("adjudication")
+    if record is not None:
+        if set(record) != {"first", "second", "resolved", "reason"}:
+            raise ValueError(
+                f"{item_id}: adjudication needs first/second/resolved/reason"
+            )
+        if record["resolved"] != label or record["first"] == label:
+            raise ValueError(f"{item_id}: adjudication must resolve to `label`")
+        if alt != record["first"]:
+            raise ValueError(f"{item_id}: the first label must stay as alt_label")
     docs = tuple(_doc(d) for d in raw["docs"])
     if not 1 <= len(docs) <= vt.N_SAMPLE_CONCEPTS:
         raise ValueError(
@@ -133,6 +152,7 @@ def _item(raw: Mapping[str, Any]) -> Item:
         alt_label=None if alt is None else str(alt),
         type_assigned=bool(raw.get("type_assigned")),
         how=str(raw["how"]),
+        adjudication=None if record is None else {k: str(v) for k, v in record.items()},
     )
 
 
@@ -303,6 +323,7 @@ def summarize(
     mine = [r for r in rows if r["arm"] == arm and r["item"] in by_id]
     per_item_strict: dict[str, list[float]] = {}
     per_item_lenient: dict[str, list[float]] = {}
+    per_item_first: dict[str, list[float]] = {}
     per_item_tiers: dict[str, list[str | None]] = {}
     confusion = {g: {**dict.fromkeys(TIERS, 0), "none": 0} for g in TIERS}
     class_hits: dict[str, list[float]] = {g: [] for g in TIERS}
@@ -314,6 +335,7 @@ def summarize(
         strict, lenient = score_answer(item, tier)
         per_item_strict.setdefault(item.id, []).append(float(strict))
         per_item_lenient.setdefault(item.id, []).append(float(lenient))
+        per_item_first.setdefault(item.id, []).append(float(tier == item.first_label))
         per_item_tiers.setdefault(item.id, []).append(tier)
         class_hits[item.label].append(float(strict))
         confusion[item.label][tier if tier is not None else "none"] += 1
@@ -332,6 +354,9 @@ def summarize(
         "n_items": len(per_item_strict),
         "strict_accuracy": _mean([sum(v) / len(v) for v in per_item_strict.values()]),
         "lenient_accuracy": _mean([sum(v) / len(v) for v in per_item_lenient.values()]),
+        "strict_first_accuracy": _mean(
+            [sum(v) / len(v) for v in per_item_first.values()]
+        ),
         "per_class_recall": {g: _mean(class_hits[g]) for g in TIERS},
         "confusion": confusion,
         "failure_rate": sum(failures.values()) / n if n else None,
@@ -372,7 +397,9 @@ def registry_baseline(items: Sequence[Item]) -> dict[str, Any]:
     has to beat this for the `volatility_typing` key to be worth a call at all."""
     strict = {i.id: float(i.registry_default == i.label) for i in items}
     lenient = [i.registry_default in (i.label, i.alt_label) for i in items]
+    first = [i.registry_default == i.first_label for i in items]
     return {
+        "strict_first_accuracy": sum(first) / len(first),
         "strict_accuracy": sum(strict.values()) / len(strict),
         "lenient_accuracy": sum(lenient) / len(lenient),
         "per_item_strict": strict,

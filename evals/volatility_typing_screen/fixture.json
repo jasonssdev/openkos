@@ -25,11 +25,17 @@
      }
     }
    ],
-   "label": "slow",
-   "alt_label": "static",
+   "label": "static",
+   "alt_label": "slow",
    "ambiguous": true,
    "type_assigned": false,
-   "how": "Doctrine definitions: durable, but the bundle's own log shows this very concept corrected v1 to v2 (interpretation is refined), so slow. A static reading (millennia-old doctrine) is defensible."
+   "how": "Doctrine definitions: durable, but the bundle's own log shows this very concept corrected v1 to v2 (interpretation is refined). Resolved static after the second adjudication: a millennia-old doctrine is not expected to move. The first author's label was slow.",
+   "adjudication": {
+    "first": "slow",
+    "second": "static",
+    "resolved": "static",
+    "reason": "the second label is the first author's own flagged alternative; the owner chose it"
+   }
   },
   {
    "id": "v02",
@@ -46,11 +52,17 @@
      }
     }
    ],
-   "label": "static",
-   "alt_label": "slow",
+   "label": "slow",
+   "alt_label": "static",
    "ambiguous": true,
    "type_assigned": false,
-   "how": "A decision taken on a stated date is a fixed historical fact. The body ends 'Revisit if the essay grows long enough', a standing-review clause, hence the slow alternative."
+   "how": "A decision taken on a stated date is a fixed historical fact, but the body ends 'Revisit if the essay grows long enough', a standing-review clause. Resolved slow after the second adjudication: the review clause keeps it open. The first author's label was static.",
+   "adjudication": {
+    "first": "static",
+    "second": "slow",
+    "resolved": "slow",
+    "reason": "the second label is the first author's own flagged alternative; the owner chose it"
+   }
   },
   {
    "id": "v03",
@@ -427,11 +439,17 @@
      }
     }
    ],
-   "label": "slow",
-   "alt_label": "static",
+   "label": "static",
+   "alt_label": "slow",
    "ambiguous": true,
    "type_assigned": false,
-   "how": "A choir's roster of voice parts: a convention that rarely changes. Slow because a roster is organisational, static because the four parts are a fixed musical convention."
+   "how": "A choir's roster of voice parts: the four parts are a fixed musical convention. Resolved static after the second adjudication; the first author's slow reading (a roster is organisational) is kept as the alternative.",
+   "adjudication": {
+    "first": "slow",
+    "second": "static",
+    "resolved": "static",
+    "reason": "the second label is the first author's own flagged alternative; the owner chose it"
+   }
   },
   {
    "id": "v13",
@@ -586,11 +604,17 @@
      }
     }
    ],
-   "label": "volatile",
-   "alt_label": "slow",
+   "label": "slow",
+   "alt_label": "volatile",
    "ambiguous": true,
    "type_assigned": true,
-   "how": "Operator steps and checklists: they change with each tooling change. The type is assigned by the author (typed Concept in the source fixture); each is plainly a procedure."
+   "how": "Operator steps and checklists. Resolved slow after the second adjudication: steps persist longer than tooling churn suggests. The first author's label was volatile (they change with each tooling change). The type is assigned by the author (typed Concept in the source fixture); each is plainly a procedure.",
+   "adjudication": {
+    "first": "volatile",
+    "second": "slow",
+    "resolved": "slow",
+    "reason": "the second label is the first author's own flagged alternative; the owner chose it"
+   }
   },
   {
    "id": "v18",
@@ -742,11 +766,17 @@
      }
     }
    ],
-   "label": "slow",
-   "alt_label": "volatile",
+   "label": "volatile",
+   "alt_label": "slow",
    "ambiguous": true,
    "type_assigned": false,
-   "how": "The four participants of the corpus's committed meeting, bodies = their own introduction turns (role, affiliation, since-when). Roles last months to years. Type per the corpus ground truth."
+   "how": "The four participants of the corpus's committed meeting, bodies = their own introduction turns (role, affiliation, since-when). Resolved volatile after the second adjudication: roles and affiliations change. The first author's label was slow (roles last months to years). Type per the corpus ground truth.",
+   "adjudication": {
+    "first": "slow",
+    "second": "volatile",
+    "resolved": "volatile",
+    "reason": "the second label is the first author's own flagged alternative; the owner chose it"
+   }
   },
   {
    "id": "v22",
@@ -826,11 +856,17 @@
      }
     }
    ],
-   "label": "slow",
-   "alt_label": "volatile",
+   "label": "volatile",
+   "alt_label": "slow",
    "ambiguous": true,
    "type_assigned": false,
-   "how": "The core claim is a structural mechanism ('es estructural, no es ruido del modelo'), durable; the tail records a proposed, unmeasured fix, which is status. Type per the corpus ground truth."
+   "how": "The core claim is a structural mechanism ('es estructural, no es ruido del modelo'), durable; the tail records a proposed, unmeasured fix, which is status. Resolved volatile after the second adjudication; the first author's slow reading (the durable mechanism) is kept as the alternative. Type per the corpus ground truth.",
+   "adjudication": {
+    "first": "slow",
+    "second": "volatile",
+    "resolved": "volatile",
+    "reason": "the second label is the first author's own flagged alternative; the owner chose it"
+   }
   },
   {
    "id": "v26",
@@ -856,11 +892,17 @@
      }
     }
    ],
-   "label": "static",
-   "alt_label": "slow",
+   "label": "volatile",
+   "alt_label": "static",
    "ambiguous": true,
    "type_assigned": false,
-   "how": "Two explicit 'queda decidido' decisions. Decisions are fixed once taken; both are standing policies, which makes slow defensible. Type per the corpus ground truth."
+   "how": "Two explicit 'queda decidido' decisions. Decisions are fixed once taken, which was the first author's static label; but the encryption one is still being implemented, so the resolved label is volatile (see the adjudication reason). Type per the corpus ground truth.",
+   "adjudication": {
+    "first": "static",
+    "second": "volatile",
+    "resolved": "volatile",
+    "reason": "The encryption implementation is still pending (\"Marcos lo implementa esta semana\"), so its current status may change within days."
+   }
   },
   {
    "id": "v27",
@@ -877,11 +919,17 @@
      }
     }
    ],
-   "label": "volatile",
-   "alt_label": null,
-   "ambiguous": false,
+   "label": "slow",
+   "alt_label": "volatile",
+   "ambiguous": true,
    "type_assigned": false,
-   "how": "Four ordered operational steps; the registry default and the content agree. Type per the corpus ground truth."
+   "how": "Four ordered operational steps. The first author labelled it volatile, agreeing with the registry default; resolved slow after the second adjudication, because the process is stable (see the adjudication reason). Type per the corpus ground truth.",
+   "adjudication": {
+    "first": "volatile",
+    "second": "slow",
+    "resolved": "slow",
+    "reason": "The four-step procedure defines a stable operational process that is unlikely to change frequently."
+   }
   }
  ]
 }
