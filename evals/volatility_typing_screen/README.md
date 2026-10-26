@@ -1,9 +1,9 @@
 # Volatility-typing screen (#1563)
 
 A measurement harness for the `volatility_typing` task key. **No model has been
-run through it.** It exists so a screen can be pre-registered and run later;
-[`PREREGISTRATION-DRAFT.md`](PREREGISTRATION-DRAFT.md) is a draft, not a
-registration. Part of #1556.
+run through it.** [`PREREGISTRATION.md`](PREREGISTRATION.md) registers the
+screen; the labels were adjudicated by a second person, see
+[`ADJUDICATION.md`](ADJUDICATION.md). Part of #1556.
 
 ## What the task decides
 
@@ -70,8 +70,10 @@ because a label was decided on that text):
 | `evals/edge_typing/fixtures.py` | v09-v20 |
 | `examples/extraction-corpus/` medium-10 meeting (Spanish) | v21-v27 |
 
-Class balance: **9 static, 12 slow, 6 volatile.** 16 items carry a flagged
-alternative label. Seven are Spanish. The meeting's types are the corpus ground
+Class balance (resolved labels): **9 static, 11 slow, 7 volatile.** 17 items
+carry a flagged alternative label; for the eight whose two adjudicators
+disagreed, the alternative is the first author's label and the item's
+`adjudication` object records first, second, resolved and the reason. Seven are Spanish. The meeting's types are the corpus ground
 truth's; for v15, v17 and v18 (`*` below) the source fixture typed the
 documents `Concept` and **the author assigned** the type, because the documents
 are plainly a standing group, a procedure and a past incident. There is no Place,
@@ -98,8 +100,8 @@ per-item reasoning is in the `how` field of each item.
 
 | item | type | lang | docs | label | alt | registry default | source |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| v01 | Concept | en | 2 | slow | static | slow | good-life-demo |
-| v02 | Decision | en | 1 | static | slow | static | good-life-demo |
+| v01 | Concept | en | 2 | static | slow | slow | good-life-demo |
+| v02 | Decision | en | 1 | slow | static | static | good-life-demo |
 | v03 | Person | en | 1 | volatile | slow | slow | good-life-demo |
 | v04 | Source | en | 2 | static |  | static | good-life-demo |
 | v05 | Concept | en | 4 | slow |  | slow | query_attribution EN |
@@ -109,44 +111,47 @@ per-item reasoning is in the `how` field of each item.
 | v09 | Concept | en | 4 | slow |  | slow | edge_typing |
 | v10 | Concept | en | 4 | slow | volatile | slow | edge_typing |
 | v11 | Concept | en | 2 | static | slow | slow | edge_typing |
-| v12 | Concept | en | 2 | slow | static | slow | edge_typing |
+| v12 | Concept | en | 2 | static | slow | slow | edge_typing |
 | v13 | Concept | en | 2 | slow | static | slow | edge_typing |
 | v14 | Person | en | 2 | slow | volatile | slow | edge_typing |
 | v15 | Organization* | en | 3 | slow |  | slow | edge_typing |
 | v16 | Project | en | 1 | static | volatile | volatile | edge_typing |
-| v17 | Procedure* | en | 3 | volatile | slow | volatile | edge_typing |
+| v17 | Procedure* | en | 3 | slow | volatile | volatile | edge_typing |
 | v18 | Event* | en | 2 | static |  | static | edge_typing |
 | v19 | Concept | en | 4 | slow |  | slow | edge_typing |
 | v20 | Concept | en | 2 | volatile | slow | slow | edge_typing |
-| v21 | Person | es | 4 | slow | volatile | slow | medium-10 |
+| v21 | Person | es | 4 | volatile | slow | slow | medium-10 |
 | v22 | Event | es | 1 | static |  | static | medium-10 |
 | v23 | Concept | es | 1 | volatile | slow | slow | medium-10 |
 | v24 | Concept | es | 1 | volatile | slow | slow | medium-10 |
-| v25 | Concept | es | 1 | slow | volatile | slow | medium-10 |
-| v26 | Decision | es | 2 | static | slow | static | medium-10 |
-| v27 | Procedure | es | 1 | volatile |  | volatile | medium-10 |
+| v25 | Concept | es | 1 | volatile | slow | slow | medium-10 |
+| v26 | Decision | es | 2 | volatile | static | static | medium-10 |
+| v27 | Procedure | es | 1 | slow | volatile | volatile | medium-10 |
 
 ### What the fixture cannot show (read before any number)
 
-- **The labels are one author's and have never been adjudicated.** A second
-  adjudicator, blind to this one's labels and to the registry, must label every
-  item before any adoption decision rests on this fixture. Until then a result is
-  a measurement against one person's reading.
-- **The rubric is the registry's own.** It comes from ADR-0007, so every item
-  *without* a flagged alternative agrees with the registry default. The registry
-  predictor scores **0.778 strict (21 of 27) and 1.000 lenient**; it is wrong only on
-  the six items where the author's reading of the content differs from the type
-  default (v03, v11, v16, v20, v23, v24), and every one of those is flagged. The fixture therefore
-  discriminates a model from the registry on **six items**, and they are the six
-  least certain labels.
-- **The power to say "the key is justified" is thin.** With 27 items a model has
-  to beat the registry predictor with a positive 95% lower bound; on this fixture
-  that needs at least four of the six discriminating items and **no** loss on the
-  other 21 (checked with the harness's own bootstrap: win 4 lose 0 gives a lower
-  bound of +0.037; win 6 lose 1 gives 0.000). A model that loses a single item
-  elsewhere cannot clear it. Expect "not justified" to be the likely result for
-  any model, and read it as "this fixture cannot show it", not "the model is no
-  good".
+- **The labels are two people's, and they disagree.** A second adjudicator,
+  blind to the first author's labels and to the registry, labelled every item;
+  raw agreement is 19 of 27 and Cohen's kappa 0.544, and all eight
+  disagreements were resolved to the second adjudicator's label
+  ([`ADJUDICATION.md`](ADJUDICATION.md)). A result is a measurement against that
+  resolution, not against a truth.
+- **The rubric is the registry's own, and the first author may have anchored on
+  it.** The rubric comes from ADR-0007. Against the resolved labels the registry
+  predictor scores **0.481 strict (13 of 27) and 1.000 lenient**; against the
+  first author's labels it scored 0.778 (21 of 27). In all eight disagreements
+  the first author's label equalled the registry default: either the first
+  author anchored on the registry, or the registry default is wrong for some
+  types. The screen does not decide between them. The registry is wrong on 14
+  items (v01, v02, v03, v11, v12, v16, v17, v20, v21, v23, v24, v25, v26, v27).
+- **The bar to say "the key is justified" is lower than it was, and a pass is
+  weak evidence.** A model has to beat the registry predictor with a positive 95%
+  lower bound; the minimum is still four wins and no loss, but the number of
+  tolerated losses grows with the wins (win 7 lose 1, win 9 lose 2, win 11 lose
+  3, win 13 lose 4; checked with the harness's own bootstrap, see
+  `PREREGISTRATION.md`). Eight of the 14 wins exist only because of the
+  resolution, so read a pass as agreement with the resolved labels. `score` also
+  reports a sensitivity column scored against the first author's labels.
 - **Types that carry a type-level prior** (Place, Entity, Insight) are absent.
 - Two documents (v01 Stoicism, v02 the decision) are longer than production's
   1,000-character cut; only their `Related` / `Citations` tails are lost, and the
@@ -168,14 +173,16 @@ product decision for the maintainer, not something the harness should settle.
 
 ## Second adjudication
 
-The blocker above is closed by a second person labelling every item blind.
-Neither command contacts a model.
+Done: the repository owner labelled every item blind and the outcome is recorded
+in [`ADJUDICATION.md`](ADJUDICATION.md). The commands below reproduce it from a
+filled sheet (the sheet is never committed) and stay available for a further
+round. Neither command contacts a model.
 
 ```sh
 # 1. write the sheet OUTSIDE the repository (a path inside it is refused)
 uv run python evals/volatility_typing_screen/run_volatility_screen.py blind-sheet --out ~/scratch/volatility-blind-sheet.md
 # 2. the second adjudicator fills in every `Label:` line (static | slow | volatile)
-# 3. compare with the first author's labels
+# 3. compare with the first author's labels (`first_label`, not the resolved one)
 uv run python evals/volatility_typing_screen/run_volatility_screen.py adjudicate --sheet ~/scratch/volatility-blind-sheet.md
 ```
 
@@ -194,6 +201,7 @@ sheet with a blank, invalid, unknown or missing item is rejected and nothing is
 scored. It writes nothing into `fixture.json`: resolving each disagreement and
 recording the outcome is a separate, human step, and the filled sheet is never
 committed.
+
 
 ## Usage
 
