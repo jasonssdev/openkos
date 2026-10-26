@@ -155,6 +155,7 @@ def run_meeting(
     llm: TimedBackend,
     run: int,
     recorder: DiagnosticsRecorder | None = None,
+    retry_after_cap: bool = False,
 ) -> dict[str, Any]:
     """One arm run on one meeting: the raw, JSON-safe record to persist."""
     calls_before = len(llm.call_latencies_s)
@@ -175,14 +176,15 @@ def run_meeting(
             latency = llm.call_latencies_s[-1] if llm.call_latencies_s else None
             call_log.append(call_entry(observation, latency))
 
-        # No re-ask after a generation cap: it repeats and costs a second
-        # runaway (~250 s). Harness-only; production still retries (#1562).
+        # By default no re-ask after a generation cap: it can repeat and cost
+        # a second runaway (~250 s). Harness-only; production still retries
+        # (#1562). `retry_after_cap=True` is the measurement arm of #1564.
         outcome = decision_pass.run_decision_pass(
             windows_list,
             llm,
             on_call=on_call,
             diagnostics=recorder.last if recorder is not None else None,
-            retry_after_cap=False,
+            retry_after_cap=retry_after_cap,
         )
         failure = outcome.failure
         for result in outcome.results:
@@ -249,12 +251,15 @@ def run_arm(
     runs: int,
     log: Callable[[str], None] = print,
     recorder: DiagnosticsRecorder | None = None,
+    retry_after_cap: bool = False,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for run in range(1, runs + 1):
         for meeting, text in texts.items():
             meeting_rows = [r for r in rows if r.meeting_id == meeting]
-            record = run_meeting(arm, meeting, text, meeting_rows, llm, run, recorder)
+            record = run_meeting(
+                arm, meeting, text, meeting_rows, llm, run, recorder, retry_after_cap
+            )
             records.append(record)
             log(
                 f"    {arm} run {run} {meeting}: items={len(record['items'])} "
@@ -352,6 +357,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--allow-partial", action="store_true")
+    parser.add_argument(
+        "--retry-after-cap",
+        action="store_true",
+        help="re-ask a window after a generation cap, as production does "
+        "(default: skip the re-ask, which costs a second runaway; #1564)",
+    )
     parser.add_argument("--rescore", nargs="*", type=pathlib.Path, default=None)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
@@ -406,7 +417,15 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"model {args.model}, arm {args.arm}, {args.runs} run(s), {len(texts)} meeting(s)"
     )
-    records = run_arm(args.arm, texts, rows, llm, args.runs, recorder=recorder)
+    records = run_arm(
+        args.arm,
+        texts,
+        rows,
+        llm,
+        args.runs,
+        recorder=recorder,
+        retry_after_cap=args.retry_after_cap,
+    )
     partial = bool(scoring.blank_rows(rows))
     path = write_results(
         records,
@@ -812,6 +831,25 @@ def _self_test() -> int:
                 capped_run["call_log"][0]["reply_chars"],
             ),
             ("length", 8192, None),
+        )
+        rec_reask = DiagnosticsRecorder()
+        reask_llm = _DiagLLM([BackendGenerationCapped("cap"), _PASS_REPLY], rec_reask)
+        reasked = run_arm(
+            "pass",
+            {"ES2015a": _SYNTH_TRANSCRIPT},
+            rows,
+            TimedBackend(reask_llm),
+            1,
+            log=lambda _line: None,
+            recorder=rec_reask,
+            retry_after_cap=True,
+        )[0]
+        check("retry_after_cap re-asks a capped window", reask_llm.calls, 2)
+        check("a recovered re-ask is not a failure", reasked["failure"], None)
+        check(
+            "both attempts of a re-asked cap are logged",
+            [(e["attempt"], e["done_reason"]) for e in reasked["call_log"]],
+            [(1, "length"), (2, "stop")],
         )
         rec3 = DiagnosticsRecorder()
         ok_run = run_arm(
