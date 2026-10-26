@@ -236,6 +236,10 @@ This is a rescore of the recorded stages of the real pipeline, with no extra
 generation. It covers pool DA, runs 1 and 2: 10 meeting-runs and 82
 window-runs per model.
 
+The intervals, the loss points that are not stages (L1 to L5, L9, L12 to L14),
+and the measurable-or-not verdict for each are in
+[`STAGE_LOSS_RESULTS.md`](STAGE_LOSS_RESULTS.md).
+
 - "own" and "foreign" are meeting-level soft coverage of all gold.
 - "window lift" is the primary metric applied to each stage's objects.
 - The row-to-row change in window lift is that stage's loss.
