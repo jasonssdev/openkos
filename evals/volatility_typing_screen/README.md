@@ -1,8 +1,8 @@
 # Volatility-typing screen (#1563)
 
-A measurement harness for the `volatility_typing` task key. **No model has been
-run through it.** [`PREREGISTRATION.md`](PREREGISTRATION.md) registers the
-screen; the labels were adjudicated by a second person, see
+A measurement harness for the `volatility_typing` task key. **The screen has been run:
+no model clears the registered bar, see [`RESULTS.md`](RESULTS.md).**
+[`PREREGISTRATION.md`](PREREGISTRATION.md) registered the screen; the labels were adjudicated by a second person, see
 [`ADJUDICATION.md`](ADJUDICATION.md). Part of #1556.
 
 ## What the task decides
