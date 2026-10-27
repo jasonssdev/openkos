@@ -38,6 +38,7 @@ fixed in [`PREREGISTRATION.md`](PREREGISTRATION.md); the outcome is in
 | `judge_study.py` | #1571: the cached records replayed with only the selector judge routed (none, self, fixed `DEFAULT_JUDGE_MODEL`); extraction calls cache-only (`replay-self`, `run`, `score`, `--self-test`); rules in `JUDGE_STUDY_PREREGISTRATION.md`, outcome in `JUDGE_STUDY_RESULTS.md` |
 | `stage_loss.py` | #1559: gold content lost at each extraction stage and loss point L1-L14, from the stored #1557 and #1558 records, cache-only embeddings (`score`, `--self-test`); rules in `STAGE_LOSS_PREREGISTRATION.md`, outcome in `STAGE_LOSS_RESULTS.md` |
 | `cut_profile.py` | #1579: descriptive profile of what the selector judge's cut removes (by type, bundle size, body size), model-free over the #1571 records (`profile`, `--self-test`); the decision document is `NEXT_STEP.md` |
+| `label_study.py` | #1579 step 3: `gpt-oss:20b` labels the ceiling objects keep / merge / drop (cut and kept together), with a duplicate-control (`population`, `run`, `score`, `--self-test`); rules in `LABEL_STUDY_PREREGISTRATION.md`, outcome in `LABEL_STUDY_RESULTS.md` |
 
 ## Data stays outside the repository
 
