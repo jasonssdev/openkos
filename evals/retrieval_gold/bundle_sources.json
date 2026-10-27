@@ -5,7 +5,8 @@
  "roots": {
   "transcripts": "AMI transcripts rendered by the thesis renderer (the concept-screen inputs/transcripts layout); --transcripts DIR",
   "extraction-corpus": "examples/extraction-corpus/sources; most files are gitignored third-party notes, so --prose-dir DIR points at a checkout that has them",
-  "repo": "this repository"
+  "repo": "this repository",
+  "translations": "the 12 Spanish machine translations of the development meetings, written by translate_meetings.py and pinned here after owner review; --translations DIR"
  },
  "sources": [
   {
@@ -257,6 +258,138 @@
    "tier": "core",
    "bytes": 38429,
    "sha256": "0d20e54e31f2dc750b600ca0f590f0657948c17ca066109ec9c08d90ee5244a2"
+  },
+  {
+   "id": "ES2015a-es",
+   "root": "translations",
+   "path": "ES2015a-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "ES2015a"
+  },
+  {
+   "id": "ES2015b-es",
+   "root": "translations",
+   "path": "ES2015b-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "ES2015b"
+  },
+  {
+   "id": "ES2015c-es",
+   "root": "translations",
+   "path": "ES2015c-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "ES2015c"
+  },
+  {
+   "id": "ES2015d-es",
+   "root": "translations",
+   "path": "ES2015d-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "ES2015d"
+  },
+  {
+   "id": "IS1004a-es",
+   "root": "translations",
+   "path": "IS1004a-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "IS1004a"
+  },
+  {
+   "id": "IS1004b-es",
+   "root": "translations",
+   "path": "IS1004b-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "IS1004b"
+  },
+  {
+   "id": "IS1004c-es",
+   "root": "translations",
+   "path": "IS1004c-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "IS1004c"
+  },
+  {
+   "id": "IS1004d-es",
+   "root": "translations",
+   "path": "IS1004d-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "IS1004d"
+  },
+  {
+   "id": "TS3009a-es",
+   "root": "translations",
+   "path": "TS3009a-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "TS3009a"
+  },
+  {
+   "id": "TS3009b-es",
+   "root": "translations",
+   "path": "TS3009b-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "TS3009b"
+  },
+  {
+   "id": "TS3009c-es",
+   "root": "translations",
+   "path": "TS3009c-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "TS3009c"
+  },
+  {
+   "id": "TS3009d-es",
+   "root": "translations",
+   "path": "TS3009d-es.md",
+   "language": "es",
+   "kind": "ami-translation",
+   "tier": "core",
+   "bytes": 0,
+   "sha256": "pending-translation",
+   "translation_of": "TS3009d"
   },
   {
    "id": "large-03-skills-vs-tools",
@@ -520,5 +653,8 @@
    "id": "evals/desktop_app/materials, examples/good-life-demo/raw",
    "why": "four notes under 1 KB: they add Source documents, not realism"
   }
- ]
+ ],
+ "notes": {
+  "translations": "Each *-es source is a machine translation of its English twin (a CC BY 4.0 adaptation: attribution and the machine-translation statement are written into the file). bytes 0 and sha256 pending-translation mean not produced yet; build_bundle.py refuses to build until translate_meetings.py pin fills them."
+ }
 }
