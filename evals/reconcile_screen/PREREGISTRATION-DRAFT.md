@@ -1,12 +1,12 @@
 # Pre-registration (DRAFT): the merged-body reconciliation model screen (#1563)
 
 **Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third adjudication")
-and the owner's questions are decided; still blocked on Stage 0 and the `TO RECOMPUTE` J
-bar.** Nothing below binds until a final version of this file, with the numbers
-marked `TO RECOMPUTE` replaced, is merged to `main` before any scored model call
+and the owner's questions are decided and the J bar is recomputed; still blocked on
+Stage 0.** Nothing below binds until a final version of this file is merged to `main`
+before any scored model call
 (#1556: pre-register, and merge the pre-registration, before any run). No model has been
 called in preparing this draft; every number in it was computed by
-`run_reconcile_screen.py forecast` or `--self-test`, which contact none. A measurement: it
+`run_reconcile_screen.py forecast`, `j-table` or `--self-test`, which contact none. A measurement: it
 adopts nothing and changes no production code, default, prompt or task key. Part of #1556;
 refs #1563, #1557.
 
@@ -19,11 +19,10 @@ refs #1563, #1557.
    `second`, `resolved`, `reason`; the first label stays as `alt_label`), each re-anchored
    with literals that pass `integrity_problems` (none retired), and listed in
    [`ADJUDICATION.md`](ADJUDICATION.md).
-2. **Done for the floors and the class balance** (`forecast`, below). The J bar's
-   constant-gain lower bounds are still the first author's: no model-free command prints
-   them, so they are `TO RECOMPUTE` at registration; the unit test
-   `test_the_j_bar_on_the_real_reference_is_pinned` still pins, on the adjudicated labels,
-   that four outright wins clear J and three do not.
+2. **Done** for the floors and the class balance (`forecast`, below) and for the J bar
+   (`j-table`, below), both on the adjudicated labels; the unit test
+   `test_the_j_bar_on_the_real_reference_is_pinned` pins that four outright wins clear J
+   and three do not.
 3. **Done.** The five questions are decided (owner, 2026-10-27; see "Decisions the owner
    made").
 4. **Stage 0** (below) replaces the assumed latencies and records the model digests
@@ -92,16 +91,20 @@ under every baseline (0), because each kind is kept by one trivial predictor.
 
 **What the J bar is.** The reference is wrong in 27 claims and scores below 1.0 in 13
 cases (28 and 14 on the first author's labels). With the harness's own bootstrap over
-cases (10,000 resamples, seed 42), on the first author's labels (`TO RECOMPUTE` except
-where pinned):
+cases (10,000 resamples, seed 42), on the adjudicated labels (`run_reconcile_screen.py
+j-table`, no model; `reconcile_core.j_tolerance` and `constant_gain_bound`):
 
 - a model that matches the reference on every case and is better by a constant **+0.05**
-  on every case clears J (95% lower bound 0.04); +0.10 gives 0.08;
-- a model that matches the reference everywhere except winning *k* cases outright (to 1.0)
-  clears J from *k* = 4 (win 3 does not; `test_the_j_bar_on_the_real_reference_is_pinned` pins
-  both). It tolerates **no** outright loss (a case to 0.0) at any *k* from 4 to 14, because one
-  such loss is a delta of -1.0 against gains of at most 0.44 a case. Partial losses are
-  different: a model reads on its gains and losses per case, not on its mean alone.
+  on every case (a case score capped at 1.0, so the 2 cases already perfect gain nothing)
+  clears J: point 0.043, 95% lower bound 0.033 (13 of 15 cases can gain); **+0.10** gives
+  point 0.087, lower bound 0.067;
+- a model that matches the reference everywhere except winning *k* cases outright (the
+  reference's lowest cases, to 1.0) clears J from *k* = 4 (win 3 does not;
+  `test_the_j_bar_on_the_real_reference_is_pinned` pins both). It tolerates **no** outright
+  loss (the reference's highest cases, to 0.0) at any *k* from 4 to 13 (every case the
+  reference scores below 1.0), because one such loss is a delta of -1.0 against gains of at
+  most 0.44 a case. Partial losses are different: a model reads on its gains and losses per
+  case, not on its mean alone.
 
 Stated before data so a J pass is not over-read: **a pass shows a model keeps more of what
 the notes say, and says shared facts once, better than a sentence-level union with no model

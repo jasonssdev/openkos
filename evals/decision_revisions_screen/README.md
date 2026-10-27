@@ -128,30 +128,32 @@ and 19 on the drafter's labels).
 predictor" is empty by construction; the measure that means something is the room
 left under the strongest one.) The sharper finding is on the other side.
 
-**The stored `qwen3:8b` run leaves little room above the baseline.** On the drafter's
-labels (not re-scored after the adjudication, which moved `r43` and `r53`), scored by this
-screen's rule, the three stored 15-run `qwen3:8b` runs under the current judge prompt
+**The stored `qwen3:8b` run leaves little room above the baseline.** Read into this
+screen's format (`import-stored`, no model) and scored by its rule on the adjudicated
+labels, the three stored 15-run `qwen3:8b` runs under the current judge prompt
 (`d8238af6410ac31d`, `evals/decision_revisions/results/runs-20260928T173355Z...`,
-`...204537Z...`, `...20260929T011322Z...`) score **0.893, 0.887 and 0.882**, against
-the reference's 0.603. On the latest, 50 of 58 items are answered correctly in every
-run and only 8 fall below 1.0: five are never right (`r14`, `r27`, `r30`, `r43`,
-`r53`), two are right one run in five (`r13`, `r28`) and one right in 11 of 15 runs (0.73). The prompt was tuned against
-the 46 `original` pairs (the diagnosis read all of them: 0.85 to 0.87 there), and the
-12 `confirmation` pairs are at ceiling (0.99 to 1.00), so they cannot separate any
+`...204537Z...`, `...20260929T011322Z...`) score **0.928, 0.922 and 0.916**, against
+the reference's 0.586 (on the drafter's labels the same answers score 0.893, 0.887 and
+0.882, which the import reproduces). On the latest, 52 of 58 items are answered correctly
+in every run and only 6 fall below 1.0: three are never right (`r14`, `r27`, `r30`) and
+three are right in a fraction of runs (`r13` 0.20, `r28` 0.20, `r04` 0.73). The prompt was
+tuned against the 46 `original` pairs (0.894 to 0.909 there), and the 12 `confirmation`
+pairs are at ceiling (0.994 to 1.000), so they cannot separate any
 two models. Consequences, stated before any run:
 
 - the question "does the key beat no model" is already answered by the stored run
   for `qwen3:8b`, **if the labels hold**; rule J will be cleared by every competent
   model and discriminates little;
-- the live question is selection against `qwen3:8b`, where the headroom is about 7
-  items. Replaying the stored per-item scores, a candidate that fixes 3 of those 7
-  with no loss has a paired-gain lower bound of 0.0 (not cleared) and one that fixes
-  5 clears it (+0.017). The bootstrap does not know the 8 hard items are not
-  independent, so treat that as optimistic;
-- **4 of the 5 never-right items are ones the drafter flagged contested** (`r14`,
-  `r27`, `r43`, `r53`), and the fifth (`r30`) is an undirected pair the drafter did not flag. These are the first
-  places a blind second labeller can overturn a label, and a model "failing" on them
-  may be a label error. This is why the adjudication is the blocking step.
+- the live question is selection against `qwen3:8b`, where the headroom is 6 items.
+  Replaying the stored per-item scores (`score` prints it), a candidate that fixes 3 of
+  those 6 with no loss has a paired-gain lower bound of 0.0 (not cleared) and one that
+  fixes 4 clears it (+0.0138), 5 gives +0.0172. The bootstrap does not know the hard
+  items are not independent, so treat that as optimistic;
+- **2 of the 3 never-right items are ones the drafter flagged contested** (`r14`,
+  `r27`), and the third (`r30`) is an undirected pair the drafter did not flag. These are
+  the first places a labeller can be overturned, and a model "failing" on them may be a
+  label error. The adjudication already moved the other two former never-right items
+  (`r43`, `r53`) to the model's answer.
 
 ## The fixture
 
@@ -231,6 +233,10 @@ Always with `OLLAMA_HOST` pointing nowhere unless a run is intended:
 # model-free
 OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py --self-test
 OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py forecast --runs 3
+OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py j-table
+# read a stored run of the older harness into this screen's format, then score it
+OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py import-stored --runs-dir <dir> --stored evals/decision_revisions/results/runs-20260929T011322Z-qwen3-8b.json
+OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py score --models qwen3:8b --runs-dir <dir>
 # a model (needs a local Ollama; stamped, cached per row, resumable) -- NOT before registration
 uv run python -u evals/decision_revisions_screen/run_revisions_screen.py run --model qwen3:8b --runs 3
 uv run python evals/decision_revisions_screen/run_revisions_screen.py score

@@ -593,6 +593,19 @@ def _self_test() -> int:
             "rule J needs four wins over the reference with no loss, and three do not clear it",
             clears(4) and not clears(3),
         )
+        j_text = core.render_j_table(
+            "always references",
+            ref_scores,
+            wins=[3, 4],
+            shuffles=1,
+            resamples=500,
+        )
+        check(
+            "the j-table prints the reference's misses and a row per win count, no model",
+            "wrong for the reference: 25 of 49" in j_text
+            and "| 3 | -1 |" in j_text
+            and "| 4 | 0 |" in j_text,
+        )
 
         # Direction: the trap, production's object-type correction, its withdrawal.
         same_type = by_item["e18"]
@@ -1008,6 +1021,17 @@ def build_parser() -> argparse.ArgumentParser:
     fc.add_argument("--models", default=",".join([BASELINE, *CANDIDATES]))
     fc.add_argument("--runs", type=int, default=3)
 
+    jt = sub.add_parser(
+        "j-table", help="the J tolerance table on the resolved labels; no model"
+    )
+    jt.add_argument("--shuffles", type=int, default=10)
+    jt.add_argument("--resamples", type=int, default=10_000)
+    jt.add_argument(
+        "--wins",
+        default="3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,25",
+        help="comma-separated win counts",
+    )
+
     run = sub.add_parser("run", help="one model, every item")
     common(run)
     run.add_argument("--model", required=True)
@@ -1089,6 +1113,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             encoding="utf-8",
         )
         print(f"imported {len(labels)} labels into {args.out}")
+        return 0
+
+    if args.stage == "j-table":
+        name, ref = core.reference_baseline(items)
+        print(
+            core.render_j_table(
+                name,
+                ref["per_item_strict"],
+                wins=[int(w) for w in args.wins.split(",")],
+                shuffles=args.shuffles,
+                resamples=args.resamples,
+            )
+        )
         return 0
 
     arms = list(core.ARMS)

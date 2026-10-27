@@ -50,6 +50,7 @@ fixture's label; `strict (1st)` keeps scoring the drafter's labels either way.
 | items wrong for the reference | 23 | 24 |
 | items wrong for both `always unrelated` and the lexical cut | 19 | 21 |
 
-Not recomputed: the stored `qwen3:8b` scores (0.893, 0.887, 0.882) and the headroom
-analysis built on them. They need the stored rows re-scored against the adjudicated
-labels, which this adjudication did not do.
+The stored `qwen3:8b` scores (0.893, 0.887, 0.882 on the drafter's labels) are 0.928,
+0.922 and 0.916 on the adjudicated ones, and the headroom above them is 6 items instead of
+7; see `PREREGISTRATION-DRAFT.md`. They were re-scored from the stored rows
+(`import-stored`, then `score`), not by this adjudication.

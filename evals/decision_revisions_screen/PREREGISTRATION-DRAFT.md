@@ -1,13 +1,14 @@
 # Pre-registration (DRAFT): the decision-revisions model screen (#1563)
 
 **Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third
-adjudication") and the owner's questions are decided; still blocked on the stored-run
-re-score (decision 1) and Stage 0.** Nothing below binds until a final version of this
-file, with the numbers marked `TO RECOMPUTE` replaced, is merged to `main` before
+adjudication"), the owner's questions are decided and the stored-run re-score is done
+(decision 1); still blocked on Stage 0.** Nothing below binds until a final version of
+this file is merged to `main` before
 any scored model call (#1556: pre-register, and merge the pre-registration, before
 any run). No model has been called in preparing this draft; every number in it was
-computed by `run_revisions_screen.py forecast` or `--self-test`, which contact none,
-or by re-scoring the stored `qwen3:8b` rows of `evals/decision_revisions/results/`.
+computed by `run_revisions_screen.py forecast`, `j-table` or `--self-test`, which
+contact none, or by `import-stored` and `score`, which read the stored `qwen3:8b` rows
+of `evals/decision_revisions/results/` and contact none.
 A measurement: it adopts nothing and changes no production code, default, prompt or
 task key. Part of #1556; refs #1563, #1557.
 
@@ -19,13 +20,13 @@ task key. Part of #1556; refs #1563, #1557.
    were resolved by a third model (Claude Opus) on the owner's delegation, recorded in
    [`adjudication.json`](adjudication.json) (`first`, `second`, `resolved`, `reason`) and
    listed in [`ADJUDICATION.md`](ADJUDICATION.md).
-2. **Done for the floors and the class balance** (`forecast`, below). Still `TO
-   RECOMPUTE`: the J tolerance statement (`--self-test` pins on the adjudicated labels
-   that four wins clear J and three do not) and every number derived from the stored
-   `qwen3:8b` rows (the 0.893 / 0.887 / 0.882 scores, the 7-item headroom and the
-   paired-gain replay), which were not re-scored here.
+2. **Done** for the floors and the class balance (`forecast`, below), for the J
+   tolerance (`j-table`; `--self-test` pins on the adjudicated labels that four wins
+   clear J and three do not) and for every number derived from the stored `qwen3:8b`
+   rows (the scores, the headroom and the paired-gain replay), re-scored on the
+   adjudicated labels (below).
 3. **Done.** The six questions are decided (owner, 2026-10-27; see "Decisions the owner
-   made"). Decision 1 owes the stored-run re-score, which no existing command performs.
+   made"). Decision 1's stored-run re-score is done with `import-stored` and `score`.
 4. **Stage 0** (below) replaces the assumed latencies. It was not run for this
    draft because the server is reserved for another job. The digests below are as
    `ollama list` reported them, a read-only call.
@@ -86,26 +87,68 @@ brackets. Class balance: REVERSES 14, REFINES 13, REAFFIRMS 8, UNRELATED 23 (the
 | `always reaffirms` | 8 / 58 = 0.138 [6 / 58 = 0.103] |
 | items wrong for the reference | 24 / 58 [23 / 58] |
 | items wrong for both `always unrelated` and the lexical cut | 21 / 58 [19 / 58] |
-| stored `qwen3:8b`, current judge prompt, three 15-run runs | 0.893, 0.887, 0.882 (not a floor: a measurement of the baseline model on the drafter's labels; `TO RECOMPUTE` on the adjudicated ones) |
+| stored `qwen3:8b`, current judge prompt, three 15-run runs, on the adjudicated labels | **0.928, 0.922, 0.916** (not a floor: a measurement of the baseline model; the same answers on the drafter's labels are 0.893, 0.887, 0.882, which `import-stored` reproduces, so the import is faithful) |
+
+The stored runs are those of `evals/decision_revisions/results/` stamped with judge
+prompt `d8238af6410ac31d` (`runs-20260928T173355Z`, `runs-20260928T204537Z`,
+`runs-20260929T011322Z`, the last being "the latest" below), stage (b) only (each pair
+handed to the judge directly, 58 pairs x 15 runs = 870 calls each, as this screen
+measures). `import-stored` writes them into this screen's run format; the older harness
+stored no latency, so the median and p95 latency are `n/a` and V2 would trip on them
+(`score` reads this as a missing number, as the rule says). Of the 870 calls of each run,
+none was malformed. Per run, on the adjudicated labels: strict (clean) 0.952, 0.941,
+0.938; `original` 0.909, 0.903, 0.894; `confirmation` 1.000, 0.994, 1.000; false-supersede
+rate 0.012, 0.016, 0.021.
 
 **What the J bar is, and why it will not decide.** The reference is wrong on 24
-items (23 on the drafter's labels; the stored-run figures in this paragraph are the
-drafter's and `TO RECOMPUTE`). With the harness's own bootstrap (10,000 resamples, seed 42, the edge-typing
-screen's), a model that matches the reference everywhere it is right and wins *k* of
-the 23 clears J with no loss from *k* = 4; the `--self-test` pins win 4 clears and
-win 3 does not. **The stored `qwen3:8b` run already scores about 0.88, so every
+items (23 on the drafter's labels). With the harness's own bootstrap (10,000
+resamples, seed 42, the edge-typing screen's), a model that matches the reference
+everywhere it is right and wins *k* of the 24 clears J with no loss from *k* = 4; the
+`--self-test` pins win 4 clears and win 3 does not. `run_revisions_screen.py j-table`
+(no model; the edge-typing screen's `j_tolerance`) adds the losses a candidate can
+afford, on the adjudicated labels (id order; the range is over 10 seeded shuffles of
+which items are won and lost):
+
+| wins | lose at most | range |
+| --- | --- | --- |
+| 3 | none (cannot clear J) | -1 to -1 |
+| 4 | 0 | 0 to 0 |
+| 5 | 0 | 0 to 0 |
+| 6 | 0 | 0 to 0 |
+| 7 | 1 | 1 to 1 |
+| 8 | 1 | 1 to 1 |
+| 9 | 2 | 2 to 2 |
+| 10 | 2 | 2 to 2 |
+| 12 | 3 | 3 to 4 |
+| 14 | 5 | 5 to 5 |
+| 16 | 6 | 6 to 6 |
+| 18 | 7 | 7 to 8 |
+| 20 | 9 | 9 to 9 |
+| 22 | 10 | 10 to 10 |
+| 24 (every miss) | 12 | 11 to 12 |
+
+**The stored `qwen3:8b` runs already score about 0.92, and each clears J by a wide
+margin (gain over the lexical cut +0.330 [0.199, 0.466] for the latest run), so every
 competent model clears J.** A pass shows a model agrees with these labels better
 than the best word-overlap cut does; it does not show the model judges revisions
 correctly, and it does not discriminate between models. The deciding comparison is
-selection against `qwen3:8b`, where the headroom is about 7 items:
+selection against `qwen3:8b`, where the headroom is 6 items, not the 7 the drafter's
+labels showed:
 
-- Replaying the stored per-item scores of the latest `qwen3:8b` run (50 of 58 items
-  right in every run; five never right, two right one run in five, one at 0.73), a
-  candidate that fixes 3 of the 7 weakest items with no loss has a paired-gain lower
-  bound of 0.0 and one that fixes 5 has +0.017. Selection therefore needs a
-  candidate that is right on at least 5 of those 7 and loses nothing, or a different
-  set of items after the adjudication. The most probable outcome, stated before the
-  data, is that nothing is selected.
+- Replaying the stored per-item scores of the latest `qwen3:8b` run (`score` prints
+  this; 52 of 58 items right in every run; three never right: `r14`, `r27`, `r30`;
+  three partial: `r13` 0.20, `r28` 0.20 and `r04` 0.73), a candidate that fixes 3 of
+  the 6 weakest items with no loss has a paired-gain lower bound of 0.0000 (point
+  +0.0517), one that fixes 4 of 6 has +0.0138 (point +0.0655) and one that fixes 5 of 6
+  has +0.0172. The other two stored runs agree (6 of 58 and 7 of 58 items below 1.0;
+  4 fixed gives +0.0092 and +0.0149). Selection therefore needs a candidate that is
+  right on at least 4 of those 6 and loses nothing, an easier bar than the 5 of 7 the
+  drafter's labels implied, but the replay is the most favourable case: a real candidate
+  also loses items and varies between runs. The adjudication moved two items in the
+  baseline's favour (`r43` and `r53` resolved to `reaffirms`, which the latest run answers
+  in every call: REAFFIRMS recall 1.000, 120 of 120 calls), and `r14`, resolved to the
+  drafter's `reverses`, is still never answered `reverses`. The most probable outcome, stated before the data, is that nothing is
+  selected.
 - The 12 `confirmation` pairs are at ceiling for the baseline (0.99 to 1.00) and the
   46 `original` pairs are the ones the judge prompt was tuned on, for `qwen3:8b`.
   The baseline's score is optimistic for generalisation and a candidate that wins is
@@ -182,8 +225,8 @@ the resolved labels, with a 95% percentile bootstrap over items (10,000 resample
 seed 42).
 
 - **J (justified):** a model clears J iff its paired gain over the reference (the
-  strongest model-free predictor on the resolved labels, recomputed at registration;
-  the lexical cut on the drafter's) has a 95% lower bound above 0. If no model
+  strongest model-free predictor on the resolved labels: the lexical cut, on the
+  drafter's and on the resolved labels alike) has a 95% lower bound above 0. If no model
   clears J the verdict is "the key is not justified on this fixture". Because the
   stored baseline already clears it, J is computed for `qwen3:8b` too and reported
   first.
@@ -231,8 +274,8 @@ the baseline's median, floor 60 s, as in #1557). If the measured total would exc
 the budget the confirmation drops to 3 seeds; if the screen itself would exceed it,
 the slowest candidate is dropped before any scored call, not after. One Ollama job at
 a time, models one at a time, server defaults, and this work the only user of the
-server. The harness never contacts a model in `--self-test`, `forecast`, `blind-sheet`
-or `adjudicate`.
+server. The harness never contacts a model in `--self-test`, `forecast`, `j-table`,
+`import-stored`, `blind-sheet`, `adjudicate` or `score`.
 
 ## Commands
 
@@ -240,6 +283,10 @@ or `adjudicate`.
 OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py forecast --runs 3
 uv run python -u evals/decision_revisions_screen/run_revisions_screen.py run --model qwen3:8b --runs 3
 uv run python evals/decision_revisions_screen/run_revisions_screen.py score
+# model-free: the J table, and a stored run of the older harness read into this format
+OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py j-table
+OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py import-stored --runs-dir <dir> --stored evals/decision_revisions/results/runs-20260929T011322Z-qwen3-8b.json
+OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py score --models qwen3:8b --runs-dir <dir>
 ```
 
 ## Decisions the owner made (2026-10-27)
@@ -250,12 +297,12 @@ recommended.
 1. **The stored `qwen3:8b` runs are re-scored on the adjudicated labels before the screen
    spends about 2 hours of the server.** Decided by the owner, 2026-10-27. The adjudication is
    recorded, so the remaining question is whether the headroom above `qwen3:8b` survives it.
-   **Not done yet:** no existing command re-scores them. The screen's `score` reads only its
-   own run files (`runs-<model>.json` with a `stamp` and `rows`), and the stored runs under
-   `evals/decision_revisions/results/` are the older harness's format; that harness's
-   `--rescore` scores them against the drafter's labels with its own report, not against
-   `adjudication.json` under this screen's rule. A model-free import of those rows is owed
-   before the 0.893 / 0.887 / 0.882 figures and the headroom analysis can be replaced.
+   **Done (status note, not a change to the decision):** the screen's `score` reads only
+   its own run files (`runs-<model>.json` with a `stamp` and `rows`), and the stored runs
+   under `evals/decision_revisions/results/` are the older harness's format, so
+   `import-stored` reads their stage-(b) rows into this screen's format (no model) and
+   `score` then applies this screen's rule against `adjudication.json`. The 0.893 / 0.887 /
+   0.882 figures became 0.928 / 0.922 / 0.916 and the headroom 7 items became 6 (above).
 2. **An undirected `reverses`/`refines` is scored as one untyped change.** Decided by the
    owner, 2026-10-27. It is what production does with the verdict (`relation_for`); scoring
    the distinction would reward a choice nothing consumes.

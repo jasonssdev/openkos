@@ -101,6 +101,60 @@ def justified(delta_vs_reference: Mapping[str, float]) -> bool:
     return bool(_EDGE.justified(delta_vs_reference))
 
 
+def j_tolerance(
+    reference: Mapping[str, float],
+    *,
+    wins: int,
+    shuffle_seed: int | None = None,
+    resamples: int = 10_000,
+) -> int:
+    """Most items a candidate can lose and still clear J while winning `wins` of
+    the reference's misses (the edge-typing screen's definition, unchanged)."""
+    return int(
+        _EDGE.j_tolerance(
+            reference, wins=wins, shuffle_seed=shuffle_seed, resamples=resamples
+        )
+    )
+
+
+def render_j_table(
+    name: str,
+    reference: Mapping[str, float],
+    *,
+    wins: Sequence[int],
+    shuffles: int,
+    resamples: int = 10_000,
+) -> str:
+    return str(
+        _EDGE.render_j_table(
+            name, reference, wins=wins, shuffles=shuffles, resamples=resamples
+        )
+    )
+
+
+def headroom_replay(
+    per_item: Mapping[str, float], *, resamples: int = 10_000
+) -> list[dict[str, float]]:
+    """What a candidate that fixes the baseline's weakest items and loses nothing
+    would show: for each count of items below 1.0 fixed (weakest first, ties by
+    id), the paired gain over the baseline and its 95% lower bound. The most
+    favourable case for a candidate; real candidates also lose and vary."""
+    weak = [k for _, k in sorted((v, k) for k, v in per_item.items() if v < 1.0)]
+    rows: list[dict[str, float]] = []
+    for fixed in range(len(weak) + 1):
+        candidate = {**per_item, **dict.fromkeys(weak[:fixed], 1.0)}
+        gap = paired_bootstrap(candidate, per_item, resamples=resamples)
+        rows.append(
+            {
+                "fixed": fixed,
+                "of": len(weak),
+                "point": gap["point"],
+                "lo": gap["lo"],
+            }
+        )
+    return rows
+
+
 LABELS: Final = ("REVERSES", "REFINES", "REAFFIRMS", "UNRELATED")
 """The fixture's label vocabulary, in a fixed order (upper case, as the fixture
 writes it; the judge's wire values are the lower-case `RevisionVerdictValue`s)."""
@@ -339,7 +393,7 @@ def summarize(
             quiet_calls += 1
             quiet_queued += bool(row.get("actionable"))
     repeated = [a for a in answers.values() if len(a) >= 2]
-    latencies = [float(r["latency_s"]) for r in mine]
+    latencies = [float(r["latency_s"]) for r in mine if r.get("latency_s") is not None]
     n = len(mine)
     per_item = {k: sum(v) / len(v) for k, v in strict.items()}
     uncontested = [v for k, v in per_item.items() if not by_id[k].contested]

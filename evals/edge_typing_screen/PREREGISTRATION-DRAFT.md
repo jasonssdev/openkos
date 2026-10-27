@@ -1,13 +1,13 @@
 # Pre-registration (DRAFT): the edge-typing model screen (#1563)
 
 **Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third
-adjudication") and the owner's questions are decided; still blocked on Stage 0 and
-the `TO RECOMPUTE` J table.** Nothing below binds until a final version of this
-file, with the numbers marked `TO RECOMPUTE` replaced, is merged to `main` before
+adjudication"), the owner's questions are decided and the J table is recomputed;
+still blocked on Stage 0.** Nothing below binds until a final version of this
+file is merged to `main` before
 any scored model call (#1556: pre-register, and merge the pre-registration, before
 any run). No model has been called in preparing this draft; every number in it was
-computed by `run_edge_typing_screen.py forecast` or `--self-test`, which contact
-none. A measurement: it adopts nothing and changes no production code, default,
+computed by `run_edge_typing_screen.py forecast`, `j-table` or `--self-test`, which
+contact none. A measurement: it adopts nothing and changes no production code, default,
 prompt or task key. Part of #1556; refs #1563, #1557.
 
 ## Before this can be registered
@@ -19,10 +19,9 @@ prompt or task key. Part of #1556; refs #1563, #1557.
    volatility fixture records them (`adjudication` with `first`, `second`, `resolved`,
    `reason`; the losing label stays as `alt_label`), and listed in
    [`ADJUDICATION.md`](ADJUDICATION.md).
-2. **Done for the floors and the class balance** (`forecast`, below). The J
-   tolerance table is still the first author's: no model-free command prints it,
-   so it is `TO RECOMPUTE` at registration; `--self-test` pins on the resolved
-   labels that four wins and no loss clear J and three do not.
+2. **Done** for the floors and the class balance (`forecast`, below) and for the J
+   tolerance table (`j-table`, below), both on the resolved labels; `--self-test`
+   pins that four wins and no loss clear J and three do not.
 3. **Done.** The three questions are decided (owner, 2026-10-27; see "Decisions the
    owner made").
 4. **Stage 0** (below) replaces the assumed latencies and records the model
@@ -93,14 +92,39 @@ Class balance (resolved): `caused_by` 3, `depends_on` 4, `member_of` 4, `part_of
 `references` 21, `related_to` 9).
 
 **What the J bar is.** The reference predictor is wrong on 25 items (28 on the first
-author's labels). The tolerance table below was computed on the first author's labels and
-is `TO RECOMPUTE`. With the
+author's labels). The tolerance table below is `run_edge_typing_screen.py j-table`
+(no model) on the resolved labels. With the
 harness's own bootstrap (10,000 resamples, seed 42), a model that matches
-`always references` everywhere it is right and wins *k* of the 28 clears J with at
-most this many losses elsewhere: win 4 lose 0, win 8 lose 1, win 10 lose 2, win 12
-lose 4, win 14 lose 5, win 16 lose 6, win 18 lose 7, win 20 lose 9, win 24 lose 12,
-win 28 lose 15 (the exact tolerance depends on which items are won and lost; the
-`--self-test` pins win 4 clears and win 3 does not). Stated before data so a J pass
+`always references` everywhere except that it wins *k* of the 25 items the reference
+gets wrong clears J with at most this many losses among the 24 it gets right
+(`edge_screen_core.j_tolerance`: the first *k* wrong and the first *m* right items in
+id order; a loss is an item to 0.0). The same definition on the first author's
+labels reproduces this draft's earlier first-author table exactly (win 4 lose 0, win
+8 lose 1, win 12 lose 4, win 28 lose 15), so the definition is the one the earlier table used.
+
+| wins | lose at most (id order) | range over 10 seeded shuffles of which items |
+| --- | --- | --- |
+| 3 | none (cannot clear J) | -1 to -1 |
+| 4 | 0 | 0 to 0 |
+| 5 | 0 | 0 to 0 |
+| 6 | 0 | 0 to 0 |
+| 7 | 1 | 1 to 1 |
+| 8 | 1 | 1 to 1 |
+| 9 | 2 | 2 to 2 |
+| 10 | 2 | 2 to 2 |
+| 12 | 4 | 3 to 4 |
+| 14 | 5 | 5 to 5 |
+| 16 | 6 | 6 to 6 |
+| 18 | 7 | 7 to 8 |
+| 20 | 9 | 9 to 9 |
+| 22 | 10 | 10 to 10 |
+| 24 | 12 | 11 to 12 |
+| 25 (every miss) | 12 | 12 to 13 |
+
+Which items are won and lost moves the cell by at most one (the last column); the
+table is a guide to the size of the bar, not a decision rule, which is the bootstrap on
+the real per-item scores. `--self-test` pins win 4 clears and win 3 does not.
+Stated before data so a J pass
 is not over-read: **a pass shows a model agrees with these labels better than
 answering `references` for every link does; it does not show the model types edges
 correctly.** In particular 29 of the 49 items are constructed to the rubric and

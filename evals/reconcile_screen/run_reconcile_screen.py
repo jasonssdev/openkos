@@ -641,6 +641,15 @@ def _self_test() -> int:
         all(m in ASSUMED_MEDIAN_LATENCY_S for m in (BASELINE, *CANDIDATES)),
     )
 
+    j_text = core.render_j_table(ref_name, ref_scores, gains=[0.05], resamples=500)
+    check(
+        "j-table: names the reference's misses, the constant gain and a row per win count",
+        "scores below 1.0 in 13 of 15 cases" in j_text
+        and "+0.05" in j_text
+        and "| 3 | -1 |" in j_text
+        and "| 4 | 0 |" in j_text,
+    )
+
     # --- the blind sheet ------------------------------------------------------------
     sheet = adj.build_sheet(cases)
     ids = adj.opaque_ids(cases)
@@ -789,6 +798,10 @@ def build_parser() -> argparse.ArgumentParser:
     fc.add_argument("--models", default=",".join([BASELINE, *CANDIDATES]))
     fc.add_argument("--runs", type=int, default=DEFAULT_RUNS)
 
+    jt = sub.add_parser("j-table", help="the J bar on the resolved labels; no model")
+    jt.add_argument("--resamples", type=int, default=10_000)
+    jt.add_argument("--gains", default="0.05,0.10", help="comma-separated")
+
     run = sub.add_parser("run", help="one model, every case")
     common(run)
     run.add_argument("--model", required=True)
@@ -870,6 +883,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             encoding="utf-8",
         )
         print(f"imported {len(labels)} labels into {args.out}")
+        return 0
+
+    if args.stage == "j-table":
+        name, scores = core.reference_baseline(cases)
+        print(
+            core.render_j_table(
+                name,
+                scores,
+                gains=[float(g) for g in args.gains.split(",")],
+                resamples=args.resamples,
+            )
+        )
         return 0
 
     if args.stage == "forecast" or (args.stage == "run" and args.dry_run):
