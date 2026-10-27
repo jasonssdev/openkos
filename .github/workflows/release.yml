@@ -51,7 +51,9 @@ jobs:
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           python-version: "3.14"
-          enable-cache: true
+          # No cache: this job mints the PyPI publishing token, so nothing
+          # restored from a cache another ref wrote may reach the build.
+          enable-cache: false
 
       # Guard against a tag/version mismatch before anything is built or
       # uploaded: a tag `v0.2.0` cut while pyproject still says `0.1.0` would
@@ -145,3 +147,80 @@ jobs:
           done
           echo "::error::PyPI never resolved openkos $tag as latest (last seen: ${latest:-unreachable})" >&2
           exit 1
+
+  # The desktop installer is built here, from the tagged commit, and not taken
+  # from a pull request's `desktop-bundle` run: the file a user downloads must
+  # be the one the tag names (#1622). It runs after the PyPI job, so the
+  # provenance gates above (tag contained in main, CI green for the commit)
+  # have already passed; if this job fails, re-run it -- the release and the
+  # upload are idempotent.
+  desktop-release:
+    name: build + attach the desktop .dmg
+    needs: release
+    runs-on: macos-latest
+    timeout-minutes: 75
+    if: github.repository == 'jasonssdev/openkos'
+    permissions:
+      # The only job that writes to the repository: it creates the GitHub
+      # release and uploads the installer to it. Nothing else needs it.
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # No caches anywhere in this job: it holds `contents: write` and its
+      # output is the binary users download, so nothing restored from a cache
+      # another ref wrote may reach it. A cold build is slower and that is the
+      # price.
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          python-version: "3.14"
+          enable-cache: false
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: desktop/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: desktop/.node-version
+
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version 2.12.3 --locked
+
+      # The same script CI runs: it re-signs ad hoc, smoke-checks the engine
+      # inside the .app and only then writes build/desktop/OpenKOS.dmg.
+      - name: Build the app and smoke-check its engine
+        run: desktop/scripts/build-app.sh
+
+      - name: Checksum the installer
+        run: |
+          cd build/desktop
+          shasum -a 256 OpenKOS.dmg | tee OpenKOS.dmg.sha256
+
+      # `gh` is preinstalled on the runner and authenticates with the job's
+      # `contents: write` token. The notes state the build is unsigned and carry
+      # the sha256 the download page tells the user to compare against.
+      - name: Attach the unsigned installer to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(cut -d' ' -f1 build/desktop/OpenKOS.dmg.sha256)"
+          notes="$(printf '%s\n' \
+            "**Unsigned developer build for Apple Silicon.** macOS refuses to open it until you approve it in System Settings > Privacy & Security. Read https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/docs/install-desktop.md before you open it." \
+            "" \
+            "sha256 of \`OpenKOS.dmg\`:" \
+            "" \
+            "\`${sha}\`")"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --notes "$notes"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --title "OpenKOS ${GITHUB_REF_NAME#v} (unsigned developer build)" \
+              --notes "$notes"
+          fi
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            build/desktop/OpenKOS.dmg build/desktop/OpenKOS.dmg.sha256

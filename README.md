@@ -31,6 +31,8 @@ OpenKOS runs local models through Ollama. Ollama keeps one chat model resident a
 
 Five steps from a fresh machine to your first cited answer. Everything runs on your computer: no accounts, no API keys, nothing leaves your machine.
 
+> **Prefer an app to a terminal?** On an Apple Silicon Mac there is an unsigned developer build of the desktop app. macOS blocks it until you approve it, so read [Install the desktop app](docs/install-desktop.md) before you download it. The steps below are the command-line path.
+
 **1 · Install [Ollama](https://ollama.com)** — the local AI runtime OpenKOS talks to. Download it, open it once, and it stays running in the background.
 
 **2 · Pull the default models** (one time):
