@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0078: The inbox watch in the desktop app needs a supervised daemon, so it is a design decision, not a setting"
 description: Turning on the inbox watch from Settings is not a config edit. The watch runs only inside `openkos daemon`, which the shell does not supervise and which also runs the maintenance advisors. This draft proposes that the shell supervise an opt-in daemon sidecar for the chosen workspace, with the inbox folder written through the two-phase settings change, with the owner's answers on daemon scope, lifetime, workspaces and failure display.
-status: Proposed
+status: Accepted
 date: 2026-10-27
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0078: The inbox watch in the desktop app needs a supervised daemon, so it is a design decision, not a setting
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-27
 
 ## Context
