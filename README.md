@@ -9,7 +9,7 @@
 
 OpenKOS turns your scattered text into a living, portable knowledge base your AI agents can actually use — compiled once, kept current, and stored as plain [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) files so it is never locked to any app, model, or vendor.
 
-> **Project status: alpha.** The Compiler, the Graph-and-Memory, the Ask Surface, and the Unattended Engine arcs (MVP 1 through MVP 4) are complete and shipped; The Quiet Engine arc, which cuts the decisions the engine asks of you, is complete too; and interoperability (MVP 5), OKF export and import, is complete. The desktop app (MVP 6) is in progress: the API it is built on has shipped and its packaging spike has run, and the app itself is next. The API may still change between releases, but OpenKOS is published and installable now. Early contributors and feedback are welcome — see [Contributing](#contributing).
+> **Project status: alpha.** The Compiler, the Graph-and-Memory, the Ask Surface, and the Unattended Engine arcs (MVP 1 through MVP 4) are complete and shipped; The Quiet Engine arc, which cuts the decisions the engine asks of you, is complete too; and interoperability (MVP 5), OKF export and import, is complete. The desktop app (MVP 6) is in progress: the API it is built on and a developer build of the app have shipped; distribution, the updater and the exit session remain. The API may still change between releases, but OpenKOS is published and installable now. Early contributors and feedback are welcome — see [Contributing](#contributing).
 
 ---
 

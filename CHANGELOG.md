@@ -10,7 +10,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 > published on [PyPI](https://pypi.org/project/openkos/); the MVP 1 (Compiler),
 > MVP 2 (Graph and Memory), MVP 3 (Ask Surface), MVP 4 (Unattended Engine), and
 > MVP 5 (Interoperability) arcs are complete; MVP 6 (the desktop app and the stable
-> Python API) is next. The project's vision,
+> Python API) is in progress. The project's vision,
 > architecture, and design live in the documents under
 > [`docs/`](https://github.com/jasonssdev/openkos/tree/main/docs).
 
