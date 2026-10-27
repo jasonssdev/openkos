@@ -2,7 +2,7 @@
 
 Operating manual for AI coding agents (and humans) working **on the OpenKOS codebase**. This is the canon: read it first and keep every change consistent with it. (It is distinct from the `AGENTS.md` *inside* a knowledge bundle, which tells an agent how to operate that bundle.)
 
-OpenKOS is an open-source, **local-first engine** that compiles a person's text into a living, portable knowledge base, built on the **Open Knowledge Format (OKF)**. It is alpha; **MVP 1 (The Compiler)**, **MVP 2 (The Graph and Memory)**, **MVP 3 (The Ask Surface)**, **MVP 4 (The Unattended Engine)**, **The Quiet Engine** (a named arc before MVP 5, [ADR-0044](docs/adr/0044-the-quiet-engine-arc-precedes-interoperability.md)) and **MVP 5 (Interoperability)** are complete, and **MVP 6 (The Desktop App)** is next.
+OpenKOS is an open-source, **local-first engine** that compiles a person's text into a living, portable knowledge base, built on the **Open Knowledge Format (OKF)**. It is alpha; **MVP 1 (The Compiler)**, **MVP 2 (The Graph and Memory)**, **MVP 3 (The Ask Surface)**, **MVP 4 (The Unattended Engine)**, **The Quiet Engine** (a named arc before MVP 5, [ADR-0044](docs/adr/0044-the-quiet-engine-arc-precedes-interoperability.md)) and **MVP 5 (Interoperability)** are complete, and **MVP 6 (The Desktop App)** is in progress.
 
 ## Read these first
 
