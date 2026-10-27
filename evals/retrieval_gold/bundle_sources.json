@@ -1,0 +1,524 @@
+{
+ "kind": "retrieval-gold-bundle-sources",
+ "version": 1,
+ "bundle": "retrieval-gold-v1",
+ "roots": {
+  "transcripts": "AMI transcripts rendered by the thesis renderer (the concept-screen inputs/transcripts layout); --transcripts DIR",
+  "extraction-corpus": "examples/extraction-corpus/sources; most files are gitignored third-party notes, so --prose-dir DIR points at a checkout that has them",
+  "repo": "this repository"
+ },
+ "sources": [
+  {
+   "id": "ES2015a",
+   "root": "transcripts",
+   "path": "ES2015a.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 13692,
+   "sha256": "f7096938ea22298d1c25f4fd8a708c23c476bfb1b3c24b8e5e5f6d8bdbed36ef"
+  },
+  {
+   "id": "ES2015b",
+   "root": "transcripts",
+   "path": "ES2015b.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 39161,
+   "sha256": "d7b2ac3b84fe96a3fcb340d0f7d7c4185dabbfed2acf61fadb455f740743f50c"
+  },
+  {
+   "id": "ES2015c",
+   "root": "transcripts",
+   "path": "ES2015c.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 34574,
+   "sha256": "98d4f0e886816a41cf07ca194bae50b89121952240095fa6447a5617720a26db"
+  },
+  {
+   "id": "ES2015d",
+   "root": "transcripts",
+   "path": "ES2015d.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 33195,
+   "sha256": "398f23c48a3e5bf1c6acb2a807e15763e2002765ea14c922a8fc46fe3a7cba6f"
+  },
+  {
+   "id": "IB4003",
+   "root": "transcripts",
+   "path": "IB4003.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 35625,
+   "sha256": "32855826eedf2f057ae2a345154595c526e33bd8b40cc5914112287044a775fd"
+  },
+  {
+   "id": "IB4005",
+   "root": "transcripts",
+   "path": "IB4005.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 35683,
+   "sha256": "980a45cb3c1fbf94c7e70efdfe05aed3dd3757461148be355d030c84e757fc40"
+  },
+  {
+   "id": "IB4010",
+   "root": "transcripts",
+   "path": "IB4010.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 53402,
+   "sha256": "14f48960a39f68f095487e16f40d40ec3b8f20073c48ba4581ec83155bd1b795"
+  },
+  {
+   "id": "IB4011",
+   "root": "transcripts",
+   "path": "IB4011.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 42166,
+   "sha256": "b6fd7785541a335e81a656c96eed67528a363b5fd4ea7f388a68d60033dec177"
+  },
+  {
+   "id": "IS1002b",
+   "root": "transcripts",
+   "path": "IS1002b.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 41455,
+   "sha256": "52053b23979d33df36e605a466c61efd68b449364122c0fb8f60da8de68ec133"
+  },
+  {
+   "id": "IS1002c",
+   "root": "transcripts",
+   "path": "IS1002c.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 36034,
+   "sha256": "47c734f3342e8d89f49c5750d44fb74d1b99753965dd71fc6eab239ed4c62d0a"
+  },
+  {
+   "id": "IS1002d",
+   "root": "transcripts",
+   "path": "IS1002d.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 19514,
+   "sha256": "fe28727ec914b5d96bf02cde4253309a5f0e93babc4cae4a007ab98dee977b78"
+  },
+  {
+   "id": "IS1004a",
+   "root": "transcripts",
+   "path": "IS1004a.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 8504,
+   "sha256": "6f5601b94f8296d8ee4a4210124c8852e3b351f390b394fad65e1dc019628d14"
+  },
+  {
+   "id": "IS1004b",
+   "root": "transcripts",
+   "path": "IS1004b.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 34757,
+   "sha256": "75fe9ea0e23694df1f67e0bb640d7029e482b54eae6d6a6267f596a78953677a"
+  },
+  {
+   "id": "IS1004c",
+   "root": "transcripts",
+   "path": "IS1004c.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 36560,
+   "sha256": "ef12d47d7b9be95c38737fd9daf702c46e57730729597b8cdc8b295203a0bb9e"
+  },
+  {
+   "id": "IS1004d",
+   "root": "transcripts",
+   "path": "IS1004d.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 29581,
+   "sha256": "3c74bdd92a7a734b0ce4f401c902213ba519355eef0eb89a8db48f8ffe990963"
+  },
+  {
+   "id": "IS1005a",
+   "root": "transcripts",
+   "path": "IS1005a.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 9388,
+   "sha256": "c897a6dde90ac19616b0f48b9a59760a5b673beb4c4c8d8cf6b5cc1d937f75fe"
+  },
+  {
+   "id": "IS1005b",
+   "root": "transcripts",
+   "path": "IS1005b.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 28974,
+   "sha256": "07a63f593b9cb06c6be1fc7a95f37a6be6d564588462c56f4dd5da68c083320a"
+  },
+  {
+   "id": "IS1005c",
+   "root": "transcripts",
+   "path": "IS1005c.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 25544,
+   "sha256": "1dfd85af9ae0f22452ccf1028a3ce07158862043eead37b8993605df5a8b8dff"
+  },
+  {
+   "id": "TS3009a",
+   "root": "transcripts",
+   "path": "TS3009a.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 23559,
+   "sha256": "6d087bc2b6fd9097d97eb71e5f6da5db7f107aa65d79ea7d5f97b0d6fc77ab4f"
+  },
+  {
+   "id": "TS3009b",
+   "root": "transcripts",
+   "path": "TS3009b.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 42903,
+   "sha256": "92b42d8a1f870a7d7cc214598c27b3c750d2e853f30aa6699e11032fac82d8d5"
+  },
+  {
+   "id": "TS3009c",
+   "root": "transcripts",
+   "path": "TS3009c.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 40316,
+   "sha256": "7d78f8e33bb7eacd7346b87732e429e1255d9fc01d3e6fc1bf5aedd789640fe6"
+  },
+  {
+   "id": "TS3009d",
+   "root": "transcripts",
+   "path": "TS3009d.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 37489,
+   "sha256": "e6ffc49dd460c3aa1258fa1b4b9e35962cf0d547b28bf18478d6750ecf9584dc"
+  },
+  {
+   "id": "TS3012b",
+   "root": "transcripts",
+   "path": "TS3012b.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 46998,
+   "sha256": "9cbd0f089c5d474ec4251dc47fd00870535dafdcac45f95dd4c3e11b639e8ccf"
+  },
+  {
+   "id": "TS3012c",
+   "root": "transcripts",
+   "path": "TS3012c.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 46614,
+   "sha256": "a75afb6be30c21e5d9f7a34ae2cd40f89d544573415a10867ab6229bd15a5481"
+  },
+  {
+   "id": "TS3012d",
+   "root": "transcripts",
+   "path": "TS3012d.md",
+   "language": "en",
+   "kind": "ami-meeting",
+   "tier": "core",
+   "bytes": 38429,
+   "sha256": "0d20e54e31f2dc750b600ca0f590f0657948c17ca066109ec9c08d90ee5244a2"
+  },
+  {
+   "id": "large-03-skills-vs-tools",
+   "root": "extraction-corpus",
+   "path": "large-03-skills-vs-tools.md",
+   "language": "en",
+   "kind": "course-notes",
+   "tier": "core",
+   "bytes": 16948,
+   "sha256": "48b6f2fc05b91d89046afbc289c46e7e60511130428bb07b1ec800dfbc7869bc"
+  },
+  {
+   "id": "medium-08-sdk-skills",
+   "root": "extraction-corpus",
+   "path": "medium-08-sdk-skills.md",
+   "language": "en",
+   "kind": "course-notes",
+   "tier": "core",
+   "bytes": 13600,
+   "sha256": "1cc32a23deb57a53b08a3e2dcf0aa23e4f37ecc2e6c1f55c2db24ff4b948cc46"
+  },
+  {
+   "id": "medium-10-reunion-plataforma",
+   "root": "extraction-corpus",
+   "path": "medium-10-reunion-plataforma.md",
+   "language": "es",
+   "kind": "meeting-minutes",
+   "tier": "core",
+   "bytes": 12948,
+   "sha256": "643fdf8708c45a047ed5a7e77dd2434992cfc00bfeb0a2e2ceed12ab8d1c61d6"
+  },
+  {
+   "id": "small-04-pre-build-skills",
+   "root": "extraction-corpus",
+   "path": "small-04-pre-build-skills.md",
+   "language": "es",
+   "kind": "course-notes",
+   "tier": "core",
+   "bytes": 7693,
+   "sha256": "148a3ce6e11828e2c1497df338b1515bdcd61597a4170347e2819cb8c2ca8d4e"
+  },
+  {
+   "id": "quiet-01-project-overview",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/01-project-overview.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 5406,
+   "sha256": "dd628262a157017de294231b3da388fe603706950145d0381fbb6e36f06a8205"
+  },
+  {
+   "id": "quiet-02-hardware-guide",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/02-hardware-guide.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 9516,
+   "sha256": "3e46aecda2f3558a6cd2c662837c71bb644b4cd3dae386205f5e65316848f411"
+  },
+  {
+   "id": "quiet-03-sensor-calibration",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/03-sensor-calibration.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 4354,
+   "sha256": "9f3051b302ab282826b64c05e39703b56e2ae771ce557e205bd7cb9b107f31be"
+  },
+  {
+   "id": "quiet-04-mqtt-topics",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/04-mqtt-topics.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2949,
+   "sha256": "29272a6d2d8a4917648b941484594ec48cbd630695667d767b944640246b8df3"
+  },
+  {
+   "id": "quiet-05-data-storage",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/05-data-storage.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 3411,
+   "sha256": "25c6b394dcdee78659533c2440daac5155fe71f75d37fc5fb2803bd523936534"
+  },
+  {
+   "id": "quiet-06-dashboards",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/06-dashboards.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2741,
+   "sha256": "07227d36c27a71dfd8be64550bc6c755ef5debf0435c737f4ee1cbcb0dc85a13"
+  },
+  {
+   "id": "quiet-07-meeting-2026-03-04-kickoff",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/07-meeting-2026-03-04-kickoff.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 4733,
+   "sha256": "80b14813e83f252056054e9c3655eb1b3d081d3ab9a01259d8c2c52ba6caf016"
+  },
+  {
+   "id": "quiet-08-meeting-2026-03-18-weekly-sync",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/08-meeting-2026-03-18-weekly-sync.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2496,
+   "sha256": "8085cb674d28e354fd90f5e0b5670850282e6ff761ecaf534fd9496dd53d62c7"
+  },
+  {
+   "id": "quiet-09-meeting-2026-04-01-weekly-sync",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/09-meeting-2026-04-01-weekly-sync.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2361,
+   "sha256": "da885f6681c99a286e7fd7ec868f647b79b83be4ddc8cbb623cf2f890ed343cd"
+  },
+  {
+   "id": "quiet-10-lora-gateway",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/10-lora-gateway.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 3705,
+   "sha256": "1494b9af49ef8e3157db93373f9b0b93e086dc1c944452f9ba8a85f844cd428c"
+  },
+  {
+   "id": "quiet-11-solar-power-notes",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/11-solar-power-notes.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2765,
+   "sha256": "4b627e29532f8975fa0afff583083329fafa0e55eb5b4b40351365cc9f6667a7"
+  },
+  {
+   "id": "quiet-12-site-survey-harbor",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/12-site-survey-harbor.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2140,
+   "sha256": "8c2faec0ec3bd48a6b2453ac977f00647cd7b015fa261a4fd8f23fbddedb3bdb"
+  },
+  {
+   "id": "quiet-13-city-council-permit",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/13-city-council-permit.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2471,
+   "sha256": "2c043b0e7d040e5beb186f5eb84d4edf98cbb33e387990a73bc1b47d50615bb9"
+  },
+  {
+   "id": "quiet-14-alerts-and-thresholds",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/14-alerts-and-thresholds.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 3210,
+   "sha256": "dd18268271983a6f7e0323aa7b2308489160f7d35281ecf9e13cb611d1dfbf4d"
+  },
+  {
+   "id": "quiet-15-data-quality-checklist",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/15-data-quality-checklist.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2122,
+   "sha256": "2877c7fc86846fc7dbfc5f3bdd0b42c005ddac406d652dfd4c931f20b501d0e8"
+  },
+  {
+   "id": "quiet-16-volunteer-onboarding",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/16-volunteer-onboarding.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2363,
+   "sha256": "766baaaf2ec2ca0aedec5d5d20fdafd82b0af6d6ed9993e9dd10fd24e3fc8da8"
+  },
+  {
+   "id": "quiet-17-firmware-updates",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/17-firmware-updates.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 3549,
+   "sha256": "115146a88e9a9386718e76d30b6d406cfc660f83bebdf8f2df01bc9f432d7817"
+  },
+  {
+   "id": "quiet-18-backup-and-retention",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/18-backup-and-retention.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2546,
+   "sha256": "15504ce15ce7062d001a77f04ed6bbfb2afa42733b29766fe48ae2b170a22d3d"
+  },
+  {
+   "id": "quiet-19-school-outreach",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/19-school-outreach.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 2432,
+   "sha256": "52f135cbd8a213c8607951d5776c36819c14baa5aada3ec2a01898c02ceff3f7"
+  },
+  {
+   "id": "quiet-20-lessons-learned",
+   "root": "repo",
+   "path": "evals/quiet_engine/corpus/sources/20-lessons-learned.md",
+   "language": "en",
+   "kind": "synthetic-note",
+   "tier": "synthetic",
+   "bytes": 5237,
+   "sha256": "fe28c6cebe22044e9f7769229700387e122d501a6ccb4c98711744f09cc212c9"
+  }
+ ],
+ "excluded": [
+  {
+   "id": "TS3012a",
+   "why": "whole-source cap (#1607): production extraction fails on it"
+  },
+  {
+   "id": "medium-09-sdk-skills-notes",
+   "why": "byte-identical to medium-08 below the H1; a synthetic container-title twin that would duplicate every derived object"
+  },
+  {
+   "id": "every AMI meeting not on ALLOWED_MEETINGS",
+   "why": "thesis evaluation and reserve series; refused by screen_data.require_allowed"
+  },
+  {
+   "id": "evals/decision_extraction/ground_truth/TS3005*",
+   "why": "TS3005 is a thesis evaluation series"
+  },
+  {
+   "id": "evals/desktop_app/materials, examples/good-life-demo/raw",
+   "why": "four notes under 1 KB: they add Source documents, not realism"
+  }
+ ]
+}
