@@ -63,7 +63,13 @@ DEFAULT_RUNS_DIR: Final = (
     pathlib.Path.home() / "Dev/Projects/openkos-eval-runs/edge-typing-screen"
 )
 BASELINE: Final = "qwen3:8b"
-CANDIDATES: Final = ("gemma4:26b-a4b", "qwen3:14b", "qwen3.6:27b", "qwen3.6:35b-a3b")
+CANDIDATES: Final = (
+    "gemma4:26b-a4b",
+    "qwen3:14b",
+    "qwen3.6:27b",
+    "qwen3.6:35b-a3b",
+    "gemma2:27b",
+)
 DEFAULT_TIMEOUT: Final = 120.0
 LOAD_S: Final = 60.0
 ASSUMED_MEDIAN_LATENCY_S: Final[dict[str, float]] = {
@@ -72,10 +78,12 @@ ASSUMED_MEDIAN_LATENCY_S: Final[dict[str, float]] = {
     "qwen3:14b": 6.57,
     "qwen3.6:27b": 6.57,
     "qwen3.6:35b-a3b": 3.22,
+    "gemma2:27b": 6.57,
 }
 """ASSUMED per-call latencies, NOT measured for this task: the answer-call
-medians #1560 recorded, with `qwen3.6:27b` borrowing `qwen3:14b`'s because it
-has none (the volatility screen's table). `evals/edge_typing/README.md` measured
+medians #1560 recorded, with `qwen3.6:27b` and `gemma2:27b` (a candidate by
+the owner's decision of 2026-10-27) borrowing `qwen3:14b`'s because they have
+none (the volatility screen's table). `evals/edge_typing/README.md` measured
 `qwen3:8b` at about 1.3 s per edge on 145-character documents, so these are
 probably high for the small documents and about right for the ADR pairs (up to
 12,000 characters); a stage-0 timing of three calls per model replaces them
@@ -276,7 +284,7 @@ def render_report(
         "",
         "Labels: the first author's"
         + (
-            f", with {adjudicated} item(s) resolved by a second adjudicator."
+            f", with {adjudicated} disagreement(s) adjudicated."
             if adjudicated
             else "; NO second adjudication is recorded yet. Read every number as a"
             " measurement against one person's labels."
@@ -410,12 +418,12 @@ def _self_test() -> int:
         and core.class_balance(items)
         == {
             "caused_by": 3,
-            "depends_on": 5,
+            "depends_on": 4,
             "member_of": 4,
             "part_of": 3,
             "produced_by": 4,
-            "references": 21,
-            "related_to": 9,
+            "references": 24,
+            "related_to": 7,
         },
     )
     check(
@@ -554,10 +562,10 @@ def _self_test() -> int:
 
         # The registered floors.
         check(
-            "the baselines are 21, 9 and 12 of 49 strict; the commonest label is 21 of 49",
+            "the baselines are 24, 7 and 10 of 49 strict; the commonest label is 24 of 49",
             [round(table[n]["strict_accuracy"] * 49) for n in core.BASELINE_NAMES]
-            == [21, 9, 12]
-            and core.majority_baseline(items) == 21 / 49,
+            == [24, 7, 10]
+            and core.majority_baseline(items) == 24 / 49,
         )
         check(
             "the reference for rule J is `always references`",
@@ -569,8 +577,8 @@ def _self_test() -> int:
             if not any(table[n]["per_item_strict"][i.id] for n in core.BASELINE_NAMES)
         ]
         check(
-            "16 items are right under no model-free baseline, so the fixture discriminates",
-            len(nobody) == 16,
+            "15 items are right under no model-free baseline, so the fixture discriminates",
+            len(nobody) == 15,
         )
         ref_scores = core.reference_baseline(items)[1]["per_item_strict"]
         wrong = [k for k, v in ref_scores.items() if v == 0.0]
@@ -681,7 +689,13 @@ def _self_test() -> int:
     check("the report applies the selection rule", "SELECTED" in report)
     check(
         "the report says whose labels it scores against",
-        "NO second adjudication is recorded yet" in report,
+        (
+            f"{sum(i.adjudication is not None for i in items)} disagreement(s)"
+            " adjudicated"
+            if any(i.adjudication is not None for i in items)
+            else "NO second adjudication is recorded yet"
+        )
+        in report,
     )
     text = render_forecast(
         items,
@@ -696,9 +710,9 @@ def _self_test() -> int:
     )
     check(
         "the forecast prints the baselines, the reference and the discrimination without a model",
-        "always references: 0.429 (21 of 49)" in text
+        "always references: 0.490 (24 of 49)" in text
         and "reference baseline (rule J): always references" in text
-        and "no model-free baseline gets right (strict): 16 of 49" in text,
+        and "no model-free baseline gets right (strict): 15 of 49" in text,
     )
     check("the forecast says its latencies are assumed", "assumed" in text)
 
@@ -865,8 +879,20 @@ def _self_test() -> int:
     )
     check(
         "a flagged alternative is a disagreement that says so",
-        len(alt_hit.disagreements) == sum(i.ambiguous for i in items)
-        and all(d.is_alt for d in alt_hit.disagreements),
+        alt_hit.disagreements != [] and all(d.is_alt for d in alt_hit.disagreements),
+    )
+    recorded = adj.adjudicate(
+        items,
+        adj.parse_sheet(
+            fill(lambda i: i.adjudication["second"] if i.adjudication else i.label)
+        ),
+    )
+    check(
+        "the recorded second labels reproduce 38 of 49, kappa 0.696, 11 disagreements",
+        recorded.agreed == 38
+        and len(recorded.disagreements) == 11
+        and recorded.kappa is not None
+        and abs(recorded.kappa - 0.696) < 5e-4,
     )
     blank = adj.adjudicate(items, adj.parse_sheet(sheet))
     check("an unfilled sheet is rejected, not scored", blank.problems != [])

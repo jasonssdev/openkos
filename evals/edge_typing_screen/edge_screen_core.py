@@ -150,9 +150,14 @@ def _item(raw: Mapping[str, Any], docs: Mapping[str, Doc]) -> Item:
             raise ValueError(
                 f"{item_id}: adjudication needs first/second/resolved/reason"
             )
-        if record["resolved"] != label or record["first"] == label:
+        if record["resolved"] != label:
             raise ValueError(f"{item_id}: adjudication must resolve to `label`")
-        if alt != record["first"]:
+        if record["first"] == label:
+            # Resolved to the first author: the losing second label is the
+            # alternative a careful reader could still defend.
+            if alt != record["second"]:
+                raise ValueError(f"{item_id}: the second label must stay as alt_label")
+        elif alt != record["first"]:
             raise ValueError(f"{item_id}: the first label must stay as alt_label")
     if not str(raw.get("how", "")).strip():
         raise ValueError(f"{item_id}: every label states how it was decided")

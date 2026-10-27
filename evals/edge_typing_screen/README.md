@@ -2,8 +2,8 @@
 
 A measurement harness for the `edge_typing` task key. **It has not been run, and
 it is not registered:** [`PREREGISTRATION-DRAFT.md`](PREREGISTRATION-DRAFT.md) is a
-draft blocked on the repository owner's blind adjudication of the labels (see
-"Second adjudication"). No model has been called. Part of #1556; refs #1563.
+draft; its labels are adjudicated (see "Second adjudication") and it is blocked on the
+owner's open questions and Stage 0. No model has been called. Part of #1556; refs #1563.
 
 It does not duplicate [`evals/edge_typing/`](../edge_typing/README.md). That
 harness is a regression gate for prompt changes on one model: a constructed
@@ -84,14 +84,14 @@ label:
 | `always related_to` | the abstention for every link; what the suggester answers most (67% of accepted edges on a real bundle before the rubric of #388, 59% of emissions on the constructed fixture after it, `evals/edge_typing/`) |
 | `type signature` | the type whose declared `(subordinate, superordinate)` pair `edge_typing._DIRECTION_TYPE_SIGNATURES` holds for the two object types, else `related_to`; the only deterministic opinion the engine has about a relation type |
 
-On the 49 items: **21 / 49 = 0.429 (`always references`), 9 / 49 = 0.184
-(`always related_to`), 12 / 49 = 0.245 (`type signature`)**, commonest label
-21 / 49 = 0.429. Lenient: 0.551, 0.531, 0.592. These are the first author's labels
-and will move if the adjudication changes any of them; `forecast` recomputes them.
+On the 49 items, resolved labels: **24 / 49 = 0.490 (`always references`), 7 / 49 =
+0.143 (`always related_to`), 10 / 49 = 0.204 (`type signature`)**, commonest label
+24 / 49 = 0.490. Lenient: 0.551, 0.531, 0.592. On the first author's labels they were
+21, 9 and 12 of 49; `forecast` recomputes them.
 
-**The fixture discriminates, by construction and by count.** 16 of 49 items are
-right under none of the three baselines (12 constructed same-type pairs of a
-structural type, and 4 ADR items); 28 of 49 are wrong for the strongest baseline,
+**The fixture discriminates, by construction and by count.** 15 of 49 items are
+right under none of the three baselines (16 on the first author's labels); 25 of 49
+are wrong for the strongest baseline,
 `always references`. A fixture where the commonest answer won would have returned
 a green no model could fail; the volatility screen's lesson was the opposite
 (only 6 items wrong for the floor before its adjudication).
@@ -108,8 +108,9 @@ because a label was decided on that text):
 | `good-life` | 14 | `examples/good-life-demo/bundle` | **the whole production candidate set** of a real compiled bundle (`candidate_edges`, confidential included, which is what a local backend sends); `--self-test` fails if the set changes |
 | `adr` | 6 | `docs/adr/` | ADRs that name one another, chosen for an explicit stated relationship |
 
-Class balance (first author's labels): **3 caused_by, 5 depends_on, 4 member_of,
-3 part_of, 4 produced_by, 21 references, 9 related_to.** 27 items carry a flagged
+Class balance (resolved labels): **3 caused_by, 4 depends_on, 4 member_of,
+3 part_of, 4 produced_by, 24 references, 7 related_to** (the first author's: 5
+depends_on, 21 references, 9 related_to). 27 items carry a flagged
 alternative; the 9 reversed probes carry a `trap_type`. No `Place`,
 `Entity`, `Insight`, `Event` or `Procedure` document appears as an endpoint, and
 nothing was invented to fill them.
@@ -129,7 +130,7 @@ Three things about those labels you must know before reading a number:
 - **`references` is the rubric-literal answer to any link, and that dominates.**
   Every candidate edge is a body link, so SOURCE "explicitly points at, cites, or
   names" TARGET by construction; `references` is wrong only when a specific type is
-  also stated. 21 of 49 items are labelled `references`, 12 of them the good-life
+  also stated. 24 of 49 items are labelled `references`, 14 of them the good-life
   links. The production suggester answers `related_to` most of the time
   (`evals/edge_typing/`: 67% of accepted edges on a real bundle before the rubric,
   59% of emissions on the constructed fixture after it). Which of those two is right for an explicit link
@@ -182,8 +183,8 @@ reversed-orientation item and the type that would be right the other way round.
 | e27 | constructed | Telemetry Rewrite -> Sampling Policy | Project -> Concept | references | related_to | reversed (produced_by) |
 | e28 | constructed | Escalation Ladder -> Marcus Oyelaran | Concept -> Person | produced_by |  |  |
 | e29 | constructed | Marcus Oyelaran -> Escalation Ladder | Person -> Concept | references | related_to | reversed (produced_by) |
-| g01 | good-life | Epicureanism -> Stoicism | Concept -> Concept | related_to | references |  |
-| g02 | good-life | Stoicism -> Epicureanism | Concept -> Concept | related_to | references |  |
+| g01 | good-life | Epicureanism -> Stoicism | Concept -> Concept | references | related_to |  |
+| g02 | good-life | Stoicism -> Epicureanism | Concept -> Concept | references | related_to |  |
 | g03 | good-life | Stoicism -> Frame the essay (decision) | Concept -> Decision | references | related_to |  |
 | g04 | good-life | Stoicism -> Maria Salazar | Concept -> Person | references | caused_by |  |
 | g05 | good-life | Frame the essay (decision) -> Epicureanism | Decision -> Concept | references | related_to |  |
@@ -197,7 +198,7 @@ reversed-orientation item and the type that would be right the other way round.
 | g13 | good-life | Reading notes -> Stoicism | Source -> Concept | references | related_to |  |
 | g14 | good-life | Reading notes -> Frame the essay (decision) | Source -> Decision | references | related_to |  |
 | r01 | adr | ADR-0069 -> ADR-0066 | Decision -> Decision | depends_on | references |  |
-| r02 | adr | ADR-0055 -> ADR-0054 | Decision -> Decision | depends_on | references |  |
+| r02 | adr | ADR-0055 -> ADR-0054 | Decision -> Decision | references | depends_on |  |
 | r03 | adr | ADR-0068 -> ADR-0061 | Decision -> Decision | depends_on | references |  |
 | r04 | adr | ADR-0012 -> ADR-0009 | Decision -> Decision | caused_by | references |  |
 | r05 | adr | ADR-0074 -> ADR-0067 | Decision -> Decision | references | depends_on |  |
@@ -205,9 +206,10 @@ reversed-orientation item and the type that would be right the other way round.
 
 ### What the fixture cannot show (read before any number)
 
-- **The labels are one person's.** The first author labelled all 49 items and
-  flagged an alternative on 27. Until the owner's blind second adjudication is
-  recorded, nothing here measures agreement, and the volatility screen's
+- **The labels are adjudicated, not the owner's.** The first author labelled all 49
+  items and flagged an alternative on 27; a Claude model labelled them blind (38 of 49
+  agree, kappa 0.696), and a third model resolved the 11 disagreements (see "Second
+  adjudication"). The owner labelled none of them. The volatility screen's
   experience is the warning: its first author's labels equalled the registry
   default in all eight disagreements, which moved the floor from 0.778 to 0.481.
   The same hazard exists here with `references`, which the first author may have
@@ -231,14 +233,15 @@ reversed-orientation item and the type that would be right the other way round.
   scratch document is written `private`, so the disclosure gate has nothing to
   drop).
 
-### Questions the labelling surfaced (not decided here)
+### Questions the labelling surfaced
 
 1. **Is `references` the right answer for an explicit link that states nothing
    more?** The rubric reads that way and the production suggester does not behave
    that way (it prefers `related_to`). Which is the intended behaviour decides
    whether the dominant stratum rewards or punishes the model, and whether the key
    is worth a call at all: `references` adds no claim beyond the link that already
-   exists.
+   exists. **Decided by the owner, 2026-10-27: yes** (pre-registration draft,
+   "Decisions the owner made").
 2. **Should the 14 good-life links exist as candidate edges?** The `Compiled into:`
    lines of the two Source documents produce six of them (g09 to g14) in the
    direction opposite to the engine's own `derived_from` edge, which the suggester
@@ -247,13 +250,18 @@ reversed-orientation item and the type that would be right the other way round.
 3. **`gemma2:27b` is `RECOMMENDED_TASK_MODELS["edge_typing"]`** (#650) on #516's
    0.81, measured on the constructed stratum, and is not in the candidate list this
    screen inherits from the volatility screen. If the recommendation should stand
-   or fall on this measurement it has to be added; that is a registration decision.
+   or fall on this measurement it has to be added. **Decided by the owner, 2026-10-27:
+   it is a candidate**, and the harness lists it.
 
 ## Second adjudication
 
-**A second set of labels is recorded, but not by the owner and not resolved.** The
-owner delegated the blind labelling and a Claude model filled the sheet (it read only the
-sheet). `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
+**A second set of labels is recorded, and its disagreements are resolved, but neither by
+the owner.** The owner delegated the blind labelling and a Claude model filled the sheet
+(it read only the sheet). The owner then delegated the adjudication: a third model (Claude
+Opus) resolved the 11 disagreements blind to which annotator gave which label, and each
+resolution is the item's `adjudication` record in `fixture.json`, listed in
+[`ADJUDICATION.md`](ADJUDICATION.md). An adjudication may resolve to either label; the
+losing one stays as `alt_label`. `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
 those labels, keyed by fixture id, to [`second_labels.json`](second_labels.json); the
 filled sheet is not committed. Agreement is measured against that labeller, and no
 disagreement is resolved (see the pre-registration draft).

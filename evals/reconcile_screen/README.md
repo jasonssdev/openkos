@@ -1,9 +1,9 @@
 # `reconcile_screen` — does a model keep what two notes say when it merges them? (#1563)
 
 **Status: prepared, not run.** No model has been called for this screen. The labels
-are one author's until the owner's blind labelling is recorded
-([`PREREGISTRATION-DRAFT.md`](PREREGISTRATION-DRAFT.md) lists what is blocked on
-that). It measures; it adopts nothing and changes no production code, default,
+are the first author's, checked by a blind second labeller and adjudicated by a third
+(neither the owner; see "Second labelling"; [`PREREGISTRATION-DRAFT.md`](PREREGISTRATION-DRAFT.md)
+lists what still blocks registration). It measures; it adopts nothing and changes no production code, default,
 prompt or task key. Part of #1556; refs #1563, #1557.
 
 ```bash
@@ -61,9 +61,11 @@ the `good-life-demo` bundle's person, decision, concept and source documents). A
 is 253 to 1,354 characters. `provenance_problems` checks every piece is still in its
 source file, and `run` refuses to start if one is not.
 
-Each claim says which note states it, labelled by the first author: **42 only in NOTE A,
-46 only in NOTE B, 33 in both.** Two claims are flagged as arguable (`sync-core-07`,
-`maria-salazar-03`). A claim is **kept** when its literal anchors survive in the merged
+Each claim says which note states it, labelled by the first author and adjudicated where a
+blind second labeller disagreed: **42 only in NOTE A, 46 only in NOTE B, 33 in both.** Four
+claims are flagged as arguable (`sync-core-07` and `maria-salazar-03` by the first author;
+`protocol-seams-04` and `stoicism-01`, the two adjudicated claims, carry their first label as
+the alternative). A claim is **kept** when its literal anchors survive in the merged
 body (casefolded, whitespace collapsed). A claim both notes state must also appear
 **exactly once**, because that is what the production prompt asks for; its `once`
 literal occurs exactly once in each note. `integrity_problems` checks all of it: every
@@ -82,21 +84,21 @@ see an invented sentence made of ordinary words. It is a veto input, not a quali
 
 ### Baselines and discrimination
 
-All computed with no model, on the first author's labels, strict:
+All computed with no model, on the adjudicated labels, strict (the first author's labels gave `sentence_union` 93 and 0.770, `stack` 0.729, `absorbed_only` 0.654):
 
 | Predictor | Claims kept | Mean case score |
 | --- | --- | --- |
-| `sentence_union` (every NOTE A sentence plus each NOTE B sentence not overlapping a kept one by Jaccard 0.30 on content words) | **93 of 121** | **0.770** |
-| `stack` (what production keeps on a refusal) | 88 of 121 | 0.729 |
-| `longer_only` | 81 of 121 | 0.672 |
-| `absorbed_only` | 79 of 121 | 0.654 |
+| `sentence_union` (every NOTE A sentence plus each NOTE B sentence not overlapping a kept one by Jaccard 0.30 on content words) | **94 of 121** | **0.777** |
+| `stack` (what production keeps on a refusal) | 88 of 121 | 0.728 |
+| `longer_only` | 81 of 121 | 0.673 |
+| `absorbed_only` | 79 of 121 | 0.655 |
 | `survivor_only` | 75 of 121 | 0.617 |
 
 The union threshold was fixed before any number was computed from it and is not tuned. The
 **strongest baseline is `sentence_union`, and it is the reference a model must beat.**
 
-The fixture leaves room to win: the strongest baseline gets **28 of 121 claims** wrong, and
-**14 of 15 cases** are merged perfectly by no baseline. By construction no claim is wrong
+The fixture leaves room to win: the strongest baseline gets **27 of 121 claims** wrong, and
+**13 of 15 cases** are merged perfectly by no baseline. By construction no claim is wrong
 under *every* baseline (a one-sided claim is kept by the stack, a shared one by a single
 note), so that count is 0 and is reported as 0. A baseline that kept every claim and said
 nothing twice would score 1.0; none does.
@@ -121,9 +123,12 @@ nothing twice would score 1.0; none does.
 
 ## Second labelling
 
-**A second set of labels is recorded, but not by the owner and not resolved.** The
-owner delegated the blind labelling and a Claude model filled the sheet (it read only the
-sheet). `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
+**A second set of labels is recorded, and its two disagreements are resolved, but neither
+by the owner.** The owner delegated the blind labelling and a Claude model filled the sheet
+(it read only the sheet). The owner then delegated the adjudication to a third model (Claude
+Opus), blind to which annotator gave which label; both claims are resolved in their
+`adjudication` record and re-anchored so they can be scored, as listed in
+[`ADJUDICATION.md`](ADJUDICATION.md). `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
 those labels, keyed by fixture id, to [`second_labels.json`](second_labels.json); the
 filled sheet is not committed. Agreement is measured against that labeller, and no
 disagreement is resolved (see the pre-registration draft).

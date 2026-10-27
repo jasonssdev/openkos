@@ -98,9 +98,9 @@ def test_the_real_fixture_loads_as_58_items_with_the_library_balance() -> None:
     assert len({i.id for i in items}) == 58
     assert core.class_balance(items) == {
         "REVERSES": 14,
-        "REFINES": 14,
-        "REAFFIRMS": 6,
-        "UNRELATED": 24,
+        "REFINES": 13,
+        "REAFFIRMS": 8,
+        "UNRELATED": 23,
     }
     assert sum(not i.directed for i in items) == 9
     assert sum(i.contested for i in items) == 16
@@ -115,7 +115,7 @@ def test_item_ids_follow_the_sorted_pair_key_so_they_are_stable() -> None:
 def test_an_adjudication_overlay_resolves_a_label_and_keeps_the_first(
     tmp_path: Path,
 ) -> None:
-    base = core.load_items()
+    base = core.load_items(adjudication_path=tmp_path / "none.json")
     victim = base[0]
     other = "REFINES" if victim.label != "REFINES" else "REVERSES"
     path = tmp_path / "adj.json"
@@ -136,6 +136,36 @@ def test_an_adjudication_overlay_resolves_a_label_and_keeps_the_first(
     assert changed.label == other
     assert changed.first_label == victim.label
     assert [i.label for i in items[1:]] == [i.label for i in base[1:]]
+
+
+def test_an_overlay_may_resolve_to_the_first_label(tmp_path: Path) -> None:
+    """An adjudicator who sides with the drafter leaves the label as it was,
+    and the record still names both readings."""
+    base = core.load_items(adjudication_path=tmp_path / "none.json")
+    victim = base[0]
+    other = "REFINES" if victim.label != "REFINES" else "REVERSES"
+    path = tmp_path / "adj.json"
+    path.write_text(
+        json.dumps(
+            {
+                "|".join(victim.pair_ids): {
+                    "first": victim.label,
+                    "second": other,
+                    "resolved": victim.label,
+                    "reason": "first reading",
+                }
+            }
+        )
+    )
+    kept = core.load_items(adjudication_path=path)[0]
+    assert (kept.label, kept.first_label) == (victim.label, victim.label)
+    assert kept.adjudication is not None
+    assert kept.adjudication["second"] == other
+    record = json.loads(path.read_text())
+    next(iter(record.values()))["resolved"] = "MAYBE"
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="must resolve to a label"):
+        core.load_items(adjudication_path=path)
 
 
 def test_an_overlay_whose_first_label_differs_from_the_fixture_is_refused(

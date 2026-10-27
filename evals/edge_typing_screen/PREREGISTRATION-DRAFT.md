@@ -1,7 +1,8 @@
 # Pre-registration (DRAFT): the edge-typing model screen (#1563)
 
-**Status: DRAFT. NOT REGISTERED. Blocked on the repository owner's blind
-adjudication of the labels.** Nothing below binds until a final version of this
+**Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third
+adjudication") and the owner's questions are decided; still blocked on Stage 0 and
+the `TO RECOMPUTE` J table.** Nothing below binds until a final version of this
 file, with the numbers marked `TO RECOMPUTE` replaced, is merged to `main` before
 any scored model call (#1556: pre-register, and merge the pre-registration, before
 any run). No model has been called in preparing this draft; every number in it was
@@ -11,16 +12,19 @@ prompt or task key. Part of #1556; refs #1563, #1557.
 
 ## Before this can be registered
 
-1. **The owner labels the 49 items blind** with the sheet from
-   `run_edge_typing_screen.py blind-sheet` and `adjudicate` compares it with the
-   first author's labels. Every disagreement is resolved by the owner and recorded
-   in `fixture.json` as the volatility fixture records it (`adjudication` with
-   `first`, `second`, `resolved`, `reason`; the first label stays as `alt_label`).
-   `ADJUDICATION.md` is then written, as the volatility screen's was.
-2. **The floors, the J table and the class balance are recomputed** from the
-   resolved labels (`forecast`; the values below are the first author's).
-3. **The three questions in "Decisions the owner owes" are answered**, because
-   each changes what the screen means.
+1. **Done, with two deviations (below).** The 49 items were labelled blind a second
+   time with the sheet from `run_edge_typing_screen.py blind-sheet`, by a Claude model
+   rather than the owner, and the 11 disagreements were resolved by a third model
+   (Claude Opus) on the owner's delegation, recorded in `fixture.json` as the
+   volatility fixture records them (`adjudication` with `first`, `second`, `resolved`,
+   `reason`; the losing label stays as `alt_label`), and listed in
+   [`ADJUDICATION.md`](ADJUDICATION.md).
+2. **Done for the floors and the class balance** (`forecast`, below). The J
+   tolerance table is still the first author's: no model-free command prints it,
+   so it is `TO RECOMPUTE` at registration; `--self-test` pins on the resolved
+   labels that four wins and no loss clear J and three do not.
+3. **Done.** The three questions are decided (owner, 2026-10-27; see "Decisions the
+   owner made").
 4. **Stage 0** (below) replaces the assumed latencies and records the model
    digests (`ollama list`); neither was queried for this draft, because the
    server is reserved for another job.
@@ -45,33 +49,52 @@ reversed probes `e21`, `e22`, `e23`, `e27`, `e29` (first `references`, Claude
 answered `references`. The `references`-versus-`related_to` boundary, the hazard this draft
 names, is where the two labellers split.
 
-**What this does not do.** It resolves nothing: no `adjudication` record, no `resolved`
-label, no change to any registered margin or decision rule. The floors, the class balance
-and the J table below are still the first author's and still need recomputing after the
-owner resolves the disagreements. Labels were not the only missing piece, so this draft
-stays a draft.
+**What this did not do.** It resolved nothing; the third adjudication below did.
 
-## What the labels are, until the adjudication is recorded (read before any number)
+## Third adjudication: recorded, with a deviation (read first)
 
-**One author's.** The first author labelled all 49 items by the production prompt's
+**Deviation: the disagreements were adjudicated by a third model (Claude Opus) on the
+owner's delegation, blind to annotator identity**, not by the owner. For each of the 11
+items the adjudicator read only the two documents, the production rule verbatim and the
+two candidate labels in sorted order, without knowing which annotator gave which and
+without reading either annotator's notes or reasoning, any stored model run, result or
+score; its verdicts were written down before the sources were revealed. Each resolution
+is the item's `adjudication` record in `fixture.json` (`first`, `second`, `resolved`,
+`reason`), and [`ADJUDICATION.md`](ADJUDICATION.md) lists them. 8 resolved to the first
+author's label (`e21`, `e22`, `e23`, `e27`, `e29`: `references`; `r01`, `r03`:
+`depends_on`; `r04`: `caused_by`), 3 to the second (`g01`, `g02`: `references`; `r02`:
+`references`). The losing label stays as `alt_label`, so lenient scoring still accepts
+it. No registered margin or decision rule changed. The owner may override any resolution
+at registration.
+
+## What the labels are (read before any number)
+
+**Adjudicated, one author's first.** The first author labelled all 49 items by the production prompt's
 own rule and flagged an alternative on 27. The volatility screen's second
 adjudication found its first author had anchored on the registry default in all
 eight disagreements and moved that floor from 0.778 to 0.481; the equivalent hazard
 here is `references`, the rubric-literal answer to any explicit link, which is the
 label of 21 items (12 of them the good-life links) and the strongest baseline.
 
-**The floors (the first author's labels).**
+**The floors (the resolved labels; `forecast`).** The first author's values are in
+brackets.
 
 | floor | value |
 | --- | --- |
-| `always references`, strict | **21 / 49 = 0.429** (the reference for rule J) |
-| `type signature`, strict | 12 / 49 = 0.245 |
-| `always related_to`, strict | 9 / 49 = 0.184 |
-| commonest label, strict | 21 / 49 = 0.429 (the same predictor) |
-| lenient, in that order | 27 / 49, 29 / 49, 26 / 49 (uninformative: 27 items carry an alternative) |
-| items right under no baseline | 16 / 49 (12 constructed, 4 ADR) |
+| `always references`, strict | **24 / 49 = 0.490** (the reference for rule J) [21 / 49 = 0.429] |
+| `type signature`, strict | 10 / 49 = 0.204 [12 / 49 = 0.245] |
+| `always related_to`, strict | 7 / 49 = 0.143 [9 / 49 = 0.184] |
+| commonest label, strict | 24 / 49 = 0.490 (the same predictor) [21 / 49] |
+| lenient, in that order | 27 / 49, 29 / 49, 26 / 49 (unchanged; uninformative: 27 items carry an alternative) |
+| items right under no baseline | 15 / 49 [16 / 49] |
 
-**What the J bar is.** The reference predictor is wrong on 28 items. With the
+Class balance (resolved): `caused_by` 3, `depends_on` 4, `member_of` 4, `part_of` 3,
+`produced_by` 4, `references` 24, `related_to` 7 (first author's: `depends_on` 5,
+`references` 21, `related_to` 9).
+
+**What the J bar is.** The reference predictor is wrong on 25 items (28 on the first
+author's labels). The tolerance table below was computed on the first author's labels and
+is `TO RECOMPUTE`. With the
 harness's own bootstrap (10,000 resamples, seed 42), a model that matches
 `always references` everywhere it is right and wins *k* of the 28 clears J with at
 most this many losses elsewhere: win 4 lose 0, win 8 lose 1, win 10 lose 2, win 12
@@ -82,7 +105,8 @@ is not over-read: **a pass shows a model agrees with these labels better than
 answering `references` for every link does; it does not show the model types edges
 correctly.** In particular 29 of the 49 items are constructed to the rubric and
 state their relation in its words, so a model can clear J on those alone;
-accuracy is reported per stratum and does not decide (question 3).
+accuracy is reported per stratum, and selection also needs a non-negative gain on the
+20 other items (the owner's decision 3).
 
 **Label uncertainty.** The report gives strict and lenient accuracy for every
 model, and `strict (1st)`, the same answers scored against the first author's
@@ -114,8 +138,8 @@ accurate model the most direction-blind)?
   between two samples of one arm. This screen does not reach 15 and says so).
 - **Models:** baseline `qwen3:8b` (the global default). Candidates, the other
   #1556 screens' list: `gemma4:26b-a4b`, `qwen3:14b`, `qwen3.6:27b`,
-  `qwen3.6:35b-a3b`. Judge-only models are not candidates. `gemma2:27b`, the
-  documented recommendation for this key (#650), is not in the list (question 2).
+  `qwen3.6:35b-a3b`, plus `gemma2:27b`, the documented recommendation for this key
+  (#650), added by the owner's decision 2. Judge-only models are not candidates.
 - Model digests: `TO RECORD` at registration (the harness stamps the full digest
   in-band on every run, and a run whose stamped digest differs from the table is
   void).
@@ -156,7 +180,12 @@ resamples, seed 42).
   harness measured the most accurate model hitting 17 of 18 traps).
 - **Selection:** a candidate replaces `qwen3:8b` for this key only if its paired
   gain over the baseline has a point estimate above 0 and a 95% lower bound above
-  0, no veto trips, **and** it clears J. Otherwise the baseline stays and the result
+  0, no veto trips, it clears J, **and** its paired gain on the 20 non-constructed
+  items (good-life and ADR) has a point estimate >= 0 (the owner's decision 3; the
+  point estimate of a paired mean difference is the difference of the two models'
+  accuracies on those items, which `score` reports per stratum; `score`'s verdict
+  line does not apply this guard itself, so it is read from those numbers).
+  Otherwise the baseline stays and the result
   is recorded as it is, with no retry under tuned bars (#1269 rule 4).
 - **Confirmation:** a selected model is rerun with seeds 11-15 against the baseline
   under the same rule; "confirmed" means selection holds again. Adoption (a config
@@ -166,11 +195,11 @@ resamples, seed 42).
 
 ## Forecast and budget (Ollama wall-clock; ASSUMED, not measured)
 
-Calls: 49 items x 1 arm x 3 runs = **147 per model; 735 for five models.**
+Calls: 49 items x 1 arm x 3 runs = **147 per model; 882 for six models.**
 
 Latencies are **assumptions** for this task, not measurements: #1560's answer-call
 medians (`qwen3:8b` 4.75 s, `gemma4:26b-a4b` 2.83 s, `qwen3:14b` 6.57 s,
-`qwen3.6:35b-a3b` 3.22 s; `qwen3.6:27b` borrows 6.57 s). A reply is a short JSON
+`qwen3.6:35b-a3b` 3.22 s; `qwen3.6:27b` and `gemma2:27b` borrow 6.57 s). A reply is a short JSON
 object, so they are probably high for the 109 to 219 character documents
 (`evals/edge_typing/` measured about 1.3 s per edge on `qwen3:8b`), and probably low
 for the six ADR items, whose prompts run to 12,000 characters. One load per model,
@@ -183,11 +212,12 @@ for the six ADR items, whose prompts run to 12,000 characters. One load per mode
 | `qwen3:14b` | 147 x 6.57 + 60 | 17.1 min |
 | `qwen3.6:27b` | 147 x 6.57 + 60 | 17.1 min |
 | `qwen3.6:35b-a3b` | 147 x 3.22 + 60 | 8.9 min |
-| **screen total** | | **about 1.06 h** |
+| `gemma2:27b` | 147 x 6.57 + 60 | 17.1 min |
+| **screen total** | | **about 1.35 h** |
 | confirmation (5 seeds, baseline + one candidate, assuming `qwen3:14b`) | 2 x 245 calls | about 0.80 h |
 
 **Budget: 2.5 h of Ollama wall-clock** from the first scored call; the assumed
-worst case above is about 1.9 h. **Stage 0 before the screen:** three timed calls
+worst case above is about 2.2 h. **Stage 0 before the screen:** three timed calls
 per model on a small item and one on an ADR item, which replace the assumed
 latencies in this table and set the per-call timeout (4x the baseline's median,
 floor 60 s, as in #1557). If the measured total would exceed the budget the
@@ -205,25 +235,26 @@ uv run python -u evals/edge_typing_screen/run_edge_typing_screen.py run --model 
 uv run python evals/edge_typing_screen/run_edge_typing_screen.py score
 ```
 
-## Decisions the owner owes (this draft does not make them)
+## Decisions the owner made (2026-10-27)
 
-1. **Is `references` the right label for an explicit link that states no more?**
-   The rubric says yes (SOURCE names TARGET); the suggester says `related_to` most of
-   the time (67% of accepted edges on a real bundle before the rubric of #388, 59%
-   of emissions on the constructed fixture after it, `evals/edge_typing/`). If the owner's blind labels are mostly `related_to` where the
-   first author wrote `references`, the reference baseline changes from
-   `always references` to something far weaker, J becomes easier, and the draft's
-   warning about a lowered floor applies.
-2. **Should `gemma2:27b` be a candidate?** It is the documented per-task
-   recommendation and the only model with prior evidence on this task, on the
-   constructed stratum; it is not on the volatility screen's list. Adding it needs
-   a pulled model and a latency assumption.
-3. **Pooled or stratified?** The registered statistic is pooled over all 49 items.
-   The constructed stratum (29 items) was written to the rubric and the good-life
-   stratum is 14 links among 7 documents, so a pooled pass can come from the
-   easiest 29. Stratified accuracy is reported either way; whether a model that
-   clears J only on the constructed stratum may be selected is a rule this draft
-   leaves open rather than inventing.
+Each was an open question in this draft; the owner decided all three on 2026-10-27, as
+recommended.
+
+1. **`references` is the right label for an explicit link that states no more.**
+   Decided by the owner, 2026-10-27. The rule defines `references` by SOURCE naming
+   TARGET and reserves `related_to` for when none of the listed types holds; the
+   adjudication applied that reading, so the reference baseline stays `always
+   references` (0.490 on the resolved labels).
+2. **`gemma2:27b` is a candidate.** Decided by the owner, 2026-10-27. It is the
+   documented per-task recommendation (#650) and the only model with prior evidence on
+   this task, so a screen without it could neither keep nor drop that recommendation.
+   It is in the harness's candidate list, with an assumed latency borrowed from
+   `qwen3:14b` until Stage 0 measures it; the model must be pulled before the screen.
+3. **Pooled decides, with a stratum guard.** Decided by the owner, 2026-10-27. The
+   registered statistic stays pooled over all 49 items and every stratum is reported;
+   in addition a selected candidate's paired gain over the baseline must have a point
+   estimate >= 0 on the 20 items outside the constructed stratum (14 good-life, 6 ADR),
+   so a pass cannot come only from the 29 items written to the rubric.
 
 ## Known limits (carried from the README)
 

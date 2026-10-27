@@ -298,12 +298,12 @@ def test_the_fixtures_shape_and_floors_are_pinned() -> None:
         "survivor_only": 75,
         "absorbed_only": 79,
         "longer_only": 81,
-        "sentence_union": 93,
+        "sentence_union": 94,
     }
     assert summary["strongest"] == "sentence_union"
     assert core.reference_baseline(cases)[0] == "sentence_union"
-    assert summary["cases_no_baseline_perfect"] == 14
-    assert summary["claims_strongest_wrong"] == 28
+    assert summary["cases_no_baseline_perfect"] == 13
+    assert summary["claims_strongest_wrong"] == 27
     assert summary["claims_all_baselines_wrong"] == 0
 
 

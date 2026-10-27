@@ -891,7 +891,12 @@
    "ambiguous": true,
    "trap_type": "produced_by",
    "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (direction: author -> artifact); the label is that fixture's expected_type. This is a reversed-orientation probe: produced_by is true only the other way round, so no specific type reads correctly as shown and the honest answer is references (the source body names the target) or related_to.",
-   "adjudication": null
+   "adjudication": {
+    "first": "references",
+    "second": "related_to",
+    "resolved": "references",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): SOURCE names TARGET as its output; authorship runs TARGET->SOURCE, so no origin type holds in this direction and SOURCE is not made by, inside or dependent on TARGET, which is the rule's definition of references."
+   }
   },
   {
    "id": "e22",
@@ -903,7 +908,12 @@
    "ambiguous": true,
    "trap_type": "produced_by",
    "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (direction: author -> artifact); the label is that fixture's expected_type. This is a reversed-orientation probe: produced_by is true only the other way round, so no specific type reads correctly as shown and the honest answer is references (the source body names the target) or related_to.",
-   "adjudication": null
+   "adjudication": {
+    "first": "references",
+    "second": "related_to",
+    "resolved": "references",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): SOURCE names TARGET as a record it authors; produced_by holds only the other way round, so the explicit naming is references by the rule's own definition."
+   }
   },
   {
    "id": "e23",
@@ -915,7 +925,12 @@
    "ambiguous": true,
    "trap_type": "caused_by",
    "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (direction: cause -> outcome); the label is that fixture's expected_type. This is a reversed-orientation probe: caused_by is true only the other way round, so no specific type reads correctly as shown and the honest answer is references (the source body names the target) or related_to.",
-   "adjudication": null
+   "adjudication": {
+    "first": "references",
+    "second": "related_to",
+    "resolved": "references",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): SOURCE brought TARGET about, not the reverse, so caused_by does not hold as SOURCE -> TARGET and SOURCE's explicit naming of the outage is references."
+   }
   },
   {
    "id": "e24",
@@ -963,7 +978,12 @@
    "ambiguous": true,
    "trap_type": "produced_by",
    "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (cross-type direction: producer -> artifact (Project -> Concept)); the label is that fixture's expected_type. This is a reversed-orientation probe: produced_by is true only the other way round, so no specific type reads correctly as shown and the honest answer is references (the source body names the target) or related_to.",
-   "adjudication": null
+   "adjudication": {
+    "first": "references",
+    "second": "related_to",
+    "resolved": "references",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): SOURCE produced TARGET (the reverse of produced_by); SOURCE explicitly names TARGET and owes it nothing, which is the rule's definition of references."
+   }
   },
   {
    "id": "e28",
@@ -987,31 +1007,46 @@
    "ambiguous": true,
    "trap_type": "produced_by",
    "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (cross-type direction: author -> artifact (Person -> Concept)); the label is that fixture's expected_type. This is a reversed-orientation probe: produced_by is true only the other way round, so no specific type reads correctly as shown and the honest answer is references (the source body names the target) or related_to.",
-   "adjudication": null
+   "adjudication": {
+    "first": "references",
+    "second": "related_to",
+    "resolved": "references",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): SOURCE is TARGET's author, so produced_by holds only TARGET -> SOURCE; SOURCE explicitly names the document, which is references under the rule."
+   }
   },
   {
    "id": "g01",
    "stratum": "good-life",
    "source": "concepts/epicureanism",
    "target": "concepts/stoicism",
-   "label": "related_to",
-   "alt_label": "references",
+   "label": "references",
+   "alt_label": "related_to",
    "ambiguous": true,
    "trap_type": null,
    "how": "The Related line says 'contrasted with; both take tranquillity seriously, and disagree on whether the good is virtue or pleasure': a stated connection that fits none of the six specific types, which the rubric makes related_to. It also links Stoicism by name, so references is the flagged alternative.",
-   "adjudication": null
+   "adjudication": {
+    "first": "related_to",
+    "second": "references",
+    "resolved": "references",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): SOURCE explicitly links TARGET in its Related list (contrasted with); no specific structural type holds, but the explicit naming satisfies references, and related_to is reserved for when none of the listed types holds."
+   }
   },
   {
    "id": "g02",
    "stratum": "good-life",
    "source": "concepts/stoicism",
    "target": "concepts/epicureanism",
-   "label": "related_to",
-   "alt_label": "references",
+   "label": "references",
+   "alt_label": "related_to",
    "ambiguous": true,
    "trap_type": null,
    "how": "Same reading as the reverse edge: 'contrasted with; both ask how to live and disagree on what the good is'. A stated connection with no containment, causation, authorship or dependence.",
-   "adjudication": null
+   "adjudication": {
+    "first": "related_to",
+    "second": "references",
+    "resolved": "references",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): Same as the reverse link: SOURCE explicitly names TARGET as a contrasted school, which satisfies references and leaves related_to, the answer when none holds, unused."
+   }
   },
   {
    "id": "g03",
@@ -1167,19 +1202,29 @@
    "ambiguous": true,
    "trap_type": null,
    "how": "ADR-0069 is headed 'Extends: ADR-0066' and says 'Everything else in ADR-0066 stands': it adds to a decision that must still hold, so depends_on; it also simply names it.",
-   "adjudication": null
+   "adjudication": {
+    "first": "depends_on",
+    "second": "references",
+    "resolved": "depends_on",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): SOURCE declares it Extends TARGET and that everything else in TARGET stands, so its decision holds only on top of TARGET's view-model architecture."
+   }
   },
   {
    "id": "r02",
    "stratum": "adr",
    "source": "decisions/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar",
    "target": "decisions/0054-python-314-is-the-only-supported-interpreter",
-   "label": "depends_on",
-   "alt_label": "references",
+   "label": "references",
+   "alt_label": "depends_on",
    "ambiguous": true,
    "trap_type": null,
    "how": "'The engine is Python (ADR-0054), so whatever the shell is, it runs the engine as a separate process': the shell decision is built on the interpreter decision.",
-   "adjudication": null
+   "adjudication": {
+    "first": "depends_on",
+    "second": "references",
+    "resolved": "references",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): SOURCE cites TARGET for the engine's interpreter, but its Tauri sidecar decision and its measurements (on 3.12 and 3.14) would hold without TARGET, so it is a citation, not a dependency."
+   }
   },
   {
    "id": "r03",
@@ -1191,7 +1236,12 @@
    "ambiguous": true,
    "trap_type": null,
    "how": "'The local API adapter may import only openkos.api among the engine's modules (ADR-0061), so it cannot reach a gate on its own': the decision is shaped by, and only works within, that constraint.",
-   "adjudication": null
+   "adjudication": {
+    "first": "depends_on",
+    "second": "references",
+    "resolved": "depends_on",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): SOURCE states its decision is forced by TARGET's constraint that the local API adapter may import only openkos.api, so remove TARGET and its reason for gating inside the API falls away."
+   }
   },
   {
    "id": "r04",
@@ -1203,7 +1253,12 @@
    "ambiguous": true,
    "trap_type": null,
    "how": "ADR-0012 opens with the gap ADR-0009's propagation leaves (it only runs when set-sensitivity is invoked) and decides the backfill sweep because of it.",
-   "adjudication": null
+   "adjudication": {
+    "first": "caused_by",
+    "second": "references",
+    "resolved": "caused_by",
+    "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): SOURCE exists to close the gap TARGET's set-time-only propagation left (TARGET itself says no bulk backfill ships), so TARGET brought SOURCE about."
+   }
   },
   {
    "id": "r05",
