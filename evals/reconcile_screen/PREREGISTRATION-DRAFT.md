@@ -1,7 +1,8 @@
 # Pre-registration (DRAFT): the merged-body reconciliation model screen (#1563)
 
-**Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third adjudication");
-still blocked on the owner's questions and Stage 0.** Nothing below binds until a final version of this file, with the numbers
+**Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third adjudication")
+and the owner's questions are decided; still blocked on Stage 0 and the `TO RECOMPUTE` J
+bar.** Nothing below binds until a final version of this file, with the numbers
 marked `TO RECOMPUTE` replaced, is merged to `main` before any scored model call
 (#1556: pre-register, and merge the pre-registration, before any run). No model has been
 called in preparing this draft; every number in it was computed by
@@ -23,8 +24,8 @@ refs #1563, #1557.
    them, so they are `TO RECOMPUTE` at registration; the unit test
    `test_the_j_bar_on_the_real_reference_is_pinned` still pins, on the adjudicated labels,
    that four outright wins clear J and three do not.
-3. **The questions in "Decisions the owner owes" are answered**, because each changes what
-   the screen means.
+3. **Done.** The five questions are decided (owner, 2026-10-27; see "Decisions the owner
+   made").
 4. **Stage 0** (below) replaces the assumed latencies and records the model digests
    (`ollama list`). Neither was queried for this draft, because the server is reserved for
    another job.
@@ -215,26 +216,28 @@ uv run python -u evals/reconcile_screen/run_reconcile_screen.py run --model qwen
 uv run python evals/reconcile_screen/run_reconcile_screen.py score
 ```
 
-## Decisions the owner owes (this draft does not make them)
+## Decisions the owner made (2026-10-27)
 
-1. **Is a literal anchor the right test of "kept"?** A model that keeps a claim in other words
-   is scored as having lost it. Recommended: yes. The production prompt says "keep concrete
-   details; do not summarize away substance", the anchors are the concrete part (identifiers,
-   figures, quoted terms), and a rewrite that changes them is a change a reader of the merged
-   document would have to re-check anyway. The cost is a bias toward models that copy.
-2. **Is "exactly once" the right standard for a shared claim?** Recommended: yes, it is the
-   prompt's own wording. If the owner thinks a restatement is harmless, lenient accuracy is the
-   number to read and the dedupe rate stops mattering; this draft keeps strict as the decision.
-3. **Should the decision be pooled or stratified?** The registered statistic is pooled over all
-   15 cases. Twelve are repository documents and three are the demo bundle; three cases cannot
-   carry a veto. Recommended: pooled decides, the two strata are reported, no stratum rule.
-4. **Is `sentence_union` the right reference, rather than the stack?** The stack is what ships
-   on a refusal, but a no-model union is what one would build instead of calling a model.
-   Recommended: the strongest baseline, which is the harder bar and the honest one (0.777
-   against 0.728 on the adjudicated labels).
-5. **Should `gemma2:27b` be a candidate?** It is installed and the only model recommended for
-   another task on this list. Recommended: yes, as listed; it has an 8k context window, which
-   these notes (at most about 1,400 characters each) fit well inside.
+Each was an open question in this draft; the owner decided all five on 2026-10-27, as
+recommended.
+
+1. **A literal anchor is the test of "kept".** Decided by the owner, 2026-10-27. A model that
+   keeps a claim in other words is scored as having lost it. The production prompt says "keep
+   concrete details; do not summarize away substance", the anchors are the concrete part
+   (identifiers, figures, quoted terms), and a rewrite that changes them is a change a reader
+   of the merged document would have to re-check anyway. The accepted cost is a bias toward
+   models that copy.
+2. **"Exactly once" is the standard for a shared claim.** Decided by the owner, 2026-10-27. It
+   is the prompt's own wording; strict accuracy decides and lenient accuracy is reported.
+3. **Pooled decides; the two strata are reported, with no stratum rule.** Decided by the owner,
+   2026-10-27. Twelve cases are repository documents and three are the demo bundle; three
+   cases cannot carry a veto.
+4. **`sentence_union` is the reference, not the stack.** Decided by the owner, 2026-10-27. It is
+   the strongest baseline, the harder bar and the honest one (0.777 against 0.728 on the
+   adjudicated labels); the stack is still reported.
+5. **`gemma2:27b` is a candidate, as listed.** Decided by the owner, 2026-10-27. It is installed,
+   the only model recommended for another task on this list, and its 8k context window fits
+   these notes (at most about 1,400 characters each) well.
 
 ## Known limits (carried from the README)
 

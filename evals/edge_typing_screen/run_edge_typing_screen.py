@@ -63,7 +63,13 @@ DEFAULT_RUNS_DIR: Final = (
     pathlib.Path.home() / "Dev/Projects/openkos-eval-runs/edge-typing-screen"
 )
 BASELINE: Final = "qwen3:8b"
-CANDIDATES: Final = ("gemma4:26b-a4b", "qwen3:14b", "qwen3.6:27b", "qwen3.6:35b-a3b")
+CANDIDATES: Final = (
+    "gemma4:26b-a4b",
+    "qwen3:14b",
+    "qwen3.6:27b",
+    "qwen3.6:35b-a3b",
+    "gemma2:27b",
+)
 DEFAULT_TIMEOUT: Final = 120.0
 LOAD_S: Final = 60.0
 ASSUMED_MEDIAN_LATENCY_S: Final[dict[str, float]] = {
@@ -72,10 +78,12 @@ ASSUMED_MEDIAN_LATENCY_S: Final[dict[str, float]] = {
     "qwen3:14b": 6.57,
     "qwen3.6:27b": 6.57,
     "qwen3.6:35b-a3b": 3.22,
+    "gemma2:27b": 6.57,
 }
 """ASSUMED per-call latencies, NOT measured for this task: the answer-call
-medians #1560 recorded, with `qwen3.6:27b` borrowing `qwen3:14b`'s because it
-has none (the volatility screen's table). `evals/edge_typing/README.md` measured
+medians #1560 recorded, with `qwen3.6:27b` and `gemma2:27b` (a candidate by
+the owner's decision of 2026-10-27) borrowing `qwen3:14b`'s because they have
+none (the volatility screen's table). `evals/edge_typing/README.md` measured
 `qwen3:8b` at about 1.3 s per edge on 145-character documents, so these are
 probably high for the small documents and about right for the ADR pairs (up to
 12,000 characters); a stage-0 timing of three calls per model replaces them

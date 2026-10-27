@@ -1,8 +1,8 @@
 # Pre-registration (DRAFT): the decision-revisions model screen (#1563)
 
 **Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third
-adjudication"); still blocked on the owner's questions, the stored-run re-score and
-Stage 0.** Nothing below binds until a final version of this
+adjudication") and the owner's questions are decided; still blocked on the stored-run
+re-score (decision 1) and Stage 0.** Nothing below binds until a final version of this
 file, with the numbers marked `TO RECOMPUTE` replaced, is merged to `main` before
 any scored model call (#1556: pre-register, and merge the pre-registration, before
 any run). No model has been called in preparing this draft; every number in it was
@@ -24,8 +24,8 @@ task key. Part of #1556; refs #1563, #1557.
    that four wins clear J and three do not) and every number derived from the stored
    `qwen3:8b` rows (the 0.893 / 0.887 / 0.882 scores, the 7-item headroom and the
    paired-gain replay), which were not re-scored here.
-3. **The questions in "Decisions the owner owes" are answered**, because each changes
-   what the screen means.
+3. **Done.** The six questions are decided (owner, 2026-10-27; see "Decisions the owner
+   made"). Decision 1 owes the stored-run re-score, which no existing command performs.
 4. **Stage 0** (below) replaces the assumed latencies. It was not run for this
    draft because the server is reserved for another job. The digests below are as
    `ollama list` reported them, a read-only call.
@@ -194,8 +194,8 @@ seed 42).
   gain over the baseline has a point estimate above 0 and a 95% lower bound above 0,
   no veto trips, **and** it clears J. Otherwise the baseline stays and the result is
   recorded as it is, with no retry under tuned bars (#1269 rule 4). Per-split
-  accuracy is reported with the verdict; whether a selected model must also not lose
-  on the `original` split is question 3 below.
+  accuracy is reported with the verdict, and a selected model must also have a paired
+  gain on the `original` split with a point estimate >= 0 (the owner's decision 3).
 - **Confirmation:** a selected model is rerun with seeds 11-15 against the baseline
   under the same rule; "confirmed" means selection holds again. Adoption (a config
   default or an ADR) is a separate decision this screen does not make.
@@ -242,27 +242,35 @@ uv run python -u evals/decision_revisions_screen/run_revisions_screen.py run --m
 uv run python evals/decision_revisions_screen/run_revisions_screen.py score
 ```
 
-## Decisions the owner owes (each with the recommended answer, applied unless overridden at registration)
+## Decisions the owner made (2026-10-27)
 
-1. **Is the screen worth running before the adjudication?** Recommended: no. The
-   stored run already answers "does the key beat no model" if the labels hold, and
-   the labels are the weakest link; run the blind sheet first, then decide whether
-   the 7-item headroom justifies about 2 hours of the server.
-2. **Score an undirected `reverses`/`refines` as one untyped change?** Recommended:
-   yes. It is what production does with the verdict (`relation_for`); scoring the
-   distinction would reward a choice nothing consumes.
-3. **Must a selected model also not lose to the baseline on the `original` split?**
-   Recommended: yes (point estimate of the paired gain on `original` >= 0). The
+Each was an open question in this draft; the owner decided all six on 2026-10-27, as
+recommended.
+
+1. **The stored `qwen3:8b` runs are re-scored on the adjudicated labels before the screen
+   spends about 2 hours of the server.** Decided by the owner, 2026-10-27. The adjudication is
+   recorded, so the remaining question is whether the headroom above `qwen3:8b` survives it.
+   **Not done yet:** no existing command re-scores them. The screen's `score` reads only its
+   own run files (`runs-<model>.json` with a `stamp` and `rows`), and the stored runs under
+   `evals/decision_revisions/results/` are the older harness's format; that harness's
+   `--rescore` scores them against the drafter's labels with its own report, not against
+   `adjudication.json` under this screen's rule. A model-free import of those rows is owed
+   before the 0.893 / 0.887 / 0.882 figures and the headroom analysis can be replaced.
+2. **An undirected `reverses`/`refines` is scored as one untyped change.** Decided by the
+   owner, 2026-10-27. It is what production does with the verdict (`relation_for`); scoring
+   the distinction would reward a choice nothing consumes.
+3. **A selected model must also not lose to the baseline on the `original` split** (point
+   estimate of the paired gain on `original` >= 0). Decided by the owner, 2026-10-27. The
    `confirmation` pairs are at ceiling for the baseline and cannot carry a veto.
-4. **Reference for J: the lexical oracle cut or `always unrelated`?** Recommended: the
-   lexical cut. It is the stronger predictor, so a pass means more, and it costs
-   nothing since J is expected to pass anyway. It is fitted to the labels, so it is
-   recomputed after the adjudication.
-5. **Verdict accuracy or queue outcome as the deciding metric?** Recommended: verdict
-   accuracy decides; queue recall and noise are reported. The queue rule (confidence
-   0.7, quotes) is a separate production knob this screen does not tune.
-6. **What does a pass license?** Recommended: one confirmation run on
-   ingest-produced Decisions, not a task-key change, as for reconcile.
+4. **The reference for J is the lexical oracle cut.** Decided by the owner, 2026-10-27. It is
+   the stronger predictor (0.586 on the adjudicated labels against 0.397 for `always
+   unrelated`), so a pass means more; it is fitted to the labels and was recomputed after the
+   adjudication.
+5. **Verdict accuracy decides; queue recall and noise are reported.** Decided by the owner,
+   2026-10-27. The queue rule (confidence 0.7, quotes) is a separate production knob this
+   screen does not tune.
+6. **A pass licenses one confirmation run on ingest-produced Decisions, not a task-key
+   change**, as for reconcile. Decided by the owner, 2026-10-27.
 
 ## Known limits (carried from the README)
 

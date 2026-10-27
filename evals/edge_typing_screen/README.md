@@ -233,14 +233,15 @@ reversed-orientation item and the type that would be right the other way round.
   scratch document is written `private`, so the disclosure gate has nothing to
   drop).
 
-### Questions the labelling surfaced (not decided here)
+### Questions the labelling surfaced
 
 1. **Is `references` the right answer for an explicit link that states nothing
    more?** The rubric reads that way and the production suggester does not behave
    that way (it prefers `related_to`). Which is the intended behaviour decides
    whether the dominant stratum rewards or punishes the model, and whether the key
    is worth a call at all: `references` adds no claim beyond the link that already
-   exists.
+   exists. **Decided by the owner, 2026-10-27: yes** (pre-registration draft,
+   "Decisions the owner made").
 2. **Should the 14 good-life links exist as candidate edges?** The `Compiled into:`
    lines of the two Source documents produce six of them (g09 to g14) in the
    direction opposite to the engine's own `derived_from` edge, which the suggester
@@ -249,7 +250,8 @@ reversed-orientation item and the type that would be right the other way round.
 3. **`gemma2:27b` is `RECOMMENDED_TASK_MODELS["edge_typing"]`** (#650) on #516's
    0.81, measured on the constructed stratum, and is not in the candidate list this
    screen inherits from the volatility screen. If the recommendation should stand
-   or fall on this measurement it has to be added; that is a registration decision.
+   or fall on this measurement it has to be added. **Decided by the owner, 2026-10-27:
+   it is a candidate**, and the harness lists it.
 
 ## Second adjudication
 
