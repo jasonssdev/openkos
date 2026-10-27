@@ -1,0 +1,1491 @@
+{
+ "method": "Each case is two notes about one subject, quoted verbatim from repository files (`survivor` = NOTE A, `absorbed` = NOTE B, the order production sends them in). A claim's `kind` says which note states it: a_only, b_only, or both (each note states it, in any wording). `anchors` are literal strings (matched casefolded, whitespace collapsed) that must survive in the merged body for the claim to count as kept; for a `both` claim `once` is a literal that appears exactly once in each note and must appear exactly once in the merged body. `alt_label` flags a claim whose kind a careful reader could call differently. The first author labelled every claim; the owner's blind labels are not recorded yet.",
+ "cases": [
+  {
+   "id": "local-first",
+   "title": "Runtime and privacy stance",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **Local-first & private.** Runs on the user's machine, offline; local models (Ollama by default). No mandatory cloud, no accounts, no required API keys — an opt-in `openai-compatible` backend may take a key, which the engine reads only from the `OPENKOS_OPENAI_API_KEY` environment variable, never from a file in the workspace; the desktop app keeps it in the operating system's keychain and sets that variable for the engine it starts ([ADR-0070](docs/adr/0070-the-desktop-shell-keeps-the-remote-backends-api-key-in-the-os-keychain-and-hands-it-to-the-engine-as-its-environment.md))."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/vision.md"
+     },
+     "text": "**1. Local-first and private by default.** OpenKOS runs on your machine and works offline. It is designed for local model runtimes (for example Ollama) so your knowledge never has to leave your computer. The cloud is an option you may choose, never a requirement we impose. The software is temporary; the knowledge is permanent."
+    }
+   ],
+   "claims": [
+    {
+     "id": "local-first-01",
+     "kind": "both",
+     "claim": "The system runs on the user's machine and works offline.",
+     "anchors": [
+      "offline"
+     ],
+     "once": "offline"
+    },
+    {
+     "id": "local-first-02",
+     "kind": "both",
+     "claim": "Ollama is named as the local model runtime.",
+     "anchors": [
+      "Ollama"
+     ],
+     "once": "Ollama"
+    },
+    {
+     "id": "local-first-03",
+     "kind": "both",
+     "claim": "The cloud is not required.",
+     "anchors": [
+      "cloud"
+     ],
+     "once": "cloud"
+    },
+    {
+     "id": "local-first-04",
+     "kind": "a_only",
+     "claim": "No accounts are needed.",
+     "anchors": [
+      "no accounts"
+     ]
+    },
+    {
+     "id": "local-first-05",
+     "kind": "a_only",
+     "claim": "The API key is read only from one environment variable.",
+     "anchors": [
+      "OPENKOS_OPENAI_API_KEY"
+     ]
+    },
+    {
+     "id": "local-first-06",
+     "kind": "a_only",
+     "claim": "The desktop app keeps the key in the operating system's keychain.",
+     "anchors": [
+      "keychain"
+     ]
+    },
+    {
+     "id": "local-first-07",
+     "kind": "b_only",
+     "claim": "The user's knowledge never has to leave the computer.",
+     "anchors": [
+      "never has to leave"
+     ]
+    },
+    {
+     "id": "local-first-08",
+     "kind": "b_only",
+     "claim": "The software is temporary and the knowledge is permanent.",
+     "anchors": [
+      "The software is temporary"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "adopt-okf",
+   "title": "Choosing an open format",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **Adopt OKF, don't invent a format.** Output is always a conformant OKF bundle ([v0.2 spec](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)). OpenKOS is the engine / reference implementation, never its own \"standard.\" This extends to definitions: where OKF has decided something, do not decide it again. Identity is the **Concept ID** — the file path minus `.md` (§2); there is no `id` field. Links are **bundle-relative** and **untyped** — the kind of relationship lives in the prose (§6.1). Provenance is recorded in frontmatter: `sources` is a generated projection of `provenance` (§5.1), never a body citations list. Conformance is exactly the three rules of §11 (parseable frontmatter on every non-reserved `.md`; non-empty `type`; reserved files follow §8/§9) — and **the lint is not a conformance checker**: it is our opinion about knowledge health, never OKF's verdict about validity, since OKF explicitly tolerates broken links and missing indexes. Anything we add is an extension carried in frontmatter (legal under §4.1) that degrades gracefully."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/vision.md"
+     },
+     "text": "**2. Standard-aligned, not bespoke.** Storage and interchange are OKF. We contribute to and track the standard rather than reinventing it. Adopting an open, vendor-neutral format is the *most* agnostic choice available — it is the opposite of lock-in. Standards evolve, and OpenKOS evolves with them: we adopt the best open representation available — OKF today — and stay compatible with future ones rather than being married to any single spec forever. The philosophy holds even if a given format is superseded."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/vision.md"
+     },
+     "text": "**We do not invent a format. We build the engine, and we adopt the lingua franca.**"
+    }
+   ],
+   "claims": [
+    {
+     "id": "adopt-okf-01",
+     "kind": "both",
+     "claim": "A new format is not invented.",
+     "anchors": [
+      "invent a format"
+     ],
+     "once": "invent a format"
+    },
+    {
+     "id": "adopt-okf-02",
+     "kind": "both",
+     "claim": "OpenKOS is the engine.",
+     "anchors": [
+      "the engine"
+     ],
+     "once": "the engine"
+    },
+    {
+     "id": "adopt-okf-03",
+     "kind": "a_only",
+     "claim": "A concept's identity is its path without the extension, and there is no id field.",
+     "anchors": [
+      "Concept ID",
+      "no `id` field"
+     ]
+    },
+    {
+     "id": "adopt-okf-04",
+     "kind": "a_only",
+     "claim": "Links are bundle-relative and untyped.",
+     "anchors": [
+      "bundle-relative",
+      "untyped"
+     ]
+    },
+    {
+     "id": "adopt-okf-05",
+     "kind": "a_only",
+     "claim": "The lint is not a conformance checker.",
+     "anchors": [
+      "not a conformance checker"
+     ]
+    },
+    {
+     "id": "adopt-okf-06",
+     "kind": "b_only",
+     "claim": "An open, vendor-neutral format is the opposite of lock-in.",
+     "anchors": [
+      "lock-in"
+     ]
+    },
+    {
+     "id": "adopt-okf-07",
+     "kind": "b_only",
+     "claim": "OpenKOS stays compatible with future formats.",
+     "anchors": [
+      "future ones"
+     ]
+    },
+    {
+     "id": "adopt-okf-08",
+     "kind": "b_only",
+     "claim": "The adopted format is described as the lingua franca.",
+     "anchors": [
+      "lingua franca"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "immutable-sources",
+   "title": "Sources and concept documents over time",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **Immutable sources, living objects.** `raw/` is read-only; concept documents are rewritten over time; history via git + `log.md`."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **`raw/` sits outside the bundle; `bundle/` is pure OKF.** A workspace is `raw/` (input material, any extension, untouched) + `bundle/` (the OKF bundle root) + the engine's files. Sources are not concepts, so they do not live in the concept tree — which is what makes §11 conformance hold *by construction*, even for files a user drops in by hand. Never put non-concept files inside `bundle/`."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/vision.md"
+     },
+     "text": "**3. Living knowledge, honest over time.** Raw sources are immutable — we read from them, never rewrite them. Concept documents, by contrast, are living: they are rewritten as you learn, and their history is preserved. Every fast-changing fact carries a freshness stamp so that nothing silently rots into a confident lie."
+    }
+   ],
+   "claims": [
+    {
+     "id": "immutable-sources-01",
+     "kind": "both",
+     "claim": "Concept documents are rewritten over time.",
+     "anchors": [
+      "rewritten"
+     ],
+     "once": "rewritten"
+    },
+    {
+     "id": "immutable-sources-02",
+     "kind": "both",
+     "claim": "History is kept.",
+     "anchors": [
+      "history"
+     ],
+     "once": "history"
+    },
+    {
+     "id": "immutable-sources-03",
+     "kind": "a_only",
+     "claim": "The input directory sits outside the bundle, which is pure OKF.",
+     "anchors": [
+      "pure OKF"
+     ]
+    },
+    {
+     "id": "immutable-sources-04",
+     "kind": "a_only",
+     "claim": "Non-concept files must never be put inside the bundle.",
+     "anchors": [
+      "Never put non-concept files"
+     ]
+    },
+    {
+     "id": "immutable-sources-05",
+     "kind": "a_only",
+     "claim": "Conformance holds by construction.",
+     "anchors": [
+      "by construction"
+     ]
+    },
+    {
+     "id": "immutable-sources-06",
+     "kind": "b_only",
+     "claim": "Every fast-changing fact carries a freshness stamp.",
+     "anchors": [
+      "freshness stamp"
+     ]
+    },
+    {
+     "id": "immutable-sources-07",
+     "kind": "b_only",
+     "claim": "Nothing silently rots into a confident lie.",
+     "anchors": [
+      "confident lie"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "reconstructible",
+   "title": "Derived state can be rebuilt",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **Reconstructible.** Every index / embedding / graph rebuilds from the canonical files (markdown, including the `bundle/.state/` sidecars, plus `openkos.yaml` and git). Every SQLite store under `.openkos/` is a derived cache, never the source of truth."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/vision.md"
+     },
+     "text": "**5. Reconstructible and explainable.** Every index, embedding, and graph projection must be rebuildable from the canonical OKF bundle plus the immutable sources. Retrieval always cites where an answer came from. Nothing important is hidden in an opaque store you cannot regenerate."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/architecture.md"
+     },
+     "text": "**Derived, under `.openkos/`, git-ignored, deleted wholesale by `purge`.** All\nof these are SQLite, all are reconstructible in principle, and they differ in what\nreconstruction costs:"
+    }
+   ],
+   "claims": [
+    {
+     "id": "reconstructible-01",
+     "kind": "both",
+     "claim": "Every index, embedding and graph can be rebuilt.",
+     "anchors": [
+      "embedding"
+     ],
+     "once": "embedding"
+    },
+    {
+     "id": "reconstructible-02",
+     "kind": "both",
+     "claim": "The derived stores are SQLite.",
+     "anchors": [
+      "SQLite"
+     ],
+     "once": "SQLite"
+    },
+    {
+     "id": "reconstructible-03",
+     "kind": "a_only",
+     "claim": "The SQLite stores are caches and never the source of truth.",
+     "anchors": [
+      "never the source of truth"
+     ]
+    },
+    {
+     "id": "reconstructible-04",
+     "kind": "a_only",
+     "claim": "The canonical files include the state sidecars, the config file and git.",
+     "anchors": [
+      "sidecars"
+     ]
+    },
+    {
+     "id": "reconstructible-05",
+     "kind": "b_only",
+     "claim": "Retrieval always cites where an answer came from.",
+     "anchors": [
+      "always cites"
+     ]
+    },
+    {
+     "id": "reconstructible-06",
+     "kind": "b_only",
+     "claim": "Nothing important is hidden in an opaque store.",
+     "anchors": [
+      "opaque store"
+     ]
+    },
+    {
+     "id": "reconstructible-07",
+     "kind": "b_only",
+     "claim": "The derived stores are git-ignored and deleted wholesale by purge.",
+     "anchors": [
+      "git-ignored",
+      "`purge`"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "representation-not-truth",
+   "title": "Representations and their context",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **Representation, not truth.** OpenKOS preserves representations; it does not validate them and is not an epistemic authority."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **Provenance & freshness are first-class.** Every derived object cites its sources; volatile facts carry an `as of` stamp (timeless / snapshot / pointer)."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/vision.md"
+     },
+     "text": "**6. Representation, not truth.** OpenKOS stores *representations* of knowledge — how you understand and document things — not truth itself. It is not an epistemic authority: it does not decide what is objectively true, and it lets multiple, even conflicting, perspectives coexist, each preserving its own context (source, assumptions, evidence, confidence expressed qualitatively). This is distinct from freshness: the engine reconciles what is *out of date*, but it does not adjudicate what is *contested*. OpenKOS preserves representations; it does not validate them — validation, when needed, is the work of humans or specialized agents, never a responsibility the system assumes."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/philosophy.md"
+     },
+     "text": "Two older distinctions matter here. The first is **tacit versus explicit** knowledge: much of what a person knows is never written down; it lives in their head. OpenKOS can only work with knowledge that has been externalized — but its real contribution is capturing the **connective tissue** (provenance, relationships, assumptions) that a plain note usually throws away. The second is that OpenKOS deals in **representations, not truth**. What it stores is *your* representation of how you understand something, not an objective fact about the world. That is why every object keeps its context: who, when, from what source, under what assumptions."
+    }
+   ],
+   "claims": [
+    {
+     "id": "representation-not-truth-01",
+     "kind": "both",
+     "claim": "OpenKOS is not an epistemic authority.",
+     "anchors": [
+      "epistemic authority"
+     ],
+     "once": "epistemic authority"
+    },
+    {
+     "id": "representation-not-truth-02",
+     "kind": "both",
+     "claim": "OpenKOS does not validate representations.",
+     "anchors": [
+      "does not validate them"
+     ],
+     "once": "does not validate them"
+    },
+    {
+     "id": "representation-not-truth-03",
+     "kind": "a_only",
+     "claim": "Every derived object cites its sources.",
+     "anchors": [
+      "cites its sources"
+     ]
+    },
+    {
+     "id": "representation-not-truth-04",
+     "kind": "a_only",
+     "claim": "Volatile facts carry an as-of stamp.",
+     "anchors": [
+      "`as of` stamp"
+     ]
+    },
+    {
+     "id": "representation-not-truth-05",
+     "kind": "a_only",
+     "claim": "Freshness comes in the classes timeless, snapshot and pointer.",
+     "anchors": [
+      "snapshot"
+     ]
+    },
+    {
+     "id": "representation-not-truth-06",
+     "kind": "b_only",
+     "claim": "Multiple, even conflicting, perspectives can coexist.",
+     "anchors": [
+      "conflicting"
+     ]
+    },
+    {
+     "id": "representation-not-truth-07",
+     "kind": "b_only",
+     "claim": "Tacit knowledge is distinguished from explicit knowledge.",
+     "anchors": [
+      "tacit versus explicit"
+     ]
+    },
+    {
+     "id": "representation-not-truth-08",
+     "kind": "b_only",
+     "claim": "The engine does not adjudicate what is contested.",
+     "anchors": [
+      "adjudicate"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "sync-core",
+   "title": "Synchronous core and async edge",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **The core is synchronous.** Async only at the adapter edges (`mcp/` and `localapi/`), which call the synchronous `application/` services on one worker thread per operation ([ADR-0021](docs/adr/0021-sync-async-boundary.md)). Do not make the core async."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/adr/0021-sync-async-boundary.md"
+     },
+     "text": "**One. The application layer stays synchronous, and gains no async\nvariants.** No `async def` appears in `application/` or anything below it.\nThis restates ADR-0018 as a boundary rather than a preference: a service\nwith both a sync and an async form is two implementations of the same\nrules, which is the duplication the layer exists to prevent."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/adr/0021-sync-async-boundary.md"
+     },
+     "text": "**Two. The MCP adapter owns the only event loop, and calls into the layer\nthrough one worker thread per operation** (`asyncio.to_thread`, or the\n`anyio` equivalent if the SDK supplies the loop). The adapter is the only\nasync code in the repository."
+    }
+   ],
+   "claims": [
+    {
+     "id": "sync-core-01",
+     "kind": "both",
+     "claim": "The application layer is synchronous.",
+     "anchors": [
+      "`application/`"
+     ],
+     "once": "`application/`"
+    },
+    {
+     "id": "sync-core-02",
+     "kind": "both",
+     "claim": "Each operation runs on one worker thread.",
+     "anchors": [
+      "worker thread per operation"
+     ],
+     "once": "worker thread per operation"
+    },
+    {
+     "id": "sync-core-03",
+     "kind": "a_only",
+     "claim": "The local API is one of the async edges.",
+     "anchors": [
+      "`localapi/`"
+     ]
+    },
+    {
+     "id": "sync-core-04",
+     "kind": "a_only",
+     "claim": "The core must not be made async.",
+     "anchors": [
+      "Do not make the core async"
+     ]
+    },
+    {
+     "id": "sync-core-05",
+     "kind": "b_only",
+     "claim": "A service with a sync and an async form would hold two implementations of the same rules.",
+     "anchors": [
+      "two implementations of the same rules"
+     ]
+    },
+    {
+     "id": "sync-core-06",
+     "kind": "b_only",
+     "claim": "The thread hop uses asyncio.to_thread.",
+     "anchors": [
+      "asyncio.to_thread"
+     ]
+    },
+    {
+     "id": "sync-core-07",
+     "kind": "b_only",
+     "claim": "The MCP adapter owns the only event loop.",
+     "anchors": [
+      "only event loop"
+     ],
+     "alt_label": "both"
+    }
+   ]
+  },
+  {
+   "id": "no-engine-py",
+   "title": "Services instead of one orchestrator",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **There is NO `engine.py`.** [ADR-0018](docs/adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous use-case services under `application/` instead of one orchestrator. Proposing an `engine.py` re-opens a decided question."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/architecture.md"
+     },
+     "text": "- **Use-case services, not one orchestrator.** [ADR-0018](adr/0018-application-layer-for-bounded-context-services.md) chose narrow synchronous services under `application/` over a single `engine.py`, so each use case owns its own composition instead of one module owning all of them. The write use cases are `query.py`, `ingest.py`, and `lifecycle.py`; the read verbs (`status`, `list`, `lint`, `doctor`, `get`) have their own read cores, so an adapter is a thin layer over shared code rather than a second implementation; and `consent.py` holds the confirmation contracts as typed data so a non-TTY adapter can answer a gate without re-deriving its prompt. `cli/` keeps parsing, presentation, exit codes, and the shared write mechanics the services call through rather than own."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/adr/0018-application-layer-for-bounded-context-services.md"
+     },
+     "text": "`application/` does not resolve `engine.py`'s absence by becoming it. It is a\nlayer of context-scoped services, not one thin orchestrator; whether a top-level\nwiring module is ever needed is a later question this ADR deliberately leaves\nopen."
+    }
+   ],
+   "claims": [
+    {
+     "id": "no-engine-py-01",
+     "kind": "both",
+     "claim": "ADR-0018 chose narrow synchronous services.",
+     "anchors": [
+      "ADR-0018",
+      "narrow synchronous"
+     ],
+     "once": "ADR-0018"
+    },
+    {
+     "id": "no-engine-py-02",
+     "kind": "a_only",
+     "claim": "Proposing an engine module re-opens a decided question.",
+     "anchors": [
+      "re-opens a decided question"
+     ]
+    },
+    {
+     "id": "no-engine-py-03",
+     "kind": "b_only",
+     "claim": "Each use case owns its own composition.",
+     "anchors": [
+      "owns its own composition"
+     ]
+    },
+    {
+     "id": "no-engine-py-04",
+     "kind": "b_only",
+     "claim": "The write use cases include lifecycle.",
+     "anchors": [
+      "`lifecycle.py`"
+     ]
+    },
+    {
+     "id": "no-engine-py-05",
+     "kind": "b_only",
+     "claim": "A consent module holds the confirmation contracts as typed data.",
+     "anchors": [
+      "`consent.py`"
+     ]
+    },
+    {
+     "id": "no-engine-py-06",
+     "kind": "b_only",
+     "claim": "Whether a top-level wiring module is needed is left open.",
+     "anchors": [
+      "wiring module"
+     ]
+    },
+    {
+     "id": "no-engine-py-07",
+     "kind": "b_only",
+     "claim": "The CLI keeps parsing, presentation and exit codes.",
+     "anchors": [
+      "exit codes"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "python-314",
+   "title": "The supported interpreter",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **Python 3.14 only** ([ADR-0054](docs/adr/0054-python-314-is-the-only-supported-interpreter.md)), `src/` layout, package `openkos`, `uv` for envs/deps."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **`pyproject.toml` is the single config source** — deps, the console entry point (`openkos = \"openkos.cli.main:app\"`), and Ruff / MyPy / Pytest settings."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/adr/0054-python-314-is-the-only-supported-interpreter.md"
+     },
+     "text": "Python 3.14 is the only supported interpreter. `requires-python` is `>=3.14`, the only trove classifier is 3.14, MyPy analyses for 3.14, `.python-version` is 3.14, every CI and release job uses 3.14, and the test matrix has one entry. A test pins that these sources agree, so a future drift goes red."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/adr/0054-python-314-is-the-only-supported-interpreter.md"
+     },
+     "text": "Ruff infers its target from `requires-python`, so the `UP` rules now modernise for 3.14. Dead compatibility branches for older interpreters are removed."
+    }
+   ],
+   "claims": [
+    {
+     "id": "python-314-01",
+     "kind": "both",
+     "claim": "Python 3.14 is the only supported interpreter.",
+     "anchors": [
+      "Python 3.14"
+     ],
+     "once": "Python 3.14"
+    },
+    {
+     "id": "python-314-02",
+     "kind": "a_only",
+     "claim": "The package uses a src layout.",
+     "anchors": [
+      "`src/` layout"
+     ]
+    },
+    {
+     "id": "python-314-03",
+     "kind": "a_only",
+     "claim": "uv manages environments and dependencies.",
+     "anchors": [
+      "`uv`"
+     ]
+    },
+    {
+     "id": "python-314-04",
+     "kind": "a_only",
+     "claim": "pyproject.toml is the single config source.",
+     "anchors": [
+      "single config source"
+     ]
+    },
+    {
+     "id": "python-314-05",
+     "kind": "a_only",
+     "claim": "The console entry point is a named function in the CLI module.",
+     "anchors": [
+      "openkos.cli.main:app"
+     ]
+    },
+    {
+     "id": "python-314-06",
+     "kind": "b_only",
+     "claim": "The declared minimum interpreter version is at least 3.14.",
+     "anchors": [
+      "`>=3.14`"
+     ]
+    },
+    {
+     "id": "python-314-07",
+     "kind": "b_only",
+     "claim": "The only trove classifier is 3.14.",
+     "anchors": [
+      "trove classifier"
+     ]
+    },
+    {
+     "id": "python-314-08",
+     "kind": "b_only",
+     "claim": "The Ruff UP rules modernise for 3.14.",
+     "anchors": [
+      "`UP` rules"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "llm-seam",
+   "title": "Constructing model clients",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **LLM calls** go behind `LLMBackend` (`llm/base.py`), and clients are built only through the resolver in `application/backends.py`, keyed on `openkos.yaml`'s `backend`. The default `ollama` backend talks to Ollama's native HTTP API (`llm/ollama.py`); the opt-in `openai-compatible` backend talks to `/v1/chat/completions`, `/v1/embeddings` and `/v1/models` (`llm/openai_compatible.py`) — see [ADR-0031](docs/adr/0031-openai-compatible-backend.md)."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/architecture.md"
+     },
+     "text": "- **One resolver seam constructs every LLM client.** `application/backends.py` resolves the configured `backend` (`ollama`, the default, or `openai-compatible`), the effective endpoint, and the environment-only API key, then constructs the matching concrete client — the CLI and MCP adapters call through it rather than importing `OllamaClient`/`OpenAICompatibleClient` directly. Adding a backend widens this one seam; it does not touch the pipeline packages that call `LLMBackend`/`Embedder`."
+    }
+   ],
+   "claims": [
+    {
+     "id": "llm-seam-01",
+     "kind": "both",
+     "claim": "Clients are built only through application/backends.py.",
+     "anchors": [
+      "`application/backends.py`"
+     ],
+     "once": "`application/backends.py`"
+    },
+    {
+     "id": "llm-seam-02",
+     "kind": "both",
+     "claim": "The openai-compatible backend is a configured alternative.",
+     "anchors": [
+      "`openai-compatible`"
+     ],
+     "once": "`openai-compatible`"
+    },
+    {
+     "id": "llm-seam-03",
+     "kind": "a_only",
+     "claim": "The default backend talks to Ollama's native HTTP API.",
+     "anchors": [
+      "native HTTP API"
+     ]
+    },
+    {
+     "id": "llm-seam-04",
+     "kind": "a_only",
+     "claim": "The OpenAI-compatible backend talks to a chat completions path.",
+     "anchors": [
+      "/v1/chat/completions"
+     ]
+    },
+    {
+     "id": "llm-seam-05",
+     "kind": "a_only",
+     "claim": "ADR-0031 records the OpenAI-compatible backend.",
+     "anchors": [
+      "ADR-0031"
+     ]
+    },
+    {
+     "id": "llm-seam-06",
+     "kind": "b_only",
+     "claim": "The API key comes from the environment only.",
+     "anchors": [
+      "environment-only API key"
+     ]
+    },
+    {
+     "id": "llm-seam-07",
+     "kind": "b_only",
+     "claim": "Adding a backend widens one seam.",
+     "anchors": [
+      "widens this one seam"
+     ]
+    },
+    {
+     "id": "llm-seam-08",
+     "kind": "b_only",
+     "claim": "Adapters do not import the concrete clients directly.",
+     "anchors": [
+      "`OpenAICompatibleClient`"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "protocol-seams",
+   "title": "Internal extension seams",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **Extension interfaces are `typing.Protocol`.** The seams that exist today are `GraphStore` (`graph/base.py`), `VectorStore` (`state/vectorstore.py`), and `LLMBackend` and `Embedder` (`llm/base.py`), and they are internal — OpenKOS publishes no plugin API and no entry-point group. A `Producer`/`Consumer` extension surface is a Horizon roadmap item, built on the stable Python API planned for MVP 6, not present code; do not write as though it exists."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/architecture.md"
+     },
+     "text": "- **The Protocol seams that exist today** are `GraphStore` (`graph/base.py`), `VectorStore` (`state/vectorstore.py`), and `LLMBackend` and `Embedder` (`llm/base.py`). They define the shapes their implementations satisfy (`sqlite_graph.py`, the `sqlite-vec` store, `ollama.py`, `openai_compatible.py`). They are internal seams, not a published plugin API: OpenKOS ships no `Producer`/`Consumer` interface and no entry-point group. That extension surface is a roadmap item, not present code — see [`roadmap.md`](roadmap.md)."
+    }
+   ],
+   "claims": [
+    {
+     "id": "protocol-seams-01",
+     "kind": "both",
+     "claim": "GraphStore is one of the seams.",
+     "anchors": [
+      "`GraphStore`"
+     ],
+     "once": "`GraphStore`"
+    },
+    {
+     "id": "protocol-seams-02",
+     "kind": "both",
+     "claim": "There is no entry-point group.",
+     "anchors": [
+      "entry-point group"
+     ],
+     "once": "entry-point group"
+    },
+    {
+     "id": "protocol-seams-03",
+     "kind": "both",
+     "claim": "There is no Producer/Consumer interface yet.",
+     "anchors": [
+      "`Producer`/`Consumer`"
+     ],
+     "once": "`Producer`/`Consumer`"
+    },
+    {
+     "id": "protocol-seams-04",
+     "kind": "a_only",
+     "claim": "The seams are typing.Protocol classes.",
+     "anchors": [
+      "`typing.Protocol`"
+     ]
+    },
+    {
+     "id": "protocol-seams-05",
+     "kind": "a_only",
+     "claim": "The extension surface is planned on the stable Python API of MVP 6.",
+     "anchors": [
+      "MVP 6"
+     ]
+    },
+    {
+     "id": "protocol-seams-06",
+     "kind": "a_only",
+     "claim": "The extension surface must not be written about as though it exists.",
+     "anchors": [
+      "do not write as though it exists"
+     ]
+    },
+    {
+     "id": "protocol-seams-07",
+     "kind": "b_only",
+     "claim": "sqlite_graph.py implements the graph seam.",
+     "anchors": [
+      "`sqlite_graph.py`"
+     ]
+    },
+    {
+     "id": "protocol-seams-08",
+     "kind": "b_only",
+     "claim": "The roadmap document tracks the extension surface.",
+     "anchors": [
+      "`roadmap.md`"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "docs-policy",
+   "title": "Where documentation changes",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **Docs describe the shape, not the diff.** `docs/` changes only when the general shape changes — a layer, a workflow, a principle. Behavioral detail lives in `openspec/specs/`, decisions in ADRs, particulars in issues and the CHANGELOG. Do not sync `docs/` on every merged change; do not write counts that rot (\"26 verbs\" — `--help` is the authority); do not mark behavior with \"since #NNN\" — state it timelessly, history carries the when. (Full policy: `CONTRIBUTING.md`, \"Where knowledge about the project lives\".)"
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "AGENTS.md"
+     },
+     "text": "- **Specs are the contract.** Behavior is agreed in `openspec/` before it is built: `openspec/specs/{domain}/spec.md` is the living per-domain contract; `openspec/changes/{change-name}/` carries a change in flight (proposal, delta specs, design, tasks) until archive merges its deltas into the main spec; `openspec/config.yaml` holds the per-phase rules. It is tracked and reviewed like any other file. Required for anything touching the knowledge model, the OKF conformance surface, the ingestion pipeline, or public interfaces (CLI, API, MCP); below that bar, see `CONTRIBUTING.md`."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "CONTRIBUTING.md"
+     },
+     "text": "- **`docs/` — the durable shape.** Principles, the knowledge model, the architecture, the user journey. These describe how OpenKOS works *in general*, and change only when the shape itself changes — a new layer, a removed channel, a redefined workflow. Closing an issue is not, by itself, a reason to touch them.\n- **`openspec/specs/` — the behavior contract.** Living, per-domain, always-current statements of what the system MUST do. Behavioral detail belongs here, not in `docs/`.\n- **`docs/adr/` — decisions.** Immutable records of significant, hard-to-reverse choices and the reasoning behind them.\n- **Issues, pull requests, and `CHANGELOG.md` — the particulars.** What changed, when, and in which release."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "CONTRIBUTING.md"
+     },
+     "text": "1. **No counts that rot.** Not \"26 verbs\" but \"the CLI's verbs\" — `openkos --help` is the authority for the list.\n2. **No \"since #NNN\".** Describe behavior as it is; git history and the changelog carry the *when*. A link to a closed issue is fine as a historical footnote explaining why a design was *retired*; a ticket number woven into a feature's description is not.\n3. **Name the authority instead of copying the value.** Model tags, caps, and windows live in `openkos.yaml`, the specs, and the ADRs. Docs may show a current default where the user must literally type it (the README quickstart); everywhere else, point at the authority."
+    }
+   ],
+   "claims": [
+    {
+     "id": "docs-policy-01",
+     "kind": "both",
+     "claim": "Counts such as 26 verbs rot and are not written.",
+     "anchors": [
+      "26 verbs"
+     ],
+     "once": "26 verbs"
+    },
+    {
+     "id": "docs-policy-02",
+     "kind": "both",
+     "claim": "Behavior is not marked with since-#NNN.",
+     "anchors": [
+      "since #NNN"
+     ],
+     "once": "since #NNN"
+    },
+    {
+     "id": "docs-policy-03",
+     "kind": "both",
+     "claim": "The --help output is the authority for the verb list.",
+     "anchors": [
+      "is the authority"
+     ],
+     "once": "is the authority"
+    },
+    {
+     "id": "docs-policy-04",
+     "kind": "both",
+     "claim": "Behavioral detail lives in the specs.",
+     "anchors": [
+      "Behavioral detail"
+     ],
+     "once": "Behavioral detail"
+    },
+    {
+     "id": "docs-policy-05",
+     "kind": "a_only",
+     "claim": "A change in flight lives in a per-change folder under openspec.",
+     "anchors": [
+      "`openspec/changes/{change-name}/`"
+     ]
+    },
+    {
+     "id": "docs-policy-06",
+     "kind": "a_only",
+     "claim": "A config file holds the per-phase rules.",
+     "anchors": [
+      "per-phase rules"
+     ]
+    },
+    {
+     "id": "docs-policy-07",
+     "kind": "b_only",
+     "claim": "Closing an issue is not by itself a reason to edit the docs.",
+     "anchors": [
+      "Closing an issue"
+     ]
+    },
+    {
+     "id": "docs-policy-08",
+     "kind": "b_only",
+     "claim": "Model tags, caps and windows live in config, specs and ADRs.",
+     "anchors": [
+      "Model tags, caps, and windows"
+     ]
+    },
+    {
+     "id": "docs-policy-09",
+     "kind": "b_only",
+     "claim": "ADRs record hard-to-reverse choices.",
+     "anchors": [
+      "hard-to-reverse"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "maria-salazar",
+   "title": "A person in the demo bundle",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/people/maria-salazar.md"
+     },
+     "text": "Studies Hellenistic ethics. Teaches the Hellenistic ethics seminar this term (as of 2026-07-14) — a post is a volatile fact, so the faculty page linked in `resource` is the source of truth here, not this page [1]."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/people/maria-salazar.md"
+     },
+     "text": "Corrected the *apatheia* reading in [Stoicism](/concepts/stoicism.md), and argued for the framing recorded in [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md) [1]."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/sources/call-with-maria-2026-07-14.md"
+     },
+     "text": "Maria corrected the *apatheia* reading: it is freedom from the *pathē*, the destructive passions, not the absence of feeling — the Stoics kept the *eupatheiai*. The misreading comes from the English cognate *apathy*. She argued for framing the essay on the dichotomy of control instead, mentioned her current teaching, and shared a plan she asked me not to spread."
+    }
+   ],
+   "claims": [
+    {
+     "id": "maria-salazar-01",
+     "kind": "both",
+     "claim": "Maria corrected the apatheia reading.",
+     "anchors": [
+      "*apatheia*"
+     ],
+     "once": "*apatheia*"
+    },
+    {
+     "id": "maria-salazar-02",
+     "kind": "both",
+     "claim": "Maria argued for framing the essay on the dichotomy of control.",
+     "anchors": [
+      "dichotomy of control"
+     ],
+     "once": "dichotomy of control"
+    },
+    {
+     "id": "maria-salazar-03",
+     "kind": "both",
+     "claim": "Maria teaches.",
+     "anchors": [
+      "teach"
+     ],
+     "once": "teach",
+     "alt_label": "a_only"
+    },
+    {
+     "id": "maria-salazar-04",
+     "kind": "a_only",
+     "claim": "She studies Hellenistic ethics.",
+     "anchors": [
+      "Hellenistic ethics"
+     ]
+    },
+    {
+     "id": "maria-salazar-05",
+     "kind": "a_only",
+     "claim": "Her teaching post is dated 2026-07-14 as a volatile fact.",
+     "anchors": [
+      "2026-07-14"
+     ]
+    },
+    {
+     "id": "maria-salazar-06",
+     "kind": "a_only",
+     "claim": "The faculty page is the source of truth for her post.",
+     "anchors": [
+      "source of truth"
+     ]
+    },
+    {
+     "id": "maria-salazar-07",
+     "kind": "b_only",
+     "claim": "The Stoics kept the eupatheiai.",
+     "anchors": [
+      "*eupatheiai*"
+     ]
+    },
+    {
+     "id": "maria-salazar-08",
+     "kind": "b_only",
+     "claim": "The misreading comes from the English cognate apathy.",
+     "anchors": [
+      "*apathy*"
+     ]
+    },
+    {
+     "id": "maria-salazar-09",
+     "kind": "b_only",
+     "claim": "She shared a plan she asked not to be spread.",
+     "anchors": [
+      "not to spread"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "essay-frame",
+   "title": "A decision about an essay",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/decisions/frame-the-essay-on-the-dichotomy-of-control.md"
+     },
+     "text": "On 2026-07-14 I decided to organise the essay around the dichotomy of control from [Stoicism](/concepts/stoicism.md) rather than around *apatheia*."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/decisions/frame-the-essay-on-the-dichotomy-of-control.md"
+     },
+     "text": "**Rationale:** the dichotomy lands immediately with a reader who has never opened a Stoic text, while *apatheia* needs a paragraph of disambiguation every time it appears — I misread it myself on the first pass [1], and had to be corrected [2]. An idea that must be defended before it can be used is the wrong load-bearing beam for a short essay."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/sources/call-with-maria-2026-07-14.md"
+     },
+     "text": "Maria corrected the *apatheia* reading: it is freedom from the *pathē*, the destructive passions, not the absence of feeling — the Stoics kept the *eupatheiai*. The misreading comes from the English cognate *apathy*. She argued for framing the essay on the dichotomy of control instead, mentioned her current teaching, and shared a plan she asked me not to spread."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/sources/notes-on-the-enchiridion-2026-07-05.md"
+     },
+     "text": "Notes from a first pass through Epictetus's *Enchiridion* and the translator's introduction. They cover the dichotomy of control, the Stoic/Epicurean contrast the introduction draws, and a first reading of *apatheia* as \"indifference to emotion\" — flagged at the time as something to ask about, and later corrected."
+    }
+   ],
+   "claims": [
+    {
+     "id": "essay-frame-01",
+     "kind": "both",
+     "claim": "The first reading of apatheia was a misreading.",
+     "anchors": [
+      "first pass"
+     ],
+     "once": "first pass"
+    },
+    {
+     "id": "essay-frame-02",
+     "kind": "a_only",
+     "claim": "The decision was made on 2026-07-14.",
+     "anchors": [
+      "2026-07-14"
+     ]
+    },
+    {
+     "id": "essay-frame-03",
+     "kind": "a_only",
+     "claim": "The dichotomy lands with a reader who has never opened a Stoic text.",
+     "anchors": [
+      "never opened a Stoic text"
+     ]
+    },
+    {
+     "id": "essay-frame-04",
+     "kind": "a_only",
+     "claim": "Apatheia needs a paragraph of disambiguation each time.",
+     "anchors": [
+      "disambiguation"
+     ]
+    },
+    {
+     "id": "essay-frame-05",
+     "kind": "a_only",
+     "claim": "An idea that must be defended first is the wrong load-bearing beam.",
+     "anchors": [
+      "load-bearing beam"
+     ]
+    },
+    {
+     "id": "essay-frame-06",
+     "kind": "b_only",
+     "claim": "The Stoics kept the eupatheiai.",
+     "anchors": [
+      "*eupatheiai*"
+     ]
+    },
+    {
+     "id": "essay-frame-07",
+     "kind": "b_only",
+     "claim": "The notes draw a Stoic/Epicurean contrast.",
+     "anchors": [
+      "Stoic/Epicurean contrast"
+     ]
+    },
+    {
+     "id": "essay-frame-08",
+     "kind": "b_only",
+     "claim": "The notes are on Epictetus's text.",
+     "anchors": [
+      "Epictetus"
+     ]
+    },
+    {
+     "id": "essay-frame-09",
+     "kind": "b_only",
+     "claim": "She shared a plan she asked not to be spread.",
+     "anchors": [
+      "not to spread"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "stoicism",
+   "title": "A school of thought",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/concepts/stoicism.md"
+     },
+     "text": "A Hellenistic school that holds virtue to be the only good. Its practical core is the **dichotomy of control** (*Enchiridion* 1): some things are up to us — judgement, impulse, desire, aversion — and some are not — the body, reputation, office. Suffering comes from wanting what was never ours to govern [1]."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/concepts/stoicism.md"
+     },
+     "text": "**Apatheia** is freedom from the *pathē*, the destructive passions — not the absence of feeling. The Stoics kept the *eupatheiai*, the \"good feelings\": joy, caution, wishing. The goal is not to stop feeling but to stop being ruled by it [2]."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/sources/notes-on-the-enchiridion-2026-07-05.md"
+     },
+     "text": "Notes from a first pass through Epictetus's *Enchiridion* and the translator's introduction. They cover the dichotomy of control, the Stoic/Epicurean contrast the introduction draws, and a first reading of *apatheia* as \"indifference to emotion\" — flagged at the time as something to ask about, and later corrected."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "examples/good-life-demo/bundle/concepts/stoicism.md"
+     },
+     "text": "The term is commonly misread as \"indifference to emotion\", by analogy with the English cognate *apathy*. That reading makes the school sound colder than it is, and it is worth disarming before using the word in front of a general reader [2]."
+    }
+   ],
+   "claims": [
+    {
+     "id": "stoicism-01",
+     "kind": "both",
+     "claim": "The dichotomy of control comes from the Enchiridion.",
+     "anchors": [
+      "*Enchiridion*"
+     ],
+     "once": "*Enchiridion*"
+    },
+    {
+     "id": "stoicism-02",
+     "kind": "a_only",
+     "claim": "Virtue is the only good.",
+     "anchors": [
+      "only good"
+     ]
+    },
+    {
+     "id": "stoicism-03",
+     "kind": "a_only",
+     "claim": "Body, reputation and office are not up to us.",
+     "anchors": [
+      "reputation, office"
+     ]
+    },
+    {
+     "id": "stoicism-04",
+     "kind": "a_only",
+     "claim": "Suffering comes from wanting what was never ours to govern.",
+     "anchors": [
+      "never ours to govern"
+     ]
+    },
+    {
+     "id": "stoicism-05",
+     "kind": "a_only",
+     "claim": "The goal is to stop being ruled by feeling, not to stop feeling.",
+     "anchors": [
+      "ruled by it"
+     ]
+    },
+    {
+     "id": "stoicism-06",
+     "kind": "a_only",
+     "claim": "The Stoics kept the eupatheiai.",
+     "anchors": [
+      "*eupatheiai*"
+     ]
+    },
+    {
+     "id": "stoicism-07",
+     "kind": "b_only",
+     "claim": "The reading notes flagged the apatheia reading as something to ask about.",
+     "anchors": [
+      "something to ask about"
+     ]
+    },
+    {
+     "id": "stoicism-08",
+     "kind": "b_only",
+     "claim": "The misreading makes the school sound colder than it is.",
+     "anchors": [
+      "colder than it is"
+     ]
+    },
+    {
+     "id": "stoicism-09",
+     "kind": "b_only",
+     "claim": "The word is worth disarming before using it with a general reader.",
+     "anchors": [
+      "general reader"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "maintenance-cost",
+   "title": "Why knowledge needs upkeep",
+   "survivor": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/vision.md"
+     },
+     "text": "The deeper problem underneath is this: **the maintenance cost of knowledge does not scale.** No one can indefinitely organize, update, cross-reference, and reconcile what they know, so every personal knowledge system eventually decays — the burden grows faster than the value. Language models are what finally make a different outcome possible, but they are the enabling technology, not the reason OpenKOS exists. OpenKOS exists to remove that maintenance burden so knowledge can *compound* — grow more useful over the years instead of harder to keep."
+    }
+   ],
+   "absorbed": [
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/philosophy.md"
+     },
+     "text": "Knowledge is not valuable as a heap of isolated facts. Its value emerges from **connection** and from being **available at the right moment.** The obstacle is maintenance. Someone has to organize, link, update, and reconcile — and that cost grows faster than the value it produces. This is the deep reason personal knowledge systems decay and people abandon their wikis: not a failure of will, but an economics problem. The maintenance cost of knowledge does not scale."
+    },
+    {
+     "source": {
+      "kind": "file",
+      "ref": "docs/philosophy.md"
+     },
+     "text": "First, **orchestrating the maintenance.** A language model does the bookkeeping that humans reliably abandon — summarizing, cross-referencing, deduplicating, checking freshness. This is what finally breaks the historical curse: the tedium that made humans quit is exactly what an LLM does not mind. The model is the enabling technology, not the reason the project exists."
+    }
+   ],
+   "claims": [
+    {
+     "id": "maintenance-cost-01",
+     "kind": "both",
+     "claim": "The maintenance cost of knowledge does not scale.",
+     "anchors": [
+      "does not scale"
+     ],
+     "once": "does not scale"
+    },
+    {
+     "id": "maintenance-cost-02",
+     "kind": "both",
+     "claim": "The model is the enabling technology, not the reason for the project.",
+     "anchors": [
+      "enabling technology"
+     ],
+     "once": "enabling technology"
+    },
+    {
+     "id": "maintenance-cost-03",
+     "kind": "both",
+     "claim": "The burden grows faster than the value.",
+     "anchors": [
+      "grows faster than the value"
+     ],
+     "once": "grows faster than the value"
+    },
+    {
+     "id": "maintenance-cost-04",
+     "kind": "both",
+     "claim": "Personal knowledge systems decay.",
+     "anchors": [
+      "decay"
+     ],
+     "once": "decay"
+    },
+    {
+     "id": "maintenance-cost-05",
+     "kind": "a_only",
+     "claim": "Knowledge should compound.",
+     "anchors": [
+      "*compound*"
+     ]
+    },
+    {
+     "id": "maintenance-cost-06",
+     "kind": "b_only",
+     "claim": "Value emerges from connection and from being available at the right moment.",
+     "anchors": [
+      "right moment"
+     ]
+    },
+    {
+     "id": "maintenance-cost-07",
+     "kind": "b_only",
+     "claim": "The failure is an economics problem, not a failure of will.",
+     "anchors": [
+      "economics problem"
+     ]
+    },
+    {
+     "id": "maintenance-cost-08",
+     "kind": "b_only",
+     "claim": "The model's bookkeeping includes deduplicating.",
+     "anchors": [
+      "deduplicating"
+     ]
+    },
+    {
+     "id": "maintenance-cost-09",
+     "kind": "b_only",
+     "claim": "The tedium that made humans quit does not bother an LLM.",
+     "anchors": [
+      "does not mind"
+     ]
+    }
+   ]
+  }
+ ]
+}
