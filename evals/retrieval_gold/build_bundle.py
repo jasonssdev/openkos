@@ -74,13 +74,42 @@ REFUSED_MEETINGS: Final = {
 }
 """Allowed by the thesis allowlist but unusable here."""
 
-KNOWN_ROOTS: Final = ("transcripts", "extraction-corpus", "repo")
+TRANSLATED_MEETINGS: Final = tuple(
+    f"{series}{letter}" for series in screen_data.DEV_SERIES for letter in "abcd"
+)
+"""The only meetings that may be translated into Spanish: the 12 thesis
+DEVELOPMENT meetings (mcd-afg `config/corpus.toml`, `[oe1].development_series`,
+ADR 0005). `screen_data.ALLOWED_MEETINGS` also holds the free pool, which is
+usable as English but is not translated here, so membership is checked twice."""
+
+TRANSLATION_KIND: Final = "ami-translation"
+TRANSLATION_SUFFIX: Final = "-es"
+PENDING_SHA: Final = "pending-translation"
+"""The `sha256` of a translation that has not been produced, reviewed and pinned.
+`build` refuses to run while any selected source still carries it."""
+
+KNOWN_ROOTS: Final = ("transcripts", "extraction-corpus", "repo", "translations")
 TIERS: Final = ("core", "synthetic")
 OPENKOS_ARGV: Final = (
     sys.executable,
     "-c",
     "import sys; from openkos.cli.main import app; sys.argv[0] = 'openkos'; app()",
 )
+
+
+def require_translatable(meeting: str) -> str:
+    """`meeting` if it may be translated, else `screen_data.DisallowedMeeting`.
+
+    Fail closed, in two steps: the thesis allowlist first (so an evaluation or
+    reserve series is named for what it is), then the development list."""
+    screen_data.require_allowed(meeting)
+    if meeting not in TRANSLATED_MEETINGS:
+        raise screen_data.DisallowedMeeting(
+            f"refusing to translate {meeting!r}: only the 12 development meetings "
+            "(ES2015, IS1004, TS3009; a to d) are translated"
+        )
+    return meeting
+
 
 Runner = Callable[[Sequence[str], pathlib.Path], "subprocess.CompletedProcess[str]"]
 
@@ -99,6 +128,11 @@ class Source:
     tier: str
     bytes: int
     sha256: str
+    translation_of: str = ""
+
+    @property
+    def pending(self) -> bool:
+        return self.sha256 == PENDING_SHA
 
     @property
     def filename(self) -> str:
@@ -111,7 +145,13 @@ def load_sources(path: pathlib.Path = SOURCES_PATH) -> list[Source]:
     sources: list[Source] = []
     for index, entry in enumerate(raw.get("sources", [])):
         try:
-            source = Source(**{f: entry[f] for f in Source.__dataclass_fields__})
+            source = Source(
+                **{
+                    f: entry[f]
+                    for f in Source.__dataclass_fields__
+                    if f in entry or f != "translation_of"
+                }
+            )
         except (KeyError, TypeError) as exc:
             raise BuildError(f"source #{index} is malformed: {exc!r}") from exc
         sources.append(_validated(source))
@@ -134,11 +174,28 @@ def _validated(source: Source) -> Source:
             screen_data.require_allowed(source.id)
         except screen_data.DisallowedMeeting as exc:
             raise BuildError(str(exc)) from exc
+    if source.kind == TRANSLATION_KIND:
+        try:
+            require_translatable(source.translation_of)
+        except screen_data.DisallowedMeeting as exc:
+            raise BuildError(str(exc)) from exc
+        if source.id != source.translation_of + TRANSLATION_SUFFIX:
+            raise BuildError(
+                f"{source.id}: a translation is named <meeting>{TRANSLATION_SUFFIX}"
+            )
+        if source.language != "es" or source.root != "translations":
+            raise BuildError(
+                f"{source.id}: a translation is Spanish and lives in the "
+                "'translations' root"
+            )
+    elif source.translation_of:
+        raise BuildError(f"{source.id}: only a translation names a twin")
     if source.root not in KNOWN_ROOTS:
         raise BuildError(f"{source.id}: unknown root {source.root!r}")
     if source.tier not in TIERS:
         raise BuildError(f"{source.id}: unknown tier {source.tier!r}")
-    if not re.fullmatch(r"[0-9a-f]{64}", source.sha256):
+    pending_ok = source.pending and source.kind == TRANSLATION_KIND
+    if not pending_ok and not re.fullmatch(r"[0-9a-f]{64}", source.sha256):
         raise BuildError(f"{source.id}: sha256 is not 64 hex characters")
     rel = pathlib.PurePosixPath(source.path)
     if rel.is_absolute() or ".." in rel.parts or not rel.name:
@@ -156,6 +213,11 @@ def verify_sources(
     """Why the selected bytes are not the bytes on disk (empty list: they are)."""
     problems: list[str] = []
     for source in sources:
+        if source.pending:
+            problems.append(
+                f"{source.id}: pending translation (translate, review, then pin)"
+            )
+            continue
         if source.root not in roots:
             problems.append(f"{source.id}: no directory given for root {source.root!r}")
             continue
@@ -310,6 +372,13 @@ def build(
 ) -> int:
     """Ingest every pending source, reindex, write the manifest. Exit status."""
     workspace = refuse_workspace(workspace)
+    unpinned = [s.id for s in sources if s.pending]
+    if unpinned:
+        raise BuildError(
+            f"{len(unpinned)} Spanish translation(s) are pending: "
+            f"{', '.join(unpinned)}. Run evals/retrieval_gold/translate_meetings.py "
+            "(run, sample-sheet, owner review, pin) before building"
+        )
     problems = verify_sources(sources, roots)
     if problems:
         raise BuildError(
@@ -433,8 +502,12 @@ def _self_test_sources(c: _Checks, tmp: pathlib.Path) -> None:
         {s.tier for s in sources} == set(TIERS), "both the core and synthetic tiers"
     )
     c.check(
-        all(re.fullmatch(r"[0-9a-f]{64}", s.sha256) for s in sources),
-        "every source carries a sha256",
+        all(
+            re.fullmatch(r"[0-9a-f]{64}", s.sha256)
+            or (s.pending and s.kind == TRANSLATION_KIND)
+            for s in sources
+        ),
+        "every source carries a sha256 (a translation may still be pending)",
     )
     names = [s.filename for s in sources]
     c.check(
@@ -771,6 +844,119 @@ def _self_test_cli(c: _Checks, tmp: pathlib.Path) -> None:
     c.check(not created, "and creates nothing there")
 
 
+def _translation_entry(**over: Any) -> dict[str, Any]:
+    base = _entry(
+        id="ES2015a-es",
+        path="ES2015a-es.md",
+        language="es",
+        kind="ami-translation",
+        translation_of="ES2015a",
+        root="translations",
+        sha256=PENDING_SHA,
+    )
+    base.update(over)
+    return base
+
+
+def _self_test_translations(c: _Checks, tmp: pathlib.Path) -> None:
+    sources = load_sources()
+    twins = [s for s in sources if s.kind == "ami-translation"]
+    c.check(len(twins) == 12, f"12 Spanish translations, got {len(twins)}")
+    c.check(
+        sorted(s.translation_of for s in twins) == sorted(TRANSLATED_MEETINGS),
+        "the translations are exactly the 12 development meetings",
+    )
+    c.check(
+        all(s.language == "es" and s.id == s.translation_of + "-es" for s in twins),
+        "each is Spanish and named after its English twin",
+    )
+    english = {s.id for s in sources if s.kind == "ami-meeting"}
+    c.check(
+        all(s.translation_of in english for s in twins),
+        "every translation sits beside its English twin in the bundle",
+    )
+    titles = {s.filename for s in sources}
+    c.check(len(titles) == len(sources), "translations have distinct file names")
+
+    for label, entry in {
+        "a translation of an evaluation-series meeting": _translation_entry(
+            id="ES2002a-es", path="ES2002a-es.md", translation_of="ES2002a"
+        ),
+        "a translation of TS3012a (free pool, not a development meeting)": (
+            _translation_entry(
+                id="TS3012a-es", path="TS3012a-es.md", translation_of="TS3012a"
+            )
+        ),
+        "a translation of a free-pool meeting": _translation_entry(
+            id="IB4003-es", path="IB4003-es.md", translation_of="IB4003"
+        ),
+        "a translation whose id is not its twin's": _translation_entry(id="X-es"),
+        "a translation recorded as English": _translation_entry(language="en"),
+        "a translation outside the translations root": _translation_entry(
+            root="transcripts"
+        ),
+        "a pending marker on a transcript": _entry(sha256=PENDING_SHA),
+    }.items():
+        c.raises(_loader(_write_sources(tmp, [entry])), f"refuses {label}")
+    pinned = _translation_entry(sha256="a" * 64, bytes=10)
+    loaded = load_sources(_write_sources(tmp, [pinned]))
+    c.check(
+        len(loaded) == 1 and not loaded[0].pending,
+        "a pinned translation loads and is not pending",
+    )
+    c.check(
+        load_sources(_write_sources(tmp, [_translation_entry()]))[0].pending,
+        "a translation without a hash is pending",
+    )
+
+
+def _self_test_pending(c: _Checks, tmp: pathlib.Path) -> None:
+    sources, roots = _fake_sources(tmp, 2)
+    pending = Source(
+        "ES2015a-es",
+        "translations",
+        "ES2015a-es.md",
+        "es",
+        "ami-translation",
+        "core",
+        0,
+        PENDING_SHA,
+        "ES2015a",
+    )
+    runner = _FakeRunner()
+    ws = tmp / "ws-pending" / "bundle-v1"
+    message = c.raises(
+        lambda: build(
+            [*sources, pending], roots, ws, runner=runner, identify=_identify
+        ),
+        "build refuses while a translation is pending",
+    )
+    c.check(
+        "pending" in message
+        and "ES2015a-es" in message
+        and "translate_meetings" in message,
+        "and names it and the script that produces it",
+    )
+    c.check(runner.calls == [] and not ws.exists(), "before any command or workspace")
+    c.check(
+        any("pending" in p for p in verify_sources([pending], roots)),
+        "plan reports a pending translation as a problem",
+    )
+    c.check(
+        build(sources, roots, tmp / "ws-ok" / "b", runner=runner, identify=_identify)
+        == 0,
+        "the same build passes once nothing is pending",
+    )
+    runner = _FakeRunner()
+    only = [s for s in sources if s.id == "s1"]
+    c.check(
+        build(only, roots, tmp / "ws-only" / "b", runner=runner, identify=_identify)
+        == 0
+        and runner.ingested() == ["s1"],
+        "a pilot restricted to one id ingests only it",
+    )
+
+
 def _self_test() -> int:
     c = _Checks()
     with (
@@ -780,6 +966,8 @@ def _self_test() -> int:
     ):
         tmp = pathlib.Path(raw_tmp).resolve()
         _self_test_sources(c, tmp)
+        _self_test_translations(c, tmp)
+        _self_test_pending(c, tmp)
         _self_test_verify(c, tmp)
         _self_test_workspace(c, tmp)
         _self_test_build(c, tmp)
@@ -813,6 +1001,13 @@ def _selected(args: argparse.Namespace) -> list[Source]:
     sources = load_sources()
     if args.no_synthetic:
         sources = [s for s in sources if s.tier != "synthetic"]
+    only = getattr(args, "only", None)
+    if only:
+        wanted = [part for part in only.split(",") if part]
+        unknown = sorted(set(wanted) - {s.id for s in sources})
+        if unknown:
+            raise BuildError(f"--only names unknown source id(s): {unknown}")
+        sources = [s for s in sources if s.id in wanted]
     return sources
 
 
@@ -823,6 +1018,8 @@ def _roots(args: argparse.Namespace) -> dict[str, pathlib.Path]:
     )
     if args.transcripts is not None:
         roots["transcripts"] = args.transcripts
+    if getattr(args, "translations", None) is not None:
+        roots["translations"] = args.translations
     return roots
 
 
@@ -874,12 +1071,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--prose-dir", type=pathlib.Path, help="extraction-corpus sources directory"
         )
         cmd.add_argument(
+            "--translations",
+            type=pathlib.Path,
+            help="directory of the pinned Spanish translations (translate_meetings.py)",
+        )
+        cmd.add_argument(
             "--no-synthetic", action="store_true", help="drop the synthetic tier"
         )
         if name == "build":
             cmd.add_argument("--workspace", type=pathlib.Path, required=True)
             cmd.add_argument(
                 "--limit", type=int, help="ingest at most N pending sources"
+            )
+            cmd.add_argument(
+                "--only",
+                help="comma-separated source ids: build just these (a pilot, e.g. "
+                "ES2015a-es). The manifest then reports the build incomplete",
             )
     args = parser.parse_args(argv)
     if args.self_test:
