@@ -5,7 +5,9 @@ from typing import Any
 
 import yaml
 
-_WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
+_WORKFLOW = (
+    Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
+)
 
 
 def _workflow() -> dict[Any, Any]:
