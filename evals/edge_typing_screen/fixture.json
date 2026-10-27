@@ -1,0 +1,1233 @@
+{
+ "version": 1,
+ "docs": {
+  "concepts/retry-budget": {
+   "id": "concepts/retry-budget",
+   "type": "Concept",
+   "title": "Retry Budget",
+   "text": "# Retry Budget\n\nThe retry budget is one component inside the request scheduler. It lives in the scheduler's own module and is constructed by the scheduler at startup; nothing outside the scheduler can hold one.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/retry-budget"
+   }
+  },
+  "concepts/request-scheduler": {
+   "id": "concepts/request-scheduler",
+   "type": "Concept",
+   "title": "Request Scheduler",
+   "text": "# Request Scheduler\n\nThe request scheduler is a single subsystem that owns queueing, admission and retry. It is built from several internal components, one of which is the retry budget.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/request-scheduler"
+   }
+  },
+  "concepts/nightly-backup-job": {
+   "id": "concepts/nightly-backup-job",
+   "type": "Concept",
+   "title": "Nightly Backup Job",
+   "text": "# Nightly Backup Job\n\nThe nightly backup job is one of the scheduled maintenance jobs. It is listed alongside the log-rotation job and the index-vacuum job, and each of them is registered the same way.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/nightly-backup-job"
+   }
+  },
+  "concepts/scheduled-maintenance-jobs": {
+   "id": "concepts/scheduled-maintenance-jobs",
+   "type": "Concept",
+   "title": "Scheduled Maintenance Jobs",
+   "text": "# Scheduled Maintenance Jobs\n\nScheduled maintenance jobs is the collection of recurring jobs the operator can enable. Its members are alike in kind: each is a periodic task with a cron expression and a retention policy.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/scheduled-maintenance-jobs"
+   }
+  },
+  "concepts/report-renderer": {
+   "id": "concepts/report-renderer",
+   "type": "Concept",
+   "title": "Report Renderer",
+   "text": "# Report Renderer\n\nThe report renderer needs a working template cache to do its job. The cache is not part of the renderer and is not built by it -- the renderer simply cannot produce output when the cache is absent.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/report-renderer"
+   }
+  },
+  "concepts/template-cache": {
+   "id": "concepts/template-cache",
+   "type": "Concept",
+   "title": "Template Cache",
+   "text": "# Template Cache\n\nThe template cache is an independent service holding compiled templates. It is deployed on its own and has no knowledge of which components read from it.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/template-cache"
+   }
+  },
+  "concepts/checkout-outage": {
+   "id": "concepts/checkout-outage",
+   "type": "Concept",
+   "title": "Checkout Outage",
+   "text": "# Checkout Outage\n\nThe checkout outage was a two-hour period in which no order could be placed. It happened because the payment gateway migration removed a header the checkout service required.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/checkout-outage"
+   }
+  },
+  "concepts/payment-gateway-migration": {
+   "id": "concepts/payment-gateway-migration",
+   "type": "Concept",
+   "title": "Payment Gateway Migration",
+   "text": "# Payment Gateway Migration\n\nThe payment gateway migration moved traffic to a new provider. It dropped a legacy header during the cutover, which brought about the checkout outage the same afternoon.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/payment-gateway-migration"
+   }
+  },
+  "concepts/quarterly-risk-report": {
+   "id": "concepts/quarterly-risk-report",
+   "type": "Concept",
+   "title": "Quarterly Risk Report",
+   "text": "# Quarterly Risk Report\n\nThe quarterly risk report is a document. It was written and published by the risk committee, which is the body that authors it each quarter.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/quarterly-risk-report"
+   }
+  },
+  "concepts/risk-committee": {
+   "id": "concepts/risk-committee",
+   "type": "Concept",
+   "title": "Risk Committee",
+   "text": "# Risk Committee\n\nThe risk committee is a standing group of five people. Among other duties it authors the quarterly risk report.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/risk-committee"
+   }
+  },
+  "concepts/migration-runbook": {
+   "id": "concepts/migration-runbook",
+   "type": "Concept",
+   "title": "Migration Runbook",
+   "text": "# Migration Runbook\n\nThe migration runbook is a set of operator steps. Step four explicitly cites the rollback policy by name and tells the reader to consult it before proceeding.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/migration-runbook"
+   }
+  },
+  "concepts/rollback-policy": {
+   "id": "concepts/rollback-policy",
+   "type": "Concept",
+   "title": "Rollback Policy",
+   "text": "# Rollback Policy\n\nThe rollback policy states when a change may be reverted and who may authorize it. It is maintained independently of any particular runbook.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/rollback-policy"
+   }
+  },
+  "concepts/onboarding-checklist": {
+   "id": "concepts/onboarding-checklist",
+   "type": "Concept",
+   "title": "Onboarding Checklist",
+   "text": "# Onboarding Checklist\n\nThe onboarding checklist covers the first week for a new engineer: accounts, environment, and a first small change.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/onboarding-checklist"
+   }
+  },
+  "concepts/incident-review-culture": {
+   "id": "concepts/incident-review-culture",
+   "type": "Concept",
+   "title": "Incident Review Culture",
+   "text": "# Incident Review Culture\n\nIncident review culture describes how the team talks about failure after the fact, and what it expects from a written review.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/incident-review-culture"
+   }
+  },
+  "concepts/aortic-valve": {
+   "id": "concepts/aortic-valve",
+   "type": "Concept",
+   "title": "Aortic Valve",
+   "text": "# Aortic Valve\n\nThe aortic valve forms the outflow gate of the heart. Anatomically it is situated within that organ and cannot be described apart from the chamber it seals.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/aortic-valve"
+   }
+  },
+  "concepts/human-heart": {
+   "id": "concepts/human-heart",
+   "type": "Concept",
+   "title": "Human Heart",
+   "text": "# Human Heart\n\nThe human heart is a single muscular organ. Its interior comprises chambers and valves, the aortic valve among the structures it contains.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/human-heart"
+   }
+  },
+  "concepts/soprano-line": {
+   "id": "concepts/soprano-line",
+   "type": "Concept",
+   "title": "Soprano Line",
+   "text": "# Soprano Line\n\nThe soprano line belongs to the choir's roster of voice parts. It is enrolled there on the same footing as alto, tenor and bass, each an entry of equal standing.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/soprano-line"
+   }
+  },
+  "concepts/voice-parts": {
+   "id": "concepts/voice-parts",
+   "type": "Concept",
+   "title": "Voice Parts",
+   "text": "# Voice Parts\n\nVoice parts is a roster whose entries are peers. Enrollment means being a part on that roster, and no entry contains any other.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/voice-parts"
+   }
+  },
+  "concepts/wal-segment": {
+   "id": "concepts/wal-segment",
+   "type": "Concept",
+   "title": "WAL Segment",
+   "text": "# WAL Segment\n\nA WAL segment is one file inside the write-ahead log. The log is a single ordered structure and the segment is a piece of it; a segment has no meaning outside its log.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/wal-segment"
+   }
+  },
+  "concepts/write-ahead-log": {
+   "id": "concepts/write-ahead-log",
+   "type": "Concept",
+   "title": "Write-Ahead Log",
+   "text": "# Write-Ahead Log\n\nThe write-ahead log is one durable structure guaranteeing ordering. Internally it is divided into segments, each a component of the same whole.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/write-ahead-log"
+   }
+  },
+  "concepts/eu-west-replica": {
+   "id": "concepts/eu-west-replica",
+   "type": "Concept",
+   "title": "EU West Replica",
+   "text": "# EU West Replica\n\nThe EU West replica is one of the read replicas. It sits beside the US East and AP South replicas, and all of them are provisioned from the same template.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/eu-west-replica"
+   }
+  },
+  "concepts/read-replicas": {
+   "id": "concepts/read-replicas",
+   "type": "Concept",
+   "title": "Read Replicas",
+   "text": "# Read Replicas\n\nRead replicas is the set of standby copies serving read traffic. Every member is alike in kind: a follower with the same schema and its own region.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/read-replicas"
+   }
+  },
+  "concepts/search-api": {
+   "id": "concepts/search-api",
+   "type": "Concept",
+   "title": "Search API",
+   "text": "# Search API\n\nThe search API requires the ranking service to answer a query. The ranking service is deployed separately and is not contained in the API; without it the API returns an error.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/search-api"
+   }
+  },
+  "concepts/ranking-service": {
+   "id": "concepts/ranking-service",
+   "type": "Concept",
+   "title": "Ranking Service",
+   "text": "# Ranking Service\n\nThe ranking service scores documents. It runs as its own process and does not know which callers depend on it.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/ranking-service"
+   }
+  },
+  "concepts/data-loss-incident": {
+   "id": "concepts/data-loss-incident",
+   "type": "Concept",
+   "title": "Data Loss Incident",
+   "text": "# Data Loss Incident\n\nThe data loss incident destroyed six hours of writes. It occurred because the storage upgrade disabled fsync without anyone noticing.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/data-loss-incident"
+   }
+  },
+  "concepts/storage-upgrade": {
+   "id": "concepts/storage-upgrade",
+   "type": "Concept",
+   "title": "Storage Upgrade",
+   "text": "# Storage Upgrade\n\nThe storage upgrade replaced the disk layer. It turned fsync off by default, which brought about the data loss incident that weekend.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/storage-upgrade"
+   }
+  },
+  "concepts/architecture-decision-record": {
+   "id": "concepts/architecture-decision-record",
+   "type": "Concept",
+   "title": "Architecture Decision Record",
+   "text": "# Architecture Decision Record\n\nThe architecture decision record is a written document. It was authored and signed off by the platform team, which produces one for every significant decision.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/architecture-decision-record"
+   }
+  },
+  "concepts/platform-team": {
+   "id": "concepts/platform-team",
+   "type": "Concept",
+   "title": "Platform Team",
+   "text": "# Platform Team\n\nThe platform team is a group of engineers owning shared infrastructure. Among its outputs it authors architecture decision records.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/platform-team"
+   }
+  },
+  "concepts/deploy-guide": {
+   "id": "concepts/deploy-guide",
+   "type": "Concept",
+   "title": "Deploy Guide",
+   "text": "# Deploy Guide\n\nThe deploy guide walks an operator through a release. Its final section names the incident severity matrix explicitly and tells the reader to consult that document when a deploy goes wrong.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/deploy-guide"
+   }
+  },
+  "concepts/incident-severity-matrix": {
+   "id": "concepts/incident-severity-matrix",
+   "type": "Concept",
+   "title": "Incident Severity Matrix",
+   "text": "# Incident Severity Matrix\n\nThe incident severity matrix defines severity levels and the response each one requires. It stands on its own.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/incident-severity-matrix"
+   }
+  },
+  "concepts/hiring-loop": {
+   "id": "concepts/hiring-loop",
+   "type": "Concept",
+   "title": "Hiring Loop",
+   "text": "# Hiring Loop\n\nThe hiring loop describes the interview stages a candidate goes through and who runs each one.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/hiring-loop"
+   }
+  },
+  "concepts/documentation-style": {
+   "id": "concepts/documentation-style",
+   "type": "Concept",
+   "title": "Documentation Style",
+   "text": "# Documentation Style\n\nDocumentation style covers tone, heading conventions and how much context a page should assume of its reader.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/documentation-style"
+   }
+  },
+  "concepts/cost-dashboard": {
+   "id": "concepts/cost-dashboard",
+   "type": "Concept",
+   "title": "Cost Dashboard",
+   "text": "# Cost Dashboard\n\nThe cost dashboard shows monthly spend per service and highlights the largest movers week over week.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/cost-dashboard"
+   }
+  },
+  "concepts/oncall-rotation": {
+   "id": "concepts/oncall-rotation",
+   "type": "Concept",
+   "title": "On-call Rotation",
+   "text": "# On-call Rotation\n\nThe on-call rotation lists who carries the pager each week and how handover happens between shifts.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/oncall-rotation"
+   }
+  },
+  "people/dana-reyes": {
+   "id": "people/dana-reyes",
+   "type": "Person",
+   "title": "Dana Reyes",
+   "text": "# Dana Reyes\n\nDana Reyes is one of the platform guild's members. She joined it the same way the other members did, and the guild lists her alongside them; nothing about her membership differs in kind from theirs.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "people/dana-reyes"
+   }
+  },
+  "organizations/platform-guild": {
+   "id": "organizations/platform-guild",
+   "type": "Organization",
+   "title": "Platform Guild",
+   "text": "# Platform Guild\n\nThe platform guild is a standing group of engineers. Its members are alike in kind -- each joins by the same route, holds the same standing, and can leave without the guild ceasing to be itself.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "organizations/platform-guild"
+   }
+  },
+  "concepts/sampling-policy": {
+   "id": "concepts/sampling-policy",
+   "type": "Concept",
+   "title": "Sampling Policy",
+   "text": "# Sampling Policy\n\nThe sampling policy is a document that the telemetry rewrite produced. It did not exist before that work began; the rewrite drafted it, and it records what the rewrite decided.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/sampling-policy"
+   }
+  },
+  "projects/telemetry-rewrite": {
+   "id": "projects/telemetry-rewrite",
+   "type": "Project",
+   "title": "Telemetry Rewrite",
+   "text": "# Telemetry Rewrite\n\nThe telemetry rewrite is a project that ran for two quarters. Among the things it produced is the sampling policy, which it wrote to record its own decisions.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "projects/telemetry-rewrite"
+   }
+  },
+  "concepts/escalation-ladder": {
+   "id": "concepts/escalation-ladder",
+   "type": "Concept",
+   "title": "Escalation Ladder",
+   "text": "# Escalation Ladder\n\nThe escalation ladder is a document Marcus Oyelaran wrote. He authored it on his own and it carries his name; it is the artifact, not the author.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "concepts/escalation-ladder"
+   }
+  },
+  "people/marcus-oyelaran": {
+   "id": "people/marcus-oyelaran",
+   "type": "Person",
+   "title": "Marcus Oyelaran",
+   "text": "# Marcus Oyelaran\n\nMarcus Oyelaran is an on-call engineer. He wrote the escalation ladder, and is the author of it rather than anything it contains.",
+   "language": "en",
+   "source": {
+    "kind": "edge_fixtures",
+    "ref": "people/marcus-oyelaran"
+   }
+  },
+  "concepts/epicureanism": {
+   "id": "concepts/epicureanism",
+   "type": "Concept",
+   "title": "Epicureanism",
+   "text": "# Epicureanism\n\nA Hellenistic school that holds pleasure to be the good — where \"pleasure\" means *ataraxia*, the absence of disturbance, rather than indulgence. The reputation for hedonism is a later distortion [1].\n\n## Related\n\n- [Stoicism](/concepts/stoicism.md) — contrasted with; both take tranquillity seriously, and disagree on whether the good is virtue or pleasure\n\n# Citations\n\n[1] [Reading notes — Enchiridion, 2026-07-05](/sources/notes-on-the-enchiridion-2026-07-05.md)",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "examples/good-life-demo/bundle/concepts/epicureanism.md"
+   }
+  },
+  "concepts/stoicism": {
+   "id": "concepts/stoicism",
+   "type": "Concept",
+   "title": "Stoicism",
+   "text": "# Stoicism\n\nA Hellenistic school that holds virtue to be the only good. Its practical core is the **dichotomy of control** (*Enchiridion* 1): some things are up to us — judgement, impulse, desire, aversion — and some are not — the body, reputation, office. Suffering comes from wanting what was never ours to govern [1].\n\n**Apatheia** is freedom from the *pathē*, the destructive passions — not the absence of feeling. The Stoics kept the *eupatheiai*, the \"good feelings\": joy, caution, wishing. The goal is not to stop feeling but to stop being ruled by it [2].\n\nThe term is commonly misread as \"indifference to emotion\", by analogy with the English cognate *apathy*. That reading makes the school sound colder than it is, and it is worth disarming before using the word in front of a general reader [2].\n\n## Related\n\n- [Epicureanism](/concepts/epicureanism.md) — contrasted with; both ask how to live and disagree on what the good is\n- [Maria Salazar](/people/maria-salazar.md) — corrected the apatheia reading here\n- [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md) — cited in\n\n# Citations\n\n[1] [Reading notes — Enchiridion, 2026-07-05](/sources/notes-on-the-enchiridion-2026-07-05.md)\n[2] [Call with Maria Salazar — 2026-07-14](/sources/call-with-maria-2026-07-14.md)",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "examples/good-life-demo/bundle/concepts/stoicism.md"
+   }
+  },
+  "decisions/frame-the-essay-on-the-dichotomy-of-control": {
+   "id": "decisions/frame-the-essay-on-the-dichotomy-of-control",
+   "type": "Decision",
+   "title": "Frame the essay on the dichotomy of control",
+   "text": "# Frame the essay on the dichotomy of control\n\nOn 2026-07-14 I decided to organise the essay around the dichotomy of control from [Stoicism](/concepts/stoicism.md) rather than around *apatheia*.\n\n**Rationale:** the dichotomy lands immediately with a reader who has never opened a Stoic text, while *apatheia* needs a paragraph of disambiguation every time it appears — I misread it myself on the first pass [1], and had to be corrected [2]. An idea that must be defended before it can be used is the wrong load-bearing beam for a short essay.\n\n**Alternatives:** frame it on *apatheia* — richer, and closer to what the Stoics were actually arguing about, but it spends the reader's attention on a correction instead of on the argument. Frame it on the [Epicurean](/concepts/epicureanism.md) contrast — interesting, but it makes the essay comparative rather than practical.\n\n**Status:** active. Revisit if the essay grows long enough to afford the disambiguation.\n\n# Citations\n\n[1] [Reading notes — Enchiridion, 2026-07-05](/sources/notes-on-the-enchiridion-2026-07-05.md)\n[2] [Call with Maria Salazar — 2026-07-14](/sources/call-with-maria-2026-07-14.md)",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "examples/good-life-demo/bundle/decisions/frame-the-essay-on-the-dichotomy-of-control.md"
+   }
+  },
+  "people/maria-salazar": {
+   "id": "people/maria-salazar",
+   "type": "Person",
+   "title": "Maria Salazar",
+   "text": "# Maria Salazar\n\nStudies Hellenistic ethics. Teaches the Hellenistic ethics seminar this term (as of 2026-07-14) — a post is a volatile fact, so the faculty page linked in `resource` is the source of truth here, not this page [1].\n\nCorrected the *apatheia* reading in [Stoicism](/concepts/stoicism.md), and argued for the framing recorded in [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md) [1].\n\nQuietly looking to move departments (as of 2026-07-14); asked that it not be spread [1].\n\n## Related\n\n- [Stoicism](/concepts/stoicism.md) — corrected the apatheia reading in\n- [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md) — argued for\n\n# Citations\n\n[1] [Call with Maria Salazar — 2026-07-14](/sources/call-with-maria-2026-07-14.md)",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "examples/good-life-demo/bundle/people/maria-salazar.md"
+   }
+  },
+  "sources/call-with-maria-2026-07-14": {
+   "id": "sources/call-with-maria-2026-07-14",
+   "type": "Source",
+   "title": "Call with Maria Salazar — 2026-07-14",
+   "text": "# Call with Maria Salazar — 2026-07-14\n\nMaria corrected the *apatheia* reading: it is freedom from the *pathē*, the destructive passions, not the absence of feeling — the Stoics kept the *eupatheiai*. The misreading comes from the English cognate *apathy*. She argued for framing the essay on the dichotomy of control instead, mentioned her current teaching, and shared a plan she asked me not to spread.\n\nCompiled into: [Stoicism](/concepts/stoicism.md), [Maria Salazar](/people/maria-salazar.md), [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md).",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "examples/good-life-demo/bundle/sources/call-with-maria-2026-07-14.md"
+   }
+  },
+  "sources/notes-on-the-enchiridion-2026-07-05": {
+   "id": "sources/notes-on-the-enchiridion-2026-07-05",
+   "type": "Source",
+   "title": "Reading notes — Enchiridion, 2026-07-05",
+   "text": "# Reading notes — Enchiridion, 2026-07-05\n\nNotes from a first pass through Epictetus's *Enchiridion* and the translator's introduction. They cover the dichotomy of control, the Stoic/Epicurean contrast the introduction draws, and a first reading of *apatheia* as \"indifference to emotion\" — flagged at the time as something to ask about, and later corrected.\n\nCompiled into: [Stoicism](/concepts/stoicism.md), [Epicureanism](/concepts/epicureanism.md), [Frame the essay on the dichotomy of control](/decisions/frame-the-essay-on-the-dichotomy-of-control.md).",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "examples/good-life-demo/bundle/sources/notes-on-the-enchiridion-2026-07-05.md"
+   }
+  },
+  "decisions/0069-the-desktop-components-are-a-design-system-built-ahead-of-screens-and-tested-in-jsdom": {
+   "id": "decisions/0069-the-desktop-components-are-a-design-system-built-ahead-of-screens-and-tested-in-jsdom",
+   "type": "Decision",
+   "title": "ADR-0069: The desktop components are a design system built ahead of the screens, and tested in jsdom",
+   "text": "# ADR-0069: The desktop components are a design system built ahead of the screens, and tested in jsdom\n\n- **Status:** Accepted\n- **Date:** 2026-10-16\n- **Extends:** [ADR-0066](0066-the-desktop-screens-are-plain-dom-over-a-tested-view-model-with-no-ui-framework.md)\n\n## Context\n\n[ADR-0066](0066-the-desktop-screens-are-plain-dom-over-a-tested-view-model-with-no-ui-framework.md) made the desktop screens plain DOM over a view model tested in Node, and made two narrower calls for that stage: components are extracted \"when a screen needs one, not ahead of it\", and a DOM test environment (jsdom or happy-dom) was rejected because the markup held no decision.\n\nOn the first hands-on run the maintainer judged the app's look unacceptable: brand colors without hierarchy, layout or considered components ([#1477](https://github.com/jasonssdev/openkos/issues/1477)). The decision was to build a real design system before more screens are built. That changes both forces ADR-0066 weighed:\n\n- **Components are now designed, not extracted.** An app shell, list rows, cards, four button variants, callouts, a dialog, a segmented choice and the loading, empty, error and offline states are drawn together, so they read as one system, and reviewed in a gallery on made-up data before a screen adopts them. Extracting them one screen at a time is what produced the prototype look.\n- **The components now hold behavior.** A dialog keeps focus inside, returns it on close and makes the rest inert; a segmented choice is a radio group driven by arrow keys; a busy button ignores clicks and says what runs; an unavailable nav item stays focusable and inert. That is behavior a person relies on, and it is not in any view model, so \"the markup holds no decision\" no longer holds for this layer.\n\n## Decision\n\n- **One design system, under `desktop/ui/system/`.** Its components are plain functions returning elements, styled only by `ui-`-prefixed classes in `desktop/ui/system.css` over the tokens of `tokens.css`, and described in `desktop/DESIGN.md`. They may be built ahead of the screens that use them; the gallery (`desktop/ui/gallery.html`, a development page that is not an input of the build) is where they are reviewed first.\n- **Their DOM behavior is tested in jsdom.** jsdom is a development dependency; a test file opts in with `// @vitest-environment jsdom`, so the view models and the client keep running in plain Node. Render functions of a screen may be tested the same way where they carry focus or disclosure behavior.\n- **Everything else in ADR-0066 stands.** View models with no DOM hold every transition and every word; render functions write text only and decide nothing; no UI framework and no runtime dependency enters the page.\n- **Screens move onto the system one at a time.** A screen not yet moved keeps its older styles under a `ui-legacy` scope, where the system's resets do not reach it, and the older classes go when nothing uses them.\n\n## Consequences\n\n- Easier: a screen is assembled from components that were already reviewed together, so the app reads as one product and a restyle is a change to one stylesheet.\n- Easier: focus handling, keyboard patterns and busy states are tested where they live, not only through the participant session.\n- Harder: jsdom is a second dependency tree to pin and update, though only in development; the page's supply chain is unchanged.\n- Harder: a component built ahead of a screen can turn out wrong for it. The gallery and the first screen to adopt it are the check, and a component no screen adopts within its arc should be removed rather than kept.\n- jsdom is not a browser: layout, contrast and visual rendering are still not checked in CI (contrast is measured from the tokens by `tokens.test.ts`).\n\n## Alternatives considered\n\n- **Keep extracting components per screen (ADR-0066 as written).** Rejected: it produced the look the maintainer rejected, and it gives no place to review the system as a whole.\n- **happy-dom instead of jsdom.** Another DOM implementation for tests. Not chosen: jsdom is already pinned and the component suite runs on it; nothing measured here favors a switch, and the choice is cheap to revisit because tests opt in per file.\n- **A component library or a UI framework.** Rejected for the reasons in ADR-0066: the page's first runtime dependency and release cadence, for behavior a few tested functions carry.\n- **Browser tests (Playwright) for the components.** Closer to the real web view. Rejected for this stage: a browser download in CI for a handful of components whose behavior jsdom exercises; it stays the option if a defect shows jsdom diverging from WebKit.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0069-the-desktop-components-are-a-design-system-built-ahead-of-screens-and-tested-in-jsdom.md"
+   }
+  },
+  "decisions/0066-the-desktop-screens-are-plain-dom-over-a-tested-view-model-with-no-ui-framework": {
+   "id": "decisions/0066-the-desktop-screens-are-plain-dom-over-a-tested-view-model-with-no-ui-framework",
+   "type": "Decision",
+   "title": "ADR-0066: The desktop screens are plain DOM over a tested view model, with no UI framework",
+   "text": "# ADR-0066: The desktop screens are plain DOM over a tested view model, with no UI framework\n\n- **Status:** Accepted\n- **Date:** 2026-10-16\n\n## Context\n\nThe review screen is the first real screen of the desktop app ([roadmap](../roadmap.md#mvp-6--the-desktop-app)): a person who has never used a terminal settles the pending-decision queue on it. [ADR-0065](0065-the-desktop-web-view-is-typescript-built-with-vite-over-a-client-generated-from-the-openapi-snapshot.md) made the web view a TypeScript package built with Vite over a typed client with no runtime dependency, and left open how screens are written. The status page that proved it is a few dozen lines of `textContent` writes.\n\nThe review screen is larger: a list, one decision at a time with its evidence, previews and applies with echoed versions, a check (judging) with consent, progress and stop, splits from the merge history, and a message for every refusal the [wording brief](../decision-wording.md) lists. The forces:\n\n- **The hard part is the state, not the markup.** Which question to ask, which options exist, what happens on a stale version, a busy library or an interrupted group: that is where a defect strands the person, and it is what must be tested. The markup is a handful of cards, buttons and notices.\n- **Every word is fixed by the brief.** The copy must be testable as data, apart from any rendering.\n- **The tests run in Node.** The client's vitest suite has no DOM environment, and adding one (jsdom, happy-dom) is a second dependency tree to pin for markup that is not where the risk is.\n- **The page ships what the bundler emits.** ADR-0065 keeps every npm package a development dependency; a framework would be the first runtime dependency in the page and a release cadence the app must follow.\n- **No full design system.** The user's direction is to extract components as this screen needs them, on the tokens of `desktop/ui/tokens.css`.\n\n## Decision\n\nWe write the desktop screens against the DOM directly, in two layers, with no UI framework.\n\n- **A view model with no DOM.** One module per screen holds the screen's state and its transitions as plain TypeScript over a narrow interface of the client (the methods it calls), and one holds the wording: pure functions from the API's data to the sentences, options and messages of the brief. Both are unit-tested in Node with a mocked client; they are where the behavior lives.\n- **Thin render functions.** The screen is redrawn from the state on every change by functions that build elements with `document.createElement`, write every value with `textContent` (never markup), and wire events back to the view model's transitions. They hold no decision of their own.\n- **Components are extracted functions, not a library.** A component (a button with a role, a notice with its symbol, a decision card, a page's evidence) is a function returning an element, styled only with the custom properties of `tokens.css`. Components are added when a screen needs one, not ahead of it.\n- **No runtime dependency.** The page still ships only what Vite emits from our own sources.\n\n## Consequences\n\n- Easier: every transition and every word on the screen is tested without a browser or a DOM library; the vitest suite stays in Node.\n- Easier: nothing outside the repository decides how the page renders, upgrades or breaks; the page's supply chain is unchanged.\n- Easier: the render layer is replaceable. A later screen, or a later framework, can render the same view model.\n- Harder: redrawing a section from state is ours to keep efficient and to keep focus stable; render functions must restore the focused control after a redraw, which a framework would do for us.\n- Harder: the render functions are not unit-tested; their correctness rests on staying thin, on typechecking and on the participant session of the [MVP 6 preregistration](../../evals/desktop_app/PREREGISTRATION.md). Visual rendering is not checked in CI.\n- Contributors write components as plain functions; a pattern that grows past a screen's needs is a sign to revisit this ADR, not to grow a framework by hand.\n\n## Alternatives considered\n\n- **A UI framework (React, Preact, Svelte, Solid, Lit).** Declarative rendering and focus handling come for free. Rejected for now: it is the page's first runtime dependency and release cadence, it moves the screen's logic into components that need a DOM environment to test, and the screen's risk is in its state and copy, which a framework does not test. A later ADR may adopt one over the same view model if the app grows past what thin render functions can carry.\n- **Web components with custom elements.** No dependency, and encapsulated styling. Rejected: the shadow DOM separates the components from the tokens' custom properties only to have them passed back in, and custom elements add lifecycle code without testing the state any better.\n- **A DOM test environment (jsdom or happy-dom) and tests of the render functions.** Rejected for this stage: a second dependency tree for markup that holds no decision; the view-model tests cover the behavior, and the exit-criteria session covers what a person sees.\n- **Templates written as HTML strings.** Short to write. Rejected: every value would have to be escaped by hand, and one missed escape renders a page title as markup; `textContent` makes that impossible by construction.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0066-the-desktop-screens-are-plain-dom-over-a-tested-view-model-with-no-ui-framework.md"
+   }
+  },
+  "decisions/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar": {
+   "id": "decisions/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar",
+   "type": "Decision",
+   "title": "ADR-0055: The desktop shell is Tauri 2, with the engine as a supervised sidecar",
+   "text": "# ADR-0055: The desktop shell is Tauri 2, with the engine as a supervised sidecar\n\n- **Status:** Amended by ADR-0056\n- **Date:** 2026-10-14\n\n## Context\n\n[MVP 6](../roadmap.md) ships OpenKOS as an application a person installs without a terminal. The engine is Python ([ADR-0054](0054-python-314-is-the-only-supported-interpreter.md)), so whatever the shell is, it runs the engine as a separate process and talks to it over a local API ([ADR-0058](0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md)). The roadmap names the tradeoff: installer size and a built-in signed updater against the maturity of the signing path for a bundled binary.\n\nThe project ships without an Apple Developer ID, so updates cannot lean on Apple's certificates. Whatever signs the updates must be a key the project owns.\n\nEvidence comes from a throwaway packaging spike run on the project's development machine (Apple Silicon, macOS 27.0), which built a Tauri 2 shell (CLI 2.12.2) around a frozen engine ([ADR-0056](0056-the-engine-ships-frozen-with-pyinstaller-one-directory-under-contents-resources-deep-ad-hoc-signed.md)) and ran it unsigned. All numbers below are from that spike.\n\n- **Size.** The whole app is small: with the engine frozen on Python 3.12 the `.app` was 48 MB, the `.dmg` 24 MB and the updater archive 21 MB; on Python 3.14, the interpreter ADR-0054 adopts, the `.app` was 57 MB, the `.dmg` 30 MB and the updater archive 25 MB. The engine dominates; the shell is not the main cost.\n- **Updater (S3).** The Tauri updater took an installed v1 (0.1.0, engine 1) to v2 (0.2.0, engine 2) from a local manifest, verified against a minisign key generated for the spike. The engine's sha256 changed from `1295...d142` to `3f01...81df`, and the running engine reported version 2. The updater key is the project's own and free, independent of any Apple certificate.\n- **Supervision (S4).** With no guard, both SIGTERM and SIGKILL of the shell left an orphaned engine. With the engine watching stdin for EOF and polling its parent PID, both left 0 engines, on 3.12 and on 3.14. A graceful exit (the shell killing the sidecar on `RunEvent::Exit`) left none even without the guard.\n- **Startup (S2).** Spawn to first successful `/health` through the app took a median of 0.072 s (max 0.074 s) on 3.12 and 0.078 s (max 0.102 s) on 3.14, against a bar of 3 s. Both runs had a warm page cache; a true post-reboot cold start was not measured.\n\n## Decision\n\nThe desktop shell is Tauri 2. The shell starts, supervises and stops the engine; the engine is a sidecar process, never a library loaded into the shell.\n\nThe engine's launch goes through a small executable wrapper declared as the Tauri `externalBin`, and the frozen one-directory engine ships as a bundle resource beside it (see ADR-0056 for why). The engine carries the stdin-EOF plus parent-PID guard, so it exits when the shell dies by any route, and the shell also kills it on a graceful exit. The shell hands the engine its per-launch token over stdin ([ADR-0058](0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md)).\n\nUpdates use Tauri's updater, signed with a project-owned minisign key.\n\n## Consequences\n\n**What becomes easier:**\n\n- A small installer and a signed update path that needs no paid certificate.\n- A shell that is a thin supervisor: all behaviour stays in the synchronous engine behind its local API, so the shell is replaceable.\n\n**What becomes harder, and what we accept:**\n\n- **`externalBin` does not fit a PyInstaller one-directory freeze.** It expects a single binary, while the freeze is a directory of files. The wrapper is the externalBin and the directory is a resource. The spike used a shell script as the wrapper.\n- **The updater needs https.** The spike's local manifest over plain `http` only worked with `dangerousInsecureTransportProtocol`, which is for local testing and must never ship. Production updates are served over https.\n- **A script wrapper loses its signature in the update tarball.** macOS update tarballs must be built with `COPYFILE_DISABLE=1`, because otherwise AppleDouble `._` files broke the unpack. That setting strips the extended-attribute signature of a script-wrapper externalBin, so the updated app failed `codesign` verification until it was re-signed. The re-sign fixed it. A compiled stub as the wrapper avoids the problem and is the intended direction; this was not built or measured.\n- The shell is Rust and web-view based. Contributors to the shell need that toolchain.\n- **Not measured:** the installer size of any alternative shell, so the size advantage over Electron is the expected order of magnitude, not a measured ratio; Windows and Linux behaviour; the updater on a rebuilt-and-re-signed release pipeline.\n\n## Alternatives considered\n\n- **Electron.** A mature updater and a large ecosystem, but it ships a full Chromium and a Node runtime, so the installer is larger, and its update signing path leans on platform code-signing certificates the project does not have. The shell would also add a second language runtime next to the engine's Python. Not measured in the spike. Rejected on size and on the signing dependency.\n- **pywebview.** The engine's own language and no second toolchain, but it provides no signed updater and no sidecar supervision, so both would be built here. Rejected: it moves the hardest part of the shell onto the project.\n- **Briefcase.** Python-native packaging that produces an app bundle, but it ties the shell to the interpreter and offers no updater of its own. Rejected for the same reason as pywebview.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar.md"
+   }
+  },
+  "decisions/0054-python-314-is-the-only-supported-interpreter": {
+   "id": "decisions/0054-python-314-is-the-only-supported-interpreter",
+   "type": "Decision",
+   "title": "ADR-0054: Python 3.14 is the only supported interpreter",
+   "text": "# ADR-0054: Python 3.14 is the only supported interpreter\n\n- **Status:** Accepted\n- **Date:** 2026-10-14\n\n## Context\n\nOpenKOS declared `requires-python = \">=3.12\"`, ran its tests on 3.12, 3.13 and 3.14, pinned the quality, build and release jobs to 3.12, pinned MyPy to `python_version = \"3.12\"`, and developed locally on 3.13 through `.python-version`. Five interpreters were in play and none of them was the one the next arc ships.\n\nMVP 6 (the desktop app) freezes exactly one interpreter into the application. A packaging spike on 2026-10-14 re-validated 3.14: on 3.14.6, PyInstaller 6.22.3 froze the engine, `sqlite_vec` loaded in the frozen build, `run_query` answered, and startup was 0.078 s median.\n\nThe matrix also costs real time. CI duration is dominated by the full suite under coverage, run once per interpreter, and 3.12 and 3.13 add wall-clock time without testing anything the desktop app will run. Interpreter drift has shipped bugs before: `Path.exists()` re-raises `EACCES` on 3.12 and 3.13 but suppresses it on 3.14, which forced a `stat()` workaround.\n\nThe maintainer wants a single interpreter.\n\n## Decision\n\nPython 3.14 is the only supported interpreter. `requires-python` is `>=3.14`, the only trove classifier is 3.14, MyPy analyses for 3.14, `.python-version` is 3.14, every CI and release job uses 3.14, and the test matrix has one entry. A test pins that these sources agree, so a future drift goes red.\n\nRuff infers its target from `requires-python`, so the `UP` rules now modernise for 3.14. Dead compatibility branches for older interpreters are removed.\n\n## Consequences\n\n**What becomes easier:**\n\n- One interpreter in development, CI, release and the frozen desktop app: a bug reproduces everywhere or nowhere.\n- CI runs the coverage suite once instead of three times.\n- Language and standard-library features of 3.14 are usable without a fallback.\n\n**What becomes harder, and what we accept:**\n\n- **A user-visible break.** `pip install openkos` on Python 3.12 or 3.13 resolves to 0.5.5, the last release that supports them, and does not receive later versions. They must move to Python 3.14 to upgrade.\n- Contributors need Python 3.14, which `uv` installs on request.\n- Nothing is tested on 3.12 or 3.13 from here on, so a regression there would not be caught, and none is promised against.\n\n## Alternatives considered\n\n- **Keep the three-version matrix.** This preserves the widest reach, but it keeps the slow CI, the interpreter-specific workarounds, and a tested set that differs from the interpreter the desktop app ships. Rejected.\n- **Measure coverage on one version only, and run the rest of the matrix without it.** This recovers most of the CI time but keeps three supported interpreters, the user's objection, and the drift between them. Rejected.\n- **A 3.13 floor.** This drops only the oldest interpreter, but the spike validated 3.14 and not 3.13, and it would still leave two interpreters to reason about. Rejected.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0054-python-314-is-the-only-supported-interpreter.md"
+   }
+  },
+  "decisions/0068-asking-through-the-api-applies-the-query-disclosure-rule-with-one-consent": {
+   "id": "decisions/0068-asking-through-the-api-applies-the-query-disclosure-rule-with-one-consent",
+   "type": "Decision",
+   "title": "ADR-0068: Asking through the API applies the query disclosure rule, with one consent",
+   "text": "# ADR-0068: Asking through the API applies the query disclosure rule, with one consent\n\n- **Status:** Accepted\n- **Date:** 2026-10-16\n\n## Context\n\nThe desktop app needs to ask questions, and `openkos.api` has no ask operation. [ADR-0058](0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md) left one obligation for this moment: the first ask or query endpoint must apply the sensitivity disclosure gate before an answer crosses the boundary. [ADR-0060](0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md) made the Python API owner-local and gate-free, and left gating to a disclosing adapter.\n\nTwo constraints meet here. The local API adapter may import only `openkos.api` among the engine's modules ([ADR-0061](0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra.md)), so it cannot reach a gate on its own. The API's import guard bars `openkos.mcp.gate` and `openkos.sensitivity`. The rule itself already exists twice: the MCP `query` tool's `disclose_query` and `application/query_report.py`, which `query --json` uses and which states it follows the MCP rule on the same allowed-set primitive.\n\nThe CLI asks for one consent, `--include-confidential`, and `--json` reads it for both questions: whether confidential concepts may enter retrieval (and so reach a model that is not verifiably local), and whether the machine-readable answer may name them. A local model already receives confidential concepts through the local exemption without the flag, and `--json` then withholds the answer.\n\nA query takes seconds to minutes against a local model, and the local API already runs the long judging operation as a pollable job on its own thread.\n\n## Decision\n\n- `openkos.api.ask` gates its own answer. It calls the query service, then builds its `Answer` from `application.query_report.build_query_report` with the disclosable set taken after the query ran. A confidential concept is never named, titled or quoted without consent, only counted, and an answer whose prompt held one is withheld. This is the one result of the API that is gated; every other result stays owner-local.\n- `include_confidential` is the one consent, with the CLI's meaning: confidential concepts may enter retrieval and may be named in the answer. Without it, the shared resolver's local exemption still decides whether a local model sees them.\n- The local API serves an ask as a single pollable job (`POST /v1/ask`, `GET /v1/ask/{id}`), at most one active, on its own daemon thread. An ask has no stop: the query service has no point at which to observe one.\n\n## Consequences\n\n**What becomes easier:**\n\n- The adapter, the TypeScript client and any later client get an answer that is already safe to show; none of them can forget a gate.\n- One implementation of the rule serves `query --json` and the API, so they cannot drift.\n\n**What becomes harder, and what we accept:**\n\n- On a local model, an answer that drew on a confidential concept is withheld until the person consents, even though nothing left the machine. The app must offer that consent. It is the conservative reading of ADR-0058.\n- The same consent that names a confidential concept also lets it reach a remote model. A client that shows the backend's locality beside the consent makes this legible; the API does not split it.\n- The API now holds one disclosure decision, so a change to the rule changes the API's result. The rule lives in `query_report` and is pinned by its tests and the API's.\n- An ask cannot be cancelled; an abandoned one runs to the end on a daemon thread and writes nothing.\n\n## Alternatives considered\n\n- **Gate in the adapter.** The adapter cannot import a gate, and widening its import rule would put a second disclosure seam outside the API.\n- **An ungated `ask` plus a public gating function.** Two calls, and a client that forgets the second shows confidential text.\n- **Reuse `mcp/gate.py` directly.** The API's import guard bars the MCP package; `query_report` is the same rule inside `application/`.\n- **Two consents (send to the model; show in the answer).** The CLI has one, and \"send it to a remote model but hide it from its owner\" has no user.\n- **A synchronous route.** Holds a request thread for the length of a model call, which the judging job already avoids.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0068-asking-through-the-api-applies-the-query-disclosure-rule-with-one-consent.md"
+   }
+  },
+  "decisions/0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra": {
+   "id": "decisions/0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra",
+   "type": "Decision",
+   "title": "ADR-0061: The local API is a FastAPI adapter over the Python API, shipped as an optional extra",
+   "text": "# ADR-0061: The local API is a FastAPI adapter over the Python API, shipped as an optional extra\n\n- **Status:** Accepted\n- **Date:** 2026-10-15\n\n## Context\n\n[ADR-0058](0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md) fixed the security shape of the local API (loopback, a per-launch bearer token, Host and Origin checks) but not the stack that serves it. `openkos.api` ([ADR-0060](0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md)) is the operation set the API exposes. The desktop shell cannot call Python in-process, so it needs an HTTP surface with a typed schema.\n\nA spike measured the cost of the candidate stack: 13 distributions, about 9.8 MB installed, about 8.2 MB more once frozen, about 0.32 s to the first response, and zero PyInstaller warnings. Until now the engine declared no Pydantic and no web framework.\n\n## Decision\n\n1. **FastAPI on uvicorn**, as a thin adapter over `openkos.api` only. It imports no `application/` module and no other engine layer.\n2. **Pydantic becomes a dependency for the first time**, confined to `openkos.localapi`. The earlier rule now reads \"the core and LLM extraction use no validation library\"; recovery of structured model replies stays in `llm/parsing.py`.\n3. **Shipped as the optional extra `openkos[api]`**, with the dev group carrying it so CI exercises it. `pip install openkos` is unchanged.\n4. **Concurrency.** Short operations run on the anyio worker pool, the equivalent [ADR-0021](0021-sync-async-boundary.md) names for the MCP adapter. The judging run gets its own daemon thread. `asyncio` is imported in exactly one module, `localapi/_app.py`, whose lifespan hands the blocking run-registry shutdown to a worker thread; no other `localapi` module uses it, and `tests/unit/mcp/test_layering.py` pins both that exception and the rule for `mcp/`. There is no per-call deadline because no short operation calls a model. This deviates from the MCP server's thread-per-call, `Semaphore(4)` and deadline, and the deviation is deliberate.\n5. **One ASGI guard** in the order Host, CORS preflight, Origin, token. The preflight is answered before the token check and never before the Host check. Origins are restricted to the Tauri allowlist.\n6. **Launch.** The token arrives on stdin and only its sha256 is kept in memory. The port-0 bind is handed to uvicorn, a one-line JSON ready line announces the address, and stdin EOF and SIGTERM are the shutdown lifelines.\n7. **`opentelemetry-api` arrives as a transitive hard dependency of FastAPI** with the extra.\n\n[ADR-0058](0058-the-local-api-is-loopback-http-with-a-per-launch-bearer-token-and-host-origin-checks.md) is not edited and stays the authority for the security shape; this ADR records only the preflight ordering it did not cover.\n\n## Consequences\n\nEasier: a typed OpenAPI schema for the shell's client, request validation, dataclasses served directly, and one guard for every route.\n\nHarder: a second serialization path (Pydantic) beside the API's dataclasses; the import guard gains one sanctioned importer; the `openapi.json` snapshot must be regenerated deliberately; the frozen app grows by about 8 MB; a stuck model call is abandoned at shutdown, never preempted; and the worker pool has no deadline, so a short operation that hangs holds its thread. That last cost is accepted because no short operation calls a model.\n\n## Alternatives considered\n\n- **Starlette alone.** Smaller (2.1 MB) but no schema and hand-written serialization; rejected because the shell's TypeScript client wants a schema.\n- **The hand-rolled stdlib server pattern of [ADR-0027](0027-hand-rolled-stdio-mcp-server.md).** Rejected: HTTP/1.1 parsing, CORS and concurrency are where hand-rolled servers fail.\n- **FastAPI as a core dependency.** Rejected: every `pip install openkos` would pay for a desktop-only adapter.\n- **MCP's thread-per-call with a semaphore and deadline** for short operations. Rejected: there is no model call to bound. It is kept in spirit for the run's dedicated thread.\n- **`CORSMiddleware` plus a separate token middleware.** Rejected: the preflight and token ordering must live in one guard.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra.md"
+   }
+  },
+  "decisions/0012-sensitivity-backfill-per-source-sweep": {
+   "id": "decisions/0012-sensitivity-backfill-per-source-sweep",
+   "type": "Decision",
+   "title": "ADR-0012: Sensitivity backfill as an explicit per-Source sweep, not a silent migration",
+   "text": "# ADR-0012: Sensitivity backfill as an explicit per-Source sweep, not a silent migration\n\n- **Status:** Amended by ADR-0016\n- **Date:** 2026-07-29\n\n## Context\n\nADR-0009 made Source-to-descendant sensitivity propagation part of\n`set-sensitivity`: raising a Source's `sensitivity` also raises every\nprovenance descendant found by `find_provenance_descendants`. That\npropagation only runs when `set-sensitivity` is actually invoked on a\nSource. A bundle that ingested content, or extracted descendants, before\npropagation existed (issue #219) — or one whose Sources have simply never\nhad `set-sensitivity` run against them — is left with descendants sitting\nbelow their Source's true sensitivity, with no code path that ever\nnotices or repairs it.\n\nTwo questions forced a decision. First: should this gap close itself, or\nshould an operator have to ask for it? Second: `find_provenance_descendants`\nresolves one Source's closure at a time; a bundle can have several Sources,\nand a descendant's `provenance` can cite concepts spanning more than one of\nthem. What happens to a descendant that is not fully inside any single\nSource's closure?\n\n## Decision\n\nWe close the gap with **`openkos backfill-sensitivity`**, a dedicated,\nraise-only, bundle-wide command an operator runs explicitly — never an\nautomatic migration triggered by `ingest`, `status`, or any other existing\nverb. Every `type: Source` concept in the bundle is treated as an\nindependent provenance-closure root; for each, the command resolves its\ndescendants exactly as `set-sensitivity`'s propagation does\n(`bundle.provenance.resolve_source_raises`), and where two or more Sources'\nclosures overlap on the same descendant, the raise with the highest\nresulting sensitivity wins (merge-by-max, pinned to\n`okf.SENSITIVITY_ORDER.index(new_level)`, never the private `okf._rank`).\nOne bundle-wide preview, one confirmation, one `log.md` entry, and one\ncommit cover the whole sweep, mirroring `set-sensitivity`'s own Phase A /\nPhase B shape and its fail-closed partial-write handling (naming every\npath that already landed before a mid-sweep failure, matching the #233\nfix).\n\n> **Amended 2026-08-16 by [ADR-0016](0016-maintain-the-cited-high-water-mark.md)\n> (issue #697).** The deferral described in the next paragraph, and repeated\n> under Consequences, is CLOSED. The sweep gained a second producer that folds\n> the high-water mark over each document's own direct `provenance`, so a\n> descendant in no single Source's closure IS now written by it, and the\n> `multi-source-uncovered` finding no longer marks itself as uncovered. The\n> per-Source closure half described below is unchanged.\n\nA descendant that is a member of **no single Source's** closure — for\nexample, one whose `provenance` cites two ids that resolve to two\ngenuinely unrelated Sources — is never written by this sweep. Silently\naccepting that limitation was rejected: instead, `lint` and `status` gain\na `multi-source-uncovered` finding that surfaces exactly the concepts this\nsweep cannot reach, naming every cited concept id and its level, and\nexplicitly marking the finding as not covered by `backfill-sensitivity`.\nCoverage is therefore always visible, even where it is incomplete.\n\n## Consequences\n\nEasier: an operator has one command to bring an existing bundle's\nsensitivity fully up to date with its Sources, with the same review\ndiscipline (preview, confirm gate, fail-closed writes) every other\nmutating verb already uses; a bundle that never called `set-sensitivity`\non a given Source is no longer silently under-classified forever; the\n`multi-source-uncovered` finding gives an operator a concrete, actionable\nlist instead of an invisible gap.\n\nHarder: the sweep is bundle-wide only in this MVP — there is no\nper-Source scoping flag, so an operator cannot ask it to touch just one\nSource's descendants (`set-sensitivity` already serves that narrower\ncase). A descendant spanning two or more genuinely unrelated Sources is\nnever combined across them by this command; combining sensitivity across\nmultiple Sources for such a descendant is deferred to MVP-2/3 per\nADR-0009, so today it stays reported, not resolved, until a human acts on\nthe `multi-source-uncovered` finding directly (typically via\n`set-sensitivity` on the descendant itself, or a future combining verb).\nThe command also does not run the unresolvable-provenance scan\n`set-sensitivity` runs on its target Source: every Source cites its raw\ningest `resource`, which never resolves to a bundle id, so running that\nscan bundle-wide would emit one WARNING per Source on every invocation,\nincluding the no-op path. `lint`'s existing `dangling` finding already\ncovers that signal read-only; extending the WARNING itself to be more\nselective is out of scope here (tracked separately, issue #232).\n\n## Alternatives considered\n\n- **Run the backfill automatically on every `ingest`/`status`/`lint`\n  invocation.** Rejected: an automatic silent migration changes bundle\n  data as a side effect of an unrelated read-only or ingest command,\n  violating the review discipline every other mutating write in this\n  codebase follows. An operator should decide when a bundle-wide sweep of\n  descendant sensitivities happens, and see the preview before it does.\n- **Treat a descendant citing two or more Sources as covered by the\n  highest of the two Sources' levels, combining across Source closures.**\n  Rejected for this MVP: ADR-0009 already deferred cross-Source combining\n  to MVP-2/3, and doing it silently here — without the human confirmation\n  a `set-sensitivity` write on that descendant would get — risks\n  over-committing to a combining rule before the multi-source model is\n  settled. Reporting via `multi-source-uncovered` keeps the door open\n  without prematurely encoding a rule.\n- **Silently accept the multi-source coverage limit with no detection\n  signal.** Rejected: an invisible gap in sensitivity coverage is worse\n  than a visible, named one. The `multi-source-uncovered` finding turns an\n  accepted limitation into an actionable one.\n- **Add a per-Source scoping argument to `backfill-sensitivity`.**\n  Rejected as unnecessary scope for this MVP: `set-sensitivity <source-id>\n  <level>` already re-triggers the exact same per-Source propagation for a\n  single Source; a bundle-wide sweep exists specifically for the case\n  where an operator wants every Source covered in one pass.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0012-sensitivity-backfill-per-source-sweep.md"
+   }
+  },
+  "decisions/0009-source-sensitivity-propagation": {
+   "id": "decisions/0009-source-sensitivity-propagation",
+   "type": "Decision",
+   "title": "ADR-0009: Source sensitivity propagates to provenance descendants, raise-only",
+   "text": "# ADR-0009: Source sensitivity propagates to provenance descendants, raise-only\n\n- **Status:** Accepted\n- **Date:** 2026-07-28\n\n## Context\n\nADR-0008 recorded `set-sensitivity` as touching exactly one concept — \"no\nsibling and no derived object\" — and rejected `combine_sensitivity` for the\nverb, reasoning that a human's explicit assignment must not be folded through\na monotonic combine. That rejection was scoped to the human-assigned target\nvalue, but the *scope sentence itself* was written as if it were absolute.\n\nIssue #219 shows the gap that leaves open: the ingestion spec\n(`openspec/specs/ingestion/spec.md:414-427`) already claims a derived object's\n`sensitivity` is \"inherited\" from its Source, but no code path backs that\nclaim at the moment a Source is corrected after the fact. Raising a Source's\n`sensitivity` today leaves every derived object at its old value, still\nreadable by every `llm.chat` gate — all of which resolve sensitivity by\nreading each document's own stored field\n(`sensitivity-aware-llm` Requirement 1). A privacy correction on the Source\nsilently fails to protect what it derived.\n\n## Superseded, precisely\n\nThis ADR supersedes **only** ADR-0008's scope sentence — the claim that the\nwrite set is the single named concept. ADR-0008's downgrade gate, its\n`--allow-downgrade` contract, and `okf.sensitivity_direction`'s fail-closed\nranking remain in force verbatim: an explicit human assignment on the named\nconcept itself may still lower that concept's own value, gated exactly as\nADR-0008 describes. **ADR-0008 is not edited.**\n\n## Decision\n\nWe adopt raise-only propagation from a Source-typed concept to its\nprovenance descendants, computed via `okf.combine_sensitivity` (ADR-0003).\n\nThe write set for `set-sensitivity <concept-id> <level>` becomes: the named\nconcept, plus — when `<concept-id>` resolves to a `type: Source` concept AND\nthe Source's own assignment is itself a raise — every concept reachable via\n`bundle.provenance.find_provenance_descendants` starting from it. For each\ndescendant, the new value is\n`okf.combine_sensitivity(descendant_current, level)`; a write is staged only\nwhen that is a strict raise over the descendant's current value. ADR-0008's\nrejection of `combine_sensitivity` is preserved for the *human-assigned*\ntarget value — this ADR applies `combine_sensitivity` only to the\n*machine-derived* descendant values, which is exactly ADR-0003's own domain,\nnot the case ADR-0008 declined.\n\nRaise-only needs one direction special-case, not zero: the whole-bundle scan\nruns only when the Source's OWN assignment is itself a raise\n(`okf.sensitivity_direction(current, level) == \"raise\"`). Combine alone does\nnot guarantee an empty staged set on a downgrade — `combine_sensitivity\n(descendant_current, level)` can still return a strict raise for a\ndescendant already sitting *below* the new, lower `level` (e.g. a Source\ngoing `confidential` -> `private` with a `public` descendant). Gating the\nscan on the Source's own direction keeps a downgrade run's write set to\nexactly the named concept, matching \"Cascading downgrades\" rejected below. A\nprovenance reference that cannot be resolved to an existing concept in the\nbundle snapshot emits a stderr warning naming it and is excluded from\npropagation — fail closed, never treated as absent, never lowered. Every\nstaged descendant raise is reported: it appears in the confirmation preview\nand the post-write success message, and `--auto` still performs the\npropagation, only skipping the prompt. Phase B writes every staged\ndescendant, then the named concept, then `log.md`, then issues one\nauto-commit covering every changed path — descendants land first so a\nmid-way failure leaves the bundle over-classified, never under-classified.\n\n## Consequences\n\nEasier: the ingestion spec's inheritance claim becomes backed by code; a\nprivacy correction on a Source is one verb instead of a manual walk of every\nderived object. `set-sensitivity` becomes the single place both the\ncreation-time and set-time write-through rules are documented together.\n\nHarder: `set-sensitivity` on a Source becomes a multi-file write and a\nfull-bundle read, where before it touched one file. Descendants of a Source\nthat is never re-set stay stale until the next correction — no bulk backfill\nships with this decision. A derived object whose `provenance` was orphaned\nby an absorbing `merge` (which rewrites `relations:` but not `provenance:`)\nsilently falls outside the closure; today that only produces a warning, not\na repair — tracked as a separate follow-up issue. Multi-source high-water-mark\ncombination (a derived object citing more than one Source) stays deferred per\nthe ingestion spec's existing MVP-2/3 non-goal; `find_provenance_descendants`'s\nconservative full-provenance-subset rule already excludes that case rather\nthan combining it incorrectly.\n\n## Alternatives considered\n\n- **Read-time computed sensitivity.** Rejected: rewrites\n  `sensitivity-aware-llm` Requirement 1 (\"resolve from its own stored\n  field\"), touches roughly 8 requirements and 6 call sites, adds a\n  provenance walk to every gate check, and leaves the on-disk file still\n  mislabeled for git, grep, and a human reading the bundle directly.\n- **Creation-time propagation only (no set-time write-through).** Rejected:\n  that only fixes new ingests; it leaves every already-ingested Source's\n  correction as silent as it is today — exactly the bug #219 reports.\n- **Cascading downgrades.** Rejected: a Source correction that also silently\n  declassified its derived objects would be the opposite failure mode — an\n  unreviewed loss of protection instead of an unreviewed gain of exposure.\n- **A new reverse index for the provenance closure.** Rejected:\n  `bundle.provenance.find_provenance_descendants` already computes exactly\n  this closure for `forget --scope source`; reusing it costs one full-bundle\n  read on a rare human verb, not a new durable structure to keep in sync.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0009-source-sensitivity-propagation.md"
+   }
+  },
+  "decisions/0074-undoing-a-reconcile-removes-what-reconcile-wrote-keyed-by-the-pair": {
+   "id": "decisions/0074-undoing-a-reconcile-removes-what-reconcile-wrote-keyed-by-the-pair",
+   "type": "Decision",
+   "title": "ADR-0074: Undoing a reconcile removes what reconcile wrote, keyed by the pair",
+   "text": "# ADR-0074: Undoing a reconcile removes what reconcile wrote, keyed by the pair\n\n- **Status:** Accepted\n- **Date:** 2026-10-17\n\n## Context\n\n[ADR-0072](0072-contradictions-and-revisions-are-previewed-as-findings-and-applied-as-decisions.md)\nlets the app settle a contradiction or a revision: decline it, or reconcile the\npair as both right (`reconciled_with`), one replacing the other (`supersedes`)\nor one updating the other (`revises`). The wording brief gives those\nconfirmations no Undo (#1497).\n[ADR-0067](0067-undoing-a-review-choice-is-a-two-phase-api-operation-keyed-by-what-the-choice-wrote.md)\nfixed the shape of an undo: a preview and an apply keyed by what the choice\nwrote, a digest of the bytes the plan rests on, one lock, one commit, no queue\nrow touched.\n\nA decline has a CLI inverse (`contradictions --reopen`), keyed by the pair and\nthe merged-body discriminator. A reconcile has none: `reconcile` refuses to\nchange an existing resolution and tells the person to edit the pages or revert\nwith git. What it writes is spread over both pages: the edge (two for\n`reconciled_with`), a `## Reconciliation` note on each page, and for a\nsupersede the counterpart's out-of-date mark. `unrelate`, which ADR-0067\nexposes, removes one edge and withdraws the mark, but leaves the notes, so after\nit a page would still say \"Superseded by ...\" about a page that no longer\nsupersedes it.\n\n## Decision\n\n1. **A decline is reopened in ADR-0067's shape.** `declined_contradictions`\n   lists the declined records; `preview_reopen_contradiction` /\n   `apply_reopen_contradiction` take the pair and `merged_absorbed_id` and make\n   the `contradictions --reopen` write.\n2. **A reconcile is undone by the pair.** `reconciled_pairs` lists the pairs\n   holding one resolution; `preview_unreconcile` / `apply_unreconcile` take the\n   pair only, and the resolution is read from the pages. A pair holds at most\n   one resolution, so the pair names it; a pair holding disagreeing ones, which\n   only a hand edit makes, is refused.\n3. **The inverse is derived from the write.** The undo removes every edge of\n   the resolution's type between the two pages, through `unrelate`'s prepare;\n   withdraws a supersede's mark exactly when `unrelate` would; removes, on each\n   page, the reconciliation note anchored on the other page when it keeps the\n   shape `reconcile` wrote (heading, anchor, one sentence); adds one `log.md`\n   line; and commits the changed pages and the log once. A note edited around\n   its anchor is left as the person left it.\n4. **Two refusals:** `not_declined` and `not_reconciled` join `NotUndoable`; a\n   moved digest is `UndoStale`.\n\n## Consequences\n\n- The app can offer Undo on every contradiction and revision confirmation, and\n  the \"edit the pages or revert with git\" advice has an app equivalent.\n- After an undo with nothing in between, pages in the engine's form return to\n  their earlier bytes, so a persisted contradiction verdict is fresh again and\n  the finding comes back on the next check without a model call. A hand-written\n  page keeps its values but is re-serialised, as every engine write does. Like every ADR-0067 undo,\n  it does not come back at once: no queue row is proposed.\n- The engine gains a write the CLI does not have. `reconcile`'s refusal text is\n  unchanged; a CLI verb can reuse the same service later.\n- Removing a note depends on its shape. A reconcile note a person rewrote stays,\n  and the preview's `pages_changed` shows which pages change.\n\n## Alternatives considered\n\n- **Offer `unrelate` as the undo of a supersede.** No new operation, but it\n  leaves both notes, and a symmetric reconcile needs two unrelates and still\n  leaves its notes. Rejected: the undo would not undo what the app said it did.\n- **Record what each reconcile wrote and replay it backwards.** Exact for\n  reconciles the app made, but a second record of what the pages already say,\n  absent for every reconcile the CLI made. Rejected.\n- **Key the undo by the decision key, as the reconcile was applied.** The row\n  was resolved when it was applied, and the CLI reconciles with no row\n  (ADR-0067's reason). Rejected.\n- **Refuse when a note was edited.** Safer for the note, but it would leave the\n  edge, which the person did not edit, impossible to undo from the app.\n  Rejected: the edge and the mark are undone, the edited note is kept.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0074-undoing-a-reconcile-removes-what-reconcile-wrote-keyed-by-the-pair.md"
+   }
+  },
+  "decisions/0067-undoing-a-review-choice-is-a-two-phase-api-operation-keyed-by-what-the-choice-wrote": {
+   "id": "decisions/0067-undoing-a-review-choice-is-a-two-phase-api-operation-keyed-by-what-the-choice-wrote",
+   "type": "Decision",
+   "title": "ADR-0067: Undoing a review choice is a two-phase API operation keyed by what the choice wrote",
+   "text": "# ADR-0067: Undoing a review choice is a two-phase API operation keyed by what the choice wrote\n\n- **Status:** Accepted\n- **Date:** 2026-10-16\n\n## Context\n\nThe decision wording brief (`docs/decision-wording.md`) offers an **Undo** on the\nconfirmation of four choices. A combine has one, through `preview_unmerge` and\n`apply_unmerge` ([ADR-0064](0064-unmerge-is-a-two-phase-api-operation-bound-to-a-version-over-the-ledger.md)).\nKeep separate, connect and \"how quickly it goes out of date\" have none in\n`openkos.api` (#1466), although the CLI reverses each (`duplicates --reopen`,\n`unrelate`, `set-volatility`). The desktop app reaches the engine only through\nthe API ([ADR-0060](0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md),\n[ADR-0061](0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra.md)).\n\nThree forces shape the operations. The choice's queue row was resolved when it\nwas applied, and the same ruling, relation or tier can be written by the CLI\nwith no row, so a decision key cannot name what to undo. A stateless client must\nconsent to exactly what is written, as for every API write\n([ADR-0053](0053-curation-decisions-are-a-two-phase-application-surface.md)).\nAnd a tier undo has no CLI precedent for \"there was no entry\": `set-volatility`\nonly sets one.\n\n## Decision\n\n1. **Two phases per kind, keyed by what the choice wrote.** `preview_reopen` /\n   `apply_reopen` take the member set, `preview_unrelate` / `apply_unrelate` the\n   edge `(source, type, target)`, `preview_tier_change` / `apply_tier_change` the\n   type and the tier. No decision key is involved and the queue is neither\n   resolved nor proposed to; a reopened group comes back when the queue is next\n   refreshed.\n2. **The version digests what the plan rests on.** The ruling's sidecar, the\n   source page (and the target when its deprecated-status export is withdrawn),\n   or `openkos.yaml`, with the key. The apply takes the workspace lock once,\n   re-plans from current bytes, and returns `UndoStale` on a moved digest, then\n   writes and commits only its own paths: one write, one commit.\n3. **One refusal type for the three kinds.** `NotUndoable` with\n   `not_kept_distinct`, `not_related`, `tier_unchanged` or `unknown_type`,\n   decided from the files, never from error text, and one HTTP row per reason.\n4. **A tier undo restores the configured entry.** A set-tier preview reports the\n   type's entry before the change (`configured_tier`); the undo sets it back, and\n   removes the entry when there was none (`tier=None`), by the same\n   comment-safe text surgery `set-volatility` uses.\n5. **Listing and reading stay free.** `kept_distinct` lists the rulings a\n   settings screen will offer **Ask me again** on, and `merged_concepts` (#1467)\n   lists every combined page; both read sidecars only, with no lock and no model.\n\n## Consequences\n\n- The app can offer the brief's Undo for all four choices, and later the\n  settings and page screens can reuse the same operations for **Ask me again**,\n  **Remove** and the tier setting.\n- One refusal type keeps the surface smaller than a refusal and a stale type\n  per kind would, at the cost of a reason set that is a union across kinds.\n- An undo can reverse a ruling, relation or tier the CLI wrote, not only one the\n  app wrote. That is the CLI verbs' scope too, and the preview names exactly\n  what is reversed.\n- `openkos.yaml` gains a write the CLI does not have (removing an entry). It is\n  text surgery with the same refusals as setting one; a header left with no\n  entries is kept.\n- Like every API write, an undo refreshes no derived index.\n\n## Alternatives considered\n\n- **Undo by decision key, reopening the queue row.** The row is resolved, the CLI\n  writes the same files with no row, and a resolved row would have to be\n  revived. Rejected for the reason ADR-0064 rejected it for unmerge.\n- **A per-kind refusal and stale type.** Six names for four reasons, and six\n  HTTP rows for one meaning of stale. Rejected.\n- **Restore a tier by writing the old effective tier explicitly.** The effect\n  today is the same, but it pins a type that had followed the engine's default,\n  so a later default would no longer reach it. Rejected.\n- **Unlocked check, then a locked write with drift guards (the decision\n  surface's shape).** Each undo is one small write; planning under the lock makes\n  the plan and the write see the same bytes with no second guard, as ADR-0064\n  chose for unmerge.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0067-undoing-a-review-choice-is-a-two-phase-api-operation-keyed-by-what-the-choice-wrote.md"
+   }
+  },
+  "decisions/0003-sensitivity-high-water-mark": {
+   "id": "decisions/0003-sensitivity-high-water-mark",
+   "type": "Decision",
+   "title": "ADR-0003: Sensitivity high-water-mark ordering and fail-closed combine",
+   "text": "# ADR-0003: Sensitivity high-water-mark ordering and fail-closed combine\n\n- **Status:** Accepted\n- **Date:** 2026-07-20\n\n## Context\n\nKOM (`docs/knowledge-object-model.md:255-272`) states a derived object is \"at\nleast as sensitive as the most sensitive source\" — a synthesis of a\nconfidential and a public source is confidential. A repo-wide scan finds\n**zero implementation**: sensitivity today is only inherited verbatim from\nconfig `default_sensitivity` or a Source (`cli/main.py:318,542`). The merge\nslice is the first operation that combines two objects' sensitivity, so it\nmust be the first real implementation. Sensitivity is a security-relevant\nfield; values read from frontmatter may be missing or malformed (hand-edited,\nLLM-derived, wrong type).\n\n## Decision\n\nWe define `SENSITIVITY_ORDER = (\"public\", \"private\", \"confidential\")` and a\npure `combine_sensitivity(a, b) -> str` in `model/okf.py` (alongside\n`build_concept`). It returns `SENSITIVITY_ORDER[max(rank(a), rank(b))]` —\nalways the more restrictive side. Ranking **fails closed**: a missing or\nblank value ranks as `private` (the config default floor); a present but\nunrecognized or non-string value ranks as `confidential` (the most\nrestrictive level). The result is always a canonical member of the ordering.\nMerge invokes it at build time so the survivor's sensitivity is **recomputed,\nnever copied** from either input, and records `sensitivity_before` in the\nmerge ledger (ADR-0002) so the lossy recompute stays reversible.\n\n## Consequences\n\nEasier: a single, tested source of truth for combining sensitivity that other\nfuture derivations (synthesis, compilation) can reuse; safe-by-default\nhandling of dirty frontmatter. Harder: the ordering and fail-closed rules\nbecome a load-bearing policy other tooling will rely on; because the recompute\nis lossy, any reversal must depend on the ledger snapshot, not re-derivation.\nRequires dedicated tests for every pair plus the missing/malformed/non-string\nedges.\n\n## Alternatives considered\n\n- **Survivor-wins sensitivity** (like other scalar conflicts): rejected — it\n  can silently downgrade a confidential absorbed object into a public\n  survivor, violating the KOM high-water-mark and the sensitivity principle.\n- **Fail-open on unknown values** (treat as public/private-min): rejected —\n  a security field must fail toward more restrictive, never less.\n- **No ordering constant, ad-hoc comparison at the call site**: rejected —\n  scatters a security rule and blocks reuse by future derivations.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0003-sensitivity-high-water-mark.md"
+   }
+  },
+  "decisions/0002-reversible-merge-ledger": {
+   "id": "decisions/0002-reversible-merge-ledger",
+   "type": "Decision",
+   "title": "ADR-0002: Reversible merge ledger with embedded verbatim snapshots",
+   "text": "# ADR-0002: Reversible merge ledger with embedded verbatim snapshots\n\n- **Status:** Superseded in part by ADR-0013 and ADR-0017 -- the storage clause and the catalog-snapshot clause\n  (ledger entries now live in a `bundle/.state/ledger/` sidecar, never the\n  survivor's own frontmatter). The entry schema, LIFO-tail enforcement, and\n  round-trip-parity contract below remain in effect, governed by this ADR.\n- **Date:** 2026-07-20\n\n## Context\n\n`merge <survivor> <absorbed>` is OpenKOS's first destructive operation. KOM\n(`docs/knowledge-object-model.md:317-328`) specs merge as a first-class,\n**reversible, no-information-loss** lifecycle step — a higher bar than\n`forget`'s \"undo is plain git\" precedent. Merge mutates the survivor\nirreversibly: sensitivity is recomputed by high-water-mark (lossy — the\ncombined value cannot recover either input), provenance is union-deduped\n(loses ordering/multiplicity), the body is appended, and inbound `[...]\n(/absorbed.md)` links across the bundle are rewritten. The absorbed file is\ndeleted. A durable, engine-driven `unmerge` must restore the exact pre-merge\nbundle without depending on the user's git discipline or an intact `.git`\n(exports may ship without it). At the time of this decision, the graph was\nephemeral (rebuilt per run), so there was no store to repair — the only\ndurable representation was markdown text. (Update, performance-caching\nSlice 5: the graph — like FTS and the vector store — is now ALSO persisted\nto `.openkos/graph.db`, written only by `reindex` and rebuilt wholesale on\nthe next `reindex` run after any bundle change; it remains a rebuildable\nDERIVED cache, never the source of truth, so this ADR's core reasoning is\nunaffected — merge/unmerge's reversibility contract still rests entirely\non markdown text, never on the graph store.)\n\n## Decision\n\nWe embed a `merged_from` **list** in the survivor's OKF frontmatter (an\nordinary unknown key, not a new OKF type — §4.1 tolerance). Each entry carries\nthe **verbatim pre-merge byte-for-byte snapshots** of the absorbed file\n(`absorbed_snapshot`), the survivor itself (`survivor_before`), `index.md`\n(`index_before`), and `log.md` (`log_before`), plus the recorded\n`link_rewrites` (`{file, old_link, new_link}`) and\n`sensitivity_before`/`sensitivity_after` for audit. `survivor_before` is the\nsurvivor's full verbatim bytes immediately prior to THIS merge's write,\nexplicitly **RETAINING any prior `merged_from` entries** from earlier merges —\nit excludes ONLY the new entry being created by this merge (which does not\nexist yet at snapshot time); it does NOT strip the whole `merged_from` key.\nThis is what lets sequential pairwise merges reverse losslessly in LIFO order.\n`unmerge <survivor-id> <absorbed-id>` is **two-arg, LIFO-enforced**: it\nreverses ONLY the most-recent unreversed entry (the tail), and the supplied\n`absorbed-id` MUST equal that tail entry's `absorbed_id`, else the command\nrefuses with a clean error and no write (reversing a non-tail entry is unsafe\ndue to nested snapshots / overlapping rewrites). (Since #562,\n`unmerge <survivor-id> --to <absorbed-id>` additionally unwinds the ledger\ntail-first as a sequence of these same single-step LIFO reversals, down to\nand including the target entry — sugar over the LIFO rule, never an\nexception to it.) It writes every snapshot back\nverbatim (restoring `log.md` from `log_before` and THEN appending one unmerge\naudit line), and reverses each recorded link rewrite by exact fence-masked\nsubstitution bounded to the recorded occurrences — failing closed if a target\nfile has drifted. The\nledger is written and read only through `okf.dump_frontmatter`/\n`load_frontmatter` (symmetric YAML), never hand-spliced. Merge writes the\nsurvivor (carrying the snapshot) **before** deleting the absorbed file, so a\ncrash never destroys the only copy. Round-trip parity (merge→unmerge =\nbyte-identical pre-merge bundle) is the contract, guarded by a property test.\n\n## Consequences\n\nEasier: full, git-independent, portable undo; the survivor is self-describing;\npartial writes stay benign and recoverable. Harder: the survivor's frontmatter\ngrows by the size of the embedded snapshots (acceptable — data, not a new\ntype); the ledger format becomes a **durable on-disk contract** that later\nchanges must migrate; `unmerge` must fail closed on drift rather than\ncorrupt. Deterministic (no LLM), so fully unit-testable.\n\n## Alternatives considered\n\n- **Git-only + `merged_from` breadcrumb** (explore Option A): lowest effort but\n  reversibility depends on user commit discipline and a live `.git`; loses the\n  no-info-loss bar KOM sets, and does nothing for dangling links.\n- **Redirect-stub tombstone** (Option B): best portability but stubs accumulate\n  forever in `index.md`/FTS/graph, in tension with \"fewer, richer objects\".\n- **Hash-referenced snapshot**: loses content the moment history is rewritten,\n  gc'd, or exported without `.git`.\n- **Deterministic inversion instead of snapshots**: impossible — sensitivity\n  high-water-mark and provenance dedup are lossy.",
+   "language": "en",
+   "source": {
+    "kind": "okf_file",
+    "ref": "docs/adr/0002-reversible-merge-ledger.md"
+   }
+  }
+ },
+ "items": [
+  {
+   "id": "e01",
+   "stratum": "constructed",
+   "source": "concepts/retry-budget",
+   "target": "concepts/request-scheduler",
+   "label": "part_of",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (part_of vs member_of); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e02",
+   "stratum": "constructed",
+   "source": "concepts/nightly-backup-job",
+   "target": "concepts/scheduled-maintenance-jobs",
+   "label": "member_of",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (part_of vs member_of); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e03",
+   "stratum": "constructed",
+   "source": "concepts/report-renderer",
+   "target": "concepts/template-cache",
+   "label": "depends_on",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (depends_on vs part_of); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e04",
+   "stratum": "constructed",
+   "source": "concepts/checkout-outage",
+   "target": "concepts/payment-gateway-migration",
+   "label": "caused_by",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (caused_by vs produced_by); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e05",
+   "stratum": "constructed",
+   "source": "concepts/quarterly-risk-report",
+   "target": "concepts/risk-committee",
+   "label": "produced_by",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (caused_by vs produced_by); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e06",
+   "stratum": "constructed",
+   "source": "concepts/migration-runbook",
+   "target": "concepts/rollback-policy",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (references vs related_to); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e07",
+   "stratum": "constructed",
+   "source": "concepts/onboarding-checklist",
+   "target": "concepts/incident-review-culture",
+   "label": "related_to",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (the honest abstention); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e08",
+   "stratum": "constructed",
+   "source": "concepts/aortic-valve",
+   "target": "concepts/human-heart",
+   "label": "part_of",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (part_of vs member_of (held out from the examples)); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e09",
+   "stratum": "constructed",
+   "source": "concepts/soprano-line",
+   "target": "concepts/voice-parts",
+   "label": "member_of",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (part_of vs member_of (held out from the examples)); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e10",
+   "stratum": "constructed",
+   "source": "concepts/wal-segment",
+   "target": "concepts/write-ahead-log",
+   "label": "part_of",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (part_of vs member_of); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e11",
+   "stratum": "constructed",
+   "source": "concepts/eu-west-replica",
+   "target": "concepts/read-replicas",
+   "label": "member_of",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (part_of vs member_of); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e12",
+   "stratum": "constructed",
+   "source": "concepts/search-api",
+   "target": "concepts/ranking-service",
+   "label": "depends_on",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (depends_on vs part_of); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e13",
+   "stratum": "constructed",
+   "source": "concepts/data-loss-incident",
+   "target": "concepts/storage-upgrade",
+   "label": "caused_by",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (caused_by vs produced_by); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e14",
+   "stratum": "constructed",
+   "source": "concepts/architecture-decision-record",
+   "target": "concepts/platform-team",
+   "label": "produced_by",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (caused_by vs produced_by); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e15",
+   "stratum": "constructed",
+   "source": "concepts/deploy-guide",
+   "target": "concepts/incident-severity-matrix",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (references vs related_to); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e16",
+   "stratum": "constructed",
+   "source": "concepts/hiring-loop",
+   "target": "concepts/documentation-style",
+   "label": "related_to",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (the honest abstention); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e17",
+   "stratum": "constructed",
+   "source": "concepts/cost-dashboard",
+   "target": "concepts/oncall-rotation",
+   "label": "related_to",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (the honest abstention); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e18",
+   "stratum": "constructed",
+   "source": "concepts/scheduled-maintenance-jobs",
+   "target": "concepts/nightly-backup-job",
+   "label": "related_to",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": "member_of",
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (direction: collection -> member); the label is that fixture's expected_type. This is a reversed-orientation probe: member_of is true only the other way round, so no specific type reads correctly as shown and the honest answer is related_to.",
+   "adjudication": null
+  },
+  {
+   "id": "e19",
+   "stratum": "constructed",
+   "source": "concepts/read-replicas",
+   "target": "concepts/eu-west-replica",
+   "label": "related_to",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": "member_of",
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (direction: collection -> member); the label is that fixture's expected_type. This is a reversed-orientation probe: member_of is true only the other way round, so no specific type reads correctly as shown and the honest answer is related_to.",
+   "adjudication": null
+  },
+  {
+   "id": "e20",
+   "stratum": "constructed",
+   "source": "concepts/voice-parts",
+   "target": "concepts/soprano-line",
+   "label": "related_to",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": "member_of",
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (direction: collection -> member (held out from the examples)); the label is that fixture's expected_type. This is a reversed-orientation probe: member_of is true only the other way round, so no specific type reads correctly as shown and the honest answer is related_to.",
+   "adjudication": null
+  },
+  {
+   "id": "e21",
+   "stratum": "constructed",
+   "source": "concepts/risk-committee",
+   "target": "concepts/quarterly-risk-report",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": "produced_by",
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (direction: author -> artifact); the label is that fixture's expected_type. This is a reversed-orientation probe: produced_by is true only the other way round, so no specific type reads correctly as shown and the honest answer is references (the source body names the target) or related_to.",
+   "adjudication": null
+  },
+  {
+   "id": "e22",
+   "stratum": "constructed",
+   "source": "concepts/platform-team",
+   "target": "concepts/architecture-decision-record",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": "produced_by",
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (direction: author -> artifact); the label is that fixture's expected_type. This is a reversed-orientation probe: produced_by is true only the other way round, so no specific type reads correctly as shown and the honest answer is references (the source body names the target) or related_to.",
+   "adjudication": null
+  },
+  {
+   "id": "e23",
+   "stratum": "constructed",
+   "source": "concepts/payment-gateway-migration",
+   "target": "concepts/checkout-outage",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": "caused_by",
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (direction: cause -> outcome); the label is that fixture's expected_type. This is a reversed-orientation probe: caused_by is true only the other way round, so no specific type reads correctly as shown and the honest answer is references (the source body names the target) or related_to.",
+   "adjudication": null
+  },
+  {
+   "id": "e24",
+   "stratum": "constructed",
+   "source": "people/dana-reyes",
+   "target": "organizations/platform-guild",
+   "label": "member_of",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (cross-type: member -> collection (Person -> Organization)); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e25",
+   "stratum": "constructed",
+   "source": "organizations/platform-guild",
+   "target": "people/dana-reyes",
+   "label": "related_to",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": "member_of",
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (cross-type direction: collection -> member (Organization -> Person)); the label is that fixture's expected_type. This is a reversed-orientation probe: member_of is true only the other way round, so no specific type reads correctly as shown and the honest answer is related_to.",
+   "adjudication": null
+  },
+  {
+   "id": "e26",
+   "stratum": "constructed",
+   "source": "concepts/sampling-policy",
+   "target": "projects/telemetry-rewrite",
+   "label": "produced_by",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (cross-type: artifact -> producer (Concept -> Project)); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e27",
+   "stratum": "constructed",
+   "source": "projects/telemetry-rewrite",
+   "target": "concepts/sampling-policy",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": "produced_by",
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (cross-type direction: producer -> artifact (Project -> Concept)); the label is that fixture's expected_type. This is a reversed-orientation probe: produced_by is true only the other way round, so no specific type reads correctly as shown and the honest answer is references (the source body names the target) or related_to.",
+   "adjudication": null
+  },
+  {
+   "id": "e28",
+   "stratum": "constructed",
+   "source": "concepts/escalation-ladder",
+   "target": "people/marcus-oyelaran",
+   "label": "produced_by",
+   "alt_label": null,
+   "ambiguous": false,
+   "trap_type": null,
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (cross-type: artifact -> author (Concept -> Person)); the label is that fixture's expected_type.",
+   "adjudication": null
+  },
+  {
+   "id": "e29",
+   "stratum": "constructed",
+   "source": "people/marcus-oyelaran",
+   "target": "concepts/escalation-ladder",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": "produced_by",
+   "how": "Constructed to the production rubric in evals/edge_typing/fixtures.py (cross-type direction: author -> artifact (Person -> Concept)); the label is that fixture's expected_type. This is a reversed-orientation probe: produced_by is true only the other way round, so no specific type reads correctly as shown and the honest answer is references (the source body names the target) or related_to.",
+   "adjudication": null
+  },
+  {
+   "id": "g01",
+   "stratum": "good-life",
+   "source": "concepts/epicureanism",
+   "target": "concepts/stoicism",
+   "label": "related_to",
+   "alt_label": "references",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The Related line says 'contrasted with; both take tranquillity seriously, and disagree on whether the good is virtue or pleasure': a stated connection that fits none of the six specific types, which the rubric makes related_to. It also links Stoicism by name, so references is the flagged alternative.",
+   "adjudication": null
+  },
+  {
+   "id": "g02",
+   "stratum": "good-life",
+   "source": "concepts/stoicism",
+   "target": "concepts/epicureanism",
+   "label": "related_to",
+   "alt_label": "references",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "Same reading as the reverse edge: 'contrasted with; both ask how to live and disagree on what the good is'. A stated connection with no containment, causation, authorship or dependence.",
+   "adjudication": null
+  },
+  {
+   "id": "g03",
+   "stratum": "good-life",
+   "source": "concepts/stoicism",
+   "target": "decisions/frame-the-essay-on-the-dichotomy-of-control",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The Related line 'cited in' links the decision by name: the source explicitly points at the target and states no containment, cause, authorship or dependence.",
+   "adjudication": null
+  },
+  {
+   "id": "g04",
+   "stratum": "good-life",
+   "source": "concepts/stoicism",
+   "target": "people/maria-salazar",
+   "label": "references",
+   "alt_label": "caused_by",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The Related line says Maria 'corrected the apatheia reading here'. The text of the source was shaped by her correction (caused_by is defensible), but the line names her as the corrector and does not say the source exists because of her.",
+   "adjudication": null
+  },
+  {
+   "id": "g05",
+   "stratum": "good-life",
+   "source": "decisions/frame-the-essay-on-the-dichotomy-of-control",
+   "target": "concepts/epicureanism",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The Alternatives paragraph links the Epicurean contrast as a framing that was considered and not taken: it names the target without depending on or being made by it.",
+   "adjudication": null
+  },
+  {
+   "id": "g06",
+   "stratum": "good-life",
+   "source": "decisions/frame-the-essay-on-the-dichotomy-of-control",
+   "target": "concepts/stoicism",
+   "label": "references",
+   "alt_label": "depends_on",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The decision organises the essay around the dichotomy of control 'from' Stoicism and links it by name. It leans on the concept, but nothing says it stops holding without it, so references is primary and depends_on the alternative.",
+   "adjudication": null
+  },
+  {
+   "id": "g07",
+   "stratum": "good-life",
+   "source": "people/maria-salazar",
+   "target": "concepts/stoicism",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "'Corrected the apatheia reading in Stoicism': the person page names and links the concept.",
+   "adjudication": null
+  },
+  {
+   "id": "g08",
+   "stratum": "good-life",
+   "source": "people/maria-salazar",
+   "target": "decisions/frame-the-essay-on-the-dichotomy-of-control",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "'Argued for the framing recorded in' the decision: the page names and links it. She is not stated to have made the decision.",
+   "adjudication": null
+  },
+  {
+   "id": "g09",
+   "stratum": "good-life",
+   "source": "sources/call-with-maria-2026-07-14",
+   "target": "concepts/stoicism",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The source's closing line 'Compiled into: ...' links the target by name. The real derivation (the target derived from the source) is the engine-owned type that is never suggestable and is stored the other way round, so as shown the honest claim is that the source names the target.",
+   "adjudication": null
+  },
+  {
+   "id": "g10",
+   "stratum": "good-life",
+   "source": "sources/call-with-maria-2026-07-14",
+   "target": "decisions/frame-the-essay-on-the-dichotomy-of-control",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The source's closing line 'Compiled into: ...' links the target by name. The real derivation (the target derived from the source) is the engine-owned type that is never suggestable and is stored the other way round, so as shown the honest claim is that the source names the target.",
+   "adjudication": null
+  },
+  {
+   "id": "g11",
+   "stratum": "good-life",
+   "source": "sources/call-with-maria-2026-07-14",
+   "target": "people/maria-salazar",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The source's closing line 'Compiled into: ...' links the target by name. The real derivation (the target derived from the source) is the engine-owned type that is never suggestable and is stored the other way round, so as shown the honest claim is that the source names the target.",
+   "adjudication": null
+  },
+  {
+   "id": "g12",
+   "stratum": "good-life",
+   "source": "sources/notes-on-the-enchiridion-2026-07-05",
+   "target": "concepts/epicureanism",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The source's closing line 'Compiled into: ...' links the target by name. The real derivation (the target derived from the source) is the engine-owned type that is never suggestable and is stored the other way round, so as shown the honest claim is that the source names the target.",
+   "adjudication": null
+  },
+  {
+   "id": "g13",
+   "stratum": "good-life",
+   "source": "sources/notes-on-the-enchiridion-2026-07-05",
+   "target": "concepts/stoicism",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The source's closing line 'Compiled into: ...' links the target by name. The real derivation (the target derived from the source) is the engine-owned type that is never suggestable and is stored the other way round, so as shown the honest claim is that the source names the target.",
+   "adjudication": null
+  },
+  {
+   "id": "g14",
+   "stratum": "good-life",
+   "source": "sources/notes-on-the-enchiridion-2026-07-05",
+   "target": "decisions/frame-the-essay-on-the-dichotomy-of-control",
+   "label": "references",
+   "alt_label": "related_to",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "The source's closing line 'Compiled into: ...' links the target by name. The real derivation (the target derived from the source) is the engine-owned type that is never suggestable and is stored the other way round, so as shown the honest claim is that the source names the target.",
+   "adjudication": null
+  },
+  {
+   "id": "r01",
+   "stratum": "adr",
+   "source": "decisions/0069-the-desktop-components-are-a-design-system-built-ahead-of-screens-and-tested-in-jsdom",
+   "target": "decisions/0066-the-desktop-screens-are-plain-dom-over-a-tested-view-model-with-no-ui-framework",
+   "label": "depends_on",
+   "alt_label": "references",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "ADR-0069 is headed 'Extends: ADR-0066' and says 'Everything else in ADR-0066 stands': it adds to a decision that must still hold, so depends_on; it also simply names it.",
+   "adjudication": null
+  },
+  {
+   "id": "r02",
+   "stratum": "adr",
+   "source": "decisions/0055-the-desktop-shell-is-tauri-2-with-the-engine-as-a-supervised-sidecar",
+   "target": "decisions/0054-python-314-is-the-only-supported-interpreter",
+   "label": "depends_on",
+   "alt_label": "references",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "'The engine is Python (ADR-0054), so whatever the shell is, it runs the engine as a separate process': the shell decision is built on the interpreter decision.",
+   "adjudication": null
+  },
+  {
+   "id": "r03",
+   "stratum": "adr",
+   "source": "decisions/0068-asking-through-the-api-applies-the-query-disclosure-rule-with-one-consent",
+   "target": "decisions/0061-the-local-api-is-a-fastapi-adapter-over-the-python-api-shipped-as-an-optional-extra",
+   "label": "depends_on",
+   "alt_label": "references",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "'The local API adapter may import only openkos.api among the engine's modules (ADR-0061), so it cannot reach a gate on its own': the decision is shaped by, and only works within, that constraint.",
+   "adjudication": null
+  },
+  {
+   "id": "r04",
+   "stratum": "adr",
+   "source": "decisions/0012-sensitivity-backfill-per-source-sweep",
+   "target": "decisions/0009-source-sensitivity-propagation",
+   "label": "caused_by",
+   "alt_label": "references",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "ADR-0012 opens with the gap ADR-0009's propagation leaves (it only runs when set-sensitivity is invoked) and decides the backfill sweep because of it.",
+   "adjudication": null
+  },
+  {
+   "id": "r05",
+   "stratum": "adr",
+   "source": "decisions/0074-undoing-a-reconcile-removes-what-reconcile-wrote-keyed-by-the-pair",
+   "target": "decisions/0067-undoing-a-review-choice-is-a-two-phase-api-operation-keyed-by-what-the-choice-wrote",
+   "label": "references",
+   "alt_label": "depends_on",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "ADR-0074 reopens a decline 'in ADR-0067's shape' and says every ADR-0067 undo behaves alike: it cites and follows the earlier decision. depends_on is defensible.",
+   "adjudication": null
+  },
+  {
+   "id": "r06",
+   "stratum": "adr",
+   "source": "decisions/0003-sensitivity-high-water-mark",
+   "target": "decisions/0002-reversible-merge-ledger",
+   "label": "references",
+   "alt_label": "depends_on",
+   "ambiguous": true,
+   "trap_type": null,
+   "how": "One sentence: the survivor's sensitivity is recorded as sensitivity_before 'in the merge ledger (ADR-0002)'. A pointer to where the value is stored.",
+   "adjudication": null
+  }
+ ]
+}

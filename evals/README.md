@@ -45,6 +45,7 @@ of a harness's own scoring code.
 - [`discarded_generation`](discarded_generation/README.md) — how much extraction generates and then throws away.
 - [`duplicate_function_words`](duplicate_function_words/README.md) — function words deciding a title-containment near-match.
 - [`edge_typing`](edge_typing/README.md) — the edge-type suggester's typing quality.
+- [`edge_typing_screen`](edge_typing_screen/README.md) — a model-screen harness for the edge-type suggester: a 49-item labelled fixture, model-free baselines, a direction trap and a blind-adjudication sheet; draft pre-registration, no model run yet.
 - [`extraction_cap`](extraction_cap/README.md) — the extraction cap-and-decay behavior against the extraction corpus.
 - [`extraction_collapse`](extraction_collapse/README.md) — what collapses extraction to a single object, via matched pairs.
 - [`generation_ceiling`](generation_ceiling/README.md) — which calls hit the generation ceiling, and whether chunking helps.
