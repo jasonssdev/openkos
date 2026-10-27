@@ -42,6 +42,7 @@ EXEMPT: dict[str, str] = {
     "query_grounding/run_query_grounding_probe.py": "embedding model only, zero chat calls",
     "query_identity/run_query_identity_probe.py": "embedding model only, zero chat calls",
     "retrieval_stability/run_retrieval_stability_probe.py": "retrieval only: the chat LLM is a stub",
+    "retrieval_gold/run_retrieval_gold.py": "embedding model only, zero chat calls; the stored run records the harness commit and the embedder digest itself",
     "section_coverage/run_embedding_coverage_probe.py": "embedding model only, zero chat calls",
     "transcript_decisions/thesis_metric.py": "embedding model only, zero chat calls; scores stored runs that carry their own stamp",
 }
