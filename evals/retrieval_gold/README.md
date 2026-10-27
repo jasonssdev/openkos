@@ -293,6 +293,15 @@ on disk (another run, or an edited translation). It prints `k of N wrong` and, a
 the bar, pins nothing. A blocked pin means re-translating (a new `--out`, possibly a
 changed prompt) and a new sheet, not editing the verdicts.
 
+**Review record (deviation).** The registered step 2 is an owner review with no model.
+The owner delegated it: the 120-pair sheet was filled by a Claude model (a different
+family from the `gemma4` translator), and the owner's maintainer session spot-checked a
+random draw of the `accurate` verdicts before pinning. Result: 111 accurate, 8 minor
+issue, 1 wrong (ES2015a-t0100, a meaning inversion), so `pin` passed at 1 of 120. The
+pin's `review` block records the counts and the sheet's sha256, not the reviewer, so
+this paragraph is the record of who reviewed. A Spanish-side effect in the gold set is
+therefore bounded by a model review, not a native speaker's.
+
 ### Translation GPU forecast
 
 **About 1.3 hours** (range 1.25 to 1.5) with `gemma4:26b-a4b` on this machine's Ollama,

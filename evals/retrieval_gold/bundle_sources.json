@@ -266,9 +266,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "ES2015a"
+   "bytes": 15456,
+   "sha256": "e5ee203c64f795d35e6f897b1c541b0e78aef68952d2b259be1503b0866f4719",
+   "translation_of": "ES2015a",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "ES2015b-es",
@@ -277,9 +291,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "ES2015b"
+   "bytes": 42824,
+   "sha256": "867d46983f3242947db65f42e2734fab8db28e2e15deebb20ce20b2e64873c91",
+   "translation_of": "ES2015b",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "ES2015c-es",
@@ -288,9 +316,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "ES2015c"
+   "bytes": 37469,
+   "sha256": "7543ff699db698601289259be03a46121d665a20cf67ff0424a55729d45f91a1",
+   "translation_of": "ES2015c",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "ES2015d-es",
@@ -299,9 +341,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "ES2015d"
+   "bytes": 36352,
+   "sha256": "d79698be455f7d460eaaf4d7396369bcec69f9cc8345d64fca751815a1a9d8fe",
+   "translation_of": "ES2015d",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "IS1004a-es",
@@ -310,9 +366,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "IS1004a"
+   "bytes": 10009,
+   "sha256": "dc861e7c00f86963fb8f3def4db5ae809fd86317b01ad856285db2d98b92eb4f",
+   "translation_of": "IS1004a",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "IS1004b-es",
@@ -321,9 +391,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "IS1004b"
+   "bytes": 38200,
+   "sha256": "58d4fc72c24c965f748f34b0b472b41a12eed8f2366252e816a78545a35d9274",
+   "translation_of": "IS1004b",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "IS1004c-es",
@@ -332,9 +416,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "IS1004c"
+   "bytes": 40125,
+   "sha256": "2a2a58d64ddfb2b3a01d4c088bbed26a1797acb5371b4601ebd99a18ffd94f2d",
+   "translation_of": "IS1004c",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "IS1004d-es",
@@ -343,9 +441,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "IS1004d"
+   "bytes": 32833,
+   "sha256": "7138313b86ffaefec2aba6a8c81230156866e47f58e83619880a16bdc4d0f227",
+   "translation_of": "IS1004d",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "TS3009a-es",
@@ -354,9 +466,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "TS3009a"
+   "bytes": 26293,
+   "sha256": "fcafc3a0c5ad8dde48efc7fe5acf4421a0a27e17fb93fbd4de3c442689920c25",
+   "translation_of": "TS3009a",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "TS3009b-es",
@@ -365,9 +491,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "TS3009b"
+   "bytes": 47702,
+   "sha256": "d384cf141db5570328ff9716ec6fc1696cb4fc2283a918d96c062eabaf57ffe4",
+   "translation_of": "TS3009b",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "TS3009c-es",
@@ -376,9 +516,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "TS3009c"
+   "bytes": 44888,
+   "sha256": "f6cb64250b32d780f9974e550281b984135c0d53c8a76a926b78dc753e8d558e",
+   "translation_of": "TS3009c",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "TS3009d-es",
@@ -387,9 +541,23 @@
    "language": "es",
    "kind": "ami-translation",
    "tier": "core",
-   "bytes": 0,
-   "sha256": "pending-translation",
-   "translation_of": "TS3009d"
+   "bytes": 41005,
+   "sha256": "b22d3663ba4f0eb05c0ecf2bb6fc746ca08b698343e66bd8c860662756c21b61",
+   "translation_of": "TS3009d",
+   "translation": {
+    "model": {
+     "name": "gemma4:26b-a4b",
+     "digest": "001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c"
+    },
+    "prompt_sha256": "4045cfb3d8d181efc1bd37558ef7525d074563d4551c83c965bec2f81d1bd6e2",
+    "review": {
+     "pairs": 120,
+     "accurate": 111,
+     "minor_issue": 8,
+     "wrong": 1,
+     "sheet_sha256": "a2e3890e3d5621556f0fbad57792afca15080082d608e83323e220e7f1b29cf6"
+    }
+   }
   },
   {
    "id": "large-03-skills-vs-tools",
