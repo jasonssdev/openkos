@@ -1,13 +1,12 @@
-# Pre-registration (DRAFT): can the selector judge's cut be removed, keeping only the positional backstop? (#1579, step 5)
+# Pre-registration: can the selector judge's cut be removed, keeping only the positional backstop? (#1579, step 5)
 
-**Status: Draft — not registered until merged; no run before merge.** It
-becomes a registration only when this file merges to `main`. A change after
-the merge is a new registration, not an edit. Items marked **OWNER: confirm**
-carry a recommended default; the owner confirms or changes them before the
-merge, and the merged value is the registered one. Part of #1556; refs #1579.
+**Status: Registered when this file merges to `main`; no run before the merge.**
+A change after the merge is a new registration, not an edit. The owner confirmed
+every item that was marked for confirmation on 2026-10-27, unchanged from the
+recommended defaults (summary at the end). Part of #1556; refs #1579.
 
 This file changes nothing in `src/`, no default and no spec. No model runs
-while it is a draft.
+before the merge.
 
 ## Question
 
@@ -114,7 +113,7 @@ Share of windowed objects `gpt-oss:20b` labelled strict-G1 `supported`
 window. The restored objects are exactly the cut objects minus the positional
 cuts, so the difference equals `w * (P_restored - P_kept)` where `w` is the
 restored share of the backstop-only set (about 0.43, estimate).
-**Margin: -0.05 (lower one-sided 95% bound above it). OWNER: confirm; default
+**Margin: -0.05 (lower one-sided 95% bound above it). Owner-confirmed:
 -0.05.**
 
 Justification: step 1 found restored-type objects as supported as kept ones
@@ -133,7 +132,7 @@ they are removed from both sides, and the count is reported as `k of N`.
 - **Clutter share** (step 3 labels: `merge` or `drop`), `backstop-only` minus
   judge, per arm. Expected interval upper bound about 0.08 (self) and 0.06
   (fixed) from `w * D_upper`, so it may not clear a tight margin.
-  **OWNER: confirm; default NON-gating, reported with the control's weakness
+  **Owner-confirmed: NON-gating, reported with the control's weakness
   (the step 3 control passed only at the bar, 8 of 11).** If the owner makes it
   gating, the recommended margin is +0.05 on the increase, and an
   INCONCLUSIVE verdict becomes the likely outcome.
@@ -144,10 +143,10 @@ they are removed from both sides, and the count is reported as `k of N`.
 ### C1, cost budget (deterministic counts, `downstream_cost.py` logic)
 
 Same stages and groupings as `DOWNSTREAM_COST.md`, ratio `backstop-only /
-judge-kept`, arms `self` and `fixed`. Budget, **OWNER: confirm, defaults
+judge-kept`, arms `self` and `fixed`. Budget, **owner-confirmed,
 below**:
 
-| Count | Measured (`self` / `fixed`) | Budget (default) |
+| Count | Measured (`self` / `fixed`) | Budget (registered) |
 |---|---|---|
 | Objects, per source set | 329 vs 214 (1.54) / 209 (1.57) | at most **1.65x** |
 | Reindex embedding calls | same as objects | at most **1.65x** |
@@ -287,7 +286,9 @@ A new `evals/concept_model_screen/backstop_only.py` with a model-free
 
 ## Owner confirmations (summary)
 
-| # | Item | Recommended default |
+Confirmed by the owner on 2026-10-27, all at the recommended default.
+
+| # | Item | Registered value |
 |---|---|---|
 | 1 | P1 lift margin | -0.005 |
 | 2 | P2 precision margin | -0.05 |
