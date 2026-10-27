@@ -26,3 +26,9 @@ seen would be a new registration, per the rule.
 | Project | Remote Control Design Project Retrospective | CONTESTED | Describes a review of project execution without naming an item; restates the title. |
 
 Counts: CONTAINER 10, SUBJECT 1, CONTESTED 5 (16 objects).
+
+## Owner review
+
+The owner accepted this table as-is on 2026-10-27, without re-classifying any row.
+The second registration's verdict (INCONCLUSIVE, `RESULTS-2.md`) therefore stands on
+these classes; any change would be a new registration under the rule above.
