@@ -57,10 +57,11 @@ def test_pypi_publishing_is_unchanged() -> None:
     assert any(s.get("run") == "uv publish --trusted-publishing always" for s in steps)
 
 
-def test_the_desktop_job_restores_no_cache() -> None:
-    # It holds `contents: write` and builds the binary users download, so no
-    # step may restore state another ref wrote (cache poisoning).
-    steps = _workflow()["jobs"]["desktop-release"]["steps"]
+def test_no_release_job_restores_a_cache() -> None:
+    # Every job here either mints the PyPI token or holds `contents: write`
+    # and builds what users download, so no step may restore state another
+    # ref wrote (cache poisoning).
+    steps = [s for job in _workflow()["jobs"].values() for s in job["steps"]]
     for step in steps:
         uses = str(step.get("uses", ""))
         with_ = step.get("with", {}) or {}

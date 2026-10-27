@@ -51,7 +51,9 @@ jobs:
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           python-version: "3.14"
-          enable-cache: true
+          # No cache: this job mints the PyPI publishing token, so nothing
+          # restored from a cache another ref wrote may reach the build.
+          enable-cache: false
 
       # Guard against a tag/version mismatch before anything is built or
       # uploaded: a tag `v0.2.0` cut while pyproject still says `0.1.0` would
