@@ -1,7 +1,8 @@
 # Pre-registration (DRAFT): the decision-revisions model screen (#1563)
 
-**Status: DRAFT. NOT REGISTERED. Blocked on the repository owner's blind
-adjudication of the labels.** Nothing below binds until a final version of this
+**Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third
+adjudication"); still blocked on the owner's questions, the stored-run re-score and
+Stage 0.** Nothing below binds until a final version of this
 file, with the numbers marked `TO RECOMPUTE` replaced, is merged to `main` before
 any scored model call (#1556: pre-register, and merge the pre-registration, before
 any run). No model has been called in preparing this draft; every number in it was
@@ -12,15 +13,17 @@ task key. Part of #1556; refs #1563, #1557.
 
 ## Before this can be registered
 
-1. **The owner labels the 58 pairs blind** with the sheet from
-   `run_revisions_screen.py blind-sheet`, and `adjudicate` compares it with the
-   drafter's labels. Every disagreement that scores differently is resolved by the
-   owner and recorded in `adjudication.json` (`first`, `second`, `resolved`,
-   `reason`); `ADJUDICATION.md` is then written, as the volatility screen's was.
-   The five pairs the stored `qwen3:8b` run never gets right (`r14`, `r27`, `r30`,
-   `r43`, `r53`) are where a label error would show first.
-2. **The floors, the J table and the class balance are recomputed** from the
-   resolved labels (`forecast`; the values below are the drafter's).
+1. **Done, with two deviations (below).** The 58 pairs were labelled blind a second
+   time with the sheet from `run_revisions_screen.py blind-sheet`, by a Claude model
+   rather than the owner, and the 3 disagreements (all of which score differently)
+   were resolved by a third model (Claude Opus) on the owner's delegation, recorded in
+   [`adjudication.json`](adjudication.json) (`first`, `second`, `resolved`, `reason`) and
+   listed in [`ADJUDICATION.md`](ADJUDICATION.md).
+2. **Done for the floors and the class balance** (`forecast`, below). Still `TO
+   RECOMPUTE`: the J tolerance statement (`--self-test` pins on the adjudicated labels
+   that four wins clear J and three do not) and every number derived from the stored
+   `qwen3:8b` rows (the 0.893 / 0.887 / 0.882 scores, the 7-item headroom and the
+   paired-gain replay), which were not re-scored here.
 3. **The questions in "Decisions the owner owes" are answered**, because each changes
    what the screen means.
 4. **Stage 0** (below) replaces the assumed latencies. It was not run for this
@@ -44,13 +47,23 @@ All three score differently, all are pairs the drafter flagged contested, and al
 the five never-right stored-run items: `r14` (first `reverses`, Claude `unrelated`), `r43`
 (first `refines`, Claude `reaffirms`) and `r53` (first `unrelated`, Claude `reaffirms`).
 
-**What this does not do.** It resolves nothing: no `adjudication` record, no `resolved`
-label, no change to any registered margin or decision rule. The floors, the class balance
-and the J table below are still the first author's and still need recomputing after the
-owner resolves the disagreements. Labels were not the only missing piece, so this draft
-stays a draft.
+**What this did not do.** It resolved nothing; the third adjudication below did.
 
-## What the labels are, until the adjudication is recorded (read before any number)
+## Third adjudication: recorded, with a deviation (read first)
+
+**Deviation: the disagreements were adjudicated by a third model (Claude Opus) on the
+owner's delegation, blind to annotator identity**, not by the owner. For each pair the
+adjudicator read only the two Decisions as the sheet shows them (titles, bodies, dates and
+order), the production judge prompt verbatim and the two candidate verdicts in sorted
+order, without knowing which annotator gave which and without reading the drafter's notes,
+any stored model run, result or score; its verdicts were written down before the sources
+were revealed. `r14` resolved to the drafter's `reverses` (the later Decision "moves" the
+Wednesday-morning session); `r43` and `r53` resolved to the second label, `reaffirms`
+(`r43` says no change was proposed; `r53` restates the same date and place). Records are in
+`adjudication.json`. No registered margin or decision rule changed. The owner may override
+any resolution at registration.
+
+## What the labels are (read before any number)
 
 **One author's, with one review of the doubtful quarter.** The drafter labelled all
 58 pairs and flagged 16 as contested; the owner accepted all 16 as proposed on
@@ -60,21 +73,24 @@ disagreements and moved that floor from 0.778 to 0.481; the hazard here is the
 drafter's own reading of the prompt's four definitions, and 4 of the 5 items the
 stored `qwen3:8b` run never gets right are contested ones.
 
-**The floors (the drafter's labels, strict).**
+**The floors (the adjudicated labels, strict; `forecast`).** The drafter's values are in
+brackets. Class balance: REVERSES 14, REFINES 13, REAFFIRMS 8, UNRELATED 23 (the drafter's:
+14, 14, 6, 24).
 
 | floor | value |
 | --- | --- |
-| `lexical overlap (oracle cut)` | **35 / 58 = 0.603** (the reference for rule J; fitted to the labels, so optimistic) |
-| `always unrelated` | 24 / 58 = 0.414 (also the commonest label) |
-| `always refines` | 17 / 58 = 0.293 |
+| `lexical overlap (oracle cut)` | **34 / 58 = 0.586** (the reference for rule J; fitted to the labels, so optimistic) [35 / 58 = 0.603] |
+| `always unrelated` | 23 / 58 = 0.397 (also the commonest label) [24 / 58 = 0.414] |
+| `always refines` | 16 / 58 = 0.276 [17 / 58 = 0.293] |
 | `always reverses` | 16 / 58 = 0.276 |
-| `always reaffirms` | 6 / 58 = 0.103 |
-| items wrong for the reference | 23 / 58 |
-| items wrong for both `always unrelated` and the lexical cut | 19 / 58 |
-| stored `qwen3:8b`, current judge prompt, three 15-run runs | 0.893, 0.887, 0.882 (not a floor: a measurement of the baseline model on the same labels) |
+| `always reaffirms` | 8 / 58 = 0.138 [6 / 58 = 0.103] |
+| items wrong for the reference | 24 / 58 [23 / 58] |
+| items wrong for both `always unrelated` and the lexical cut | 21 / 58 [19 / 58] |
+| stored `qwen3:8b`, current judge prompt, three 15-run runs | 0.893, 0.887, 0.882 (not a floor: a measurement of the baseline model on the drafter's labels; `TO RECOMPUTE` on the adjudicated ones) |
 
-**What the J bar is, and why it will not decide.** The reference is wrong on 23
-items. With the harness's own bootstrap (10,000 resamples, seed 42, the edge-typing
+**What the J bar is, and why it will not decide.** The reference is wrong on 24
+items (23 on the drafter's labels; the stored-run figures in this paragraph are the
+drafter's and `TO RECOMPUTE`). With the harness's own bootstrap (10,000 resamples, seed 42, the edge-typing
 screen's), a model that matches the reference everywhere it is right and wins *k* of
 the 23 clears J with no loss from *k* = 4; the `--self-test` pins win 4 clears and
 win 3 does not. **The stored `qwen3:8b` run already scores about 0.88, so every

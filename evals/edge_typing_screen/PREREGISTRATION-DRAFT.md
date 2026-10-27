@@ -1,7 +1,7 @@
 # Pre-registration (DRAFT): the edge-typing model screen (#1563)
 
-**Status: DRAFT. NOT REGISTERED. Blocked on the repository owner's blind
-adjudication of the labels.** Nothing below binds until a final version of this
+**Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third
+adjudication"); still blocked on the owner's questions and Stage 0.** Nothing below binds until a final version of this
 file, with the numbers marked `TO RECOMPUTE` replaced, is merged to `main` before
 any scored model call (#1556: pre-register, and merge the pre-registration, before
 any run). No model has been called in preparing this draft; every number in it was
@@ -11,14 +11,17 @@ prompt or task key. Part of #1556; refs #1563, #1557.
 
 ## Before this can be registered
 
-1. **The owner labels the 49 items blind** with the sheet from
-   `run_edge_typing_screen.py blind-sheet` and `adjudicate` compares it with the
-   first author's labels. Every disagreement is resolved by the owner and recorded
-   in `fixture.json` as the volatility fixture records it (`adjudication` with
-   `first`, `second`, `resolved`, `reason`; the first label stays as `alt_label`).
-   `ADJUDICATION.md` is then written, as the volatility screen's was.
-2. **The floors, the J table and the class balance are recomputed** from the
-   resolved labels (`forecast`; the values below are the first author's).
+1. **Done, with two deviations (below).** The 49 items were labelled blind a second
+   time with the sheet from `run_edge_typing_screen.py blind-sheet`, by a Claude model
+   rather than the owner, and the 11 disagreements were resolved by a third model
+   (Claude Opus) on the owner's delegation, recorded in `fixture.json` as the
+   volatility fixture records them (`adjudication` with `first`, `second`, `resolved`,
+   `reason`; the losing label stays as `alt_label`), and listed in
+   [`ADJUDICATION.md`](ADJUDICATION.md).
+2. **Done for the floors and the class balance** (`forecast`, below). The J
+   tolerance table is still the first author's: no model-free command prints it,
+   so it is `TO RECOMPUTE` at registration; `--self-test` pins on the resolved
+   labels that four wins and no loss clear J and three do not.
 3. **The three questions in "Decisions the owner owes" are answered**, because
    each changes what the screen means.
 4. **Stage 0** (below) replaces the assumed latencies and records the model
@@ -45,33 +48,52 @@ reversed probes `e21`, `e22`, `e23`, `e27`, `e29` (first `references`, Claude
 answered `references`. The `references`-versus-`related_to` boundary, the hazard this draft
 names, is where the two labellers split.
 
-**What this does not do.** It resolves nothing: no `adjudication` record, no `resolved`
-label, no change to any registered margin or decision rule. The floors, the class balance
-and the J table below are still the first author's and still need recomputing after the
-owner resolves the disagreements. Labels were not the only missing piece, so this draft
-stays a draft.
+**What this did not do.** It resolved nothing; the third adjudication below did.
 
-## What the labels are, until the adjudication is recorded (read before any number)
+## Third adjudication: recorded, with a deviation (read first)
 
-**One author's.** The first author labelled all 49 items by the production prompt's
+**Deviation: the disagreements were adjudicated by a third model (Claude Opus) on the
+owner's delegation, blind to annotator identity**, not by the owner. For each of the 11
+items the adjudicator read only the two documents, the production rule verbatim and the
+two candidate labels in sorted order, without knowing which annotator gave which and
+without reading either annotator's notes or reasoning, any stored model run, result or
+score; its verdicts were written down before the sources were revealed. Each resolution
+is the item's `adjudication` record in `fixture.json` (`first`, `second`, `resolved`,
+`reason`), and [`ADJUDICATION.md`](ADJUDICATION.md) lists them. 8 resolved to the first
+author's label (`e21`, `e22`, `e23`, `e27`, `e29`: `references`; `r01`, `r03`:
+`depends_on`; `r04`: `caused_by`), 3 to the second (`g01`, `g02`: `references`; `r02`:
+`references`). The losing label stays as `alt_label`, so lenient scoring still accepts
+it. No registered margin or decision rule changed. The owner may override any resolution
+at registration.
+
+## What the labels are (read before any number)
+
+**Adjudicated, one author's first.** The first author labelled all 49 items by the production prompt's
 own rule and flagged an alternative on 27. The volatility screen's second
 adjudication found its first author had anchored on the registry default in all
 eight disagreements and moved that floor from 0.778 to 0.481; the equivalent hazard
 here is `references`, the rubric-literal answer to any explicit link, which is the
 label of 21 items (12 of them the good-life links) and the strongest baseline.
 
-**The floors (the first author's labels).**
+**The floors (the resolved labels; `forecast`).** The first author's values are in
+brackets.
 
 | floor | value |
 | --- | --- |
-| `always references`, strict | **21 / 49 = 0.429** (the reference for rule J) |
-| `type signature`, strict | 12 / 49 = 0.245 |
-| `always related_to`, strict | 9 / 49 = 0.184 |
-| commonest label, strict | 21 / 49 = 0.429 (the same predictor) |
-| lenient, in that order | 27 / 49, 29 / 49, 26 / 49 (uninformative: 27 items carry an alternative) |
-| items right under no baseline | 16 / 49 (12 constructed, 4 ADR) |
+| `always references`, strict | **24 / 49 = 0.490** (the reference for rule J) [21 / 49 = 0.429] |
+| `type signature`, strict | 10 / 49 = 0.204 [12 / 49 = 0.245] |
+| `always related_to`, strict | 7 / 49 = 0.143 [9 / 49 = 0.184] |
+| commonest label, strict | 24 / 49 = 0.490 (the same predictor) [21 / 49] |
+| lenient, in that order | 27 / 49, 29 / 49, 26 / 49 (unchanged; uninformative: 27 items carry an alternative) |
+| items right under no baseline | 15 / 49 [16 / 49] |
 
-**What the J bar is.** The reference predictor is wrong on 28 items. With the
+Class balance (resolved): `caused_by` 3, `depends_on` 4, `member_of` 4, `part_of` 3,
+`produced_by` 4, `references` 24, `related_to` 7 (first author's: `depends_on` 5,
+`references` 21, `related_to` 9).
+
+**What the J bar is.** The reference predictor is wrong on 25 items (28 on the first
+author's labels). The tolerance table below was computed on the first author's labels and
+is `TO RECOMPUTE`. With the
 harness's own bootstrap (10,000 resamples, seed 42), a model that matches
 `always references` everywhere it is right and wins *k* of the 28 clears J with at
 most this many losses elsewhere: win 4 lose 0, win 8 lose 1, win 10 lose 2, win 12

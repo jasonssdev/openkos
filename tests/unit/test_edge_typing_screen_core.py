@@ -251,6 +251,36 @@ def test_the_adjudication_record_must_resolve_to_the_label(tmp_path: Path) -> No
         )
 
 
+def test_an_adjudication_may_resolve_to_the_first_label(tmp_path: Path) -> None:
+    """An adjudicator who sides with the first author keeps `label`; the
+    losing second label is what stays flagged as the alternative."""
+    record = {
+        "first": "references",
+        "second": "related_to",
+        "resolved": "references",
+        "reason": "r",
+    }
+    kept = _raw(
+        label="references",
+        adjudication=record,
+        alt_label="related_to",
+        ambiguous=True,
+    )
+    item = core.load_fixture(_fixture(tmp_path, [kept]))[0]
+    assert (item.label, item.first_label, item.alt_label) == (
+        "references",
+        "references",
+        "related_to",
+    )
+    with pytest.raises(ValueError, match="second label must stay as alt_label"):
+        core.load_fixture(
+            _fixture(
+                tmp_path,
+                [{**kept, "alt_label": "depends_on"}],
+            )
+        )
+
+
 def test_the_shipped_fixture_loads_and_covers_every_type() -> None:
     items = core.load_fixture()
     balance = core.class_balance(items)

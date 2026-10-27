@@ -2,8 +2,8 @@
 
 A measurement harness for the decision-revision judge's task key. **It has not been
 run, and it is not registered:** [`PREREGISTRATION-DRAFT.md`](PREREGISTRATION-DRAFT.md)
-is a draft blocked on the repository owner's blind adjudication of the labels (see
-"Second adjudication"). No model has been called. Part of #1556; refs #1563.
+is a draft; its labels are adjudicated (see "Second adjudication") and it is blocked
+on the owner's open questions and Stage 0. No model has been called. Part of #1556; refs #1563.
 
 It does not duplicate [`evals/decision_revisions/`](../decision_revisions/README.md).
 That harness gated #1014's Phase B and tuned the judge prompt against its fixture,
@@ -95,24 +95,25 @@ adjudication and carries no measured agreement; the volatility screen's second
 adjudication found its first author had anchored on the production default in all
 eight disagreements, and no number here can rule out the equivalent hazard.
 
-**Balance** (the drafter's labels): REVERSES 14, REFINES 14, REAFFIRMS 6, UNRELATED
-24. By split: `original` 46 (11, 8, 5, 22) and `confirmation` 12 (3, 6, 1, 2). 49
+**Balance** (adjudicated labels, `forecast`): REVERSES 14, REFINES 13, REAFFIRMS 8,
+UNRELATED 23 (the drafter's: REFINES 14, REAFFIRMS 6, UNRELATED 24). The breakdowns
+that follow are the drafter's labels. By split: `original` 46 (11, 8, 5, 22) and `confirmation` 12 (3, 6, 1, 2). 49
 pairs are directed and 9 undirected (3 REVERSES, 2 REFINES, 4 UNRELATED). The 16
 contested pairs are 6 REVERSES, 8 REFINES, 2 UNRELATED, all `original`. Hard-case
 tags: 11 same-subject-unrelated, 9 shared-cue-unrelated, 7
 partial-refine-reads-as-reversal, 5 reversal-reads-as-refine, 5
 reaffirm-different-words, and smaller groups.
 
-**Baselines, strict, k of 58** (`forecast` recomputes them; they move if an
-adjudication changes a label):
+**Baselines, strict, k of 58, adjudicated labels** (`forecast` recomputes them; the
+drafter's labels gave 24, 17, 16, 6 and 35):
 
 | baseline | what it answers | k / 58 |
 | --- | --- | --- |
-| `always unrelated` | the commonest label | **24** (0.414) |
-| `always refines` | `refines` for every pair | 17 (0.293) |
+| `always unrelated` | the commonest label | **23** (0.397) |
+| `always refines` | `refines` for every pair | 16 (0.276) |
 | `always reverses` | `reverses` for every pair | 16 (0.276) |
-| `always reaffirms` | `reaffirms` for every pair | 6 (0.103) |
-| `lexical overlap (oracle cut)` | one word-overlap cut, below it `unrelated`, at or above it `refines`, chosen to maximise accuracy **on these labels** | **35** (0.603) |
+| `always reaffirms` | `reaffirms` for every pair | 8 (0.138) |
+| `lexical overlap (oracle cut)` | one word-overlap cut, below it `unrelated`, at or above it `refines`, chosen to maximise accuracy **on these labels** | **34** (0.586) |
 
 Production holds no deterministic opinion about a verdict (its direction rule orders
 a pair, its candidate stage needs an embedder), so there is no shipped heuristic to
@@ -121,12 +122,14 @@ and it is fitted to the answer key, an optimistic ceiling for any word-overlap
 heuristic, not something that ships. It is the reference of rule J.
 
 **Does the fixture discriminate?** Yes, against the baselines: the reference is
-wrong on **23 of 58** items and the two strongest baselines are both wrong on 19.
+wrong on **24 of 58** items and the two strongest baselines are both wrong on 21 (23
+and 19 on the drafter's labels).
 (Four constant answers cover every label between them, so "right under no trivial
 predictor" is empty by construction; the measure that means something is the room
 left under the strongest one.) The sharper finding is on the other side.
 
-**The stored `qwen3:8b` run leaves little room above the baseline.** Scored by this
+**The stored `qwen3:8b` run leaves little room above the baseline.** On the drafter's
+labels (not re-scored after the adjudication, which moved `r43` and `r53`), scored by this
 screen's rule, the three stored 15-run `qwen3:8b` runs under the current judge prompt
 (`d8238af6410ac31d`, `evals/decision_revisions/results/runs-20260928T173355Z...`,
 `...204537Z...`, `...20260929T011322Z...`) score **0.893, 0.887 and 0.882**, against
@@ -160,14 +163,15 @@ pair renumbers the items (and the blind sheet's shuffle).
 
 ### What the fixture cannot show (read before any number)
 
-- **The labels are one author's** (above). Nothing here measures agreement until the
-  owner's blind adjudication is recorded.
+- **The labels are adjudicated, not the owner's.** A Claude model labelled the 58 pairs
+  blind (55 agree, kappa 0.927) and a third model resolved the 3 disagreements (see
+  "Second adjudication"); the owner reviewed only the drafter's 16 contested pairs.
 - **The prompt was tuned on it**, for `qwen3:8b`: the baseline model's score is
   optimistic for generalisation and any other model is, if anything, disadvantaged
   by a prompt it was not tuned with. A win for a candidate is therefore stronger
   evidence than a loss.
 - **Eight stored-run items carry all the headroom** (above); per-class recall is
-  thin (REAFFIRMS has 6 items) and a class recall rests on 18 calls at three seeds.
+  thin (REAFFIRMS has 8 items) and a class recall rests on 18 calls at three seeds.
 - **One domain, one voice, English only.** Short bodies; no non-English Decisions;
   no real compiled bundle. The ingest-produced Decision text a user's bundle holds is
   not covered, and `plan_revision_candidates` is not measured.
@@ -175,9 +179,12 @@ pair renumbers the items (and the blind sheet's shuffle).
 
 ## Second adjudication
 
-**A second set of labels is recorded, but not by the owner and not resolved.** The
-owner delegated the blind labelling and a Claude model filled the sheet (it read only the
-sheet). `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
+**A second set of labels is recorded, and its three disagreements are resolved, but
+neither by the owner.** The owner delegated the blind labelling and a Claude model filled
+the sheet (it read only the sheet). The owner then delegated the adjudication to a third
+model (Claude Opus), blind to which annotator gave which label; the resolutions are in
+[`adjudication.json`](adjudication.json) and listed in [`ADJUDICATION.md`](ADJUDICATION.md).
+A record may resolve to either label. `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
 those labels, keyed by fixture id, to [`second_labels.json`](second_labels.json); the
 filled sheet is not committed. Agreement is measured against that labeller, and no
 disagreement is resolved (see the pre-registration draft).
@@ -213,8 +220,8 @@ unknown or missing item is rejected and nothing is scored. It writes nothing:
 resolving each disagreement and recording it is a separate, human step. Each record
 goes into `adjudication.json` beside this file, keyed `idA|idB` (sorted), with
 `first`, `second`, `resolved` and `reason`; the loader checks `first` against the
-fixture and the first label stays recoverable as `strict (1st)`. The file does not
-exist yet, and the filled sheet is never committed.
+fixture and the first label stays recoverable as `strict (1st)`. The filled sheet is never
+committed.
 
 ## Usage
 

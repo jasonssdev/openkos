@@ -1,0 +1,20 @@
+{
+ "decisions/childrens-story-time|decisions/toddler-read-aloud-session": {
+  "first": "REVERSES",
+  "second": "UNRELATED",
+  "resolved": "REVERSES",
+  "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): 'moves to Thursday afternoons' presupposes the Wednesday-morning slot the earlier Decision set (the reason given is the Wednesday-morning nap), so the later overturns that choice."
+ },
+ "decisions/newsletter-schedule|decisions/volunteer-newsletter-frequency": {
+  "first": "REFINES",
+  "second": "REAFFIRMS",
+  "resolved": "REAFFIRMS",
+  "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): The later Decision says no change was proposed and the newsletter continues monthly, restating the same choice; the first Monday is described as continuing practice, not a new condition."
+ },
+ "decisions/spring-book-sale|decisions/spring-book-sale-date": {
+  "first": "UNRELATED",
+  "second": "REAFFIRMS",
+  "resolved": "REAFFIRMS",
+  "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): Both set the spring book sale for 25 April at the community hall; one restates the other's choice, and the doors-open time adds no condition to the choice."
+ }
+}

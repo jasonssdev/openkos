@@ -299,7 +299,7 @@ def render_report(
         "",
         "Labels: the drafter's, with the owner having accepted the contested ones"
         + (
-            f"; {adjudicated} item(s) resolved by a second adjudicator."
+            f"; {adjudicated} disagreement(s) adjudicated."
             if adjudicated
             else "; NO second adjudication is recorded yet. Read every number as a"
             " measurement against one author's labels."
@@ -465,7 +465,7 @@ def _self_test() -> int:
         "the registered size and class balance: 58 pairs, 4 verdicts",
         len(items) == 58
         and core.class_balance(items)
-        == {"REVERSES": 14, "REFINES": 14, "REAFFIRMS": 6, "UNRELATED": 24},
+        == {"REVERSES": 14, "REFINES": 13, "REAFFIRMS": 8, "UNRELATED": 23},
     )
     check(
         "the registered splits: 46 original, 12 confirmation; 9 undirected; 16 contested",
@@ -584,10 +584,10 @@ def _self_test() -> int:
 
     # The registered floors.
     check(
-        "the baselines are 24, 16, 17, 6 and 35 of 58 strict; the commonest label is 24 of 58",
+        "the baselines are 23, 16, 16, 8 and 34 of 58 strict; the commonest label is 23 of 58",
         [round(table[n]["strict_accuracy"] * 58) for n in core.BASELINE_NAMES]
-        == [24, 16, 17, 6, 35]
-        and core.majority_baseline(items) == 24 / 58,
+        == [23, 16, 16, 8, 34]
+        and core.majority_baseline(items) == 23 / 58,
     )
     check(
         "the reference for rule J is the lexical cut, the strongest",
@@ -596,8 +596,8 @@ def _self_test() -> int:
     ref_scores = core.reference_baseline(items)[1]["per_item_strict"]
     wrong = [k for k, v in ref_scores.items() if v == 0.0]
     check(
-        "23 items are wrong for the reference, so the fixture leaves room to win",
-        len(wrong) == 23,
+        "24 items are wrong for the reference, so the fixture leaves room to win",
+        len(wrong) == 24,
     )
 
     def clears(wins: int) -> bool:
@@ -697,7 +697,13 @@ def _self_test() -> int:
     check("the report applies the selection rule", "SELECTED" in report)
     check(
         "the report says whose labels it scores against",
-        "NO second adjudication is recorded yet" in report,
+        (
+            f"{sum(i.adjudication is not None for i in items)} disagreement(s)"
+            " adjudicated"
+            if any(i.adjudication is not None for i in items)
+            else "NO second adjudication is recorded yet"
+        )
+        in report,
     )
     text = render_forecast(
         items, models=[BASELINE], runs=3, latencies=ASSUMED_MEDIAN_LATENCY_S
@@ -705,9 +711,9 @@ def _self_test() -> int:
     check("the forecast names the call count", f"total calls: {len(items) * 3}" in text)
     check(
         "the forecast prints the baselines, the reference and the room to win without a model",
-        "always unrelated: 0.414 (24 of 58)" in text
+        "always unrelated: 0.397 (23 of 58)" in text
         and f"reference baseline (rule J): {lexical_name}" in text
-        and "items wrong for the reference (room for a model to win): 23 of 58" in text,
+        and "items wrong for the reference (room for a model to win): 24 of 58" in text,
     )
     check("the forecast says its latencies are assumed", "assumed" in text)
     check(
@@ -889,6 +895,23 @@ def _self_test() -> int:
         and agree.agreed == len(items)
         and agree.kappa == 1.0
         and agree.disagreements == [],
+    )
+    recorded = adj.adjudicate(
+        items,
+        adj.parse_sheet(
+            fill(
+                lambda i: core.WIRE[
+                    i.adjudication["second"] if i.adjudication else i.label
+                ]
+            )
+        ),
+    )
+    check(
+        "the recorded second labels reproduce 55 of 58, kappa 0.927, 3 disagreements",
+        recorded.agreed == 55
+        and len(recorded.disagreements) == 3
+        and recorded.kappa is not None
+        and abs(recorded.kappa - 0.927) < 5e-4,
     )
     rotate = {
         lab: core.WIRE[core.LABELS[(n + 1) % len(core.LABELS)]]

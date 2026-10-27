@@ -1,7 +1,7 @@
 # Pre-registration (DRAFT): the merged-body reconciliation model screen (#1563)
 
-**Status: DRAFT. NOT REGISTERED. Blocked on the repository owner's blind labelling of
-the claims.** Nothing below binds until a final version of this file, with the numbers
+**Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third adjudication");
+still blocked on the owner's questions and Stage 0.** Nothing below binds until a final version of this file, with the numbers
 marked `TO RECOMPUTE` replaced, is merged to `main` before any scored model call
 (#1556: pre-register, and merge the pre-registration, before any run). No model has been
 called in preparing this draft; every number in it was computed by
@@ -11,15 +11,18 @@ refs #1563, #1557.
 
 ## Before this can be registered
 
-1. **The owner labels the 121 claims blind** with the sheet from `run_reconcile_screen.py
-   blind-sheet`, and `adjudicate` compares it with the first author's labels. Every
-   disagreement is resolved by the owner and recorded in `fixture.json` as the volatility
-   fixture records it (`adjudication` with `first`, `second`, `resolved`, `reason`; the first
-   label stays as `alt_label`). A claim that moves between one-sided and shared needs a
-   `once` literal that occurs exactly once in each note, or is retired with a reason.
-   `ADJUDICATION.md` is then written, as the volatility screen's was.
-2. **The floors, the J bar and the class balance are recomputed** from the resolved labels
-   (`forecast`; the values below are the first author's).
+1. **Done, with two deviations (below).** The 121 claims were labelled blind a second
+   time with the sheet from `run_reconcile_screen.py blind-sheet`, by a Claude model rather
+   than the owner, and the 2 disagreements were resolved by a third model (Claude Opus) on
+   the owner's delegation, recorded in `fixture.json` (`adjudication` with `first`,
+   `second`, `resolved`, `reason`; the first label stays as `alt_label`), each re-anchored
+   with literals that pass `integrity_problems` (none retired), and listed in
+   [`ADJUDICATION.md`](ADJUDICATION.md).
+2. **Done for the floors and the class balance** (`forecast`, below). The J bar's
+   constant-gain lower bounds are still the first author's: no model-free command prints
+   them, so they are `TO RECOMPUTE` at registration; the unit test
+   `test_the_j_bar_on_the_real_reference_is_pinned` still pins, on the adjudicated labels,
+   that four outright wins clear J and three do not.
 3. **The questions in "Decisions the owner owes" are answered**, because each changes what
    the screen means.
 4. **Stage 0** (below) replaces the assumed latencies and records the model digests
@@ -43,38 +46,53 @@ disagreements: `protocol-seams-04` (first `A`, Claude `AB`) and `stoicism-01` (f
 Claude `A`). Each moves a claim between one-sided and shared, so neither can be re-scored
 until it has a `once` literal (or is retired), per the README.
 
-**What this does not do.** It resolves nothing: no `adjudication` record, no `resolved`
-label, no change to any registered margin or decision rule. The floors, the class balance
-and the J table below are still the first author's and still need recomputing after the
-owner resolves the disagreements. Labels were not the only missing piece, so this draft
-stays a draft.
+**What this did not do.** It resolved nothing; the third adjudication below did.
 
-## What the labels are, until the blind labelling is recorded (read before any number)
+## Third adjudication: recorded, with a deviation (read first)
 
-**One author's.** The first author chose the claims and labelled which note states each,
-flagging 2 as arguable. The volatility screen's second adjudication found its first author
+**Deviation: the disagreements were adjudicated by a third model (Claude Opus) on the
+owner's delegation, blind to annotator identity**, not by the owner. For each claim the
+adjudicator read only the two notes, the sheet's rule and the two candidate labels in sorted
+order, without knowing which annotator gave which and without reading any annotator's
+notes, any stored model run, result or score; its verdicts were written down before the
+sources were revealed. Both resolved to the second label: `protocol-seams-04` is `both`
+(Note B's "The Protocol seams" states it) and `stoicism-01` is `a_only` (Note B touches the
+Enchiridion without saying the dichotomy comes from it). Each claim was re-anchored
+(`protocol-seams-04`: anchor and `once` `Protocol`; `stoicism-01`: anchor `*Enchiridion* 1`,
+no `once`), so both are scored and neither is retired. No registered margin or decision
+rule changed. The owner may override either resolution at registration.
+
+## What the labels are (read before any number)
+
+**Adjudicated, one author's first.** The first author chose the claims and labelled which
+note states each, flagging 2 as arguable; the two adjudicated claims are flagged too (4). The volatility screen's second adjudication found its first author
 had anchored on the registry default and moved that floor from 0.778 to 0.481. The
 equivalent hazard here is **over-calling `both`**: a claim the first author reads as stated
 in both notes is one the model must state exactly once, and a reader who sees only one note
 stating it turns it into a one-sided claim and removes the dedupe test from it. Of the 33
 `both` claims, 2 are flagged; the rest are shared facts with a literal both notes carry.
 
-**The floors (the first author's labels, strict, no model).**
+**The floors (the adjudicated labels, strict, no model; `forecast`).** The first author's
+labels gave `sentence_union` 93 / 0.770, `stack` 0.729, `longer_only` 0.672 and
+`absorbed_only` 0.654.
 
 | baseline | claims kept | mean case score |
 | --- | --- | --- |
-| `sentence_union` (the reference for J) | 93 / 121 | **0.770** |
-| `stack` (what production keeps on a refusal) | 88 / 121 | 0.729 |
-| `longer_only` | 81 / 121 | 0.672 |
-| `absorbed_only` | 79 / 121 | 0.654 |
+| `sentence_union` (the reference for J) | 94 / 121 | **0.777** |
+| `stack` (what production keeps on a refusal) | 88 / 121 | 0.728 |
+| `longer_only` | 81 / 121 | 0.673 |
+| `absorbed_only` | 79 / 121 | 0.655 |
 | `survivor_only` | 75 / 121 | 0.617 |
 
-Class balance: 42 only in NOTE A, 46 only in NOTE B, 33 in both. The strongest baseline
-gets 28 claims wrong; 14 of 15 cases are merged perfectly by no baseline; no claim is wrong
+Class balance: 42 only in NOTE A, 46 only in NOTE B, 33 in both (unchanged: the two
+adjudicated claims swap sides). The strongest baseline gets 27 claims wrong (28 on the
+first author's labels); 13 of 15 cases are merged perfectly by no baseline (14); no claim is wrong
 under every baseline (0), because each kind is kept by one trivial predictor.
 
-**What the J bar is.** The reference is wrong in 28 claims and scores below 1.0 in 14
-cases. With the harness's own bootstrap over cases (10,000 resamples, seed 42):
+**What the J bar is.** The reference is wrong in 27 claims and scores below 1.0 in 13
+cases (28 and 14 on the first author's labels). With the harness's own bootstrap over
+cases (10,000 resamples, seed 42), on the first author's labels (`TO RECOMPUTE` except
+where pinned):
 
 - a model that matches the reference on every case and is better by a constant **+0.05**
   on every case clears J (95% lower bound 0.04); +0.10 gives 0.08;
@@ -212,8 +230,8 @@ uv run python evals/reconcile_screen/run_reconcile_screen.py score
    carry a veto. Recommended: pooled decides, the two strata are reported, no stratum rule.
 4. **Is `sentence_union` the right reference, rather than the stack?** The stack is what ships
    on a refusal, but a no-model union is what one would build instead of calling a model.
-   Recommended: the strongest baseline, which is the harder bar and the honest one (0.770
-   against 0.729).
+   Recommended: the strongest baseline, which is the harder bar and the honest one (0.777
+   against 0.728 on the adjudicated labels).
 5. **Should `gemma2:27b` be a candidate?** It is installed and the only model recommended for
    another task on this list. Recommended: yes, as listed; it has an 8k context window, which
    these notes (at most about 1,400 characters each) fit well inside.

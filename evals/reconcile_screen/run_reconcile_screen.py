@@ -223,7 +223,7 @@ def render_forecast(
         f"total Ollama wall-clock: {plan['total_seconds'] / 3600:.2f} h "
         "(latencies assumed, not measured for this task)",
         "",
-        "model-free baselines on this fixture (strict, first author's labels):",
+        "model-free baselines on this fixture (strict, resolved labels):",
     ]
     for name, row in summary["baselines"].items():
         lines.append(
@@ -706,6 +706,21 @@ def _self_test() -> int:
     check(
         "adjudicate: a sheet that agrees everywhere has kappa 1 and no disagreement",
         agreed.kappa == 1.0 and not agreed.disagreements and not agreed.problems,
+    )
+    recorded = adj.adjudicate(
+        cases,
+        adj.parse_sheet(
+            fill(
+                lambda c: token[c.adjudication["second"] if c.adjudication else c.kind]
+            )
+        ),
+    )
+    check(
+        "adjudicate: the recorded second labels reproduce 119 of 121, kappa 0.975",
+        recorded.agreed == 119
+        and len(recorded.disagreements) == 2
+        and recorded.kappa is not None
+        and abs(recorded.kappa - 0.975) < 5e-4,
     )
     victim = cases[0].claims[0]
     flipped = adj.adjudicate(

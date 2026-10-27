@@ -224,8 +224,8 @@ def load_items(adjudication_path: pathlib.Path = ADJUDICATION_PATH) -> list[Item
                     f"{ids}: adjudication `first` {record['first']!r} is not the "
                     f"fixture's label {label!r}"
                 )
-            if record["resolved"] not in LABELS or record["resolved"] == label:
-                raise ValueError(f"{ids}: adjudication must resolve to another label")
+            if record["resolved"] not in LABELS:
+                raise ValueError(f"{ids}: adjudication must resolve to a label")
             label = record["resolved"]
         a, b = decisions[ids[0]], decisions[ids[1]]
         directed = pair.expected_later_id is not None
