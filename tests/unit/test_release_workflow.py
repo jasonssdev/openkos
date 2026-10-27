@@ -55,3 +55,15 @@ def test_contents_write_is_confined_to_the_desktop_job() -> None:
 def test_pypi_publishing_is_unchanged() -> None:
     steps = _workflow()["jobs"]["release"]["steps"]
     assert any(s.get("run") == "uv publish --trusted-publishing always" for s in steps)
+
+
+def test_the_desktop_job_restores_no_cache() -> None:
+    # It holds `contents: write` and builds the binary users download, so no
+    # step may restore state another ref wrote (cache poisoning).
+    steps = _workflow()["jobs"]["desktop-release"]["steps"]
+    for step in steps:
+        uses = str(step.get("uses", ""))
+        with_ = step.get("with", {}) or {}
+        assert "cache" not in uses.split("@")[0], uses
+        assert with_.get("enable-cache") in (None, False), step
+        assert "cache" not in with_, step
