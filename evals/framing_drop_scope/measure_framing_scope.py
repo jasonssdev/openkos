@@ -78,11 +78,84 @@ ADJUDICATION: Final[dict[tuple[str, str], tuple[str, str]]] = {
         CONTAINER,
         "Describes the meeting itself, typed Project.",
     ),
+    ("Decision", "Meeting Environment Improvements"): (
+        CONTAINER,
+        "Proposed changes to the room, but none named; reads as a topic heading and as a decision about the space.",
+    ),
+    ("Decision", "Meeting Room Equipment Feedback"): (
+        CONTAINER,
+        "An assessment with only implicit decisions; no named decision, little more than the title.",
+    ),
+    ("Decision", "Next Meeting Date Schedule"): (
+        CONTAINER,
+        "Timeframe of the next gathering: schedule.",
+    ),
+    ("Decision", "Next Meeting Planning"): (
+        CONTAINER,
+        "Timing of the next meeting: schedule.",
+    ),
+    ("Decision", "Next Meeting Schedule"): (
+        CONTAINER,
+        "Timing of the next gathering: schedule.",
+    ),
+    ("Decision", "Next meeting schedule"): (
+        CONTAINER,
+        "Timing of the next gathering: schedule.",
+    ),
+    ("Decision", "Postponement of Meeting Due to Schedule Conflict"): (
+        CONTAINER,
+        "Ending the current session early because the room was booked: the gathering's own occurrence.",
+    ),
+    ("Decision", "Project retrospective on financial and material constraints"): (
+        SUBJECT,
+        "Names a specific outcome (designed a product without knowing cost viability) that stands without the meeting.",
+    ),
+    ("Decision", "Scheduling Next Meeting for First Monday of May"): (
+        CONTAINER,
+        "A date for the next meeting: schedule.",
+    ),
+    ("Decision", "Scheduling Strategy for Next Meeting"): (
+        CONTAINER,
+        "How to pick the next meeting date: schedule.",
+    ),
+    ("Decision", "Scheduling of the May meeting"): (
+        CONTAINER,
+        "Next club meeting in May: schedule.",
+    ),
+    ("Decision", "Selection of film for April screening and meeting details"): (
+        CONTAINER,
+        "Names a real decision (screen 'American Beauty') and also wraps logistics and the next meeting: meets both tests.",
+    ),
+    ("Entity", "Next meeting schedule"): (
+        CONTAINER,
+        "Attempt to schedule a follow-up and its conflicts: schedule.",
+    ),
+    ("Project", "Cost and Criteria Review Meeting"): (
+        CONTAINER,
+        "A review gathering, yet names cost assumptions and specifications it checked: meets both tests.",
+    ),
+    ("Project", "Movie Review Meeting"): (
+        CONTAINER,
+        "A scheduled gathering reviewing a list; describes the meeting itself.",
+    ),
+    ("Project", "Remote Control Design Project Retrospective"): (
+        CONTAINER,
+        "Describes a review of project execution without naming an item; restates the title.",
+    ),
 }
 """(type, title) -> (class, reason). Written after reading each object's
 description in its run; see the results note for the reading."""
 
-CONTESTED: Final = frozenset({("Decision", "Decisions Made in Previous Meeting")})
+CONTESTED: Final = frozenset(
+    {
+        ("Decision", "Decisions Made in Previous Meeting"),
+        ("Decision", "Meeting Environment Improvements"),
+        ("Decision", "Meeting Room Equipment Feedback"),
+        ("Decision", "Selection of film for April screening and meeting details"),
+        ("Project", "Cost and Criteria Review Meeting"),
+        ("Project", "Remote Control Design Project Retrospective"),
+    }
+)
 """Adjudicated objects whose class is a coin flip on their description. They
 count as a container under `CONTAINER` and as a subject under `SUBJECT`."""
 
@@ -532,6 +605,15 @@ def _t_contested_readings() -> None:
     _check(len(s["before"]["false_positives"]) == 1 and not s["opt1"]["leaks"], "s")
 
 
+def _t_registry_is_consistent() -> None:
+    """Every contested key is adjudicated, and only Event/Procedure-free types
+    are keyed (those two classes are fixed by definition)."""
+    _check(set(ADJUDICATION) >= CONTESTED, f"{CONTESTED - set(ADJUDICATION)}")
+    for (kind, _), (klass, _) in ADJUDICATION.items():
+        _check(kind not in ("Event", "Procedure"), kind)
+        _check(klass in READINGS, klass)
+
+
 def _t_population_split() -> None:
     old, new = _rec("ES2015a", []), _rec("IS1002b", [])
     stored, fresh = split_population([old, new, _rec("IB4011", [])])
@@ -620,6 +702,7 @@ def self_test() -> int:
         _t_unadjudicated_fails,
         _t_attrition_reading,
         _t_contested_readings,
+        _t_registry_is_consistent,
         _t_population_split,
         _t_verdict_adopt,
         _t_verdict_needs_a_new_fp,
