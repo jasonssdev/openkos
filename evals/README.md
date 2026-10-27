@@ -70,6 +70,7 @@ of a harness's own scoring code.
 - [`query_title`](query_title/README.md) — subject-named versus question-named titles for saved insights.
 - [`queue_outcomes`](queue_outcomes/README.md) — how much of the pending-work queue is applied as proposed, per kind (reader; no result yet).
 - [`quiet_engine`](quiet_engine/README.md) — The Quiet Engine arc's product metrics: decisions per source and time to a cited answer, v0.4.0 against main.
+- [`retrieval_gold`](retrieval_gold/README.md) — a model-free retrieval gold set harness: recall@k, MRR and nDCG per channel (lexical, dense, fused) over judged documents; draft questions, no judgments yet.
 - [`retrieval_stability`](retrieval_stability/README.md) — citation stability across near-identical questions.
 - [`runtime_screen`](runtime_screen/README.md) — Ollama vs llama.cpp vs MLX on Apple Silicon: speed, memory and swaps, then output equivalence through the #1560 and #1557 harnesses.
 - [`section_coverage`](section_coverage/README.md) — whether a per-section coverage signal can see a lost section.
