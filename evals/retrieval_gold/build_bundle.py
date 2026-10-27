@@ -240,11 +240,14 @@ def refuse_workspace(path: pathlib.Path) -> pathlib.Path:
     Refused: this repository, anything inside it, and anything inside any git
     work tree (a `.git` directory, or the `.git` file of a linked worktree).
     `ingest` auto-commits, so a nested workspace would commit into the outer
-    repository."""
+    repository. The workspace's own repository is allowed when the directory is
+    already an OpenKOS workspace (`openkos.yaml`): `init` creates it, and a run
+    resumes there after the pilot."""
     resolved = path.expanduser().resolve()
     if resolved == REPO_ROOT or REPO_ROOT in resolved.parents:
         raise BuildError(f"refusing {resolved}: it is inside the repository")
-    for ancestor in (resolved, *resolved.parents):
+    own = () if (resolved / "openkos.yaml").is_file() else (resolved,)
+    for ancestor in (*own, *resolved.parents):
         if (ancestor / ".git").exists():
             raise BuildError(
                 f"refusing {resolved}: it is inside the git work tree {ancestor}"
@@ -587,6 +590,24 @@ def _self_test_workspace(c: _Checks, tmp: pathlib.Path) -> None:
     ok = tmp / "outside" / "ws"
     c.check(
         refuse_workspace(ok) == ok.resolve(), "accepts a path outside every work tree"
+    )
+    resumed = tmp / "resumed" / "ws"
+    (resumed / ".git").mkdir(parents=True)
+    (resumed / "openkos.yaml").write_text("model: m\n", encoding="utf-8")
+    c.check(
+        refuse_workspace(resumed) == resumed.resolve(),
+        "accepts a workspace's own git repository, so a run resumes after init",
+    )
+    foreign = tmp / "foreign"
+    (foreign / ".git").mkdir(parents=True)
+    c.raises(
+        lambda: refuse_workspace(foreign),
+        "refuses a git repository that is not an OpenKOS workspace",
+    )
+    (resumed / "inner").mkdir()
+    c.raises(
+        lambda: refuse_workspace(resumed / "inner"),
+        "refuses a path inside a workspace's git repository",
     )
     link = tmp / "lnk"
     link.symlink_to(REPO_ROOT)
