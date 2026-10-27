@@ -492,6 +492,25 @@ def test_the_j_bar_on_the_real_reference_is_pinned() -> None:
     assert core.justified(core.paired_bootstrap(uniform, reference))
 
 
+def test_a_constant_gain_is_capped_at_a_perfect_case_score() -> None:
+    reference = {"a": 0.5, "b": 0.98, "c": 1.0}
+    bound = core.constant_gain_bound(reference, gain=0.05, resamples=200)
+    assert bound["point"] == pytest.approx((0.05 + 0.02 + 0.0) / 3)
+    assert bound["lo"] <= bound["point"] <= bound["hi"]
+
+
+def test_the_j_table_lists_wins_up_to_the_cases_below_perfect() -> None:
+    reference = {f"c{i}": 1.0 if i < 10 else 0.5 for i in range(20)}
+    rows = core.j_table_rows(reference, resamples=300)
+    assert [r["wins"] for r in rows] == list(range(0, 11))
+    assert rows[0]["tolerance"] == -1
+    text = core.render_j_table("demo", reference, gains=[0.05], resamples=300)
+    assert "reference: demo" in text
+    assert "scores below 1.0 in 10 of 20 cases" in text
+    assert "| 10 |" in text
+    assert "+0.05" in text
+
+
 # --- the forecast ---------------------------------------------------------------------
 
 

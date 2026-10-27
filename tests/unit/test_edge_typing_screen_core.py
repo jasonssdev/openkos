@@ -489,3 +489,57 @@ def test_the_forecast_is_calls_times_latency_plus_one_load() -> None:
     assert plan["calls_per_model"] == 30
     assert plan["seconds"] == {"m": 120.0}
     assert plan["total_seconds"] == 120.0
+
+
+# --- the J tolerance table ---------------------------------------------------
+
+
+def test_j_tolerance_counts_losses_a_binary_reference_can_absorb() -> None:
+    reference = {f"i{n:02d}": 1.0 if n < 10 else 0.0 for n in range(20)}
+    assert core.j_tolerance(reference, wins=1, resamples=300) == -1
+    few = core.j_tolerance(reference, wins=6, resamples=300)
+    many = core.j_tolerance(reference, wins=10, resamples=300)
+    assert 0 <= few <= many
+
+
+def test_j_tolerance_refuses_more_wins_than_the_reference_gets_wrong() -> None:
+    with pytest.raises(ValueError, match="wrong"):
+        core.j_tolerance({"a": 1.0, "b": 0.0}, wins=2)
+
+
+def test_j_tolerance_is_reproducible_by_id_order_and_by_shuffle_seed() -> None:
+    reference = {f"i{n:02d}": 1.0 if n % 2 else 0.0 for n in range(30)}
+    assert core.j_tolerance(reference, wins=8, resamples=300) == core.j_tolerance(
+        reference, wins=8, resamples=300
+    )
+    assert core.j_tolerance(
+        reference, wins=8, shuffle_seed=3, resamples=300
+    ) == core.j_tolerance(reference, wins=8, shuffle_seed=3, resamples=300)
+
+
+def test_the_j_table_lists_each_win_count_with_its_spread_over_shuffles() -> None:
+    reference = {f"i{n:02d}": 1.0 if n < 10 else 0.0 for n in range(20)}
+    rows = core.j_table_rows(reference, wins=[6, 10], shuffles=3, resamples=300)
+    assert [r["wins"] for r in rows] == [6, 10]
+    for row in rows:
+        assert row["by_id"] == core.j_tolerance(
+            reference, wins=row["wins"], resamples=300
+        )
+        assert row["low"] <= row["high"]
+    text = core.render_j_table(
+        "demo", reference, wins=[6, 10], shuffles=3, resamples=300
+    )
+    assert "reference: demo" in text
+    assert "wrong for the reference: 10 of 20" in text
+    assert "| 6 |" in text
+    assert "| 10 |" in text
+
+
+def test_the_j_table_on_the_resolved_edge_labels_is_pinned() -> None:
+    items = core.load_fixture()
+    _, ref = core.reference_baseline(items)
+    reference = ref["per_item_strict"]
+    assert sum(v == 0.0 for v in reference.values()) == 25
+    assert core.j_tolerance(reference, wins=3) == -1
+    assert core.j_tolerance(reference, wins=4) == 0
+    assert core.j_tolerance(reference, wins=8) == 1

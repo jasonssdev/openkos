@@ -440,6 +440,43 @@ def test_the_paired_bootstrap_is_reproducible_and_brackets_the_mean() -> None:
     assert a["lo"] <= a["point"] <= a["hi"]
 
 
+def test_the_j_table_on_the_adjudicated_reference_is_pinned() -> None:
+    items = core.load_items()
+    name, ref = core.reference_baseline(items)
+    reference = ref["per_item_strict"]
+    assert sum(v == 0.0 for v in reference.values()) == 24
+    assert core.j_tolerance(reference, wins=3, resamples=2000) == -1
+    assert core.j_tolerance(reference, wins=4, resamples=2000) >= 0
+    text = core.render_j_table(name, reference, wins=[3, 4], shuffles=1, resamples=500)
+    assert "wrong for the reference: 24 of 58" in text
+
+
+def test_the_headroom_replay_fixes_the_weakest_items_first_with_no_loss() -> None:
+    own = {f"r{n:02d}": 1.0 for n in range(20)}
+    own.update({"r00": 0.0, "r01": 0.0, "r02": 0.5, "r03": 0.9})
+    rows = core.headroom_replay(own, resamples=300)
+    assert [r["fixed"] for r in rows] == [0, 1, 2, 3, 4]
+    assert rows[0]["point"] == 0.0
+    assert rows[0]["lo"] == 0.0
+    assert rows[4]["point"] == pytest.approx((1.0 + 1.0 + 0.5 + 0.1) / 20)
+    assert [r["point"] for r in rows] == sorted(r["point"] for r in rows)
+    assert core.headroom_replay({"a": 1.0, "b": 1.0}, resamples=100)[0]["fixed"] == 0
+
+
+def test_a_run_with_no_stored_latency_has_no_latency_summary() -> None:
+    item = _item()
+    row = {
+        "item": item.id,
+        "verdict": "reverses",
+        "latency_s": None,
+        "failure": None,
+        "actionable": True,
+    }
+    summary = core.summarize([row], [item])
+    assert summary["median_latency_s"] is None
+    assert summary["p95_latency_s"] is None
+
+
 def test_the_forecast_multiplies_calls_by_latency_and_adds_one_load() -> None:
     plan = core.forecast(
         n_items=58, runs=3, median_latency_s={"a": 2.0, "b": 4.0}, load_s=60.0
