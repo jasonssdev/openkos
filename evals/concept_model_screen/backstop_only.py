@@ -1531,6 +1531,42 @@ def cmd_confirm(args: argparse.Namespace) -> int:
     return run_confirmation(args, meetings)
 
 
+def write_stamp_sidecar(path: pathlib.Path, stamp: Mapping[str, Any]) -> None:
+    """The stamp of a result that cannot carry one in-band (the label file's
+    values are all read as records), beside it, as `harness_stamp` does."""
+    import harness_stamp
+
+    harness_stamp.write_stamp_sidecar(path, stamp)
+
+
+def write_result(
+    path: pathlib.Path, payload: Mapping[str, Any], stamp: Mapping[str, Any]
+) -> None:
+    """Store a result of a run that called a model, with its identity stamp
+    in-band (`harness_stamp`): harness commit, model digest, prompt hashes."""
+    if "stamp" in payload:
+        raise ValueError("payload already holds a 'stamp'")
+    _write_json(path, {**payload, "stamp": dict(stamp)})
+
+
+def run_stamp(host: str | None) -> dict[str, Any]:
+    """The stamp of a confirmation run: the G1 judge as the stamped model and
+    the prompts sent, plus the fixed selector judge and the embedder identity."""
+    from harness_prompts import extraction_prompts
+    from harness_stamp import build_stamp, model_identity
+
+    stamp = build_stamp(
+        model=sj.JUDGE_MODEL,
+        prompts={"screen/g1": sj.G1_SYSTEM, **extraction_prompts()},
+        host=host,
+    )
+    stamp["other_models"] = [
+        model_identity(js.JUDGE_MODEL, host),
+        model_identity(_screen().EMBED_MODEL, host),
+    ]
+    return stamp
+
+
 def run_confirmation(args: argparse.Namespace, meetings: Sequence[str]) -> int:
     from harness_stamp import model_identity
 
@@ -1545,6 +1581,7 @@ def run_confirmation(args: argparse.Namespace, meetings: Sequence[str]) -> int:
                 f"refusing: {model} digest {ident.get('digest')} != pinned {pinned}"
             )
     path = args.out_dir / "scores" / "confirmation.json"
+    stamp = run_stamp(args.host)
     corpus = rcs.Corpus(args.screen_dir)
     # Amendment 1: missing confirmation-set vectors are computed, with the
     # registration's pinned bge-m3 digest, and only for confirmation texts.
@@ -1571,7 +1608,7 @@ def run_confirmation(args: argparse.Namespace, meetings: Sequence[str]) -> int:
     try:
         store.vectors(texts)
     except StopLine as err:
-        _write_json(path, {"status": "stopped", "reasons": [str(err)]})
+        write_result(path, {"status": "stopped", "reasons": [str(err)]}, stamp)
         print(f"STOP: {err}; no partial verdict is read")
         return 1
     print(f"embeddings: {embed_spent[0]:.0f} s", flush=True)
@@ -1607,15 +1644,17 @@ def run_confirmation(args: argparse.Namespace, meetings: Sequence[str]) -> int:
                 send=send,
                 timeouts=timeouts,
             )
-            _write_json(fpath, rec)
+            write_result(fpath, rec, stamp)
             spent += js._judge_wall(rec)
             print(
                 f"{time.strftime('%H:%M:%S')} fixed judge {meeting} r{run}: {spent:.0f} s",
                 flush=True,
             )
             if budget_exceeded(spent):
-                _write_json(
-                    path, {"status": "stopped", "reasons": ["GPU budget exceeded"]}
+                write_result(
+                    path,
+                    {"status": "stopped", "reasons": ["GPU budget exceeded"]},
+                    stamp,
                 )
                 print("STOP: GPU budget exceeded; no partial verdict is read")
                 return 1
@@ -1635,10 +1674,12 @@ def run_confirmation(args: argparse.Namespace, meetings: Sequence[str]) -> int:
             spent_s=spent,
         )
     except StopLine as err:
-        _write_json(path, {"status": "stopped", "reasons": [str(err)]})
+        write_result(path, {"status": "stopped", "reasons": [str(err)]}, stamp)
         print(f"STOP: {err}; no partial verdict is read")
         return 1
     lpath = args.out_dir / "restored" / "labels.json"
+    if lpath.is_file():
+        write_stamp_sidecar(lpath, stamp)
     label_wall = (
         sum(float(r["wall_s"]) for r in _load(lpath).values())
         if lpath.is_file()
@@ -1647,7 +1688,7 @@ def run_confirmation(args: argparse.Namespace, meetings: Sequence[str]) -> int:
     result = score_confirmation(
         args.screen_dir, args.out_dir, meetings, spent + label_wall
     )
-    _write_json(path, result)
+    write_result(path, result, stamp)
     print(json.dumps(result, indent=2))
     return 0
 
@@ -1880,6 +1921,58 @@ def _t_embedding_guard() -> None:
     calls = [0.0]
     timed = timed_embed(embed, calls, budget_s=1.0, clock=iter([0.0, 2.0]).__next__)
     _raises(StopLine, functools.partial(timed, ["x"]), "embedding budget")
+
+
+def _t_result_is_stamped() -> None:
+    import io
+    import subprocess
+    import tempfile
+
+    import harness_stamp as hs
+
+    class _Resp(io.BytesIO):
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    def opener(url: str, timeout: float = 0) -> _Resp:
+        body = {"models": [{"name": "gpt-oss:20b", "digest": "d" * 64}]}
+        return _Resp(json.dumps(body).encode("utf-8"))
+
+    def runner(cmd: Sequence[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(cmd, 0, stdout="c" * 40 + "\n", stderr="")
+
+    stamp = hs.build_stamp(
+        model="gpt-oss:20b",
+        prompts={"screen/g1": sj.G1_SYSTEM},
+        opener=opener,
+        runner=runner,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / "scores" / "confirmation.json"
+        write_result(path, {"status": "ran", "points": {"self": 0.01}}, stamp)
+        got = hs.load_stamp(path)
+        _check(got is not None, "a stored result carries its stamp")
+        _check(
+            got is not None and hs.stamp_problems(got) == [], "and it pins the result"
+        )
+        _check(
+            json.loads(path.read_text(encoding="utf-8"))["status"] == "ran",
+            "payload kept",
+        )
+        _raises(
+            ValueError,
+            functools.partial(write_result, path, {"stamp": {}, "status": "x"}, stamp),
+            "stamp",
+        )
+    _check(
+        "write_result(" in inspect.getsource(run_confirmation), "run stores through it"
+    )
+    _check(
+        "_write_json(path" not in inspect.getsource(run_confirmation), "no bare store"
+    )
 
 
 def _t_cost_gate() -> None:
@@ -2172,6 +2265,7 @@ TESTS: Final[Sequence[Callable[[], None]]] = (
     _t_registered_constants,
     _t_foreign_control_refusal,
     _t_embedding_guard,
+    _t_result_is_stamped,
     _t_gate_direction,
     _t_decision_rule,
     _t_ts3012_refusal,
