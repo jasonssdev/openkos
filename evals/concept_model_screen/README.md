@@ -39,6 +39,7 @@ fixed in [`PREREGISTRATION.md`](PREREGISTRATION.md); the outcome is in
 | `stage_loss.py` | #1559: gold content lost at each extraction stage and loss point L1-L14, from the stored #1557 and #1558 records, cache-only embeddings (`score`, `--self-test`); rules in `STAGE_LOSS_PREREGISTRATION.md`, outcome in `STAGE_LOSS_RESULTS.md` |
 | `downstream_cost.py` | #1579: model-free count of the post-extraction work the judge's cut saves (identity groups, reindex embedding calls, revision pool), by running the production candidate generators over temporary bundles built from the #1571 records (`measure`, `--self-test`); results in `DOWNSTREAM_COST.md` |
 | `cut_profile.py` | #1579: descriptive profile of what the selector judge's cut removes (by type, bundle size, body size), model-free over the #1571 records (`profile`, `--self-test`); the decision document is `NEXT_STEP.md` |
+| `label_study.py` | #1579 step 3: `gpt-oss:20b` labels the ceiling objects keep / merge / drop (cut and kept together), with a duplicate-control (`population`, `run`, `score`, `--self-test`); rules in `LABEL_STUDY_PREREGISTRATION.md`, outcome in `LABEL_STUDY_RESULTS.md` |
 
 ## Data stays outside the repository
 
