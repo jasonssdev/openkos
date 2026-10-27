@@ -16,7 +16,7 @@ Nothing here runs unless you ask. `--self-test` contacts no model.
         --out ~/openkos-eval-runs/retrieval-gold/translation-review.md \\
         --translations DIR --transcripts DIR
     uv run python evals/retrieval_gold/translate_meetings.py pin \\
-        --translations DIR --transcripts DIR --reviewed
+        --translations DIR --transcripts DIR --sheet FILLED_SHEET
 
 Only `run` talks to a model, and it is GPU-bound: read the README forecast first.
 
@@ -41,8 +41,9 @@ Properties that matter:
   adaptation, so each output carries the attribution, the licence link and a
   statement that it was machine-translated, in its frontmatter and in plain words.
 - **A human gate before the bundle.** `sample-sheet` writes aligned EN/ES pairs for
-  a native speaker; `pin` writes the reviewed files' hashes into `bundle_sources.json`
-  only with `--reviewed`. `build_bundle.py` refuses to build until that is done.
+  a native speaker; `pin` reads that sheet once it is filled and writes the files'
+  hashes into `bundle_sources.json` only if no more than 10% of the pairs are
+  `wrong`. `build_bundle.py` refuses to build until that is done.
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from fractions import Fraction
 from typing import Any, Final
 
 HERE: Final = pathlib.Path(__file__).resolve().parent
@@ -145,7 +147,9 @@ ATTRIBUTION: Final = (
     "Adapted from the AMI Meeting Corpus (https://groups.inf.ed.ac.uk/ami/corpus/), "
     "licensed under CC BY 4.0 "
     "(https://groups.inf.ed.ac.uk/ami/corpus/license.shtml; "
-    "https://creativecommons.org/licenses/by/4.0/)."
+    "https://creativecommons.org/licenses/by/4.0/). "
+    "Cite: Carletta, J. et al. (2006). The AMI Meeting Corpus: A Pre-announcement. "
+    "MLMI 2005, LNCS 3869, 28-39. DOI 10.1007/11677482_3."
 )
 ADAPTATION: Final = (
     "Machine translation into Spanish of the English transcript {meeting}, produced "
@@ -154,6 +158,12 @@ ADAPTATION: Final = (
     "structure and sampled by a native speaker, not proofread in full, and it may "
     "contain translation errors. It is an adaptation, not the original text."
 )
+
+VERDICTS: Final = ("accurate", "minor issue", "wrong")
+WRONG_BAR: Final = Fraction(1, 10)
+"""The owner's acceptance bar (#1609): the pin is blocked when MORE than this share
+of the reviewed pairs is `wrong`. Exactly 10% passes (12 of 120); 13 of 120 blocks.
+Exact arithmetic, so the boundary is not a float comparison."""
 
 _LINE_RE: Final = re.compile(r"^(?P<label>[A-Za-z0-9_]+): (?P<text>\S.*)$")
 
@@ -717,27 +727,116 @@ def sample_sheet(
     return total
 
 
+_PAIR_RE: Final = re.compile(
+    r"^### (?P<id>[A-Za-z0-9]+)-t(?P<turn>\d{4}) \([^)\n]*\)\n"
+    r"EN: (?P<en>[^\n]*)\nES: (?P<es>[^\n]*)\nVerdict:(?P<verdict>[^\n]*)\n",
+    re.MULTILINE,
+)
+
+
+def read_sheet(
+    sheet: pathlib.Path,
+    translations: pathlib.Path,
+    transcripts: pathlib.Path,
+    meetings: Sequence[str],
+) -> dict[str, Any]:
+    """The owner's filled sheet as verdict counts, or `TranslateError`.
+
+    Refused: a sheet inside the repository, one with a pair left unfilled or marked
+    with anything but the three verdicts, one with no pairs, one that skips a
+    meeting being pinned, and one whose English or Spanish is not what is on disk
+    now (a sheet from another run, or from a file edited since)."""
+    build_bundle.refuse_workspace(sheet)
+    if not sheet.is_file():
+        raise TranslateError(f"no sheet at {sheet}")
+    text = sheet.read_text(encoding="utf-8")
+    pairs = list(_PAIR_RE.finditer(text))
+    verdict_lines = len(re.findall(r"^Verdict:", text, re.MULTILINE))
+    if not pairs or len(pairs) != verdict_lines:
+        raise TranslateError(
+            f"{sheet.name}: {len(pairs)} readable pairs but {verdict_lines} Verdict "
+            "lines; the sheet is empty or damaged"
+        )
+    counts = dict.fromkeys(VERDICTS, 0)
+    per_meeting = dict.fromkeys(meetings, 0)
+    aligned: dict[str, tuple[list[TurnLine], list[TurnLine]]] = {}
+    bad: list[str] = []
+    for match in pairs:
+        meeting, turn = match.group("id"), int(match.group("turn"))
+        pair_id = f"{meeting}-t{turn:04d}"
+        verdict = match.group("verdict").strip().strip("`*").strip().lower()
+        if verdict not in counts:
+            bad.append(f"{pair_id}: {verdict or 'unfilled'}")
+            continue
+        if meeting not in per_meeting:
+            raise TranslateError(f"{pair_id}: {meeting} is not being pinned")
+        if meeting not in aligned:
+            path, _ = _checked_translation(translations, meeting)
+            english = screen_data.load_transcript(transcripts, meeting).body
+            aligned[meeting] = (
+                parse_turns([ln for ln in english.split("\n") if ln.strip()]),
+                parse_turns(_body_lines(path.read_text(encoding="utf-8"))),
+            )
+        en_turns, es_turns = aligned[meeting]
+        if turn >= len(en_turns) or (
+            match.group("en") != en_turns[turn].text
+            or match.group("es") != es_turns[turn].text
+        ):
+            raise TranslateError(
+                f"{pair_id}: the sheet does not match the transcripts and "
+                "translations on disk (another run, or an edited file)"
+            )
+        counts[verdict] += 1
+        per_meeting[meeting] += 1
+    if bad:
+        raise TranslateError(
+            f"{len(bad)} pair(s) are unfilled or not one of "
+            f"{' / '.join(VERDICTS)}: {'; '.join(bad[:5])}"
+        )
+    missing = [m for m, n in per_meeting.items() if n == 0]
+    if missing:
+        raise TranslateError(f"the sheet has no pair for {', '.join(missing)}")
+    return {
+        "pairs": len(pairs),
+        "accurate": counts["accurate"],
+        "minor_issue": counts["minor issue"],
+        "wrong": counts["wrong"],
+        "sheet_sha256": _sha(text.encode("utf-8")),
+    }
+
+
 def pin(
     translations: pathlib.Path,
     transcripts: pathlib.Path,
     sources_path: pathlib.Path,
     *,
-    reviewed: bool,
+    sheet: pathlib.Path,
+    log: Callable[[str], None] = print,
 ) -> list[str]:
     """Write the reviewed translations' hash and size into the sources list.
 
-    All or nothing. Refuses without `reviewed`, for a meeting that is not done, a
-    file that changed since the run, a structure that no longer checks, or a hash
-    that is already pinned to something else. Returns the pinned source ids."""
-    if not reviewed:
-        raise TranslateError(
-            "pin needs the owner's review of the sample sheet: pass --reviewed"
-        )
+    The evidence of review is the owner's filled sample sheet (`read_sheet`), and
+    the pin is blocked when more than `WRONG_BAR` of its pairs are `wrong`. All or
+    nothing. Also refuses a meeting that is not done, a file that changed since the
+    run, a structure that no longer checks, or a hash already pinned to something
+    else. Returns the pinned source ids."""
     raw = json.loads(sources_path.read_text(encoding="utf-8"))
+    entries = [
+        e for e in raw["sources"] if e.get("kind") == build_bundle.TRANSLATION_KIND
+    ]
+    if not entries:
+        raise TranslateError("the sources list has no translation entries")
+    review = read_sheet(
+        sheet, translations, transcripts, [e["translation_of"] for e in entries]
+    )
+    log(f"{review['wrong']} of {review['pairs']} wrong")
+    if review["wrong"] > review["pairs"] * WRONG_BAR:
+        raise TranslateError(
+            f"{review['wrong']} of {review['pairs']} wrong is above the bar "
+            f"({WRONG_BAR.numerator}/{WRONG_BAR.denominator} of the pairs): not pinned"
+        )
     updates: list[tuple[dict[str, Any], str, int, dict[str, Any]]] = []
-    for entry in raw["sources"]:
-        if entry.get("kind") != build_bundle.TRANSLATION_KIND:
-            continue
+    for entry in entries:
         meeting = entry["translation_of"]
         build_bundle.require_translatable(meeting)
         path, manifest = _checked_translation(translations, meeting)
@@ -761,10 +860,9 @@ def pin(
         info = {
             "model": manifest["model"],
             "prompt_sha256": manifest["prompt"]["sha256"],
+            "review": review,
         }
         updates.append((entry, digest, len(data), info))
-    if not updates:
-        raise TranslateError("the sources list has no translation entries")
     for entry, digest, size, info in updates:
         entry["sha256"] = digest
         entry["bytes"] = size
@@ -834,7 +932,7 @@ def _cmd_pin(args: argparse.Namespace) -> int:
         args.translations,
         args.transcripts,
         args.sources,
-        reviewed=args.reviewed,
+        sheet=args.sheet,
     )
     print(f"pinned {len(ids)} translations in {args.sources}")
     return 0
@@ -873,9 +971,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--sources", type=pathlib.Path, default=build_bundle.SOURCES_PATH
     )
     pin_cmd.add_argument(
-        "--reviewed",
-        action="store_true",
-        help="the owner has reviewed the sample sheet and accepts the translations",
+        "--sheet",
+        type=pathlib.Path,
+        required=True,
+        help="the owner's FILLED sample sheet (outside the repository)",
     )
 
     args = parser.parse_args(argv)
@@ -1165,6 +1264,8 @@ def _self_test_pipeline(c: _Checks, tmp: pathlib.Path) -> None:
         "machine_translated: true",
         "translation_of: IS1004a",
         "language: es",
+        "Carletta",
+        "10.1007/11677482_3",
         "stub:1b",
     ):
         c.check(needle in text.split("\n---\n", 1)[0], f"frontmatter carries {needle}")
@@ -1377,37 +1478,91 @@ def _self_test_review_and_pin(c: _Checks, tmp: pathlib.Path) -> None:
     )
     c.check(not (REPO_ROOT / "sheet-never.md").exists(), "and not created")
 
-    entry = {
-        "id": f"{_FIXTURE_MEETING}-es",
-        "root": "translations",
-        "path": f"{_FIXTURE_MEETING}-es.md",
-        "language": "es",
-        "kind": "ami-translation",
-        "tier": "core",
-        "bytes": 0,
-        "sha256": build_bundle.PENDING_SHA,
-        "translation_of": _FIXTURE_MEETING,
-    }
-    sources = tmp / "sources.json"
-    sources.write_text(json.dumps({"version": 1, "sources": [entry]}), "utf-8")
+    def entry_for(meeting: str) -> dict[str, Any]:
+        return {
+            "id": f"{meeting}-es",
+            "root": "translations",
+            "path": f"{meeting}-es.md",
+            "language": "es",
+            "kind": "ami-translation",
+            "tier": "core",
+            "bytes": 0,
+            "sha256": build_bundle.PENDING_SHA,
+            "translation_of": meeting,
+        }
+
+    def write_sources(meeting: str) -> pathlib.Path:
+        path = tmp / f"sources-{meeting}.json"
+        path.write_text(
+            json.dumps({"version": 1, "sources": [entry_for(meeting)]}), "utf-8"
+        )
+        return path
+
+    def sha_of(path: pathlib.Path) -> str:
+        return str(json.loads(path.read_text("utf-8"))["sources"][0]["sha256"])
+
+    def filled(text: str, wrong: int) -> str:
+        """The sheet with `wrong` pairs marked wrong and the rest accurate or minor."""
+        verdicts = ["wrong"] * wrong
+        total = text.count("Verdict: \n")
+        verdicts += [
+            "accurate" if i % 2 else "minor issue" for i in range(total - wrong)
+        ]
+        parts = text.split("Verdict: \n")
+        return parts[0] + "".join(
+            f"Verdict: {v}\n{rest}" for v, rest in zip(verdicts, parts[1:], strict=True)
+        )
+
+    transcripts = tmp / "transcripts"
+    sources = write_sources(_FIXTURE_MEETING)
+    unfilled = tmp / "unfilled.md"
+    sample_sheet(unfilled, transcripts, out, [_FIXTURE_MEETING], 5, 7, MIN_WORDS)
     c.raises(
         TranslateError,
-        lambda: pin(out, tmp / "transcripts", sources, reviewed=False),
-        "pin refuses without the owner's review",
+        lambda: pin(out, transcripts, sources, sheet=unfilled),
+        "pin refuses an unfilled sheet",
     )
-    c.check(
-        json.loads(sources.read_text("utf-8"))["sources"][0]["sha256"]
-        == build_bundle.PENDING_SHA,
-        "and leaves the sources untouched",
+    c.check(sha_of(sources) == build_bundle.PENDING_SHA, "and leaves the sources alone")
+    invalid = tmp / "invalid.md"
+    invalid.write_text(
+        filled(unfilled.read_text("utf-8"), 0).replace(
+            "Verdict: accurate", "Verdict: great", 1
+        ),
+        encoding="utf-8",
     )
+    c.raises(
+        TranslateError,
+        lambda: pin(out, transcripts, sources, sheet=invalid),
+        "pin refuses a verdict that is not one of the three",
+    )
+    c.raises(
+        build_bundle.BuildError,
+        lambda: pin(out, transcripts, sources, sheet=REPO_ROOT / "sheet-never.md"),
+        "pin refuses a sheet inside the repository",
+    )
+    stale = tmp / "stale.md"
+    stale.write_text(
+        filled(unfilled.read_text("utf-8"), 0).replace(
+            f"ES: {_ES_LINE}", "ES: otra cosa", 1
+        ),
+        encoding="utf-8",
+    )
+    c.raises(
+        TranslateError,
+        lambda: pin(out, transcripts, sources, sheet=stale),
+        "pin refuses a sheet whose Spanish is not the translation on disk",
+    )
+    good_sheet = tmp / "good.md"
+    good_sheet.write_text(filled(unfilled.read_text("utf-8"), 0), encoding="utf-8")
     (out / f"{_FIXTURE_MEETING}-es.md").write_bytes(b"tampered")
     c.raises(
         TranslateError,
-        lambda: pin(out, tmp / "transcripts", sources, reviewed=True),
+        lambda: pin(out, transcripts, sources, sheet=good_sheet),
         "pin refuses a file that changed since the run",
     )
     _, out2 = _run(tmp, "reviewed2", _Stub())
-    pin(out2, tmp / "transcripts", sources, reviewed=True)
+    messages: list[str] = []
+    pin(out2, transcripts, sources, sheet=good_sheet, log=messages.append)
     pinned = json.loads(sources.read_text("utf-8"))["sources"][0]
     data = (out2 / f"{_FIXTURE_MEETING}-es.md").read_bytes()
     c.check(
@@ -1415,17 +1570,64 @@ def _self_test_review_and_pin(c: _Checks, tmp: pathlib.Path) -> None:
         and pinned["bytes"] == len(data),
         "pin writes the hash and size of the reviewed file",
     )
+    c.check("0 of 5 wrong" in " ".join(messages), "pin prints k of N wrong")
+    c.check(
+        pinned["translation"]["review"]["wrong"] == 0
+        and pinned["translation"]["review"]["pairs"] == 5,
+        "and records the verdict counts beside the hash",
+    )
     c.check(
         not build_bundle.load_sources(sources)[0].pending,
         "and the build script then sees it as pinned",
     )
     _, bad = _run(tmp, "failed", _Stub(lambda n, lines: _spanish(lines[:-1])))
-    sources.write_text(json.dumps({"version": 1, "sources": [entry]}), "utf-8")
     c.raises(
         TranslateError,
-        lambda: pin(bad, tmp / "transcripts", sources, reviewed=True),
+        lambda: pin(
+            bad, transcripts, write_sources(_FIXTURE_MEETING), sheet=good_sheet
+        ),
         "pin refuses a run with a failed meeting",
     )
+
+    # the acceptance bar: more than 10% wrong blocks, exactly 10% passes
+    big = "IS1004b"
+    _write_transcript(transcripts, big, _fixture_turns(130))
+    _, out_big = _run(tmp, "big", _Stub(), meetings=[big])
+    big_sheet = tmp / "big.md"
+    c.check(
+        sample_sheet(big_sheet, transcripts, out_big, [big], 120, 1, MIN_WORDS) == 120,
+        "a 120-pair sheet",
+    )
+    sheet_text = big_sheet.read_text("utf-8")
+    for wrong, blocked in ((12, False), (13, True)):
+        path = tmp / f"big-{wrong}.md"
+        path.write_text(filled(sheet_text, wrong), encoding="utf-8")
+        sources_big = write_sources(big)
+        notes: list[str] = []
+
+        def attempt(
+            sources_big: pathlib.Path = sources_big,
+            path: pathlib.Path = path,
+            notes: list[str] = notes,
+        ) -> object:
+            return pin(out_big, transcripts, sources_big, sheet=path, log=notes.append)
+
+        if blocked:
+            message = c.raises(TranslateError, attempt, f"{wrong} of 120 wrong blocks")
+            c.check(
+                f"{wrong} of 120 wrong" in message,
+                f"the refusal says {wrong} of 120 wrong",
+            )
+            c.check(
+                sha_of(sources_big) == build_bundle.PENDING_SHA, "and nothing is pinned"
+            )
+        else:
+            attempt()
+            c.check(
+                sha_of(sources_big) != build_bundle.PENDING_SHA
+                and "12 of 120 wrong" in " ".join(notes),
+                f"{wrong} of 120 wrong passes and prints it",
+            )
 
 
 def _self_test_cli(c: _Checks, tmp: pathlib.Path) -> None:

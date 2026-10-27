@@ -167,7 +167,9 @@ opened or directory created).
   (`evals/quiet_engine/corpus/sources`) are (79%; at 3 votes recall drops to 66%). The
   detector misses English with fewer than 2 function words, which is why the owner
   sample exists. The 2% and 10% figures are choices, not measurements; the manifest
-  records the real per-meeting share.
+  records the real per-meeting share. **They stay as they are for the IS1004a pilot and
+  are reviewed with its data (the recorded per-window and per-meeting shares, and which
+  turns were flagged) before the full run.**
 - **Resumable and pinned.** One record per window under `windows/<meeting>/`; the
   manifest holds each source sha256, the model tag and digest the local Ollama reports,
   the prompt sha256, the options, per-window attempts with seconds and `eval_count`, and
@@ -175,7 +177,9 @@ opened or directory created).
   options, and the English transcripts must match the sha256 pinned in
   `bundle_sources.json`.
 - **Attribution.** AMI is CC BY 4.0, and a translation is an adaptation. Each file's
-  frontmatter carries the source, the licence and its links, `translation_of`,
+  frontmatter carries the source, the licence and its links, the AMI citation
+  (Carletta, J. et al., 2006, *The AMI Meeting Corpus: A Pre-announcement*, MLMI 2005,
+  LNCS 3869, 28-39, DOI 10.1007/11677482_3), `translation_of`,
   `machine_translated: true`, the model tag, and a plain statement that it is a machine
   translation, not proofread in full, that every utterance was translated and that
   speaker labels and turn order are unchanged.
@@ -185,8 +189,9 @@ opened or directory created).
 
 ### Which model, and why
 
-**Proposed: `gemma4:26b-a4b`** (digest `001e5dafc3c7`, installed). No screen was run for
-this; the choice rests on stored evidence, and the owner confirms it before any run.
+**Chosen: `gemma4:26b-a4b`** (digest `001e5dafc3c7`, installed), confirmed by the owner.
+No screen was run for this; the choice rests on stored evidence. The Spanish is neutral
+(the prompt's default), also the owner's decision.
 
 For:
 
@@ -232,28 +237,37 @@ R=~/openkos-eval-runs/retrieval-gold/translations
 # 0. No model. Everything the script checks about itself.
 uv run python evals/retrieval_gold/translate_meetings.py --self-test
 
-# 1. Pilot, then the rest (GPU). The pilot is the smallest meeting, IS1004a.
+# 1a. Translation pilot (GPU): the smallest meeting, IS1004a. Then STOP: redo the
+#     translation forecast from its recorded seconds and eval_count, and review the
+#     10% / 2% English-leak limits against its per-window and per-meeting shares.
 uv run python evals/retrieval_gold/translate_meetings.py run \
     --model gemma4:26b-a4b --out $R --transcripts $T --meetings IS1004a
+# 1b. The rest (GPU), same --out, so IS1004a is not redone.
 uv run python evals/retrieval_gold/translate_meetings.py run \
     --model gemma4:26b-a4b --out $R --transcripts $T
 # if windows failed: read `failures` in $R/manifest.json, then add --retry-failed
 
 # 2. The owner reviews a seeded sample (no model): accurate / minor issue / wrong.
+#    The owner fills in every Verdict line of the sheet.
 uv run python evals/retrieval_gold/translate_meetings.py sample-sheet \
     --out ~/openkos-eval-runs/retrieval-gold/translation-review.md \
     --translations $R --transcripts $T --per-meeting 10 --seed 1609
 
-# 3. Pin the hashes, only after the review (no model).
+# 3. Pin the hashes from the FILLED sheet (no model). Prints "k of N wrong" and refuses
+#    above the bar.
 uv run python evals/retrieval_gold/translate_meetings.py pin \
-    --translations $R --transcripts $T --reviewed
+    --translations $R --transcripts $T \
+    --sheet ~/openkos-eval-runs/retrieval-gold/translation-review.md
 
-# 4. Plan, then a pilot of one Spanish source, then the build (GPU).
+# 4a. Plan (no model).
 uv run python evals/retrieval_gold/build_bundle.py plan --transcripts $T \
     --translations $R --prose-dir <checkout with the prose>
+# 4b. Ingest pilot (GPU): ONE Spanish source. Then STOP: forecast the Spanish ingest
+#     from its measured seconds per window, not from the English rate.
 uv run python evals/retrieval_gold/build_bundle.py build --limit 1 --only ES2015a-es \
     --workspace ~/openkos-eval-runs/retrieval-gold/bundle-v1 --transcripts $T \
     --translations $R --prose-dir <checkout with the prose>
+# 4c. The full build (GPU), same --workspace, so the pilot source is not redone.
 uv run python evals/retrieval_gold/build_bundle.py build \
     --workspace ~/openkos-eval-runs/retrieval-gold/bundle-v1 --transcripts $T \
     --translations $R --prose-dir <checkout with the prose>
@@ -261,14 +275,23 @@ uv run python evals/retrieval_gold/build_bundle.py build \
 
 Until step 3 is done `build_bundle.py build` refuses to start and names the 12 pending
 sources, and `plan` lists each as a problem. `pin` writes the reviewed files' sha256
-and size into `bundle_sources.json`, with the model and prompt that made them; the
-change is committed like any other source pin. A translation that is later edited by
+and size into `bundle_sources.json`, with the model, the prompt and the review counts
+(pairs, accurate, minor issue, wrong, sheet sha256); the change is committed like any
+other source pin. A translation that is later edited by
 hand, or re-run, no longer matches its pin, and `build` refuses it.
 
 The sample sheet holds a seeded random draw of up to 10 aligned EN/ES turn pairs per
 meeting (120 in all), taken among turns of 6 or more English words, so the owner does
-not spend the review on `Okay.` The acceptance bar (how many `wrong` is too many) is the
-owner's and is not set here.
+not spend the review on `Okay.`
+
+**Acceptance bar (the owner's):** the pin is blocked when **more than 10%** of the reviewed
+pairs are `wrong`. With 120 pairs, 12 wrong passes and 13 blocks. `pin` reads the filled
+sheet, so `--reviewed` no longer exists. It refuses a sheet with any pair unfilled or
+marked with anything but `accurate`, `minor issue` or `wrong`; one that skips a meeting;
+one inside the repository; and one whose English or Spanish no longer matches the files
+on disk (another run, or an edited translation). It prints `k of N wrong` and, above
+the bar, pins nothing. A blocked pin means re-translating (a new `--out`, possibly a
+changed prompt) and a new sheet, not editing the verdicts.
 
 ### Translation GPU forecast
 
@@ -288,10 +311,14 @@ and assumptions, in order:
 | Retries | assumed 10% extra (about 1 window in 10 retried once) | +10% |
 | **Total** | | **about 4,800 s (1.34 h); range 4,500 to 5,450 s** |
 
-Spanish ingest: about 119 windows (100 x 1.18, assuming the translation is 18% longer)
-at 31.4 s per window (`qwen3:8b`, the English figure above, n = 40) is 3,720 s; embedding
-about 80 more documents at 0.1 to 1.0 s and ingest bookkeeping add about 60 s. With the
-p90 of 37.5 s per window it is 4,500 s; with 100 windows, 3,200 s.
+Spanish ingest: this is a **placeholder, to be replaced by the ingest pilot**. About 119
+windows (100 x 1.18, assuming the translation is 18% longer) at 31.4 s per window
+(`qwen3:8b`, the English figure above, n = 40) is 3,720 s; embedding about 80 more
+documents at 0.1 to 1.0 s and ingest bookkeeping add about 60 s. With the p90 of 37.5 s
+per window it is 4,500 s; with 100 windows, 3,200 s. No stored run covers `qwen3:8b`
+extracting from a Spanish meeting transcript, so the real figure comes from the
+`--only ES2015a-es` pilot (step 4b): its seconds per window times the 12 meetings'
+window count is the forecast to use.
 
 Assumptions that can move these: the decode rate was measured on one short reply, not on
 a 1,700-token translation, and a MoE model's rate can fall as the context fills; the
