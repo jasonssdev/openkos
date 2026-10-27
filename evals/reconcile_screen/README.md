@@ -121,6 +121,13 @@ nothing twice would score 1.0; none does.
 
 ## Second labelling
 
+**A second set of labels is recorded, but not by the owner and not resolved.** The
+owner delegated the blind labelling and a Claude model filled the sheet (it read only the
+sheet). `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
+those labels, keyed by fixture id, to [`second_labels.json`](second_labels.json); the
+filled sheet is not committed. Agreement is measured against that labeller, and no
+disagreement is resolved (see the pre-registration draft).
+
 `blind-sheet` writes a sheet for the owner: each case's two notes, then its claims in a
 seeded shuffle, one question per claim ("which note states it": `A`, `B` or `AB`). It
 withholds the first author's kind and flag, the anchors, every id, every source path and the
