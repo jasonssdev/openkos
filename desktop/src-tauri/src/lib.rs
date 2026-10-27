@@ -12,6 +12,7 @@
 
 pub mod apikey;
 pub mod browser;
+pub mod dropped;
 pub mod engine;
 pub mod locator;
 pub mod supervisor;
@@ -152,6 +153,21 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(keys)
+        .on_window_event(|window, event| {
+            // Files dropped on the window go to the page as a plain DOM event;
+            // it only quotes them, and the person agrees before anything is added.
+            if let tauri::WindowEvent::DragDrop(drag) = event {
+                let script = match drag {
+                    tauri::DragDropEvent::Enter { .. } => dropped::over_script(true),
+                    tauri::DragDropEvent::Leave => dropped::over_script(false),
+                    tauri::DragDropEvent::Drop { paths, .. } => dropped::drop_script(paths),
+                    _ => return,
+                };
+                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                    let _ = webview.eval(script);
+                }
+            }
+        })
         .setup(move |app| {
             // The shell's own directory, never the workspace.
             let config_dir = app.path().app_config_dir()?;
