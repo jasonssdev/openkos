@@ -296,6 +296,20 @@ def adjudicate(
     )
 
 
+def import_labels(
+    items: Sequence[core.Item], labels: Mapping[str, str], seed: int = SEED
+) -> tuple[dict[str, str], list[str]]:
+    """Fixture item id -> the second labeller's label, from a parsed filled sheet.
+
+    Validation is `adjudicate`'s: any missing, unknown, blank or invalid entry
+    returns the problems and NO labels, so a partial sheet imports nothing."""
+    problems = adjudicate(items, labels, seed).problems
+    if problems:
+        return {}, problems
+    ids = opaque_ids(items, seed)
+    return {i.id: labels[ids[i.id]] for i in items}, []
+
+
 def render(result: Adjudication) -> str:
     if result.problems:
         return "SHEET REJECTED, nothing scored:\n" + "\n".join(

@@ -25,6 +25,32 @@ prompt or task key. Part of #1556; refs #1563, #1557.
    digests (`ollama list`); neither was queried for this draft, because the
    server is reserved for another job.
 
+## Second labelling: recorded, with a deviation (read first)
+
+**The owner did not label this sheet.** The owner delegated the blind labelling, and a
+Claude model labelled the sheet blind (it read only the blind sheet, none of
+`fixture.json`, the README, this draft or any other label). Agreement below is therefore
+measured against a **Claude labeller, not the owner**, so it is a statement about two
+readings of the same rubric, not about the owner's judgment. The owner's own review of
+every disagreement, and every resolution, is still owed. The labels were imported with
+`run_edge_typing_screen.py import-sheet` into [`second_labels.json`](second_labels.json) (labels keyed by
+fixture id, plus the labeller and seed). The filled sheet itself is not committed, per
+the README.
+
+**Result** (`adjudicate`): 38 of 49 agree (0.776), Cohen's kappa 0.696, 11 disagreements.
+In all 11 the Claude label is the first author's own flagged alternative. Five are the
+reversed probes `e21`, `e22`, `e23`, `e27`, `e29` (first `references`, Claude
+`related_to`); `g01` and `g02` (first `related_to`, Claude `references`); and four ADR items,
+`r01`, `r02`, `r03` (first `depends_on`) and `r04` (first `caused_by`), where Claude
+answered `references`. The `references`-versus-`related_to` boundary, the hazard this draft
+names, is where the two labellers split.
+
+**What this does not do.** It resolves nothing: no `adjudication` record, no `resolved`
+label, no change to any registered margin or decision rule. The floors, the class balance
+and the J table below are still the first author's and still need recomputing after the
+owner resolves the disagreements. Labels were not the only missing piece, so this draft
+stays a draft.
+
 ## What the labels are, until the adjudication is recorded (read before any number)
 
 **One author's.** The first author labelled all 49 items by the production prompt's

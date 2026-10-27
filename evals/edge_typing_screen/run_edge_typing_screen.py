@@ -872,6 +872,16 @@ def _self_test() -> int:
     check("an unfilled sheet is rejected, not scored", blank.problems != [])
     bad = adj.adjudicate(items, adj.parse_sheet(fill(lambda i: "maybe")))
     check("an invalid label is rejected, not scored", bad.problems != [])
+    got, why = adj.import_labels(items, adj.parse_sheet(fill(lambda i: i.first_label)))
+    check(
+        "import-sheet: a filled sheet maps every fixture id to its label",
+        why == [] and got == {i.id: i.first_label for i in items},
+    )
+    check(
+        "import-sheet: an unfilled sheet returns problems and no labels",
+        adj.import_labels(items, adj.parse_sheet(sheet))[0] == {}
+        and adj.import_labels(items, adj.parse_sheet(sheet))[1] != [],
+    )
     check(
         "a constant-label pair has no defined kappa",
         adj.cohen_kappa(["part_of", "part_of"], ["part_of", "part_of"]) is None,
@@ -997,6 +1007,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     adjudicate.add_argument("--sheet", type=pathlib.Path, required=True)
     adjudicate.add_argument("--seed", type=int, default=adj.SEED)
+
+    imported = sub.add_parser(
+        "import-sheet",
+        help="write a filled sheet's labels, keyed by fixture id, to a JSON file",
+    )
+    imported.add_argument("--sheet", type=pathlib.Path, required=True)
+    imported.add_argument("--out", type=pathlib.Path, required=True)
+    imported.add_argument("--labeller", required=True)
+    imported.add_argument("--seed", type=int, default=adj.SEED)
     return parser
 
 
@@ -1025,6 +1044,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(adj.render(result))
         return 1 if result.problems else 0
+    if args.stage == "import-sheet":
+        labels, problems = adj.import_labels(
+            items,
+            adj.parse_sheet(args.sheet.read_text(encoding="utf-8")),
+            seed=args.seed,
+        )
+        if problems:
+            print("SHEET REJECTED, nothing imported:\n" + "\n".join(problems))
+            return 1
+        args.out.write_text(
+            json.dumps(
+                {"labeller": args.labeller, "seed": args.seed, "labels": labels},
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"imported {len(labels)} labels into {args.out}")
+        return 0
 
     arms = list(core.ARMS)
     if args.stage == "forecast" or (args.stage == "run" and args.dry_run):

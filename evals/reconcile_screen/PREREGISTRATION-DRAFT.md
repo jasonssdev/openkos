@@ -26,6 +26,29 @@ refs #1563, #1557.
    (`ollama list`). Neither was queried for this draft, because the server is reserved for
    another job.
 
+## Second labelling: recorded, with a deviation (read first)
+
+**The owner did not label this sheet.** The owner delegated the blind labelling, and a
+Claude model labelled the sheet blind (it read only the blind sheet, none of
+`fixture.json`, the README, this draft or any other label). Agreement below is therefore
+measured against a **Claude labeller, not the owner**, so it is a statement about two
+readings of the same rubric, not about the owner's judgment. The owner's own review of
+every disagreement, and every resolution, is still owed. The labels were imported with
+`run_reconcile_screen.py import-sheet` into [`second_labels.json`](second_labels.json) (labels keyed by
+fixture id, plus the labeller and seed). The filled sheet itself is not committed, per
+the README.
+
+**Result** (`adjudicate`): 119 of 121 claims agree (0.983), Cohen's kappa 0.975, 2
+disagreements: `protocol-seams-04` (first `A`, Claude `AB`) and `stoicism-01` (first `AB`,
+Claude `A`). Each moves a claim between one-sided and shared, so neither can be re-scored
+until it has a `once` literal (or is retired), per the README.
+
+**What this does not do.** It resolves nothing: no `adjudication` record, no `resolved`
+label, no change to any registered margin or decision rule. The floors, the class balance
+and the J table below are still the first author's and still need recomputing after the
+owner resolves the disagreements. Labels were not the only missing piece, so this draft
+stays a draft.
+
 ## What the labels are, until the blind labelling is recorded (read before any number)
 
 **One author's.** The first author chose the claims and labelled which note states each,

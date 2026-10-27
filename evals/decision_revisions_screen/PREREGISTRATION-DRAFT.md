@@ -27,6 +27,29 @@ task key. Part of #1556; refs #1563, #1557.
    draft because the server is reserved for another job. The digests below are as
    `ollama list` reported them, a read-only call.
 
+## Second labelling: recorded, with a deviation (read first)
+
+**The owner did not label this sheet.** The owner delegated the blind labelling, and a
+Claude model labelled the sheet blind (it read only the blind sheet, none of
+`fixture.json`, the README, this draft or any other label). Agreement below is therefore
+measured against a **Claude labeller, not the owner**, so it is a statement about two
+readings of the same rubric, not about the owner's judgment. The owner's own review of
+every disagreement, and every resolution, is still owed. The labels were imported with
+`run_revisions_screen.py import-sheet` into [`second_labels.json`](second_labels.json) (labels keyed by
+fixture id, plus the labeller and seed). The filled sheet itself is not committed, per
+the README.
+
+**Result** (`adjudicate`): 55 of 58 agree (0.948), Cohen's kappa 0.927, 3 disagreements.
+All three score differently, all are pairs the drafter flagged contested, and all are among
+the five never-right stored-run items: `r14` (first `reverses`, Claude `unrelated`), `r43`
+(first `refines`, Claude `reaffirms`) and `r53` (first `unrelated`, Claude `reaffirms`).
+
+**What this does not do.** It resolves nothing: no `adjudication` record, no `resolved`
+label, no change to any registered margin or decision rule. The floors, the class balance
+and the J table below are still the first author's and still need recomputing after the
+owner resolves the disagreements. Labels were not the only missing piece, so this draft
+stays a draft.
+
 ## What the labels are, until the adjudication is recorded (read before any number)
 
 **One author's, with one review of the doubtful quarter.** The drafter labelled all

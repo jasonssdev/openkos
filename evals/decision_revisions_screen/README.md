@@ -175,6 +175,13 @@ pair renumbers the items (and the blind sheet's shuffle).
 
 ## Second adjudication
 
+**A second set of labels is recorded, but not by the owner and not resolved.** The
+owner delegated the blind labelling and a Claude model filled the sheet (it read only the
+sheet). `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
+those labels, keyed by fixture id, to [`second_labels.json`](second_labels.json); the
+filled sheet is not committed. Agreement is measured against that labeller, and no
+disagreement is resolved (see the pre-registration draft).
+
 Not done. The commands below write the blind sheet and, once the owner has filled
 it, compare it with the first author's labels. Neither command contacts a model.
 
