@@ -113,6 +113,12 @@ CONFIRM_MEETINGS: Final = (
 INELIGIBLE_SERIES: Final = ("TS3012",)
 """Ineligible under epic #1556 although `POOL_F_WINDOWED` lists them."""
 GPU_BUDGET_S: Final = 45 * 60.0
+EMBED_BUDGET_S: Final = 300.0
+"""Amendment 1: wall-clock ceiling for the confirmation-set embeddings, on top
+of `GPU_BUDGET_S`."""
+EMBED_BATCH: Final = 32
+CONTROL_CYCLE: Final = ("IS1002", "IS1005", "TS3012")
+"""Amendment 1: the thesis cross-team control cycle the stock rule walks."""
 STOP_AFTER_CALLS: Final = 20
 STOP_MEAN_WALL_S: Final = 25.0
 GOOD_STRICT: Final = frozenset({"supported"})
@@ -124,6 +130,10 @@ UNR: Final = "unresolved"
 
 class RefusedMeeting(ValueError):
     """A meeting the registration forbids was requested."""
+
+
+class RefusedEmbedding(ValueError):
+    """An embedding was requested for a text outside the confirmation set."""
 
 
 class StopLine(RuntimeError):
@@ -173,15 +183,82 @@ def confirmation_meetings(requested: Sequence[str] | None = None) -> list[str]:
 
 
 def foreign_control(meeting: str) -> str:
-    """The meeting whose gold is the null control for `meeting`, refused when it
-    is itself a forbidden meeting. The control's gold is read like any other
-    meeting's, so TS3012 may not enter through it either: four of the six
-    registered confirmation meetings have a TS3012 control, which makes the
-    confirmation unrunnable until the owner rules on that (reported, not
-    resolved here)."""
-    control = sd.foreign_meeting(meeting)
-    refuse_meetings([control])
-    return control
+    """The meeting whose gold is the null control for `meeting` (amendment 1).
+
+    Primary meetings keep the stock rule (`screen_data.foreign_meeting`). For a
+    confirmation meeting the rule, fixed before any run, is: walk the control
+    cycle from the next series, skip TS3012 and the meeting's own series, and
+    take the first same-letter meeting on the allowlist; if none, take the first
+    same-letter meeting of the development series in their registered order.
+    Every candidate passes `refuse_meetings`, so TS3012 and held-out series
+    never enter."""
+    refuse_meetings([meeting])
+    if meeting not in CONFIRM_MEETINGS:
+        control = sd.foreign_meeting(meeting)
+        refuse_meetings([control])
+        return control
+    series, letter = sd.series_of(meeting), sd.letter_of(meeting)
+    start = CONTROL_CYCLE.index(series)
+    ordered = [CONTROL_CYCLE[(start + k) % len(CONTROL_CYCLE)] for k in range(1, 3)]
+    for candidate_series in [*ordered, *sd.DEV_SERIES]:
+        candidate = f"{candidate_series}{letter}"
+        if candidate_series in (series, *INELIGIBLE_SERIES):
+            continue
+        if candidate in sd.ALLOWED_MEETINGS:
+            refuse_meetings([candidate])
+            return candidate
+    raise RefusedMeeting(f"no eligible null control for {meeting!r}")
+
+
+def guarded_embed(
+    embed: Callable[[list[str]], list[list[float]]], allowed: set[str]
+) -> Callable[[list[str]], list[list[float]]]:
+    """Amendment 1: embeddings may be computed only for confirmation-set texts.
+    A batch holding any other text embeds nothing."""
+
+    def guarded(texts: list[str]) -> list[list[float]]:
+        outside = [t for t in texts if t not in allowed]
+        if outside:
+            raise RefusedEmbedding(
+                f"refusing to embed {len(outside)} text(s) outside the "
+                f"confirmation set, e.g. {outside[0]!r}"
+            )
+        return embed(texts)
+
+    return guarded
+
+
+def timed_embed(
+    embed: Callable[[list[str]], list[list[float]]],
+    spent: list[float],
+    *,
+    budget_s: float,
+    clock: Callable[[], float] = time.monotonic,
+) -> Callable[[list[str]], list[list[float]]]:
+    """Charge each embedding call's wall time to `spent[0]`; past `budget_s`
+    stop (nothing is read from a stopped run)."""
+
+    def timed(texts: list[str]) -> list[list[float]]:
+        t0 = clock()
+        out = embed(texts)
+        spent[0] += clock() - t0
+        if spent[0] > budget_s:
+            raise StopLine(f"embedding budget: {spent[0]:.0f} s > {budget_s:.0f} s")
+        return out
+
+    return timed
+
+
+def count_missing(store: Any, texts: Sequence[str]) -> int:
+    """Unique texts with no cached vector; computes nothing."""
+    return sum(
+        1
+        for t in dict.fromkeys(texts)
+        if store.db.execute(
+            "SELECT 1 FROM emb WHERE key=?", (store._key(t),)
+        ).fetchone()
+        is None
+    )
 
 
 # --- pure: bootstrap and gates -------------------------------------------------
@@ -1264,6 +1341,21 @@ def _conf_variants(rec: ConfRec, arm: str) -> dict[str, list[Obj]] | None:
     return {"backstop": ceiling[:BACKSTOP], "judge": final}
 
 
+def confirmation_texts(corpus: Any, recs: Sequence[ConfRec]) -> list[str]:
+    """Every text the confirmation scoring embeds: gold, the amended null
+    control's gold, and the ceiling and final objects."""
+    rcs = _screen()
+    texts: list[str] = []
+    for meeting in dict.fromkeys(rec.meeting for rec in recs):
+        texts += [g.text for g in corpus.gold_only(foreign_control(meeting)).sentences]
+    for rec in recs:
+        _t, _w, gold = corpus.meeting(rec.meeting)
+        texts += [g.text for g in gold.sentences]
+        for stage in ("ceiling", "final"):
+            texts += [rcs.unit_text(o) for o in rec.record["stages"][stage] or []]
+    return texts
+
+
 def preflight(
     screen_dir: pathlib.Path, out_dir: pathlib.Path, meetings: Sequence[str]
 ) -> dict[str, Any]:
@@ -1278,24 +1370,15 @@ def preflight(
     store = rcs.EmbedStore(
         screen_dir / "cache" / "embed.sqlite", ab.cache_only_embed, ab.EMBED_DIGEST
     )
-    texts: list[str] = []
     for meeting in dict.fromkeys(rec.meeting for rec in recs):
         try:
-            control = foreign_control(meeting)
+            foreign_control(meeting)
         except RefusedMeeting as err:
             result["reasons"].append(f"null control of {meeting}: {err}")
-            continue
-        texts += [g.text for g in corpus.gold_only(control).sentences]
-    for rec in recs:
-        _t, _w, gold = corpus.meeting(rec.meeting)
-        texts += [g.text for g in gold.sentences]
-        st = rec.record["stages"]
-        for stage in ("ceiling", "final"):
-            texts += [rcs.unit_text(o) for o in st[stage] or []]
-    try:
-        store.vectors(texts)
-    except ab.EmbeddingCacheMiss as err:
-        result["reasons"].append(f"embedding cache miss: {err}")
+    if result["reasons"]:
+        return result
+    texts = confirmation_texts(corpus, recs)
+    result["embeddings_missing"] = count_missing(store, texts)
     if result["reasons"]:
         return result
     windows = sum(
@@ -1312,6 +1395,7 @@ def preflight(
         ok=True,
         meeting_runs=len(recs),
         fixed_replays_needed=sum(1 for r in recs if r.fixed is None),
+        embed_batches=-(-result["embeddings_missing"] // EMBED_BATCH),
         label_windows_upper_bound=windows,
     )
     return result
@@ -1437,7 +1521,9 @@ def cmd_confirm(args: argparse.Namespace) -> int:
         return 1
     if not args.run:
         print(
-            f"forecast: {pre['fixed_replays_needed']} gemma4:26b-a4b judge call(s), at most "
+            f"forecast: {pre['embeddings_missing']} bge-m3 embedding text(s) in "
+            f"{pre['embed_batches']} call(s) (budget {EMBED_BUDGET_S:.0f} s), "
+            f"{pre['fixed_replays_needed']} gemma4:26b-a4b judge call(s), at most "
             f"{pre['label_windows_upper_bound']} gpt-oss:20b label call(s), budget "
             f"{GPU_BUDGET_S / 60:.0f} min; nothing was called (pass --run to call models)"
         )
@@ -1460,6 +1546,35 @@ def run_confirmation(args: argparse.Namespace, meetings: Sequence[str]) -> int:
             )
     path = args.out_dir / "scores" / "confirmation.json"
     corpus = rcs.Corpus(args.screen_dir)
+    # Amendment 1: missing confirmation-set vectors are computed, with the
+    # registration's pinned bge-m3 digest, and only for confirmation texts.
+    ident = model_identity(rcs.EMBED_MODEL, args.host)
+    if ident.get("digest") != ab.EMBED_DIGEST:
+        raise SystemExit(
+            f"refusing: {rcs.EMBED_MODEL} digest {ident.get('digest')} != "
+            f"pinned {ab.EMBED_DIGEST}"
+        )
+    conf_recs, _gone = load_confirmation_records(
+        args.screen_dir, args.out_dir, meetings
+    )
+    texts = confirmation_texts(corpus, conf_recs)
+    client = rcs.OllamaClient(rcs.EMBED_MODEL, host=args.host, timeout=600)
+    embed_spent = [0.0]
+    store = rcs.EmbedStore(
+        args.screen_dir / "cache" / "embed.sqlite",
+        guarded_embed(
+            timed_embed(client.embed, embed_spent, budget_s=EMBED_BUDGET_S),
+            set(texts),
+        ),
+        ab.EMBED_DIGEST,
+    )
+    try:
+        store.vectors(texts)
+    except StopLine as err:
+        _write_json(path, {"status": "stopped", "reasons": [str(err)]})
+        print(f"STOP: {err}; no partial verdict is read")
+        return 1
+    print(f"embeddings: {embed_spent[0]:.0f} s", flush=True)
     timeouts = dict(rcs.load_timeouts(args.screen_dir))
     send = sp.ollama_sender(args.host)
     spent = 0.0
@@ -1703,13 +1818,68 @@ def _t_ts3012_refusal() -> None:
 
 
 def _t_foreign_control_refusal() -> None:
-    _check(sd.foreign_meeting("IS1005a") == "TS3012a", "the null control is TS3012")
-    for meeting in ("IS1005a", "IS1005b", "IS1005c", "IS1002d"):
-        _raises(RefusedMeeting, functools.partial(foreign_control, meeting), "TS3012")
-    _check(foreign_control("IS1002b") == "IS1005b", "a control outside TS3012")
-    _check(foreign_control("ES2015a") == "IS1004a", "primary controls are developed")
+    _check(sd.foreign_meeting("IS1005a") == "TS3012a", "the stock control is TS3012")
+    # Amendment 1, rule 2: TS3012 never enters, and the replacement is a rule.
+    want = {
+        "IS1002b": "IS1005b",
+        "IS1002c": "IS1005c",
+        "IS1002d": "ES2015d",
+        "IS1005a": "ES2015a",
+        "IS1005b": "IS1002b",
+        "IS1005c": "IS1002c",
+    }
+    for meeting, control in want.items():
+        _check(
+            foreign_control(meeting) == control,
+            f"{meeting}: {foreign_control(meeting)}",
+        )
+    _check(set(want) == set(CONFIRM_MEETINGS), "every confirmation meeting is covered")
+    for meeting in CONFIRM_MEETINGS:
+        c = foreign_control(meeting)
+        _check(not c.startswith("TS3012") and c in sd.ALLOWED_MEETINGS, "eligible")
+        _check(sd.series_of(c) != sd.series_of(meeting), "a different series")
+        _check(sd.series_of(c) not in sd.THESIS_EVALUATION_SERIES, "not held out")
+    _raises(RefusedMeeting, functools.partial(foreign_control, "TS3012a"), "TS3012")
+    _raises(RefusedMeeting, functools.partial(foreign_control, "ES2002a"), "thesis")
+    _check(foreign_control("ES2015a") == "IS1004a", "primary controls are unchanged")
     for meeting in sd.POOL_DA:
-        _check(foreign_control(meeting) in sd.ALLOWED_MEETINGS, "primary control")
+        _check(foreign_control(meeting) == sd.foreign_meeting(meeting), "primary rule")
+
+
+def _t_embedding_guard() -> None:
+    import tempfile
+
+    import run_concept_screen as rcs
+
+    sent: list[str] = []
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        sent.extend(texts)
+        return [[1.0, 0.0] for _ in texts]
+
+    guarded = guarded_embed(embed, {"conf a", "conf b"})
+    _check(guarded(["conf a"]) == [[1.0, 0.0]], "a confirmation text embeds")
+    _raises(
+        RefusedEmbedding, functools.partial(guarded, ["primary text"]), "primary text"
+    )
+    _check(sent == ["conf a"], f"nothing else reached the model: {sent}")
+    _raises(
+        RefusedEmbedding,
+        functools.partial(guarded, ["conf b", "primary text"]),
+        "primary text",
+    )
+    _check(sent == ["conf a"], "a batch with one outsider embeds nothing")
+    with tempfile.TemporaryDirectory() as tmp:
+        store = rcs.EmbedStore(pathlib.Path(tmp) / "e.sqlite", embed, "digest")
+        store.vectors(["conf a"])
+        _check(
+            count_missing(store, ["conf a", "conf b", "conf b"]) == 1, "unique misses"
+        )
+        _check(count_missing(store, ["conf a"]) == 0, "all cached")
+    _check(EMBED_BUDGET_S == 300.0 and EMBED_BATCH == 32, "embedding budget pinned")
+    calls = [0.0]
+    timed = timed_embed(embed, calls, budget_s=1.0, clock=iter([0.0, 2.0]).__next__)
+    _raises(StopLine, functools.partial(timed, ["x"]), "embedding budget")
 
 
 def _t_cost_gate() -> None:
@@ -2001,6 +2171,7 @@ def _t_label_run() -> None:
 TESTS: Final[Sequence[Callable[[], None]]] = (
     _t_registered_constants,
     _t_foreign_control_refusal,
+    _t_embedding_guard,
     _t_gate_direction,
     _t_decision_rule,
     _t_ts3012_refusal,
