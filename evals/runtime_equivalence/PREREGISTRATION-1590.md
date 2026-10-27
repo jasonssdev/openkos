@@ -1,6 +1,7 @@
 # Pre-registration: llama.cpp vs Ollama on the same weights, with power (#1590)
 
-**Status: registered when this file merges, before any measured call.** A
+**Status: registered when this file merges, before any measured call; run,
+result EQUIVALENT, recorded in [`RESULTS-1590.md`](RESULTS-1590.md).** A
 change after the merge is a new registration, not an edit. Follow-up to
 #1586 (`evals/runtime_screen/RESULTS.md`). Part of #1556.
 
