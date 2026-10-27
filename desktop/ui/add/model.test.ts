@@ -69,6 +69,53 @@ describe("AddModel", () => {
     expect(model.state).toMatchObject({ phase: "consent", quote: ONE });
   });
 
+  it("quotes dropped files exactly as it quotes chosen ones, without opening the chooser", async () => {
+    const { model, client, pick } = make({ quotes: [ONE] });
+    await model.drop(["/Users/me/a.md", "/Users/me/b.md"]);
+    expect(pick).not.toHaveBeenCalled();
+    expect(client.quoteIngest).toHaveBeenCalledWith({ paths: ["/Users/me/a.md", "/Users/me/b.md"] });
+    expect(model.state).toMatchObject({ phase: "consent", quote: ONE });
+    expect(client.startIngest).not.toHaveBeenCalled();
+  });
+
+  it("never starts a run for a drop until the person agrees", async () => {
+    const { model, client } = make({ quotes: [ONE], start: [job({ state: "running" })], polls: [finished()] });
+    await model.drop(["/Users/me/a.md"]);
+    expect(client.startIngest).not.toHaveBeenCalled();
+    await model.agree();
+    expect(client.startIngest).toHaveBeenCalledWith({ token: ONE.token });
+  });
+
+  it("ignores a drop of nothing, before the engine is there, or while a quote or run is open", async () => {
+    const waiting = new AddModel({ pick: async () => null });
+    await waiting.drop(["/Users/me/a.md"]);
+    expect(waiting.state.phase).toBe("idle");
+    const { model, client } = make({ quotes: [ONE] });
+    await model.drop([]);
+    expect(client.quoteIngest).not.toHaveBeenCalled();
+    await model.drop(["/Users/me/a.md"]);
+    await model.drop(["/Users/me/other.md"]);
+    expect(client.quoteIngest).toHaveBeenCalledOnce();
+    expect(model.state.quote).toBe(ONE);
+  });
+
+  it("takes a drop after a result or a problem, like a refused file", async () => {
+    const { model, client } = make({ quotes: [ONE, TWO], start: [finished()] });
+    await model.drop(["/Users/me/a.md"]);
+    await model.agree();
+    expect(model.state.phase).toBe("done");
+    await model.drop(["/Users/me/b.md"]);
+    expect(client.quoteIngest).toHaveBeenLastCalledWith({ paths: ["/Users/me/b.md"] });
+    expect(model.state.phase).toBe("consent");
+  });
+
+  it("shows a folder or unreadable drop with the engine's own wording, as the chooser does", async () => {
+    const { model } = make({ quotes: [quote([fileQuote("notes", { status: "refused", refusal: "not_a_file" })])] });
+    await model.drop(["/Users/me/notes"]);
+    expect(model.state.phase).toBe("consent");
+    expect(model.state.quote?.files[0]?.refusal).toBe("not_a_file");
+  });
+
   it("shows the quoting step while it waits", async () => {
     const { model, seen } = make({ quotes: [ONE] });
     await model.choose();

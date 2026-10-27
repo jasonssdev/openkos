@@ -30,12 +30,18 @@ function list(items: { text: string; note?: string | null }[]): HTMLElement {
 function start(state: AddState, actions: AddActions): Child[] {
   const waiting = state.ready ? null : el("p", { class: "ui-field__hint", attrs: { id: WAITING_ID } }, "Waiting for OpenKOS to start…");
   return [
-    uiButton("Choose files…", actions.choose, {
-      variant: "primary",
-      disabled: !state.ready,
-      focusKey: "add-choose",
-      ...(state.ready ? {} : { describedBy: WAITING_ID }),
-    }),
+    el(
+      "div",
+      { class: "add-drop", attrs: { role: "group", "aria-label": "Drop files" } },
+      el("p", { class: "add-drop__title" }, "Drop files here"),
+      el("p", { class: "ui-field__hint" }, "Drop them anywhere in this window, or choose them from your Mac."),
+      uiButton("Choose files…", actions.choose, {
+        variant: "primary",
+        disabled: !state.ready,
+        focusKey: "add-choose",
+        ...(state.ready ? {} : { describedBy: WAITING_ID }),
+      }),
+    ),
     waiting,
   ];
 }
@@ -117,7 +123,7 @@ function body(state: AddState, actions: AddActions): Child[] {
 export function renderAdd(root: HTMLElement, state: AddState, actions: AddActions): void {
   const header = pageHeader({
     title: "Add files",
-    description: "Choose files from your Mac. OpenKOS keeps them and makes pages from what is in them.",
+    description: "Drop files on this window or choose them from your Mac. OpenKOS keeps them and makes pages from what is in them.",
   });
   redraw(root, `add-${state.phase === "stopping" ? "running" : state.phase}`, () =>
     root.replaceChildren(header, ...(body(state, actions).filter((n) => n !== null && n !== false && n !== undefined) as (Node | string)[])),

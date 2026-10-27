@@ -14,6 +14,7 @@ import {
   type EngineState,
   type Invoke,
 } from "../client/index.ts";
+import { listenForDrops } from "./add/drop.ts";
 import { AddModel } from "./add/model.ts";
 import { renderAdd } from "./add/render.ts";
 import { addCue, nextUnseen } from "./add/wording.ts";
@@ -200,6 +201,14 @@ add.subscribe((next) => {
   addPhase = next.phase;
   paintAdd();
   paintNav();
+});
+
+// Files dropped anywhere on the window: look at them on the Add files screen, where
+// the quote and the person's consent come first. Not before a library is open.
+listenForDrops(window, document.body, (paths) => {
+  if (view === "welcome" || view === "setup" || !add.state.ready) return;
+  show("add");
+  void add.drop(paths);
 });
 
 /** A refused file's "Add it": quote it on the Add files screen. */

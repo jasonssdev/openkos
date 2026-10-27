@@ -44,6 +44,20 @@ describe("the Add files screen", () => {
     expect(a.choose).toHaveBeenCalledOnce();
   });
 
+  it("offers dropping as well as the button, in words", () => {
+    const root = draw(state());
+    const zone = root.querySelector(".add-drop") as HTMLElement;
+    expect(zone.textContent).toContain("Drop files here");
+    expect(zone.textContent).toContain("Choose files");
+    expect(zone.getAttribute("role")).toBe("group");
+    expect(zone.getAttribute("aria-label")).toBe("Drop files");
+    expect(buttons(root)).toEqual(["Choose files…"]);
+  });
+
+  it("keeps the drop hint off the screens that follow", () => {
+    expect(draw(state({ phase: "quoting" })).querySelector(".add-drop")).toBeNull();
+  });
+
   it("waits for the engine, saying why the button is unavailable", () => {
     const root = draw(state({ ready: false }));
     const choose = button(root, "Choose files…");

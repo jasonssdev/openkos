@@ -87,6 +87,13 @@ export class AddModel {
     await this.#quote({ kind: "paths", paths });
   }
 
+  /** Quote files dropped on the window: the chooser's path, without the chooser. */
+  async drop(paths: string[]): Promise<void> {
+    if (this.#client === null || paths.length === 0) return;
+    if (this.#state.phase !== "idle" && this.#state.phase !== "done" && this.#state.phase !== "problem") return;
+    await this.#quote({ kind: "paths", paths });
+  }
+
   /** Quote the file a refused decision names. */
   async addRefused(decisionKey: string): Promise<void> {
     if (this.#client === null || (this.#state.phase !== "idle" && this.#state.phase !== "done" && this.#state.phase !== "problem")) return;
