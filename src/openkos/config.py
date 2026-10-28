@@ -436,6 +436,16 @@ as many hand-annotated decisions as the general pass, at high precision, but
 short of the bar set for making it the default. So it stays opt-in, and off
 restores the pre-pass path byte-for-byte."""
 
+DEFAULT_QUERY_AWARE_EXCERPTS = False
+"""Packaged default for `query_aware_excerpts` (#1647): whether `query`, when a
+retrieved document exceeds its share of the prompt window, keeps the 800-char
+windows that best match the question (BM25 over that document's windows,
+model-free, no extra call) instead of evenly spaced ones.
+
+`False`, and deliberately so: the choice is unmeasured until it is scored on
+`evals/retrieval_gold` against a pre-registered decision rule (umbrella
+#1652). Off, every prompt is byte-identical to a run with the key absent."""
+
 DEFAULT_REVISION_HISTORY = False
 """Packaged default for `revision_history` (#1014 piece b): whether `query`
 attaches each retrieved concept's earlier versions -- reached through its
@@ -1545,6 +1555,13 @@ class Config:
     `DEFAULT_ATTACH_AT_INGEST` when the key is absent or explicitly null. Added
     LAST and DEFAULTED, like `revision_history`, so a positional or partial
     `Config(...)` construction elsewhere is unchanged."""
+    query_aware_excerpts: bool = DEFAULT_QUERY_AWARE_EXCERPTS
+    """Whether `query` chooses the windows of an over-budget context block by
+    BM25 similarity to the question (#1647), defaulting to
+    `DEFAULT_QUERY_AWARE_EXCERPTS` (`False`) when the key is absent or
+    explicitly null. The application layer passes this value explicitly to
+    `answer`'s `query_aware_excerpts` kwarg, so the default lives in ONE
+    place. Added LAST and DEFAULTED, like `transcript_decisions`."""
     transcript_decisions: bool = DEFAULT_TRANSCRIPT_DECISIONS
     """Whether ingest runs the transcript decision pass on a meeting-shaped
     source (#1348), defaulting to `DEFAULT_TRANSCRIPT_DECISIONS` (`False`)
@@ -1629,6 +1646,7 @@ def parse_config(root: Path, text: str) -> Config:
     type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
     rationale_language = raw.get("rationale_language")
     revision_history = raw.get("revision_history")
+    query_aware_excerpts = raw.get("query_aware_excerpts")
     transcript_decisions = raw.get("transcript_decisions")
     attach_at_ingest = raw.get("attach_at_ingest")
     backend = raw.get("backend")
@@ -1915,6 +1933,12 @@ def parse_config(root: Path, text: str) -> Config:
             f"{layout.config_path.name}: 'revision_history' must be a "
             f"boolean, got {type(revision_history).__name__}"
         )
+    if query_aware_excerpts is not None and not isinstance(query_aware_excerpts, bool):
+        # Same narrow `isinstance(x, bool)` guard as `revision_history`.
+        raise ValueError(
+            f"{layout.config_path.name}: 'query_aware_excerpts' must be a "
+            f"boolean, got {type(query_aware_excerpts).__name__}"
+        )
     if transcript_decisions is not None and not isinstance(transcript_decisions, bool):
         # Same narrow `isinstance(x, bool)` guard as `revision_history`: YAML
         # resolves `1` to `int`, and this key gates an extra model call per
@@ -2112,6 +2136,11 @@ def parse_config(root: Path, text: str) -> Config:
             revision_history
             if revision_history is not None
             else DEFAULT_REVISION_HISTORY
+        ),
+        query_aware_excerpts=(
+            query_aware_excerpts
+            if query_aware_excerpts is not None
+            else DEFAULT_QUERY_AWARE_EXCERPTS
         ),
         backend=resolved_backend,
         base_url=resolved_base_url,
