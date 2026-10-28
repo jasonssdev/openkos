@@ -659,6 +659,8 @@ be resolved by hand; the command never merges them.
 | `prereg_tools.py`, `gold_prereg.py` | Model-free pieces of the registrations below: chunk counts, the length diagnostic, the vocabulary-gap stratum, the leak audit, three-list fusion, the distance aggregators. Pure, `--self-test`. |
 | `PREREGISTRATION-1648.md` | Registered on merge: does the dense channel favour long documents (diagnostic first, then arms). |
 | `PREREGISTRATION-1650.md` | Registered on merge: index the questions a Decision answers (doc2query), measured on the vocabulary-gap stratum. |
+| `PREREGISTRATION-1651.md` | Registered on merge: a chat model as a pointwise reranker over a widened fused pool, the cheapest path before any `llama-server` step. |
+| `gold_rerank.py` | Model-free parts of that registration (prompt parsing, the rerank arms, latency accounting, the decision rule) plus the two commands that call Ollama (`wide-run`, `score-pool`). `--self-test`. |
 | `bundle_sources.json` | The selected sources with their sha256, language, kind and tier, and what was excluded and why. |
 | `questions.draft.json` | The draft question set for the 35-document draft bundle; no judgments. |
 | `questions.v1.json` | The frozen, model-authored question set for `bundle-v1`; no judgments. |
