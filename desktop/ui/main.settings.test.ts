@@ -9,6 +9,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 const TOKEN = "f".repeat(64);
 const READY = { state: "ready", attempt: 1, base_url: "http://127.0.0.1:4321/v1", token: TOKEN, pid: 7 };
 
+let watchState: Record<string, unknown> = { state: "on", attempt: 1, pid: 9, wanted: true };
+let spent = false;
+
 const invoke = vi.fn(async (command: string) => {
   switch (command) {
     case "engine_state":
@@ -17,6 +20,8 @@ const invoke = vi.fn(async (command: string) => {
       return true;
     case "workspace_choice_status":
       return { source: "remembered", path: "/Users/me/library", valid: true };
+    case "watch_state":
+      return watchState;
     default:
       throw new Error(`unexpected ${command}`);
   }
@@ -45,6 +50,10 @@ const fetchMock = vi.fn(async (request: Request) => {
   const body =
     path === "/v1/settings/model"
       ? CLOUD
+      : path === "/v1/settings/inbox"
+        ? { inbox: "/Users/me/Inbox", quiet_seconds: 30, max_calls_per_day: 500 }
+        : path === "/v1/unattended"
+          ? { last_job: null, budget_exhausted: spent, jobs_unreadable: false }
       : path === "/v1/reconciled"
         ? { pairs: [{ first_id: "b/x", second_id: "b/y", relation_type: "reconciled_with", holder_id: null, target_id: null }] }
         : path === "/v1/declined-contradictions"
@@ -81,6 +90,44 @@ beforeAll(async () => {
 afterAll(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("the watch status in the app", () => {
+  it("keeps a quiet line at the foot of the sidebar saying watching is on", () => {
+    expect(button(footer(), "Watching: on")).toBeDefined();
+  });
+
+  it("changes that line when the daemon stops on the AI model's limit, without a visit to Settings", async () => {
+    spent = true;
+    await vi.advanceTimersByTimeAsync(31_000);
+    await settle();
+    expect(button(footer(), "Watching: paused")).toBeDefined();
+    expect(button(footer(), "Watching: on")).toBeUndefined();
+  });
+
+  it("changes it again when the shell gives up on the daemon", async () => {
+    watchState = { state: "failed", reason: "exited", detail: "boom", wanted: true };
+    await vi.advanceTimersByTimeAsync(31_000);
+    await settle();
+    expect(button(footer(), "Watching: stopped")).toBeDefined();
+    // Leaves the state as the rest of the file expects it.
+    watchState = { state: "on", attempt: 1, pid: 9, wanted: true };
+    spent = false;
+    await vi.advanceTimersByTimeAsync(31_000);
+    await settle();
+    expect(button(footer(), "Watching: on")).toBeDefined();
+  });
+
+  it("opens Settings from that line, where the card says the same", async () => {
+    button(footer(), "Watching: on")?.click();
+    await settle();
+    expect(view("settings").hidden).toBe(false);
+    expect(view("settings").textContent).toContain("Watch a folder");
+    expect(view("settings").textContent).toContain("/Users/me/Inbox");
+    expect(view("settings").textContent).toContain("Watching is on.");
+    const status = Array.from(document.querySelectorAll<HTMLButtonElement>(".ui-nav-item")).find((n) => n.textContent === "Status");
+    status?.click();
+  });
 });
 
 describe("settings in the app", () => {

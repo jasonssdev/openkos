@@ -3281,6 +3281,28 @@
       "kind": "dataclass",
       "members": {}
     },
+    "UnattendedActivity": {
+      "fields": [
+        {
+          "annotation": "JobSummary | None",
+          "default": false,
+          "name": "last_job"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "budget_exhausted"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "jobs_unreadable"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "UndoStale": {
       "fields": [
         {
@@ -4917,6 +4939,18 @@
         }
       ],
       "returns": "WorkspaceStatus"
+    },
+    "unattended_activity": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "UnattendedActivity"
     }
   }
 }

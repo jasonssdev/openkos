@@ -9,15 +9,29 @@ import {
   ApiKeyError,
   retryWhileBusy,
   type Schemas,
+  type WatchStatus,
   type WorkspaceChoice,
 } from "../../client/index.ts";
 import type { Undo } from "../review/model.ts";
 import { problemFor, titleOf, undoneLine } from "../review/wording.ts";
 import { type Refusal, welcomeRefusal } from "../setup/wording.ts";
-import { WORDS, cloudWarning, keyAfterSaveFailure, keyFailure, saveFailure, savedNote } from "./wording.ts";
+import {
+  WATCH,
+  WORDS,
+  cloudWarning,
+  keyAfterSaveFailure,
+  keyFailure,
+  saveFailure,
+  savedNote,
+  watchFailure,
+  watchCommandFailure,
+} from "./wording.ts";
 
 type Settings = Schemas["ModelSettings"];
 type Preview = Schemas["ModelSettingsPreview"];
+type Inbox = Schemas["InboxSettings"];
+type InboxPreview = Schemas["InboxSettingsPreview"];
+type Activity = Schemas["UnattendedActivity"];
 
 /**
  * The AI models a library uses on this Mac when it comes back from the cloud:
@@ -31,6 +45,10 @@ export interface SettingsApi {
   modelSettings(): Promise<Settings>;
   previewModelSettings(body: Schemas["ModelSettingsPreviewRequest"]): Promise<Preview>;
   applyModelSettings(body: Schemas["ModelSettingsApplyRequest"]): Promise<Schemas["ModelSettingsResponse"]>;
+  unattendedActivity(): Promise<Activity>;
+  inboxSettings(): Promise<Inbox>;
+  previewInboxSettings(body: Schemas["InboxSettingsPreviewRequest"]): Promise<InboxPreview>;
+  applyInboxSettings(body: Schemas["InboxSettingsApplyRequest"]): Promise<Schemas["InboxSettingsResponse"]>;
   reconciledPairs(): Promise<Schemas["ReconciledPairList"]>;
   declinedContradictions(): Promise<Schemas["DeclinedContradictionList"]>;
   readPage(conceptId: string): Promise<Schemas["Page"]>;
@@ -57,6 +75,14 @@ export interface SettingsPorts {
     pickFolder(): Promise<string | null>;
     open(path: string): Promise<WorkspaceChoice>;
     create(path: string): Promise<WorkspaceChoice>;
+  };
+  /** The inbox watch (ADR-0078): the shell runs the daemon only while the person turned it on. */
+  watch: {
+    state(): Promise<WatchStatus>;
+    set(on: boolean): Promise<WatchStatus>;
+    pickFolder(): Promise<string | null>;
+    /** Ask the shell to raise the notification that the watch paused on the limit. */
+    notifyBudgetStop(): Promise<void>;
   };
 }
 
@@ -99,6 +125,34 @@ export interface SettingsState {
   declined: UndoRow[];
   /** The key of the row being undone. */
   undoing: string | null;
+  /** The watch folder and its limits; `null` until read. */
+  inbox: Inbox | null;
+  /** What the shell says of the watch; `null` until read. */
+  watch: WatchStatus | null;
+  watchBusy: "choosing" | "starting" | "stopping" | null;
+  /** A folder chosen and previewed, waiting for the person to start watching it. */
+  watchConfirm: { folder: string } | null;
+  /** The person stopped the watch in this session. */
+  stoppedByYou: boolean;
+  /** The engine's latest unattended job outcome; `null` until read. */
+  activity: Activity | null;
+}
+
+/**
+ * What the persistent watch status says (ADR-0078, "Five"): `on`, `stopped` (the
+ * person turned it off), `budget` (the daemon runs but its latest job ran out of
+ * the AI model's limit: it idles, it does not exit, so only the engine's job
+ * record can say so) or `failed` (the shell gave up restarting it). `null`:
+ * nothing to say, because the watch was never turned on or cannot be read.
+ */
+export type WatchKind = "on" | "stopped" | "budget" | "failed";
+
+export function watchKind(state: Pick<SettingsState, "watch" | "activity" | "inbox" | "stoppedByYou">): WatchKind | null {
+  const watch = state.watch;
+  if (watch === null || watch.state === "no_workspace") return null;
+  if (watch.state === "failed") return "failed";
+  if (!watch.wanted) return state.stoppedByYou || state.inbox?.inbox ? "stopped" : null;
+  return state.activity?.budget_exhausted ? "budget" : "on";
 }
 
 /** A cloud model is on: the shell shows it while it lasts. */
@@ -129,12 +183,22 @@ export class SettingsModel {
     settled: [],
     declined: [],
     undoing: null,
+    inbox: null,
+    watch: null,
+    watchBusy: null,
+    watchConfirm: null,
+    stoppedByYou: false,
+    activity: null,
   };
 
   readonly #ports: SettingsPorts;
   readonly #listeners = new Set<Listener>();
   #api: SettingsApi | null = null;
   #pending: Preview | null = null;
+  #watchPending: InboxPreview | null = null;
+  /** The first look at the watch has been taken: a stop already there is not news. */
+  #baselined = false;
+  #wasPaused = false;
 
   constructor(ports: SettingsPorts) {
     this.#ports = ports;
@@ -164,13 +228,19 @@ export class SettingsModel {
     const api = this.#api;
     if (api === null) return;
     if (this.state.settings === null) this.#set({ phase: "loading" });
-    const [settings, key, library] = await Promise.allSettled([
+    const [settings, key, library, inbox, watch, activity] = await Promise.allSettled([
       api.modelSettings(),
       this.#ports.keys.isSet(),
       this.#ports.workspaces.status(),
+      api.inboxSettings(),
+      this.#ports.watch.state(),
+      api.unattendedActivity(),
     ]);
     if (api !== this.#api) return;
     this.#set({
+      ...(inbox.status === "fulfilled" ? { inbox: inbox.value } : {}),
+      ...(watch.status === "fulfilled" ? { watch: watch.value } : {}),
+      ...(activity.status === "fulfilled" ? { activity: activity.value } : {}),
       ...(settings.status === "fulfilled"
         ? { phase: "ready" as const, settings: settings.value }
         : { phase: this.state.settings === null ? ("failed" as const) : this.state.phase }),
@@ -178,6 +248,7 @@ export class SettingsModel {
       ...(library.status === "fulfilled" ? { library: library.value } : {}),
       librarySwitching: false,
     });
+    this.#noticeBudgetStop();
     await this.#loadUndoLists(api);
   }
 
@@ -377,6 +448,140 @@ export class SettingsModel {
     } catch (error) {
       this.#set({ removingKey: false, problem: keyFailure(error) });
     }
+  }
+
+  /**
+   * Read the watch again: the shell's state always, and the engine's job record
+   * while the watch is wanted and an engine runs. A read that fails keeps what
+   * was known. The daemon can stop on its own, so the page asks now and then.
+   */
+  async refreshWatch(): Promise<void> {
+    const api = this.#api;
+    const [watch] = await Promise.allSettled([this.#ports.watch.state()]);
+    const state = watch.status === "fulfilled" ? watch.value : this.state.watch;
+    let activity = this.state.activity;
+    if (api !== null && state?.wanted === true) {
+      const [read] = await Promise.allSettled([api.unattendedActivity()]);
+      if (api !== this.#api) return;
+      if (read.status === "fulfilled") activity = read.value;
+    }
+    this.#set({ watch: state, activity });
+    this.#noticeBudgetStop();
+  }
+
+  /**
+   * The daemon idles on a spent budget and exits with no code, so the shell
+   * cannot tell the person; the page sees it first, in the job record, and asks
+   * the shell for the notification once per stop. A stop already there when the
+   * app first looked is not announced, and a failure is the shell's to raise.
+   */
+  #noticeBudgetStop(): void {
+    if (this.state.watch === null) return;
+    const paused = watchKind(this.state) === "budget";
+    const announce = this.#baselined && paused && !this.#wasPaused;
+    this.#baselined = true;
+    this.#wasPaused = paused;
+    if (announce) void this.#ports.watch.notifyBudgetStop().catch(() => {});
+  }
+
+  /** Choose the folder to watch and preview it; nothing is written until `confirmWatch`. */
+  async chooseWatchFolder(): Promise<void> {
+    const api = this.#api;
+    if (api === null || this.state.watchBusy !== null) return;
+    this.#watchPending = null;
+    this.#set({ watchBusy: "choosing", watchConfirm: null, problem: null, note: null });
+    try {
+      const path = await this.#ports.watch.pickFolder();
+      if (path === null) {
+        this.#set({ watchBusy: null });
+        return;
+      }
+      try {
+        const preview = await api.previewInboxSettings({ inbox: path });
+        this.#watchPending = preview;
+        this.#set({ watchBusy: null, watchConfirm: { folder: preview.proposed.inbox ?? path } });
+      } catch (error) {
+        const saved = this.state.inbox?.inbox ?? null;
+        if (!(error instanceof ApiError && error.code === "inbox_unchanged" && saved !== null)) throw error;
+        // The folder is already the saved one: only the watch is left to start.
+        this.#set({ watchBusy: null, watchConfirm: { folder: saved } });
+      }
+    } catch (error) {
+      this.#set({ watchBusy: null, problem: watchFailure(error) });
+    }
+  }
+
+  /** Not this folder after all: nothing was written. */
+  cancelWatch(): void {
+    this.#watchPending = null;
+    this.#set({ watchConfirm: null });
+  }
+
+  /** Save the previewed folder, then start the watch on it. */
+  async confirmWatch(): Promise<void> {
+    const api = this.#api;
+    const confirm = this.state.watchConfirm;
+    if (api === null || confirm === null || this.state.watchBusy !== null) return;
+    const preview = this.#watchPending;
+    this.#watchPending = null;
+    this.#set({ watchBusy: "starting", watchConfirm: null, problem: null, note: null });
+    let folder = confirm.folder;
+    if (preview !== null) {
+      try {
+        const answer = await retryWhileBusy(() => api.applyInboxSettings({ version: preview.version }));
+        this.#set({ inbox: answer.changed.settings });
+        folder = answer.changed.settings.inbox ?? folder;
+      } catch (error) {
+        this.#set({ watchBusy: null, problem: watchFailure(error) });
+        if (error instanceof ApiError && error.code === "stale") await this.load();
+        return;
+      }
+    }
+    try {
+      const watch = await this.#ports.watch.set(true);
+      this.#set({ watchBusy: null, watch, stoppedByYou: false, note: WATCH.startedNote(folder) });
+    } catch (error) {
+      this.#set({ watchBusy: null, problem: WATCH.notStarted(error) });
+    }
+  }
+
+  /** Start watching the folder that is already saved. */
+  async startWatch(): Promise<void> {
+    if (this.state.watchBusy !== null) return;
+    this.#set({ watchBusy: "starting", problem: null, note: null });
+    try {
+      const watch = await this.#ports.watch.set(true);
+      this.#set({ watchBusy: null, watch, stoppedByYou: false });
+    } catch (error) {
+      this.#set({ watchBusy: null, problem: watchCommandFailure(error) });
+    }
+  }
+
+  /** Stop the watch, then take the folder out of the library's settings. */
+  async stopWatch(): Promise<void> {
+    const api = this.#api;
+    if (this.state.watchBusy !== null) return;
+    this.#set({ watchBusy: "stopping", problem: null, note: null });
+    try {
+      const watch = await this.#ports.watch.set(false);
+      this.#set({ watch, stoppedByYou: true });
+    } catch (error) {
+      this.#set({ watchBusy: null, problem: watchCommandFailure(error) });
+      return;
+    }
+    if (api !== null && this.state.inbox?.inbox) {
+      try {
+        const preview = await api.previewInboxSettings({ inbox: null });
+        const answer = await retryWhileBusy(() => api.applyInboxSettings({ version: preview.version }));
+        this.#set({ inbox: answer.changed.settings });
+      } catch (error) {
+        if (!(error instanceof ApiError && error.code === "inbox_unchanged")) {
+          this.#set({ watchBusy: null, problem: WATCH.folderKept });
+          return;
+        }
+      }
+    }
+    this.#set({ watchBusy: null, note: WATCH.stoppedNote });
   }
 
   openLibrary(): Promise<void> {

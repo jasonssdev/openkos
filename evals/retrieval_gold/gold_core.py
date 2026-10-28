@@ -35,6 +35,9 @@ CHANNELS: Final = ("fts", "dense", "fused")
 GRADES: Final = (0, 1, 2)
 LANGUAGES: Final = ("en", "es")
 KINDS: Final = ("single-hop", "multi-hop", "enumeration")
+# The vocabulary-gap stratum: a question that avoids its passage's words, and
+# the rest. Orthogonal to the kind; reported beside it.
+STRATA: Final = (("vocab-gap", True), ("plain", False))
 
 POOL_FTS_ONLY: Final = "fts-only"
 POOL_FULL: Final = "full"
@@ -67,6 +70,22 @@ class Question:
     kind: str
     question: str
     note: str = ""
+    # Author metadata, outside the question hash and out of every sheet: the
+    # vocabulary-gap stratum, the documents the author read, and (for a gap
+    # question) the verbatim passages it was written from.
+    vocab_gap: bool = False
+    answers: tuple[str, ...] = ()
+    passages: tuple[str, ...] = ()
+
+
+def _string_list(
+    entry: Mapping[str, Any], key: str, label: str, local: list[str]
+) -> tuple[str, ...]:
+    raw = entry.get(key, [])
+    if not isinstance(raw, list) or not all(isinstance(x, str) and x for x in raw):
+        local.append(f"{label}: `{key}` must be a list of non-empty strings")
+        return ()
+    return tuple(raw)
 
 
 def parse_questions(raw: Mapping[str, Any]) -> tuple[list[Question], list[str]]:
@@ -99,6 +118,11 @@ def parse_questions(raw: Mapping[str, Any]) -> tuple[list[Question], list[str]]:
         text = entry.get("question")
         if not isinstance(text, str) or not text.strip():
             local.append(f"{label}: empty question")
+        gap = entry.get("vocab_gap", False)
+        if not isinstance(gap, bool):
+            local.append(f"{label}: `vocab_gap` must be true or false")
+        answers = _string_list(entry, "answers", label, local)
+        passages = _string_list(entry, "passages", label, local)
         problems += local
         if local:
             continue
@@ -109,9 +133,42 @@ def parse_questions(raw: Mapping[str, Any]) -> tuple[list[Question], list[str]]:
                 kind=str(entry["kind"]),
                 question=str(text),
                 note=str(entry.get("note", "")),
+                vocab_gap=gap is True,
+                answers=answers,
+                passages=passages,
             )
         )
     return (out, problems) if not problems else ([], problems)
+
+
+AUTHORED_SIZE: Final = (40, 60)
+AUTHORED_MIN_GAP_SHARE: Final = 0.25
+
+
+def authoring_problems(questions: Sequence[Question]) -> list[str]:
+    """The size, stratum and metadata rules of a model-authored set
+    (README, "The v1 question set"). The lexical rules need the bundle and
+    live in `gold_overlap`."""
+    out: list[str] = []
+    low, high = AUTHORED_SIZE
+    if not low <= len(questions) <= high:
+        out.append(f"{len(questions)} questions; the set must hold {low} to {high}")
+    gap = sum(1 for q in questions if q.vocab_gap)
+    if questions and gap / len(questions) < AUTHORED_MIN_GAP_SHARE:
+        out.append(
+            f"vocab_gap share is {gap}/{len(questions)}; at least "
+            f"{AUTHORED_MIN_GAP_SHARE:.0%} are required"
+        )
+    for language in LANGUAGES:
+        for kind in KINDS:
+            if not any(q.language == language and q.kind == kind for q in questions):
+                out.append(f"no {language} {kind} question")
+    for q in questions:
+        if not q.answers:
+            out.append(f"{q.id}: no `answers` (the documents the author read)")
+        if q.vocab_gap and not q.passages:
+            out.append(f"{q.id}: a vocab_gap question needs its `passages`")
+    return out
 
 
 def questions_sha256(questions: Sequence[Question]) -> str:
@@ -426,6 +483,23 @@ def score_run(
         }
         for kind in KINDS
     }
+    by_stratum = {
+        name: {
+            channel: {
+                metric: _mean(
+                    [
+                        per_question[q.id][channel][metric]
+                        for q in questions
+                        if q.vocab_gap is gap
+                    ]
+                )
+                for metric in METRICS
+            }
+            for channel in channels
+        }
+        for name, gap in STRATA
+        if any(q.vocab_gap is gap for q in questions)
+    }
     return {
         "kind": SCORES_KIND,
         "bundle": judgments.get("bundle"),
@@ -438,6 +512,11 @@ def score_run(
         "per_question": per_question,
         "summary": summary,
         "by_kind": by_kind,
+        "by_stratum": by_stratum,
+        "n_stratum": {
+            name: sum(1 for q in questions if q.vocab_gap is gap)
+            for name, gap in STRATA
+        },
         "coverage": {c: _mean(covered[c]) for c in channels},
     }
 
@@ -469,6 +548,14 @@ def render_report(report: Mapping[str, Any]) -> str:
             row = report["summary"][name][channel]
             lines.append(
                 f"  {channel:<7}" + "".join(f"{row[m]:>11.3f}" for m in METRICS)
+            )
+    for name, rows in report.get("by_stratum", {}).items():
+        lines += ["", f"[stratum {name}] n={report['n_stratum'][name]}"]
+        lines.append(f"  {'channel':<7}" + "".join(f"{m:>11}" for m in METRICS))
+        for channel in report["channels"]:
+            lines.append(
+                f"  {channel:<7}"
+                + "".join(f"{rows[channel][m]:>11.3f}" for m in METRICS)
             )
     return "\n".join(lines)
 

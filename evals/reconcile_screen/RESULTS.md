@@ -9,8 +9,9 @@ cases, 121 claims; 75 calls per model). Stored outputs:
 ## Verdict
 
 **A model call is justified: `gemma4:26b-a4b` clears J and is SELECTED over `qwen3:8b`.** It is
-the only model to clear J, and the only one selected. The confirmation run (seeds 11 to 15)
-has not been run. This adopts nothing and changes no default.
+the only model to clear J, and the only one selected on seeds 1 to 5. **The confirmation run (seeds 11 to 15) did not
+confirm the selection** (see "Confirmation" at the end): the gain over `qwen3:8b` has a lower
+bound of -0.012. This adopts nothing and changes no default.
 
 ## Gates
 
@@ -74,18 +75,58 @@ stability across seeds is low (0.200), so individual runs vary.
 Measured wall-clock for the screen: 5,523 s = 1.53 h, against a forecast of 1.66 h and a
 budget of 2.5 h. Within budget; no model was dropped. Per model: `qwen3:8b` 501 s,
 `gemma4:26b-a4b` 400 s, `qwen3:14b` 835 s, `qwen3.6:27b` 2,168 s, `qwen3.6:35b-a3b` 393 s,
-`gemma2:27b` 1,226 s. The confirmation (baseline + `gemma4:26b-a4b`, 2 x 75 calls) is not yet
-run; at these medians it adds roughly 0.25 h.
+`gemma2:27b` 1,226 s. The confirmation is timed under "Confirmation".
 
 ## Deviations
 
 None from the registered procedure: models, seeds (1 to 5), timeout (60 s), decision rule and
 vetoes as registered; digests matched the registration table (`ollama list`). The registered
-confirmation was not run in this change.
+confirmation was run afterwards; see "Confirmation".
 
 ## What this licenses
 
-A selection licenses one confirmation run (seeds 11 to 15, same rule) on notes that ingest
-actually produced, because this fixture's notes are repository documents, and then a separate
-ADR decision. It does not license a config default or a `reconcile` task key; the key set is
-closed by #508's rule. The screen does not score whether the merged document reads well.
+A selection licenses one confirmation run (seeds 11 to 15, same rule), and a confirmed one
+would license a run on notes that ingest actually produced, because this fixture's notes are
+repository documents, and then a separate ADR decision. The confirmation did not hold (below),
+so nothing further is licensed here. Neither result licenses a config default or a `reconcile`
+task key; the key set is closed by #508's rule. The screen does not score whether the merged
+document reads well.
+
+## Confirmation (seeds 11 to 15)
+
+Run as the registration defines it: baseline `qwen3:8b` and the selected `gemma4:26b-a4b`,
+`run --runs 5 --first-run 11 --timeout 60`, same fixture, same rule, at main commit `05a7cb8a`,
+2026-10-27. Stored outputs: `~/Dev/Projects/openkos-eval-runs/reconcile-confirmation/`.
+
+**Verdict: the selection is NOT confirmed.** Selection needs a 95% lower bound above 0 on the
+paired gain over the baseline; on the new seeds it is -0.012.
+
+| Gate | Seeds 1 to 5 | Seeds 11 to 15 | Holds |
+|---|---|---|---|
+| J: `gemma4:26b-a4b` gain over `sentence_union` (point, 95% CI lower) | +0.112, +0.035 | +0.095, +0.009 | yes (margin +0.009) |
+| Gain over `qwen3:8b` (point, lower bound) | +0.094, +0.013 | +0.071, -0.012 | no (margin -0.012) |
+| Vetoes | none | none | yes |
+
+The point estimate is above 0 in both seed sets and J still clears, but the registered
+selection rule needs the lower bound above 0, and the margin of 0.013 on the first seeds did
+not survive. The registered outcome is that the baseline stays; recorded as it is, with no
+retry under tuned bars.
+
+| Model | Strict | Lenient | Strict (1st) | Retention | Dedupe | Fabrication | Failures | Median s | p95 s | Stability |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `qwen3:8b` | 0.801 | 0.817 | 0.810 | 0.982 | 0.339 | 0.067 | 0.000 | 5.62 | 14.89 | 0.867 |
+| `gemma4:26b-a4b` | 0.872 | 0.887 | 0.881 | 0.927 | 0.785 | 0.013 | 0.000 | 4.76 | 11.31 | 0.067 |
+
+Vetoes again do not trip for `gemma4:26b-a4b`: failure rate 0.000, median 4.76 s against a
+limit of 11.24 s (2.0 x 5.62), fabrication 0.013 against a limit of 0.167. Reference
+`qwen3:8b` over `sentence_union`: +0.024, lower bound -0.038 (not cleared).
+
+Timeouts and failures: 0 for both models (75 calls each). Stability is low for the candidate
+(0.067 against 0.867 for the baseline, and 0.200 on the first seeds): its per-case score varies
+from seed to seed, which fits the wider interval.
+
+Time: 877 s = 0.24 h (`qwen3:8b` 486 s, `gemma4:26b-a4b` 391 s). With the screen's 1.53 h the
+total is 1.77 h, within the 2.5 h budget.
+
+Deviations: none. The confirmation used a separate runs directory so the screen's stored runs
+were not overwritten.

@@ -15,6 +15,7 @@ pub mod browser;
 pub mod dropped;
 pub mod engine;
 pub mod locator;
+pub mod notify;
 pub mod supervisor;
 pub mod watch;
 pub mod workspace;
@@ -111,6 +112,14 @@ async fn set_watch(
         )
     })?;
     Ok(watch.status(Some(&workspace)))
+}
+
+/// Tell the person the watch paused on the AI model's limit. The daemon idles
+/// on a spent budget and records it for the engine to report, so only the page
+/// learns of it; the text is fixed here and the page cannot choose it.
+#[tauri::command]
+fn notify_watch_budget(app: tauri::AppHandle) {
+    notify::show_native(&app, &notify::watch_budget());
 }
 
 /// Open the existing workspace at `path`, remember it and restart the engine
@@ -212,6 +221,7 @@ pub fn run() {
     let environ = Arc::clone(&keys);
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(keys)
         .on_window_event(|window, event| {
             // Files dropped on the window go to the page as a plain DOM event;
@@ -247,6 +257,7 @@ pub fn run() {
             // The watch's daemon is a second sidecar, idle until the person
             // turns it on; it resumes only where they already did.
             let located = Arc::clone(&workspaces);
+            let handle = app.handle().clone();
             let watch = Watch::new(
                 WatchChoice::new(&config_dir),
                 WatchSupervisor::new(
@@ -256,9 +267,9 @@ pub fn run() {
                     }),
                     Box::new(move || watch_environ.engine_env()),
                     // The macOS notification is raised from here (ADR-0078).
-                    Box::new(|reason, detail| {
-                        eprintln!("openkos-desktop: the inbox watch failed ({reason}): {detail}");
-                    }),
+                    notify::on_failed(Arc::new(move |notice| {
+                        notify::show_native(&handle, notice);
+                    })),
                     WatchConfig::default(),
                 ),
             );
@@ -277,6 +288,7 @@ pub fn run() {
             create_workspace,
             watch_state,
             set_watch,
+            notify_watch_budget,
             pick_inbox_folder,
             pick_workspace_folder,
             pick_files,

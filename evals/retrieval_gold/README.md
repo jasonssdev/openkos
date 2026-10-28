@@ -8,9 +8,10 @@ was measured only through answers and citations (`query_citation`,
 gives a retrieval technique a number that has no chat model in it
 ([#1609](https://github.com/jasonssdev/openkos/issues/1609)).
 
-This directory holds the **harness and a DRAFT question set**. There are no relevance
-judgments yet, so there is nothing to score and no baseline. The judgments come from
-the blind sheet below.
+This directory holds the **harness, a DRAFT question set for the 35-document draft
+bundle, and the frozen `questions.v1.json` for the built gold bundle**. There are no
+relevance judgments yet, so there is nothing to score and no baseline. The judgments
+come from the blind sheet below.
 
 ## What it measures
 
@@ -58,10 +59,10 @@ The 35-document bundle above is **not to be judged**: a top 10 is 29% of it, hal
 is raw `Source` notes instead of compiled concepts, and each language is a different
 domain ([#1609](https://github.com/jasonssdev/openkos/issues/1609)). The replacement is
 compiled by the shipped `openkos ingest` and `openkos reindex` from the sources listed in
-`bundle_sources.json`, with `build_bundle.py`. Nothing has been built yet; the build
-needs the GPU, and the **questions and the full-pool judge sheet are rebuilt over the
-built bundle afterwards** (the draft questions are written against the old bundle and
-stay untouched until then).
+`bundle_sources.json`, with `build_bundle.py`. The bundle is built (`bundle-v1`, 61
+sources, 425 documents including the 61 source pages); the **questions and the full-pool
+judge sheet are rebuilt over it** (the draft questions were written against the old
+bundle and stay untouched).
 
 ### What is selected, and why
 
@@ -419,6 +420,83 @@ Assumptions, all of them:
 7. `ingest` runs no judge-model stage (`gemma4:26b-a4b` serves only `adjudicate`,
    `contradictions` and the Ask sufficiency check), so there is no model swap.
 
+### The v1 question set: authored by a model, under rules fixed first
+
+**Deviation, recorded.** The owner decided that a Claude model authors the question
+set over `bundle-v1`, with no owner review sample
+([#1609](https://github.com/jasonssdev/openkos/issues/1609)). The questions are
+therefore **unreviewed model-authored text**. The risk is lexical-overlap bias: a model
+writing a question while reading a passage tends to copy that passage's words, which
+would hand the lexical channel (`fts`) an advantage the production traffic does not
+give it. The rules below were written before any question and mitigate that risk; they
+do not remove it. A reader of a number from this set should read it next to the
+vocabulary-gap stratum, not only the total.
+
+The rules (the authoring followed them; the model-free `check-questions` command and
+`--self-test` verify the mechanical ones):
+
+1. **Size and scope.** 40 to 60 questions over `bundle-v1`, development material only.
+   English questions over the English material, Spanish questions over the 12 translated
+   meetings and the Spanish notes (`small-04`, `medium-10`).
+2. **Kinds.** `single-hop` (a point fact), `multi-hop` (the answer needs two or more
+   pieces of evidence, from different documents where the material allows; the one
+   Spanish meeting note and the course note only offer pieces that are separate compiled
+   objects of one source) and `enumeration` (the answer is a list). The Spanish half
+   carries all three too.
+3. **Vocabulary-gap stratum, at least 25% of the questions.** A `vocab_gap` question
+   uses words that do not appear in the answering passage: a paraphrase, a synonym, or
+   a description of the thing instead of its name. The author records `passages`, the
+   verbatim spans it was written from (the check refuses a span that is not in an
+   answering document), and the check requires the question to share at most 2 content
+   words with them, and at most a quarter of its own content words. The passage, not
+   the whole document, is the yardstick because a long meeting transcript contains
+   nearly every common word somewhere. Generic question words ("whose", "much", "use")
+   are stop words. `score` reports the stratum beside the kind (`by_stratum`).
+4. **Paraphrase, never copy.** No question shares a run of 4 consecutive content words
+   (stop words removed from both sides first, so a dropped "the" does not hide a copy)
+   with a document it was written from (the whole document). This applies to every
+   question, not only the stratum.
+5. **Read the source, never a retrieval output.** Each question was written by reading
+   the source passage. No retrieval, no `run`, no sheet and no ranking was produced
+   before the set was frozen, and the set is not edited after the first run.
+6. **Answering documents are the author's note, not the judgment.** Each question
+   records `answers`, the documents the author read to write it. They exist for the
+   overlap check only. They are not relevance judgments (those come blind, from the
+   sheet, and a document the author never read can be judged relevant), and they do not
+   enter the sheet, the question hash or any score.
+7. **Translated twins.** Each of the 12 translated meetings exists in English and in
+   Spanish. An English question about such a meeting can have a relevant Spanish twin
+   and the other way round; the judge grades it like any other document. This set does
+   not measure cross-language retrieval, and a twin counts as pooled noise or signal
+   exactly as the judge decides.
+
+`questions.v1.json` replaces `questions.draft.json` for the gold bundle. The draft
+stays for the 35-document draft bundle that `--self-test` still builds; its judgments
+are not valid for `bundle-v1`.
+
+The frozen set has 56 questions: 35 English (16 single-hop, 9 multi-hop, 10
+enumeration) and 21 Spanish (11, 5, 5), 17 of them (30.4%) in the vocabulary-gap
+stratum. English questions are written over the 20 synthetic notes and the AMI meetings;
+Spanish ones over `medium-10`, `small-04` and the translated meetings. Its identity is
+the question hash `22baff7b222182c8a0c4af81d48d19794b14a67ea028115d66c0fefc0271d60d`
+(ids, languages, kinds and texts; `answers`, `passages` and `vocab_gap` are outside it),
+pinned in `--self-test`: a changed question is a new set, not an edit. The compiled
+objects of `bundle-v1` are noisy and often duplicated, so most questions name a source
+note as the place the author read; the judge, not the author, decides which compiled
+objects are relevant.
+
+```bash
+# Model-free. The authoring rules over the set and a built workspace (outside the repo).
+uv run python evals/retrieval_gold/run_retrieval_gold.py check-questions \
+    --workspace ~/openkos-eval-runs/retrieval-gold/bundle-v1
+```
+
+Every command that reads documents takes `--workspace` (a workspace from
+`build_bundle.py`; its `bundle/` is read and copied to a scratch directory, never
+written) and then defaults `--questions` to `questions.v1.json`. A question file names
+the bundle it was written for and the harness refuses a mismatch. The commands below
+use the draft bundle when `--workspace` is omitted.
+
 ## Delivered evidence: does the passage reach the model
 
 `recall@k` scores document ids. `answer._assemble_context` then clips every block
@@ -487,7 +565,8 @@ elided region scores 0, an invented span is refused).
   project and Spanish ones over meetings; cross-language retrieval is not measured.
 - **No answer quality, no abstention.** Every question is answerable from the bundle.
 - **Not a pre-registration.** The baseline and every candidate technique need their own
-  pre-registration (arms, metric, bar, `n`) before any run. This directory has none.
+  pre-registration (arms, metric, bar, `n`) before any run. This README registers none;
+  the registrations are the `PREREGISTRATION-<issue>.md` files listed under "Files".
 
 ## Commands
 
@@ -537,6 +616,18 @@ uv run python evals/retrieval_gold/run_retrieval_gold.py compare \
     --channel fused --metric ndcg@10
 ```
 
+For the built gold bundle the same commands take `--workspace`, which also selects
+`questions.v1.json`; the full pool needs a `run` with embeddings (bge-m3 through Ollama,
+zero chat calls):
+
+```bash
+W=~/openkos-eval-runs/retrieval-gold
+uv run python evals/retrieval_gold/run_retrieval_gold.py run \
+    --workspace $W/bundle-v1 --out $W/run-v1.json
+uv run python evals/retrieval_gold/run_retrieval_gold.py judge-sheet --pool full \
+    --workspace $W/bundle-v1 --run $W/run-v1.json --out $W/sheet-v1.md
+```
+
 `adjudicate` rejects a sheet with an unlabelled, unknown or out-of-range entry and
 writes nothing. `score` rejects a judgments file with an unknown document id, a missing
 question, a label outside {0, 1, 2}, a question with no relevant document, or a stale
@@ -550,8 +641,14 @@ be resolved by hand; the command never merges them.
 | `run_retrieval_gold.py` | Retrieval through the production seams, the commands, `--self-test`. |
 | `gold_delivery.py` | The passage-file contract, the delivered/retrieved classification and aggregate, the blind passage sheet. Pure. |
 | `gold_core.py` | Metrics, bootstrap, kappa, the question and judgment contracts, the sheet. Pure. |
+| `gold_corpus.py` | Where documents come from: the draft bundle or a built workspace (`--workspace`). |
+| `gold_overlap.py` | The model-free lexical-overlap rules for a model-authored question set. Pure. |
 | `gold_bundle.py` | The 35-document draft bundle, built from committed material. Not to be judged. |
 | `build_bundle.py` | Builds the gold bundle with production `ingest`; `plan`, `build`, `--self-test`. Refuses a pending translation. |
 | `translate_meetings.py` | Translates the 12 development meetings into Spanish; `run`, `sample-sheet`, `pin`, `--self-test`. |
+| `prereg_tools.py`, `gold_prereg.py` | Model-free pieces of the registrations below: chunk counts, the length diagnostic, the vocabulary-gap stratum, the leak audit, three-list fusion, the distance aggregators. Pure, `--self-test`. |
+| `PREREGISTRATION-1648.md` | Registered on merge: does the dense channel favour long documents (diagnostic first, then arms). |
+| `PREREGISTRATION-1650.md` | Registered on merge: index the questions a Decision answers (doc2query), measured on the vocabulary-gap stratum. |
 | `bundle_sources.json` | The selected sources with their sha256, language, kind and tier, and what was excluded and why. |
-| `questions.draft.json` | The draft question set; no judgments. |
+| `questions.draft.json` | The draft question set for the 35-document draft bundle; no judgments. |
+| `questions.v1.json` | The frozen, model-authored question set for `bundle-v1`; no judgments. |

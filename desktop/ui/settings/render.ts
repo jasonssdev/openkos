@@ -4,6 +4,7 @@
 // The key field is write-only: it starts empty on every draw and its value only
 // goes to the model.
 import {
+  badge,
   callout,
   disclosure,
   el,
@@ -18,8 +19,8 @@ import {
   uiButton,
   uiCard,
 } from "../system/index.ts";
-import type { DraftField, SettingsModel, SettingsState, UndoList, UndoRow } from "./model.ts";
-import { WORDS, modelFacts, whereItRuns } from "./wording.ts";
+import { type DraftField, type SettingsModel, type SettingsState, type UndoList, type UndoRow, type WatchKind, watchKind } from "./model.ts";
+import { WATCH, WATCH_STATUS, WORDS, modelFacts, whereItRuns } from "./wording.ts";
 
 type Dialog = ReturnType<typeof openDialog>;
 
@@ -79,6 +80,7 @@ function screen(model: SettingsModel, state: SettingsState): HTMLElement[] {
     state.problem ? callout("error", state.problem, { live: "alert" }) : null,
   ].filter((node): node is HTMLElement => node !== null);
   return [header, ...notes, modelCard(model, state),
+    ...watchCard(model, state),
     ...undoCard(model, state, "settled", WORDS.settledTitle, WORDS.undo),
     ...undoCard(model, state, "declined", WORDS.declinedTitle, WORDS.pointOutAgain),
     libraryCard(model, state),
@@ -167,6 +169,103 @@ function modelForm(model: SettingsModel, state: SettingsState): HTMLElement[] {
     ),
   );
   return body;
+}
+
+/**
+ * "Watch a folder": drawn once the engine has said what the folder is. It says
+ * what happens before anything is turned on, and that the watch also runs the
+ * daemon's other jobs (ADR-0078).
+ */
+function watchCard(model: SettingsModel, state: SettingsState): HTMLElement[] {
+  const { inbox, watchBusy: busy, watchConfirm: confirm } = state;
+  if (inbox === null) return [];
+  const body: HTMLElement[] = [
+    el("p", {}, WATCH.intro),
+    el("ul", {}, ...WATCH.what.map((line) => el("li", {}, line))),
+    el("p", {}, WATCH.also),
+    el("p", { class: "ui-field__hint" }, WATCH.stops),
+  ];
+  if (confirm !== null) {
+    body.push(
+      el("p", { class: "ui-field__label" }, WATCH.confirmTitle(confirm.folder)),
+      el(
+        "div",
+        { class: "ui-actions" },
+        uiButton(WATCH.start, () => model.confirmWatch(), { variant: "primary", focusKey: "settings:watch-confirm" }),
+        uiButton(WATCH.cancel, () => model.cancelWatch(), { variant: "quiet", focusKey: "settings:watch-cancel" }),
+      ),
+    );
+    return [uiCard({ title: WATCH.title, headingLevel: 2 }, ...body)];
+  }
+  const wanted = state.watch?.wanted === true;
+  const kind = watchKind(state);
+  if (kind !== null) body.unshift(watchStatusLine(kind, state));
+  if (inbox.inbox !== null) body.push(facts([[WATCH.folder, inbox.inbox, "code"]]));
+  const actions: HTMLButtonElement[] = [];
+  if (inbox.inbox === null) {
+    actions.push(
+      uiButton(WATCH.choose, () => model.chooseWatchFolder(), {
+        variant: "primary",
+        loading: busy === "choosing",
+        loadingLabel: WATCH.choosing,
+        disabled: busy !== null && busy !== "choosing",
+        focusKey: "settings:watch-choose",
+      }),
+    );
+  } else {
+    actions.push(
+      wanted
+        ? uiButton(WATCH.stop, () => model.stopWatch(), {
+            loading: busy === "stopping",
+            loadingLabel: WATCH.stopping,
+            disabled: busy !== null && busy !== "stopping",
+            focusKey: "settings:watch-stop",
+          })
+        : uiButton(WATCH.start, () => model.startWatch(), {
+            variant: "primary",
+            loading: busy === "starting",
+            loadingLabel: WATCH.starting,
+            disabled: busy !== null && busy !== "starting",
+            focusKey: "settings:watch-start",
+          }),
+      uiButton(WATCH.chooseAnother, () => model.chooseWatchFolder(), {
+        variant: "quiet",
+        loading: busy === "choosing",
+        loadingLabel: WATCH.choosing,
+        disabled: busy !== null && busy !== "choosing",
+        focusKey: "settings:watch-choose",
+      }),
+    );
+  }
+  if (kind === "failed") {
+    // The shell gave up restarting the daemon: a restart is one click, and what it said waits behind a disclosure.
+    actions.unshift(
+      uiButton(WATCH_STATUS.startAgain, () => model.startWatch(), {
+        variant: "primary",
+        loading: busy === "starting",
+        loadingLabel: WATCH.starting,
+        disabled: busy !== null && busy !== "starting",
+        focusKey: "settings:watch-again",
+      }),
+    );
+    if (state.watch?.state === "failed") {
+      body.push(disclosure({ summary: WORDS.showDetails, focusKey: "settings:watch-details" }, el("pre", {}, state.watch.detail)));
+    }
+  }
+  body.push(el("div", { class: "ui-actions" }, ...actions));
+  return [uiCard({ title: WATCH.title, headingLevel: 2 }, ...body)];
+}
+
+const WATCH_TONES = { on: "success", stopped: "neutral", budget: "warning", failed: "error" } as const;
+
+/** One line: a badge and the sentence, in the card and nowhere else a person must look for it. */
+function watchStatusLine(kind: WatchKind, state: SettingsState): HTMLElement {
+  return el(
+    "div",
+    { class: "ui-line", attrs: { "data-watch-status": kind, role: kind === "failed" ? "alert" : "status" } },
+    badge(WATCH_TONES[kind], WATCH_STATUS.badge[kind]),
+    el("span", {}, WATCH_STATUS[kind]),
+  );
 }
 
 /** An earlier decision list, drawn only while it has something in it. */
