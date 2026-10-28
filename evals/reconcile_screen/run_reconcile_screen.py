@@ -14,13 +14,15 @@ Subcommands:
               model-free baselines (the stack, one note alone, the longer note, a
               sentence-level union). Never contacts a model. `run --dry-run` is
               the same.
+- `stage0`    warm-up and timed calls per model on calibration cases that are
+              not fixture cases; contacts Ollama, scores nothing.
 - `run`       one model, every case, N seeded runs; cached by row.
 - `score`     the registered numbers and decision for the stored runs.
 - `blind-sheet` / `adjudicate`  the blind second labelling: write the sheet the
               owner fills in, then compare it with the fixture's labels. No model;
               see `README.md`, "Second labelling".
 
-Read `README.md` and `PREREGISTRATION-DRAFT.md` before trusting any number: the
+Read `README.md` and `PREREGISTRATION.md` before trusting any number: the
 labels are one author's until the owner's blind labelling is recorded. Model-free
 check: `--self-test`.
 """
@@ -44,6 +46,7 @@ sys.path.append(str(REPO_ROOT / "evals"))
 
 import reconcile_blind_adjudication as adj  # noqa: E402
 import reconcile_core as core  # noqa: E402
+import stage0_timing as s0  # noqa: E402
 from harness_stamp import (  # noqa: E402
     TimedBackend,
     build_stamp,
@@ -157,6 +160,106 @@ def run_model(
     return rows
 
 
+# --- stage 0 -----------------------------------------------------------------
+
+STAGE0_SMALL_CALLS: Final = 3
+STAGE0_TIMEOUT: Final = 240.0
+"""Stage 0 measures slow models rather than cutting them off at the screen's own
+timeout, which Stage 0 is what sets."""
+
+_SMALL_A = (
+    "The sourdough starter is fed once a day with equal weights of flour and water. "
+    "It is kept at 24 C on the kitchen shelf."
+)
+_SMALL_B = (
+    "Feeding the starter daily keeps it active. Baker Lena discards half of it before "
+    "each feeding, and she keeps a spare jar in the fridge as insurance."
+)
+_LARGE_A = (
+    "The weekly loaf is built around a stiff levain, not the daily starter. On Friday "
+    "evening Lena mixes 50 g of ripe starter with 100 g of flour and 60 g of water and "
+    "leaves it for eight hours at 24 C. On Saturday morning the levain has doubled and "
+    "smells faintly of apples. The final dough is 500 g of bread flour, 350 g of water, "
+    "10 g of salt and 100 g of levain, mixed by hand until no dry flour is left. The "
+    "dough rests for 30 minutes (the autolyse), then gets four sets of stretch-and-folds "
+    "spaced 45 minutes apart. After the last fold it proofs for another hour in a "
+    "floured banneton. The loaf bakes in a preheated Dutch oven: 20 minutes at 250 C "
+    "with the lid on, then 25 minutes at 220 C with the lid off. A good loaf crackles "
+    "as it cools and is not cut for at least an hour, because the crumb is still setting "
+    "and slicing too early makes it gummy. The oven door is never opened during the "
+    "covered phase. Leftover levain goes back into the daily starter jar."
+)
+_LARGE_B = (
+    "Lena's Saturday loaf uses a levain built the night before: 50 g of the ripe "
+    "starter, 100 g of flour and 60 g of water, left for eight hours. The recipe "
+    "(500 g bread flour, 350 g water, 10 g salt, 100 g levain) is deliberately a "
+    "70 percent hydration dough, which is wet enough to open the crumb but still holds "
+    "its shape in the banneton. Kneading is replaced by four stretch-and-fold rounds "
+    "every 45 minutes after a 30 minute autolyse. The most common failure is "
+    "under-proofing: a dense, gummy crumb with a few large holes under the crust means "
+    "the final proof was too short, and the fix is to give it another 30 minutes next "
+    "time, not to bake hotter. Over-proofed dough spreads flat in the pot. In winter "
+    "the kitchen is colder, so the levain takes twelve hours instead of eight and the "
+    "final proof stretches to two hours. Lena bakes in a cast-iron Dutch oven preheated "
+    "for 45 minutes: 20 minutes covered at 250 C, 25 minutes uncovered at 220 C. She "
+    "waits an hour before slicing, and she freezes any loaf she cannot finish in three "
+    "days, sliced, so single slices toast straight from the freezer. A notebook beside "
+    "the oven records the date, the room temperature and how the crumb turned out."
+)
+
+
+def calibration_cases() -> tuple[core.Case, core.Case]:
+    """`(small, large)`: two cases that are in no way scored cases (about the size
+    of `reconstructible` and `docs-policy`, the smallest and largest scored pairs,
+    on a subject no fixture case is about). They carry no claims."""
+
+    def case(id_: str, a: str, b: str) -> core.Case:
+        piece = {"kind": "calibration", "ref": id_}
+        return core.Case(
+            id=id_,
+            title="Sourdough baking",
+            survivor=(core.Piece(source=piece, text=a),),
+            absorbed=(core.Piece(source=piece, text=b),),
+            claims=(),
+        )
+
+    return (
+        case("stage0-small", _SMALL_A, _SMALL_B),
+        case("stage0-large", _LARGE_A, _LARGE_B),
+    )
+
+
+def stage0_model(model: str) -> dict[str, Any]:
+    """Warm-up, then 3 timed small calls and 1 timed large call, seed 1, on the
+    calibration cases. Returns the stamp (digest) and the latencies."""
+    small, large = calibration_cases()
+    stamp = build_stamp(
+        model=model, prompts={"reconciliation/system": rec._SYSTEM_PROMPT}
+    )
+    if stamp_problems(stamp):
+        raise SystemExit(f"cannot stamp {model}: {stamp_problems(stamp)}")
+    client = OllamaClient(
+        model=model,
+        max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
+        context_window=DEFAULT_CONTEXT_WINDOW,
+        timeout=STAGE0_TIMEOUT,
+        seed=1,
+    )
+    warm = run_item(client, small)
+    rows = [run_item(client, small) for _ in range(STAGE0_SMALL_CALLS)]
+    big = run_item(client, large)
+    return {
+        "model": model,
+        "digest": stamp["model"]["digest"],
+        "stamp": stamp,
+        "warmup_s": warm["latency_s"],
+        "small_s": [r["latency_s"] for r in rows],
+        "large_s": [big["latency_s"]],
+        "failures": [r["failure"] for r in [warm, *rows, big] if r["failure"]],
+        "large_chars": len(large.survivor_body) + len(large.absorbed_body),
+    }
+
+
 # --- storage -----------------------------------------------------------------
 
 
@@ -223,7 +326,7 @@ def render_forecast(
         f"total Ollama wall-clock: {plan['total_seconds'] / 3600:.2f} h "
         "(latencies assumed, not measured for this task)",
         "",
-        "model-free baselines on this fixture (strict, first author's labels):",
+        "model-free baselines on this fixture (strict, resolved labels):",
     ]
     for name, row in summary["baselines"].items():
         lines.append(
@@ -379,6 +482,25 @@ def _self_test() -> int:
 
     cases = core.load_fixture()
     n_claims = sum(len(c.active) for c in cases)
+    small_cal, large_cal = calibration_cases()
+    fixture_text = {p.text for c in cases for p in (*c.survivor, *c.absorbed)}
+    check(
+        "stage 0 calls no scored case: the calibration ids and notes are outside the fixture",
+        not {small_cal.id, large_cal.id} & {c.id for c in cases}
+        and not {
+            small_cal.survivor_body,
+            small_cal.absorbed_body,
+            large_cal.survivor_body,
+            large_cal.absorbed_body,
+        }
+        & fixture_text,
+    )
+    check(
+        "the large calibration pair is the size of the largest scored pair",
+        0.7 * max(len(c.survivor_body) + len(c.absorbed_body) for c in cases)
+        <= len(large_cal.survivor_body) + len(large_cal.absorbed_body)
+        <= 1.2 * max(len(c.survivor_body) + len(c.absorbed_body) for c in cases),
+    )
 
     # --- the fixture -----------------------------------------------------------
     check("fixture: every claim is scoreable", core.integrity_problems(cases) == [])
@@ -641,6 +763,15 @@ def _self_test() -> int:
         all(m in ASSUMED_MEDIAN_LATENCY_S for m in (BASELINE, *CANDIDATES)),
     )
 
+    j_text = core.render_j_table(ref_name, ref_scores, gains=[0.05], resamples=500)
+    check(
+        "j-table: names the reference's misses, the constant gain and a row per win count",
+        "scores below 1.0 in 13 of 15 cases" in j_text
+        and "+0.05" in j_text
+        and "| 3 | -1 |" in j_text
+        and "| 4 | 0 |" in j_text,
+    )
+
     # --- the blind sheet ------------------------------------------------------------
     sheet = adj.build_sheet(cases)
     ids = adj.opaque_ids(cases)
@@ -707,6 +838,21 @@ def _self_test() -> int:
         "adjudicate: a sheet that agrees everywhere has kappa 1 and no disagreement",
         agreed.kappa == 1.0 and not agreed.disagreements and not agreed.problems,
     )
+    recorded = adj.adjudicate(
+        cases,
+        adj.parse_sheet(
+            fill(
+                lambda c: token[c.adjudication["second"] if c.adjudication else c.kind]
+            )
+        ),
+    )
+    check(
+        "adjudicate: the recorded second labels reproduce 119 of 121, kappa 0.975",
+        recorded.agreed == 119
+        and len(recorded.disagreements) == 2
+        and recorded.kappa is not None
+        and abs(recorded.kappa - 0.975) < 5e-4,
+    )
     victim = cases[0].claims[0]
     flipped = adj.adjudicate(
         cases,
@@ -729,6 +875,19 @@ def _self_test() -> int:
     check(
         "adjudicate: a blank label rejects the sheet and scores nothing",
         bool(adj.adjudicate(cases, adj.parse_sheet(fill(lambda c: ""))).problems),
+    )
+    got, why = adj.import_labels(
+        cases, adj.parse_sheet(fill(lambda c: token[c.first_kind]))
+    )
+    check(
+        "import-sheet: a filled sheet maps every claim id to its label",
+        why == []
+        and got == {c.id: token[c.first_kind] for case_ in cases for c in case_.active},
+    )
+    check(
+        "import-sheet: an unfilled sheet returns problems and no labels",
+        adj.import_labels(cases, adj.parse_sheet(sheet))[0] == {}
+        and adj.import_labels(cases, adj.parse_sheet(sheet))[1] != [],
     )
     check(
         "adjudicate: a label outside A, B, AB rejects the sheet",
@@ -761,6 +920,17 @@ def build_parser() -> argparse.ArgumentParser:
     fc.add_argument("--models", default=",".join([BASELINE, *CANDIDATES]))
     fc.add_argument("--runs", type=int, default=DEFAULT_RUNS)
 
+    st0 = sub.add_parser(
+        "stage0",
+        help="timed calibration calls per model (never a scored case); contacts Ollama",
+    )
+    st0.add_argument("--runs-dir", type=pathlib.Path, default=DEFAULT_RUNS_DIR)
+    st0.add_argument("--models", default=",".join([BASELINE, *CANDIDATES]))
+
+    jt = sub.add_parser("j-table", help="the J bar on the resolved labels; no model")
+    jt.add_argument("--resamples", type=int, default=10_000)
+    jt.add_argument("--gains", default="0.05,0.10", help="comma-separated")
+
     run = sub.add_parser("run", help="one model, every case")
     common(run)
     run.add_argument("--model", required=True)
@@ -786,6 +956,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     adjudicate.add_argument("--sheet", type=pathlib.Path, required=True)
     adjudicate.add_argument("--seed", type=int, default=adj.SEED)
+
+    imported = sub.add_parser(
+        "import-sheet",
+        help="write a filled sheet's labels, keyed by fixture id, to a JSON file",
+    )
+    imported.add_argument("--sheet", type=pathlib.Path, required=True)
+    imported.add_argument("--out", type=pathlib.Path, required=True)
+    imported.add_argument("--labeller", required=True)
+    imported.add_argument("--seed", type=int, default=adj.SEED)
     return parser
 
 
@@ -814,6 +993,51 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(adj.render(result))
         return 1 if result.problems else 0
+    if args.stage == "import-sheet":
+        labels, problems = adj.import_labels(
+            cases,
+            adj.parse_sheet(args.sheet.read_text(encoding="utf-8")),
+            seed=args.seed,
+        )
+        if problems:
+            print("SHEET REJECTED, nothing imported:\n" + "\n".join(problems))
+            return 1
+        args.out.write_text(
+            json.dumps(
+                {"labeller": args.labeller, "seed": args.seed, "labels": labels},
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"imported {len(labels)} labels into {args.out}")
+        return 0
+
+    if args.stage == "stage0":
+        results = []
+        for model in args.models.split(","):
+            measured = stage0_model(model)
+            results.append(measured)
+            print(json.dumps(measured, ensure_ascii=False))
+            s0.unload(model)
+        args.runs_dir.mkdir(parents=True, exist_ok=True)
+        (args.runs_dir / "stage0.json").write_text(
+            json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+        return 0
+
+    if args.stage == "j-table":
+        name, scores = core.reference_baseline(cases)
+        print(
+            core.render_j_table(
+                name,
+                scores,
+                gains=[float(g) for g in args.gains.split(",")],
+                resamples=args.resamples,
+            )
+        )
+        return 0
 
     if args.stage == "forecast" or (args.stage == "run" and args.dry_run):
         models = args.models.split(",") if args.stage == "forecast" else [args.model]

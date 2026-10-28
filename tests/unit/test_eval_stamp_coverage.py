@@ -41,6 +41,7 @@ EXEMPT: dict[str, str] = {
     "proximity_threshold/run_proximity_threshold_probe.py": "embedding model only, zero chat calls",
     "query_grounding/run_query_grounding_probe.py": "embedding model only, zero chat calls",
     "query_identity/run_query_identity_probe.py": "embedding model only, zero chat calls",
+    "stage0_timing.py": "posts only keep_alive=0 to unload a model; no chat call and no stored result (the runners' `stage0` stamp their calls)",
     "retrieval_stability/run_retrieval_stability_probe.py": "retrieval only: the chat LLM is a stub",
     "retrieval_gold/run_retrieval_gold.py": "embedding model only, zero chat calls; the stored run records the harness commit and the embedder digest itself",
     "section_coverage/run_embedding_coverage_probe.py": "embedding model only, zero chat calls",

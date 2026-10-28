@@ -1,5 +1,5 @@
 {
- "method": "Each case is two notes about one subject, quoted verbatim from repository files (`survivor` = NOTE A, `absorbed` = NOTE B, the order production sends them in). A claim's `kind` says which note states it: a_only, b_only, or both (each note states it, in any wording). `anchors` are literal strings (matched casefolded, whitespace collapsed) that must survive in the merged body for the claim to count as kept; for a `both` claim `once` is a literal that appears exactly once in each note and must appear exactly once in the merged body. `alt_label` flags a claim whose kind a careful reader could call differently. The first author labelled every claim; the owner's blind labels are not recorded yet.",
+ "method": "Each case is two notes about one subject, quoted verbatim from repository files (`survivor` = NOTE A, `absorbed` = NOTE B, the order production sends them in). A claim's `kind` says which note states it: a_only, b_only, or both (each note states it, in any wording). `anchors` are literal strings (matched casefolded, whitespace collapsed) that must survive in the merged body for the claim to count as kept; for a `both` claim `once` is a literal that appears exactly once in each note and must appear exactly once in the merged body. `alt_label` flags a claim whose kind a careful reader could call differently. The first author labelled every claim; a second labeller labelled them blind (`second_labels.json`), and each disagreement carries an `adjudication` record (`first`, `second`, `resolved`, `reason`) with the first label kept as `alt_label`.",
  "cases": [
   {
    "id": "local-first",
@@ -897,11 +897,19 @@
     },
     {
      "id": "protocol-seams-04",
-     "kind": "a_only",
+     "kind": "both",
      "claim": "The seams are typing.Protocol classes.",
      "anchors": [
-      "`typing.Protocol`"
-     ]
+      "Protocol"
+     ],
+     "once": "Protocol",
+     "alt_label": "a_only",
+     "adjudication": {
+      "first": "a_only",
+      "second": "both",
+      "resolved": "both",
+      "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): Note B calls them 'The Protocol seams', which states in other words that the seams are typing.Protocol classes, as Note A says outright."
+     }
     },
     {
      "id": "protocol-seams-05",
@@ -1307,12 +1315,18 @@
    "claims": [
     {
      "id": "stoicism-01",
-     "kind": "both",
+     "kind": "a_only",
      "claim": "The dichotomy of control comes from the Enchiridion.",
      "anchors": [
-      "*Enchiridion*"
+      "*Enchiridion* 1"
      ],
-     "once": "*Enchiridion*"
+     "alt_label": "both",
+     "adjudication": {
+      "first": "both",
+      "second": "a_only",
+      "resolved": "a_only",
+      "reason": "Third adjudicator (Claude Opus, on the owner's delegation, blind to annotator identity): Only Note A ties the dichotomy of control to Enchiridion 1; Note B says the notes cover it while reading the Enchiridion and its translator's introduction, which touches the topic without stating its origin."
+     }
     },
     {
      "id": "stoicism-02",

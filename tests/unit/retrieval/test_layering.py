@@ -66,6 +66,13 @@ def test_answer_module_does_not_import_config() -> None:
     assert not any("config" in module for module in modules)
 
 
+def test_query_aware_excerpts_parameter_is_caller_supplied_and_off() -> None:
+    """Opt-in (#1647): `answer()` defaults the flag off, so every library and
+    eval caller keeps the even-coverage bound."""
+    parameters = inspect.signature(answer_mod.answer).parameters
+    assert parameters["query_aware_excerpts"].default is False
+
+
 def test_revision_history_parameter_has_no_internal_config_read() -> None:
     """`answer()`'s `revision_history` parameter has no internal read of
     `openkos.config` anywhere in `answer.py` -- it is caller-supplied, never

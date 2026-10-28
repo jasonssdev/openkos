@@ -298,12 +298,12 @@ def test_the_fixtures_shape_and_floors_are_pinned() -> None:
         "survivor_only": 75,
         "absorbed_only": 79,
         "longer_only": 81,
-        "sentence_union": 93,
+        "sentence_union": 94,
     }
     assert summary["strongest"] == "sentence_union"
     assert core.reference_baseline(cases)[0] == "sentence_union"
-    assert summary["cases_no_baseline_perfect"] == 14
-    assert summary["claims_strongest_wrong"] == 28
+    assert summary["cases_no_baseline_perfect"] == 13
+    assert summary["claims_strongest_wrong"] == 27
     assert summary["claims_all_baselines_wrong"] == 0
 
 
@@ -481,7 +481,7 @@ def test_j_tolerance_grows_with_wins_and_is_pinned_at_the_edges() -> None:
 
 
 def test_the_j_bar_on_the_real_reference_is_pinned() -> None:
-    """The numbers `PREREGISTRATION-DRAFT.md` quotes for the J bar."""
+    """The numbers `PREREGISTRATION.md` quotes for the J bar."""
     cases = core.load_fixture()
     name, reference = core.reference_baseline(cases)
     assert name == "sentence_union"
@@ -490,6 +490,25 @@ def test_the_j_bar_on_the_real_reference_is_pinned() -> None:
     assert core.j_tolerance(reference, wins=14) == 0
     uniform = {k: min(1.0, v + 0.05) for k, v in reference.items()}
     assert core.justified(core.paired_bootstrap(uniform, reference))
+
+
+def test_a_constant_gain_is_capped_at_a_perfect_case_score() -> None:
+    reference = {"a": 0.5, "b": 0.98, "c": 1.0}
+    bound = core.constant_gain_bound(reference, gain=0.05, resamples=200)
+    assert bound["point"] == pytest.approx((0.05 + 0.02 + 0.0) / 3)
+    assert bound["lo"] <= bound["point"] <= bound["hi"]
+
+
+def test_the_j_table_lists_wins_up_to_the_cases_below_perfect() -> None:
+    reference = {f"c{i}": 1.0 if i < 10 else 0.5 for i in range(20)}
+    rows = core.j_table_rows(reference, resamples=300)
+    assert [r["wins"] for r in rows] == list(range(0, 11))
+    assert rows[0]["tolerance"] == -1
+    text = core.render_j_table("demo", reference, gains=[0.05], resamples=300)
+    assert "reference: demo" in text
+    assert "scores below 1.0 in 10 of 20 cases" in text
+    assert "| 10 |" in text
+    assert "+0.05" in text
 
 
 # --- the forecast ---------------------------------------------------------------------

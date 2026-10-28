@@ -2,8 +2,8 @@
 
 A measurement harness for the decision-revision judge's task key. **It has not been
 run, and it is not registered:** [`PREREGISTRATION-DRAFT.md`](PREREGISTRATION-DRAFT.md)
-is a draft blocked on the repository owner's blind adjudication of the labels (see
-"Second adjudication"). No model has been called. Part of #1556; refs #1563.
+is a draft; its labels are adjudicated (see "Second adjudication") and it is blocked
+on the owner's open questions and Stage 0. No model has been called. Part of #1556; refs #1563.
 
 It does not duplicate [`evals/decision_revisions/`](../decision_revisions/README.md).
 That harness gated #1014's Phase B and tuned the judge prompt against its fixture,
@@ -95,24 +95,25 @@ adjudication and carries no measured agreement; the volatility screen's second
 adjudication found its first author had anchored on the production default in all
 eight disagreements, and no number here can rule out the equivalent hazard.
 
-**Balance** (the drafter's labels): REVERSES 14, REFINES 14, REAFFIRMS 6, UNRELATED
-24. By split: `original` 46 (11, 8, 5, 22) and `confirmation` 12 (3, 6, 1, 2). 49
+**Balance** (adjudicated labels, `forecast`): REVERSES 14, REFINES 13, REAFFIRMS 8,
+UNRELATED 23 (the drafter's: REFINES 14, REAFFIRMS 6, UNRELATED 24). The breakdowns
+that follow are the drafter's labels. By split: `original` 46 (11, 8, 5, 22) and `confirmation` 12 (3, 6, 1, 2). 49
 pairs are directed and 9 undirected (3 REVERSES, 2 REFINES, 4 UNRELATED). The 16
 contested pairs are 6 REVERSES, 8 REFINES, 2 UNRELATED, all `original`. Hard-case
 tags: 11 same-subject-unrelated, 9 shared-cue-unrelated, 7
 partial-refine-reads-as-reversal, 5 reversal-reads-as-refine, 5
 reaffirm-different-words, and smaller groups.
 
-**Baselines, strict, k of 58** (`forecast` recomputes them; they move if an
-adjudication changes a label):
+**Baselines, strict, k of 58, adjudicated labels** (`forecast` recomputes them; the
+drafter's labels gave 24, 17, 16, 6 and 35):
 
 | baseline | what it answers | k / 58 |
 | --- | --- | --- |
-| `always unrelated` | the commonest label | **24** (0.414) |
-| `always refines` | `refines` for every pair | 17 (0.293) |
+| `always unrelated` | the commonest label | **23** (0.397) |
+| `always refines` | `refines` for every pair | 16 (0.276) |
 | `always reverses` | `reverses` for every pair | 16 (0.276) |
-| `always reaffirms` | `reaffirms` for every pair | 6 (0.103) |
-| `lexical overlap (oracle cut)` | one word-overlap cut, below it `unrelated`, at or above it `refines`, chosen to maximise accuracy **on these labels** | **35** (0.603) |
+| `always reaffirms` | `reaffirms` for every pair | 8 (0.138) |
+| `lexical overlap (oracle cut)` | one word-overlap cut, below it `unrelated`, at or above it `refines`, chosen to maximise accuracy **on these labels** | **34** (0.586) |
 
 Production holds no deterministic opinion about a verdict (its direction rule orders
 a pair, its candidate stage needs an embedder), so there is no shipped heuristic to
@@ -121,34 +122,38 @@ and it is fitted to the answer key, an optimistic ceiling for any word-overlap
 heuristic, not something that ships. It is the reference of rule J.
 
 **Does the fixture discriminate?** Yes, against the baselines: the reference is
-wrong on **23 of 58** items and the two strongest baselines are both wrong on 19.
+wrong on **24 of 58** items and the two strongest baselines are both wrong on 21 (23
+and 19 on the drafter's labels).
 (Four constant answers cover every label between them, so "right under no trivial
 predictor" is empty by construction; the measure that means something is the room
 left under the strongest one.) The sharper finding is on the other side.
 
-**The stored `qwen3:8b` run leaves little room above the baseline.** Scored by this
-screen's rule, the three stored 15-run `qwen3:8b` runs under the current judge prompt
+**The stored `qwen3:8b` run leaves little room above the baseline.** Read into this
+screen's format (`import-stored`, no model) and scored by its rule on the adjudicated
+labels, the three stored 15-run `qwen3:8b` runs under the current judge prompt
 (`d8238af6410ac31d`, `evals/decision_revisions/results/runs-20260928T173355Z...`,
-`...204537Z...`, `...20260929T011322Z...`) score **0.893, 0.887 and 0.882**, against
-the reference's 0.603. On the latest, 50 of 58 items are answered correctly in every
-run and only 8 fall below 1.0: five are never right (`r14`, `r27`, `r30`, `r43`,
-`r53`), two are right one run in five (`r13`, `r28`) and one right in 11 of 15 runs (0.73). The prompt was tuned against
-the 46 `original` pairs (the diagnosis read all of them: 0.85 to 0.87 there), and the
-12 `confirmation` pairs are at ceiling (0.99 to 1.00), so they cannot separate any
+`...204537Z...`, `...20260929T011322Z...`) score **0.928, 0.922 and 0.916**, against
+the reference's 0.586 (on the drafter's labels the same answers score 0.893, 0.887 and
+0.882, which the import reproduces). On the latest, 52 of 58 items are answered correctly
+in every run and only 6 fall below 1.0: three are never right (`r14`, `r27`, `r30`) and
+three are right in a fraction of runs (`r13` 0.20, `r28` 0.20, `r04` 0.73). The prompt was
+tuned against the 46 `original` pairs (0.894 to 0.909 there), and the 12 `confirmation`
+pairs are at ceiling (0.994 to 1.000), so they cannot separate any
 two models. Consequences, stated before any run:
 
 - the question "does the key beat no model" is already answered by the stored run
   for `qwen3:8b`, **if the labels hold**; rule J will be cleared by every competent
   model and discriminates little;
-- the live question is selection against `qwen3:8b`, where the headroom is about 7
-  items. Replaying the stored per-item scores, a candidate that fixes 3 of those 7
-  with no loss has a paired-gain lower bound of 0.0 (not cleared) and one that fixes
-  5 clears it (+0.017). The bootstrap does not know the 8 hard items are not
-  independent, so treat that as optimistic;
-- **4 of the 5 never-right items are ones the drafter flagged contested** (`r14`,
-  `r27`, `r43`, `r53`), and the fifth (`r30`) is an undirected pair the drafter did not flag. These are the first
-  places a blind second labeller can overturn a label, and a model "failing" on them
-  may be a label error. This is why the adjudication is the blocking step.
+- the live question is selection against `qwen3:8b`, where the headroom is 6 items.
+  Replaying the stored per-item scores (`score` prints it), a candidate that fixes 3 of
+  those 6 with no loss has a paired-gain lower bound of 0.0 (not cleared) and one that
+  fixes 4 clears it (+0.0138), 5 gives +0.0172. The bootstrap does not know the hard
+  items are not independent, so treat that as optimistic;
+- **2 of the 3 never-right items are ones the drafter flagged contested** (`r14`,
+  `r27`), and the third (`r30`) is an undirected pair the drafter did not flag. These are
+  the first places a labeller can be overturned, and a model "failing" on them may be a
+  label error. The adjudication already moved the other two former never-right items
+  (`r43`, `r53`) to the model's answer.
 
 ## The fixture
 
@@ -160,20 +165,31 @@ pair renumbers the items (and the blind sheet's shuffle).
 
 ### What the fixture cannot show (read before any number)
 
-- **The labels are one author's** (above). Nothing here measures agreement until the
-  owner's blind adjudication is recorded.
+- **The labels are adjudicated, not the owner's.** A Claude model labelled the 58 pairs
+  blind (55 agree, kappa 0.927) and a third model resolved the 3 disagreements (see
+  "Second adjudication"); the owner reviewed only the drafter's 16 contested pairs.
 - **The prompt was tuned on it**, for `qwen3:8b`: the baseline model's score is
   optimistic for generalisation and any other model is, if anything, disadvantaged
   by a prompt it was not tuned with. A win for a candidate is therefore stronger
   evidence than a loss.
 - **Eight stored-run items carry all the headroom** (above); per-class recall is
-  thin (REAFFIRMS has 6 items) and a class recall rests on 18 calls at three seeds.
+  thin (REAFFIRMS has 8 items) and a class recall rests on 18 calls at three seeds.
 - **One domain, one voice, English only.** Short bodies; no non-English Decisions;
   no real compiled bundle. The ingest-produced Decision text a user's bundle holds is
   not covered, and `plan_revision_candidates` is not measured.
 - The 9 undirected pairs cannot test `reverses` versus `refines` by design.
 
 ## Second adjudication
+
+**A second set of labels is recorded, and its three disagreements are resolved, but
+neither by the owner.** The owner delegated the blind labelling and a Claude model filled
+the sheet (it read only the sheet). The owner then delegated the adjudication to a third
+model (Claude Opus), blind to which annotator gave which label; the resolutions are in
+[`adjudication.json`](adjudication.json) and listed in [`ADJUDICATION.md`](ADJUDICATION.md).
+A record may resolve to either label. `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
+those labels, keyed by fixture id, to [`second_labels.json`](second_labels.json); the
+filled sheet is not committed. Agreement is measured against that labeller, and no
+disagreement is resolved (see the pre-registration draft).
 
 Not done. The commands below write the blind sheet and, once the owner has filled
 it, compare it with the first author's labels. Neither command contacts a model.
@@ -206,8 +222,8 @@ unknown or missing item is rejected and nothing is scored. It writes nothing:
 resolving each disagreement and recording it is a separate, human step. Each record
 goes into `adjudication.json` beside this file, keyed `idA|idB` (sorted), with
 `first`, `second`, `resolved` and `reason`; the loader checks `first` against the
-fixture and the first label stays recoverable as `strict (1st)`. The file does not
-exist yet, and the filled sheet is never committed.
+fixture and the first label stays recoverable as `strict (1st)`. The filled sheet is never
+committed.
 
 ## Usage
 
@@ -217,6 +233,10 @@ Always with `OLLAMA_HOST` pointing nowhere unless a run is intended:
 # model-free
 OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py --self-test
 OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py forecast --runs 3
+OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py j-table
+# read a stored run of the older harness into this screen's format, then score it
+OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py import-stored --runs-dir <dir> --stored evals/decision_revisions/results/runs-20260929T011322Z-qwen3-8b.json
+OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/decision_revisions_screen/run_revisions_screen.py score --models qwen3:8b --runs-dir <dir>
 # a model (needs a local Ollama; stamped, cached per row, resumable) -- NOT before registration
 uv run python -u evals/decision_revisions_screen/run_revisions_screen.py run --model qwen3:8b --runs 3
 uv run python evals/decision_revisions_screen/run_revisions_screen.py score

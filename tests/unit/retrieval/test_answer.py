@@ -3541,6 +3541,77 @@ def test_an_excerpted_document_keeps_both_ends_not_just_the_head(
     assert "line 1499" in sent
 
 
+def _needle_bundle(tmp_path: Path) -> Path:
+    """One huge Source whose only answer-bearing line sits mid-document."""
+    bundle_dir = tmp_path / "bundle"
+    lines = [f"filler line {n:04d} " + "y" * 60 for n in range(1_500)]
+    lines[611] = "the zephyr migration deadline is 14 March " + "z" * 20
+    _write_doc(
+        bundle_dir / "sources" / "huge.md",
+        doc_type="Source",
+        title="Huge",
+        body="\n".join(lines),
+    )
+    return bundle_dir
+
+
+def _ask_needle(
+    bundle_dir: Path, question: str = "zephyr migration deadline", **kwargs: object
+) -> tuple[str, answer_mod.AnswerResult]:
+    llm = _WindowedLLM()
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            question,
+            bundle_dir=bundle_dir,
+            llm=llm,
+            fts_index=idx,
+            **kwargs,  # type: ignore[arg-type]
+        )
+    return _sent_user_content(llm), result
+
+
+def test_query_aware_excerpts_default_off_is_byte_identical(tmp_path: Path) -> None:
+    """The flag down must not move one byte of model input (#1647): omitted
+    and explicit False send the same prompt, and that prompt is the
+    even-coverage one, which drops the mid-document line."""
+    bundle_dir = _needle_bundle(tmp_path)
+
+    omitted, _ = _ask_needle(bundle_dir)
+    explicit, _ = _ask_needle(bundle_dir, query_aware_excerpts=False)
+
+    assert omitted == explicit
+    assert "zephyr migration deadline is 14 March" not in omitted
+
+
+def test_query_aware_excerpts_on_keeps_the_window_with_the_question_terms(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = _needle_bundle(tmp_path)
+
+    sent, result = _ask_needle(bundle_dir, query_aware_excerpts=True)
+
+    assert "zephyr migration deadline is 14 March" in sent
+    assert answer_mod.CONTEXT_ELISION_MARKER in sent
+    assert result.excerpted_titles == ["Huge"]
+    again, _ = _ask_needle(bundle_dir, query_aware_excerpts=True)
+    assert again == sent
+
+
+def test_query_aware_excerpts_on_leaves_a_fitting_context_unchanged(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    sent_off, _ = _ask_needle(bundle_dir, "dichotomyzz")
+    sent_on, result = _ask_needle(bundle_dir, "dichotomyzz", query_aware_excerpts=True)
+    assert sent_on == sent_off
+    assert result.excerpted_titles == []
+
+
 def test_a_clipped_documents_citation_is_marked_partial(tmp_path: Path) -> None:
     """The half that keeps false provenance off disk: `--save` files
     citations verbatim, so a citation for a document the model read a
@@ -4214,6 +4285,26 @@ def test_bound_with_history_overhead_uses_hit_labels_only() -> None:
     assert len(bounded[0]) < len(bodies[0]), "fixture must actually force excerpting"
     assert bounded[0] == hit_only_bounded[0]
     assert bounded[1] == hit_only_bounded[1]
+
+
+def test_bound_with_history_honours_query_aware_excerpts() -> None:
+    """The grouped (history) path takes the same opt-in switch (#1647): off
+    drops the mid-document line, on keeps it, and off is the default."""
+    lines = [f"filler line {n:04d} " + "y" * 60 for n in range(1_500)]
+    lines[611] = "the zephyr migration deadline is 14 March " + "z" * 20
+    body = "\n".join(lines)
+    llm = _WindowedLLM(context_window=5_000, max_generation_tokens=200)
+    question = "zephyr migration deadline"
+
+    default, _, _ = answer_mod._bound_with_history(
+        ["[H0]\n"], [body], [0], llm=llm, question=question
+    )
+    on, _, _ = answer_mod._bound_with_history(
+        ["[H0]\n"], [body], [0], llm=llm, question=question, query_aware=True
+    )
+
+    assert "zephyr migration deadline is 14 March" not in default[0]
+    assert "zephyr migration deadline is 14 March" in on[0]
 
 
 def test_fit_within_todays_bound(tmp_path: Path) -> None:

@@ -52,7 +52,7 @@ FAILURE_ABS_CAP: Final = 0.10
 FAILURE_MARGIN: Final = 0.02
 LATENCY_RATIO_CAP: Final = 2.0
 FABRICATION_MARGIN: Final = 0.10
-"""The registered vetoes (see `PREREGISTRATION-DRAFT.md`)."""
+"""The registered vetoes (see `PREREGISTRATION.md`)."""
 
 UNION_THRESHOLD: Final = 0.30
 """Token-overlap (Jaccard) at which the model-free `sentence_union` baseline
@@ -655,6 +655,70 @@ def j_tolerance(
         else:
             break
     return best
+
+
+def constant_gain_bound(
+    reference: Mapping[str, float], *, gain: float, resamples: int = 10_000
+) -> dict[str, float]:
+    """The paired gain of a candidate that matches the reference on every case and
+    is better by `gain` on each, a case score never going above 1.0 (the
+    convention `test_the_j_bar_on_the_real_reference_is_pinned` uses)."""
+    candidate = {k: min(1.0, v + gain) for k, v in reference.items()}
+    return paired_bootstrap(candidate, reference, resamples=resamples)
+
+
+def j_table_rows(
+    reference: Mapping[str, float], *, resamples: int = 10_000
+) -> list[dict[str, int]]:
+    """`j_tolerance` for every win count from 0 to the number of cases the
+    reference scores below 1.0 (a win on a perfect case changes nothing)."""
+    below = sum(v < 1.0 for v in reference.values())
+    return [
+        {
+            "wins": wins,
+            "tolerance": j_tolerance(reference, wins=wins, resamples=resamples),
+        }
+        for wins in range(below + 1)
+    ]
+
+
+def render_j_table(
+    name: str,
+    reference: Mapping[str, float],
+    *,
+    gains: Sequence[float],
+    resamples: int = 10_000,
+) -> str:
+    """The J bar as markdown, from the labels alone (no model)."""
+    below = sum(v < 1.0 for v in reference.values())
+    lines = [
+        f"# J bar (no model contacted); reference: {name}",
+        "",
+        f"the reference scores below 1.0 in {below} of {len(reference)} cases "
+        f"(bootstrap {resamples} resamples over cases, seed 42)",
+        "",
+        "constant gain on every case (a case score capped at 1.0):",
+        "",
+        "| gain | point | 95% lower bound |",
+        "| --- | --- | --- |",
+    ]
+    for gain in gains:
+        bound = constant_gain_bound(reference, gain=gain, resamples=resamples)
+        lines.append(f"| +{gain:.2f} | {bound['point']:.3f} | {bound['lo']:.3f} |")
+    lines += [
+        "",
+        "outright wins (the reference's lowest cases to 1.0) with the most outright "
+        "losses (its highest cases to 0.0) that still clear J (-1: none, losing "
+        "nothing included):",
+        "",
+        "| wins | lose at most |",
+        "| --- | --- |",
+    ]
+    lines += [
+        f"| {r['wins']} | {r['tolerance']} |"
+        for r in j_table_rows(reference, resamples=resamples)
+    ]
+    return "\n".join(lines)
 
 
 # --- forecast ----------------------------------------------------------------------

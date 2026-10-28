@@ -98,9 +98,9 @@ def test_the_real_fixture_loads_as_58_items_with_the_library_balance() -> None:
     assert len({i.id for i in items}) == 58
     assert core.class_balance(items) == {
         "REVERSES": 14,
-        "REFINES": 14,
-        "REAFFIRMS": 6,
-        "UNRELATED": 24,
+        "REFINES": 13,
+        "REAFFIRMS": 8,
+        "UNRELATED": 23,
     }
     assert sum(not i.directed for i in items) == 9
     assert sum(i.contested for i in items) == 16
@@ -115,7 +115,7 @@ def test_item_ids_follow_the_sorted_pair_key_so_they_are_stable() -> None:
 def test_an_adjudication_overlay_resolves_a_label_and_keeps_the_first(
     tmp_path: Path,
 ) -> None:
-    base = core.load_items()
+    base = core.load_items(adjudication_path=tmp_path / "none.json")
     victim = base[0]
     other = "REFINES" if victim.label != "REFINES" else "REVERSES"
     path = tmp_path / "adj.json"
@@ -136,6 +136,36 @@ def test_an_adjudication_overlay_resolves_a_label_and_keeps_the_first(
     assert changed.label == other
     assert changed.first_label == victim.label
     assert [i.label for i in items[1:]] == [i.label for i in base[1:]]
+
+
+def test_an_overlay_may_resolve_to_the_first_label(tmp_path: Path) -> None:
+    """An adjudicator who sides with the drafter leaves the label as it was,
+    and the record still names both readings."""
+    base = core.load_items(adjudication_path=tmp_path / "none.json")
+    victim = base[0]
+    other = "REFINES" if victim.label != "REFINES" else "REVERSES"
+    path = tmp_path / "adj.json"
+    path.write_text(
+        json.dumps(
+            {
+                "|".join(victim.pair_ids): {
+                    "first": victim.label,
+                    "second": other,
+                    "resolved": victim.label,
+                    "reason": "first reading",
+                }
+            }
+        )
+    )
+    kept = core.load_items(adjudication_path=path)[0]
+    assert (kept.label, kept.first_label) == (victim.label, victim.label)
+    assert kept.adjudication is not None
+    assert kept.adjudication["second"] == other
+    record = json.loads(path.read_text())
+    next(iter(record.values()))["resolved"] = "MAYBE"
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="must resolve to a label"):
+        core.load_items(adjudication_path=path)
 
 
 def test_an_overlay_whose_first_label_differs_from_the_fixture_is_refused(
@@ -408,6 +438,43 @@ def test_the_paired_bootstrap_is_reproducible_and_brackets_the_mean() -> None:
     assert a == core.paired_bootstrap(cand, ref, resamples=500)
     assert a["point"] == pytest.approx(0.4)
     assert a["lo"] <= a["point"] <= a["hi"]
+
+
+def test_the_j_table_on_the_adjudicated_reference_is_pinned() -> None:
+    items = core.load_items()
+    name, ref = core.reference_baseline(items)
+    reference = ref["per_item_strict"]
+    assert sum(v == 0.0 for v in reference.values()) == 24
+    assert core.j_tolerance(reference, wins=3, resamples=2000) == -1
+    assert core.j_tolerance(reference, wins=4, resamples=2000) >= 0
+    text = core.render_j_table(name, reference, wins=[3, 4], shuffles=1, resamples=500)
+    assert "wrong for the reference: 24 of 58" in text
+
+
+def test_the_headroom_replay_fixes_the_weakest_items_first_with_no_loss() -> None:
+    own = {f"r{n:02d}": 1.0 for n in range(20)}
+    own.update({"r00": 0.0, "r01": 0.0, "r02": 0.5, "r03": 0.9})
+    rows = core.headroom_replay(own, resamples=300)
+    assert [r["fixed"] for r in rows] == [0, 1, 2, 3, 4]
+    assert rows[0]["point"] == 0.0
+    assert rows[0]["lo"] == 0.0
+    assert rows[4]["point"] == pytest.approx((1.0 + 1.0 + 0.5 + 0.1) / 20)
+    assert [r["point"] for r in rows] == sorted(r["point"] for r in rows)
+    assert core.headroom_replay({"a": 1.0, "b": 1.0}, resamples=100)[0]["fixed"] == 0
+
+
+def test_a_run_with_no_stored_latency_has_no_latency_summary() -> None:
+    item = _item()
+    row = {
+        "item": item.id,
+        "verdict": "reverses",
+        "latency_s": None,
+        "failure": None,
+        "actionable": True,
+    }
+    summary = core.summarize([row], [item])
+    assert summary["median_latency_s"] is None
+    assert summary["p95_latency_s"] is None
 
 
 def test_the_forecast_multiplies_calls_by_latency_and_adds_one_load() -> None:

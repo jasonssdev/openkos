@@ -137,6 +137,27 @@ fn engine_program(
     }
 }
 
+/// The workspace to run on: the variable's, else a remembered folder that is
+/// still a workspace; otherwise `NoWorkspace`.
+fn chosen_workspace(
+    env: &dyn Fn(&str) -> Option<OsString>,
+    cwd: &Path,
+    remembered: Option<&Path>,
+) -> Result<PathBuf, LocateError> {
+    Ok(match workspace_from_env(env, cwd) {
+        Some(workspace) => {
+            if !workspace.is_dir() {
+                return Err(LocateError::WorkspaceMissing(workspace));
+            }
+            workspace
+        }
+        None => match remembered {
+            Some(path) if workspace::is_workspace(path) => path.to_path_buf(),
+            _ => return Err(LocateError::NoWorkspace),
+        },
+    })
+}
+
 /// Form the engine command from the environment.
 ///
 /// `env` reads one variable, `cwd` is the shell's working directory,
@@ -150,23 +171,36 @@ pub fn locate(
     remembered: Option<&Path>,
     source: &EngineSource,
 ) -> Result<EngineCommand, LocateError> {
-    let workspace = match workspace_from_env(env, cwd) {
-        Some(workspace) => {
-            if !workspace.is_dir() {
-                return Err(LocateError::WorkspaceMissing(workspace));
-            }
-            workspace
-        }
-        None => match remembered {
-            Some(path) if workspace::is_workspace(path) => path.to_path_buf(),
-            _ => return Err(LocateError::NoWorkspace),
-        },
-    };
+    let workspace = chosen_workspace(env, cwd, remembered)?;
     let (program, mut args) = engine_program(env, source)?;
     args.extend([
         OsString::from("serve"),
         OsString::from("--workspace"),
         workspace.clone().into_os_string(),
+    ]);
+    Ok(EngineCommand {
+        program,
+        args,
+        cwd: Some(workspace),
+    })
+}
+
+/// The command that runs the unattended daemon on the chosen workspace (the
+/// same rules as [`locate`]): the same engine, run as `daemon` in the
+/// workspace, with the lifeline that ends it when the shell's pipe closes
+/// (ADR-0078). It takes no workspace argument: the daemon serves the folder it
+/// runs in.
+pub fn locate_daemon(
+    env: &dyn Fn(&str) -> Option<OsString>,
+    cwd: &Path,
+    remembered: Option<&Path>,
+    source: &EngineSource,
+) -> Result<EngineCommand, LocateError> {
+    let workspace = chosen_workspace(env, cwd, remembered)?;
+    let (program, mut args) = engine_program(env, source)?;
+    args.extend([
+        OsString::from("daemon"),
+        OsString::from("--stop-on-stdin-eof"),
     ]);
     Ok(EngineCommand {
         program,
@@ -203,6 +237,16 @@ fn process_source() -> EngineSource {
 /// [`locate`] against the real process environment and executable.
 pub fn locate_from_process(remembered: Option<&Path>) -> Result<EngineCommand, LocateError> {
     locate(
+        &|name| std::env::var_os(name),
+        &process_cwd(),
+        remembered,
+        &process_source(),
+    )
+}
+
+/// [`locate_daemon`] against the real process environment and executable.
+pub fn locate_daemon_from_process(remembered: Option<&Path>) -> Result<EngineCommand, LocateError> {
+    locate_daemon(
         &|name| std::env::var_os(name),
         &process_cwd(),
         remembered,
@@ -283,6 +327,37 @@ mod tests {
                 &workspace.to_string_lossy(),
             ]
         );
+    }
+
+    #[test]
+    fn the_daemon_is_the_same_engine_run_in_the_workspace_with_its_lifeline() {
+        let workspace = std::env::temp_dir();
+        let command = locate_daemon(
+            &env_of(&[(WORKSPACE_ENV, &workspace)]),
+            Path::new("/"),
+            None,
+            &development(),
+        )
+        .expect("located");
+        assert_eq!(command.program, OsString::from("uv"));
+        assert_eq!(
+            args(&command),
+            [
+                "run",
+                "--project",
+                "/src/openkos",
+                "openkos",
+                "daemon",
+                "--stop-on-stdin-eof",
+            ]
+        );
+        assert_eq!(command.cwd.as_deref(), Some(workspace.as_path()));
+    }
+
+    #[test]
+    fn the_daemon_needs_a_chosen_workspace_like_the_engine_does() {
+        let located = locate_daemon(&env_of(&[]), Path::new("/"), None, &development());
+        assert_eq!(located, Err(LocateError::NoWorkspace));
     }
 
     #[test]

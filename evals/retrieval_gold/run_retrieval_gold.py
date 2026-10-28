@@ -22,6 +22,9 @@ Subcommands (the exact commands are in `README.md`):
     judge-sheet  write a blind judgment sheet (path OUTSIDE the repository)
     adjudicate   turn a filled sheet into judgments; kappa for a second sheet
     score        recall@k, MRR, nDCG@k per channel and per language
+    passage-sheet  blind gold-passage annotation sheet (never filled here)
+    passages     a filled passage sheet to a passages file (spans must be verbatim)
+    delivered    is the gold passage in the final trimmed context (no chat call)
     compare      seeded paired bootstrap of two scored runs
     --self-test  no model is contacted
 """
@@ -36,6 +39,7 @@ import pathlib
 import sys
 import tempfile
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -48,9 +52,10 @@ sys.path.append(str(REPO_ROOT / "evals" / "query_grounding"))
 
 import gold_bundle as bundle_mod  # noqa: E402
 import gold_core as core  # noqa: E402
+import gold_delivery as delivery  # noqa: E402
 import harness_stamp  # noqa: E402
 
-from openkos import lifecycle, sensitivity  # noqa: E402
+from openkos import lifecycle, prompt_budget, sensitivity  # noqa: E402
 from openkos.llm.base import EMBED_DIM, Embedder  # noqa: E402
 from openkos.retrieval import answer as answer_mod  # noqa: E402
 from openkos.retrieval import fusion, pool  # noqa: E402
@@ -204,6 +209,61 @@ def run_all(
 
 
 # --------------------------------------------------------------------------- #
+# Delivered evidence: the shipped context assembly, no chat call               #
+# --------------------------------------------------------------------------- #
+
+
+class _WindowLLM:
+    """The two attributes the shipped bound reads off a backend, and nothing
+    else: `prompt_budget.planning_window` and `reply_reserve` duck-type
+    `context_window` and `max_generation_tokens`. `chat` exists only to be
+    refused, so a code path that reached for the model would fail loudly."""
+
+    def __init__(self, context_window: int, max_generation_tokens: int) -> None:
+        self.context_window = context_window
+        self.max_generation_tokens = max_generation_tokens
+
+    def chat(self, messages: object) -> str:
+        raise AssertionError("delivered evidence must not call the chat model")
+
+
+@dataclass(frozen=True)
+class Assembled:
+    blocks: dict[str, str]  # concept id -> the final block text the model reads
+    omitted: list[str]  # concept ids whose block the budget dropped entirely
+
+
+def assemble_blocks(
+    bundle: pathlib.Path,
+    concept_ids: Sequence[str],
+    *,
+    question: str,
+    context_window: int = prompt_budget.PLANNING_CONTEXT_WINDOW,
+    max_generation_tokens: int = prompt_budget.REPLY_RESERVE,
+) -> Assembled:
+    """The final context blocks `answer()` would send for `concept_ids`.
+
+    Calls `answer._assemble_context` itself with a `_WindowLLM`, so the
+    trimming under test is the shipped one (`_bound_bodies` ->
+    `prompt_budget.bounded_text`), and no model is contacted. The defaults are
+    the planning window and reply reserve the shipped bound falls back to; pass
+    the values of the configuration under study to measure it."""
+    omitted_ids: list[str] = []
+    blocks, citations = answer_mod._assemble_context(
+        bundle,
+        list(concept_ids),
+        llm=_WindowLLM(context_window, max_generation_tokens),
+        question=question,
+        omitted_ids_out=omitted_ids,
+        omitted_titles_out=[],
+    )
+    return Assembled(
+        blocks={c.concept_id: b for c, b in zip(citations, blocks, strict=True)},
+        omitted=omitted_ids,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Commands                                                                     #
 # --------------------------------------------------------------------------- #
 
@@ -313,6 +373,129 @@ def cmd_adjudicate(args: argparse.Namespace) -> int:
             print("JUDGMENTS REJECTED, nothing written:\n  - " + "\n  - ".join(bad))
             return 1
         _write_json(args.out, judgments)
+        print(f"wrote {args.out}")
+    return 0
+
+
+def _doc_texts() -> dict[str, str]:
+    return {d.id: d.body for d in bundle_mod.documents()}
+
+
+def cmd_passage_sheet(args: argparse.Namespace) -> int:
+    """The blind gold-passage annotation sheet. It is NOT filled here."""
+    _refuse_inside_repo(args.out)
+    questions = _load_questions(args.questions)
+    judgments = json.loads(args.judgments.read_text("utf-8"))
+    problems = core.validate_judgments(
+        judgments, questions, {d.id for d in bundle_mod.documents()}
+    )
+    if problems:
+        raise SystemExit("judgments rejected:\n  - " + "\n  - ".join(problems))
+    table = judgments["judgments"]
+    docs = {d.id: (d.title, d.body) for d in bundle_mod.documents()}
+    text = delivery.build_passage_sheet(
+        questions, table, docs, questions_sha=core.questions_sha256(questions)
+    )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(text, encoding="utf-8")
+    gold = sum(1 for q in questions for g in table[q.id].values() if g >= 1)
+    print(f"wrote {args.out} ({len(questions)} questions, {gold} gold documents)")
+    print("fill every `Passage:` line by hand; this command never fills one")
+    return 0
+
+
+def cmd_passages(args: argparse.Namespace) -> int:
+    """A filled sheet to a passages file; every span must be verbatim."""
+    _refuse_inside_repo(args.out)
+    questions = _load_questions(args.questions)
+    sha = core.questions_sha256(questions)
+    parsed, problems = delivery.parse_passage_sheet(args.sheet.read_text("utf-8"), sha)
+    raw = {
+        "kind": delivery.PASSAGES_KIND,
+        "version": 1,
+        "bundle": bundle_mod.BUNDLE_ID,
+        "questions_sha256": sha,
+        "passages": parsed,
+    }
+    if not problems:
+        _, problems = delivery.load_passages(raw, questions, _doc_texts())
+    if problems:
+        raise SystemExit("sheet rejected:\n  - " + "\n  - ".join(problems))
+    _write_json(args.out, raw)
+    print(f"wrote {args.out} ({len(parsed)} annotated questions)")
+    return 0
+
+
+def delivered_reports(
+    run: dict[str, Any],
+    passages: dict[str, dict[str, list[str]]],
+    questions: Sequence[core.Question],
+    *,
+    context_window: int,
+    max_generation_tokens: int,
+) -> dict[str, Any]:
+    """`fused@k` delivered-evidence summaries and per-question records."""
+    if "fused" not in run.get("channels", []):
+        raise SystemExit("delivered evidence needs a run with the fused channel")
+    by_id = {q.id: q for q in questions}
+    out: dict[str, Any] = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        bundle = bundle_mod.write_bundle(pathlib.Path(tmp))
+        for k in run["ks"]:
+            records: dict[str, Any] = {}
+            for qid, gold in sorted(passages.items()):
+                retrieved = run["rankings"][qid]["fused"][str(k)]
+                got = assemble_blocks(
+                    bundle,
+                    retrieved,
+                    question=by_id[qid].question,
+                    context_window=context_window,
+                    max_generation_tokens=max_generation_tokens,
+                )
+                records[qid] = delivery.question_record(
+                    gold, retrieved=retrieved, blocks=got.blocks, omitted=got.omitted
+                )
+            out[f"fused@{k}"] = {
+                "summary": delivery.summarize(records, questions),
+                "records": records,
+            }
+    return out
+
+
+def cmd_delivered(args: argparse.Namespace) -> int:
+    questions = _load_questions(args.questions)
+    run = json.loads(args.run.read_text("utf-8"))
+    problem = core.run_problem(run, questions, core.POOL_FULL)
+    if problem:
+        raise SystemExit(problem)
+    passages, problems = delivery.load_passages(
+        json.loads(args.passages.read_text("utf-8")), questions, _doc_texts()
+    )
+    if problems:
+        raise SystemExit("passages rejected:\n  - " + "\n  - ".join(problems))
+    result = delivered_reports(
+        run,
+        passages,
+        questions,
+        context_window=args.context_window,
+        max_generation_tokens=args.max_generation_tokens,
+    )
+    print(
+        f"context window {args.context_window} tokens, reply reserve "
+        f"{args.max_generation_tokens}; no model contacted"
+    )
+    print(delivery.render_report({k: v["summary"] for k, v in result.items()}))
+    if args.out is not None:
+        _refuse_inside_repo(args.out)
+        _write_json(
+            args.out,
+            {
+                "kind": "retrieval-gold-delivered",
+                "context_window": args.context_window,
+                "max_generation_tokens": args.max_generation_tokens,
+                "results": result,
+            },
+        )
         print(f"wrote {args.out}")
     return 0
 
@@ -767,6 +950,282 @@ def _self_test_pipeline(
     )
 
 
+def _self_test_delivery(c: _Checks, questions: list[core.Question]) -> None:
+    docs = {d.id: d.body for d in bundle_mod.documents()}
+    # The longest English source: long enough that a small window must excerpt it.
+    long_id = max(
+        (i for i in docs if docs[i] and i.startswith("sources/")),
+        key=lambda i: len(docs[i]),
+    )
+    long_text = docs[long_id]
+    head, tail = long_text.splitlines()[0], long_text.splitlines()[-1]
+    qid = questions[0].id
+
+    def raw(spans: dict[str, list[str]]) -> dict[str, Any]:
+        return {
+            "kind": delivery.PASSAGES_KIND,
+            "version": 1,
+            "questions_sha256": core.questions_sha256(questions),
+            "passages": {qid: spans},
+        }
+
+    # -- the loader refuses what it cannot find verbatim -------------------- #
+    ok, problems = delivery.load_passages(raw({long_id: [head, tail]}), questions, docs)
+    c.check(
+        not problems and ok[qid][long_id] == [head, tail], f"spans load: {problems}"
+    )
+    for label, bad in (
+        ("an invented span", {long_id: ["this sentence is not in the document"]}),
+        ("a paraphrase", {long_id: [head.upper() + " (reworded)"]}),
+        ("an empty span", {long_id: [""]}),
+        ("a blank span", {long_id: ["   "]}),
+        ("an unknown document", {"sources/nope": [head]}),
+        (
+            "a span in the wrong document",
+            {sorted(docs)[0]: [tail]} if tail not in docs[sorted(docs)[0]] else {},
+        ),
+    ):
+        if not bad:
+            continue
+        _, found = delivery.load_passages(raw(bad), questions, docs)
+        c.check(bool(found), f"the loader refuses {label}")
+    stale = raw({long_id: [head]})
+    stale["questions_sha256"] = "0" * 64
+    c.check(
+        bool(delivery.load_passages(stale, questions, docs)[1]),
+        "the loader refuses passages written for another question set",
+    )
+    unknown_q = raw({long_id: [head]})
+    unknown_q["passages"]["q99"] = {long_id: [head]}
+    c.check(
+        bool(delivery.load_passages(unknown_q, questions, docs)[1]),
+        "the loader refuses an unknown question",
+    )
+
+    # -- the production assembly, driven without a chat call ---------------- #
+    with tempfile.TemporaryDirectory() as tmp:
+        bundle = bundle_mod.write_bundle(pathlib.Path(tmp))
+        wide = assemble_blocks(
+            bundle, [long_id], question="q", context_window=1_000_000
+        )
+        c.check(
+            tail in wide.blocks[long_id] and head in wide.blocks[long_id],
+            "a huge window delivers the whole document",
+        )
+        narrow = assemble_blocks(
+            bundle,
+            [long_id],
+            question="q",
+            context_window=2500,
+            max_generation_tokens=500,
+        )
+        c.check(long_id in narrow.blocks, "a narrow window still excerpts the document")
+        c.check(
+            answer_mod.CONTEXT_ELISION_MARKER in narrow.blocks[long_id],
+            "the narrow window is the shipped excerpt, with its elision marker",
+        )
+        # A line the excerpt dropped (a span in an elided region), and one it kept.
+        body_lines = [ln for ln in long_text.splitlines() if len(ln) > 40]
+        dropped = [ln for ln in body_lines if ln not in narrow.blocks[long_id]]
+        kept_lines = [ln for ln in body_lines if ln in narrow.blocks[long_id]]
+        c.check(
+            bool(dropped) and bool(kept_lines),
+            "the narrow excerpt keeps some lines and drops others",
+        )
+        gold = {long_id: dropped[:1]}
+        rec_lost = delivery.question_record(
+            gold, retrieved=[long_id], blocks=narrow.blocks, omitted=narrow.omitted
+        )
+        c.check(
+            rec_lost["status"][long_id] == delivery.TRIMMED
+            and not rec_lost["delivered"],
+            "retrieved but trimmed away classifies as trimmed and scores 0",
+        )
+        c.check(
+            delivery.question_record(
+                {long_id: kept_lines[:1]},
+                retrieved=[long_id],
+                blocks=narrow.blocks,
+                omitted=narrow.omitted,
+            )["delivered"],
+            "a span the excerpt keeps scores 1",
+        )
+        c.check(
+            delivery.question_record(
+                gold, retrieved=[long_id], blocks=wide.blocks, omitted=wide.omitted
+            )["delivered"],
+            "the dropped span scores 1 once the window holds the whole document",
+        )
+        # Not retrieved: the document never reached assembly.
+        rec_nr = delivery.question_record(
+            {long_id: [head]}, retrieved=["sources/other"], blocks={}, omitted=[]
+        )
+        c.check(
+            rec_nr["status"][long_id] == delivery.NOT_RETRIEVED
+            and not rec_nr["delivered"],
+            "an unretrieved document classifies as not_retrieved",
+        )
+        # Omitted: a block the budget left no room for at all.
+        many = [i for i in sorted(docs) if i.startswith("sources/")][:12]
+        crowded = assemble_blocks(
+            bundle, many, question="q", context_window=900, max_generation_tokens=500
+        )
+        c.check(
+            len(crowded.blocks) + len(crowded.omitted) == len(many),
+            "every retrieved document is either a block or recorded as omitted",
+        )
+        if crowded.omitted:
+            gone = crowded.omitted[0]
+            rec_om = delivery.question_record(
+                {gone: [docs[gone].splitlines()[0]]},
+                retrieved=many,
+                blocks=crowded.blocks,
+                omitted=crowded.omitted,
+            )
+            c.check(
+                rec_om["status"][gone] == delivery.OMITTED, "a dropped block is omitted"
+            )
+        # The assembly is the one answer() sends: same ids, same excerpt flags.
+        question_text = "How long are raw readings kept in InfluxDB?"
+        stub = _WindowLLM(2500, 500)
+        ids = [
+            "sources/" + p.stem
+            for p in sorted(bundle_mod.QUIET_ENGINE_SOURCES.glob("*.md"))[:5]
+        ]
+        sent, cites = answer_mod._assemble_context(
+            bundle,
+            ids,
+            llm=stub,
+            question=question_text,
+        )
+        ours = assemble_blocks(
+            bundle,
+            ids,
+            question=question_text,
+            context_window=2500,
+            max_generation_tokens=500,
+        )
+        c.check(
+            [ours.blocks[x.concept_id] for x in cites] == sent,
+            "assemble_blocks returns the blocks _assemble_context sends, verbatim",
+        )
+
+    # -- end to end over a stub-embedder run: no model, the shipped assembly -- #
+    run = run_all(questions[:4], embedder=_StubEmbedder(), model_tag="stub")
+    first, second = questions[0].id, questions[1].id
+    top = run["rankings"][first]["fused"]["5"][0]
+    absent = next(
+        i for i in sorted(docs) if i not in run["rankings"][second]["fused"]["5"]
+    )
+    e2e = {
+        first: {top: [docs[top].splitlines()[0]]},
+        second: {absent: [docs[absent].splitlines()[0]]},
+    }
+    rep = delivered_reports(
+        run,
+        e2e,
+        questions[:4],
+        context_window=prompt_budget.PLANNING_CONTEXT_WINDOW,
+        max_generation_tokens=prompt_budget.REPLY_RESERVE,
+    )
+    five = rep["fused@5"]
+    c.check(
+        five["records"][first]["delivered"],
+        "e2e: the top fused document's first line is delivered",
+    )
+    c.check(
+        five["records"][second]["status"][absent] == delivery.NOT_RETRIEVED,
+        "e2e: a document outside the top 5 is not_retrieved",
+    )
+    c.check(
+        five["summary"]["all"]["delivered"] == 1 and five["summary"]["all"]["n"] == 2,
+        "e2e: 1 of 2",
+    )
+    c.check(
+        five["summary"]["unannotated"] == [questions[2].id, questions[3].id],
+        "e2e: unannotated named",
+    )
+    tiny = delivered_reports(
+        run,
+        {first: {top: [docs[top].splitlines()[-1]]}},
+        questions[:4],
+        context_window=600,
+        max_generation_tokens=500,
+    )
+    c.check(
+        not tiny["fused@5"]["records"][first]["delivered"],
+        "e2e: a window too small to hold the document does not deliver its last line",
+    )
+
+    # -- the aggregate: n of N, splits, retrieved/delivered gap -------------- #
+    recs = {
+        "a": {
+            "delivered": True,
+            "retrieved": True,
+            "status": {"d": delivery.DELIVERED},
+        },
+        "b": {"delivered": False, "retrieved": True, "status": {"d": delivery.TRIMMED}},
+        "c": {
+            "delivered": False,
+            "retrieved": False,
+            "status": {"d": delivery.NOT_RETRIEVED},
+        },
+        "d": {"delivered": False, "retrieved": True, "status": {"d": delivery.OMITTED}},
+    }
+    qs = [
+        core.Question("a", "en", "single-hop", "x"),
+        core.Question("b", "en", "multi-hop", "x"),
+        core.Question("c", "es", "single-hop", "x"),
+        core.Question("d", "es", "enumeration", "x"),
+        core.Question("e", "es", "single-hop", "unannotated"),
+    ]
+    rep = delivery.summarize(recs, qs)
+    c.check(
+        rep["all"]["n"] == 4 and rep["all"]["delivered"] == 1, f"1 of 4: {rep['all']}"
+    )
+    c.check(rep["all"]["retrieved"] == 3, "retrieved 3 of 4")
+    c.check(
+        rep["all"]["lost"] == {"not_retrieved": 1, "omitted": 1, "trimmed": 1},
+        "loss split",
+    )
+    c.check(
+        rep["by_language"]["en"]["delivered"] == 1
+        and rep["by_language"]["es"]["n"] == 2,
+        "language split",
+    )
+    c.check(rep["by_kind"]["multi-hop"]["n"] == 1, "kind split")
+    c.check(rep["unannotated"] == ["e"], "an unannotated question is named, not scored")
+    c.check(
+        "1 of 4" in delivery.render_report({"fused@5": rep}), "report prints n of N"
+    )
+
+    # -- the blind passage sheet round-trips and is not pre-filled ----------- #
+    sheet = delivery.build_passage_sheet(
+        questions[:2],
+        {questions[0].id: {long_id: 2}, questions[1].id: {long_id: 1}},
+        {long_id: ("Title", long_text)},
+        questions_sha=core.questions_sha256(questions),
+    )
+    c.check(
+        sheet.count("Passage:") >= 2, "the sheet has an empty Passage line per document"
+    )
+    c.check(
+        delivery.parse_passage_sheet(sheet, core.questions_sha256(questions))[0] == {},
+        "an unfilled sheet yields no passages",
+    )
+    filled = sheet.replace("\nPassage: \n", f"\nPassage: {head}\n", 1)
+    parsed, perr = delivery.parse_passage_sheet(
+        filled, core.questions_sha256(questions)
+    )
+    c.check(
+        not perr and parsed == {questions[0].id: {long_id: [head]}},
+        f"sheet parses: {parsed} {perr}",
+    )
+    c.check(
+        long_text.splitlines()[1] in sheet, "the sheet shows the gold document text"
+    )
+
+
 def _self_test() -> int:
     c = _Checks()
     _self_test_metrics(c)
@@ -778,6 +1237,7 @@ def _self_test() -> int:
     c.check(len(doc_ids) == len(docs), "document ids are unique")
     _self_test_judgments(c, questions, doc_ids)
     _self_test_pipeline(c, questions, doc_ids)
+    _self_test_delivery(c, questions)
     print(f"self-test: {c.total - len(c.failures)}/{c.total} passed")
     return 1 if c.failures else 0
 
@@ -820,6 +1280,35 @@ def _parser() -> argparse.ArgumentParser:
     adj.add_argument("--out", type=pathlib.Path, default=None)
     adj.add_argument("--judged-by", default="adjudicator-1")
     adj.set_defaults(func=cmd_adjudicate)
+
+    ps = sub.add_parser(
+        "passage-sheet", help="write the blind gold-passage annotation sheet"
+    )
+    paths(ps)
+    ps.add_argument("--judgments", type=pathlib.Path, required=True)
+    ps.add_argument("--out", type=pathlib.Path, required=True)
+    ps.set_defaults(func=cmd_passage_sheet)
+
+    pa = sub.add_parser("passages", help="a filled passage sheet to a passages file")
+    paths(pa)
+    pa.add_argument("--sheet", type=pathlib.Path, required=True)
+    pa.add_argument("--out", type=pathlib.Path, required=True)
+    pa.set_defaults(func=cmd_passages)
+
+    dv = sub.add_parser(
+        "delivered", help="delivered evidence: is the gold passage in the final context"
+    )
+    paths(dv)
+    dv.add_argument("--run", type=pathlib.Path, required=True)
+    dv.add_argument("--passages", type=pathlib.Path, required=True)
+    dv.add_argument("--out", type=pathlib.Path, default=None)
+    dv.add_argument(
+        "--context-window", type=int, default=prompt_budget.PLANNING_CONTEXT_WINDOW
+    )
+    dv.add_argument(
+        "--max-generation-tokens", type=int, default=prompt_budget.REPLY_RESERVE
+    )
+    dv.set_defaults(func=cmd_delivered)
 
     score = sub.add_parser("score", help="score a run against judgments")
     paths(score)

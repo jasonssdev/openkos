@@ -214,6 +214,57 @@ def save_runs(
     )
 
 
+def import_stored_runs(
+    stored: Mapping[str, Any], items: Sequence[core.Item]
+) -> tuple[list[Row], list[str]]:
+    """The older harness's stored `runs-*.json` as this screen's rows, no model.
+
+    `evals/decision_revisions/` stored two lists: `rows_a` (the candidate stage)
+    and `rows_b` (every labelled pair handed to the judge directly, which is what
+    this screen measures); only `rows_b` is read. Its rows carry no run number and
+    no latency: the k-th time a pair appears is run k (rows are stored run by run),
+    and `latency_s` is `None`, so a veto on latency has nothing to compare and
+    trips, as the draft rule says a missing number does. Labels are NOT read from
+    the stored `expected`; the screen's own (adjudicated) items decide. Returns the
+    rows and the problems that make them unusable (then the rows are empty)."""
+    by_key = {core.pair_key_text(i.pair_ids): i for i in items}
+    seen: dict[str, int] = {}
+    rows: list[Row] = []
+    problems: list[str] = []
+    for entry in stored.get("rows_b", []):
+        first, second = entry["pair_ids"]
+        key = core.pair_key_text(
+            (first, second) if first <= second else (second, first)
+        )
+        item = by_key.get(key)
+        if item is None:
+            problems.append(f"stored pair {key!r} is not in the fixture")
+            continue
+        seen[item.id] = seen.get(item.id, 0) + 1
+        malformed = bool(entry["malformed"])
+        verdict = None if malformed else str(entry["observed"])
+        confidence = float(entry["confidence"])
+        rows.append(
+            {
+                "item": item.id,
+                "verdict": verdict,
+                "confidence": confidence,
+                "actionable": verdict is not None
+                and is_actionable_revision(
+                    verdict, confidence, entry.get("quote_0"), entry.get("quote_1")
+                ),
+                "failure": "malformed" if malformed else None,
+                "latency_s": None,
+                "model": stored.get("model"),
+                "run": seen[item.id],
+            }
+        )
+    counts = {seen.get(i.id, 0) for i in items}
+    if len(counts) != 1 or 0 in counts:
+        problems.append(f"items are not all run equally often: {sorted(counts)}")
+    return ([] if problems else rows), problems
+
+
 # --- forecast ----------------------------------------------------------------
 
 
@@ -299,7 +350,7 @@ def render_report(
         "",
         "Labels: the drafter's, with the owner having accepted the contested ones"
         + (
-            f"; {adjudicated} item(s) resolved by a second adjudicator."
+            f"; {adjudicated} disagreement(s) adjudicated."
             if adjudicated
             else "; NO second adjudication is recorded yet. Read every number as a"
             " measurement against one author's labels."
@@ -368,6 +419,24 @@ def render_report(
             f"[{_fmt(delta['lo'])}, {_fmt(delta['hi'])}], vetoes {tripped or 'none'} "
             f"-> {'SELECTED' if core.selected(delta, tripped) else 'not selected'}"
         )
+    if baseline in rows_by_model:
+        own = core.per_item_strict(rows_by_model[baseline], items)
+        steps = core.headroom_replay(own, resamples=resamples)
+        lines += [
+            "",
+            f"## Headroom above {baseline} (best case: fixes its weakest items, loses nothing)",
+            "",
+            f"items below 1.0 for {baseline}: {steps[0]['of']:.0f} of {len(own)}; "
+            f"right in every run: {sum(v == 1.0 for v in own.values())} of {len(own)}",
+            "",
+            "| items fixed | paired gain | 95% lower bound |",
+            "| --- | --- | --- |",
+        ]
+        lines += [
+            f"| {s['fixed']:.0f} of {s['of']:.0f} | {_fmt(s['point'], 4)} "
+            f"| {_fmt(s['lo'], 4)} |"
+            for s in steps
+        ]
     return "\n".join(lines)
 
 
@@ -465,7 +534,7 @@ def _self_test() -> int:
         "the registered size and class balance: 58 pairs, 4 verdicts",
         len(items) == 58
         and core.class_balance(items)
-        == {"REVERSES": 14, "REFINES": 14, "REAFFIRMS": 6, "UNRELATED": 24},
+        == {"REVERSES": 14, "REFINES": 13, "REAFFIRMS": 8, "UNRELATED": 23},
     )
     check(
         "the registered splits: 46 original, 12 confirmation; 9 undirected; 16 contested",
@@ -584,10 +653,10 @@ def _self_test() -> int:
 
     # The registered floors.
     check(
-        "the baselines are 24, 16, 17, 6 and 35 of 58 strict; the commonest label is 24 of 58",
+        "the baselines are 23, 16, 16, 8 and 34 of 58 strict; the commonest label is 23 of 58",
         [round(table[n]["strict_accuracy"] * 58) for n in core.BASELINE_NAMES]
-        == [24, 16, 17, 6, 35]
-        and core.majority_baseline(items) == 24 / 58,
+        == [23, 16, 16, 8, 34]
+        and core.majority_baseline(items) == 23 / 58,
     )
     check(
         "the reference for rule J is the lexical cut, the strongest",
@@ -596,8 +665,8 @@ def _self_test() -> int:
     ref_scores = core.reference_baseline(items)[1]["per_item_strict"]
     wrong = [k for k, v in ref_scores.items() if v == 0.0]
     check(
-        "23 items are wrong for the reference, so the fixture leaves room to win",
-        len(wrong) == 23,
+        "24 items are wrong for the reference, so the fixture leaves room to win",
+        len(wrong) == 24,
     )
 
     def clears(wins: int) -> bool:
@@ -697,7 +766,13 @@ def _self_test() -> int:
     check("the report applies the selection rule", "SELECTED" in report)
     check(
         "the report says whose labels it scores against",
-        "NO second adjudication is recorded yet" in report,
+        (
+            f"{sum(i.adjudication is not None for i in items)} disagreement(s)"
+            " adjudicated"
+            if any(i.adjudication is not None for i in items)
+            else "NO second adjudication is recorded yet"
+        )
+        in report,
     )
     text = render_forecast(
         items, models=[BASELINE], runs=3, latencies=ASSUMED_MEDIAN_LATENCY_S
@@ -705,9 +780,9 @@ def _self_test() -> int:
     check("the forecast names the call count", f"total calls: {len(items) * 3}" in text)
     check(
         "the forecast prints the baselines, the reference and the room to win without a model",
-        "always unrelated: 0.414 (24 of 58)" in text
+        "always unrelated: 0.397 (23 of 58)" in text
         and f"reference baseline (rule J): {lexical_name}" in text
-        and "items wrong for the reference (room for a model to win): 23 of 58" in text,
+        and "items wrong for the reference (room for a model to win): 24 of 58" in text,
     )
     check("the forecast says its latencies are assumed", "assumed" in text)
     check(
@@ -890,6 +965,23 @@ def _self_test() -> int:
         and agree.kappa == 1.0
         and agree.disagreements == [],
     )
+    recorded = adj.adjudicate(
+        items,
+        adj.parse_sheet(
+            fill(
+                lambda i: core.WIRE[
+                    i.adjudication["second"] if i.adjudication else i.label
+                ]
+            )
+        ),
+    )
+    check(
+        "the recorded second labels reproduce 55 of 58, kappa 0.927, 3 disagreements",
+        recorded.agreed == 55
+        and len(recorded.disagreements) == 3
+        and recorded.kappa is not None
+        and abs(recorded.kappa - 0.927) < 5e-4,
+    )
     rotate = {
         lab: core.WIRE[core.LABELS[(n + 1) % len(core.LABELS)]]
         for n, lab in enumerate(core.LABELS)
@@ -938,10 +1030,119 @@ def _self_test() -> int:
     check("an unfilled sheet is rejected, not scored", blank.problems != [])
     bad = adj.adjudicate(items, adj.parse_sheet(fill(lambda i: "maybe")))
     check("an invalid label is rejected, not scored", bad.problems != [])
+    got, why = adj.import_labels(
+        items, adj.parse_sheet(fill(lambda i: core.WIRE[i.first_label]))
+    )
+    check(
+        "import-sheet: a filled sheet maps every fixture id to its label",
+        why == [] and got == {i.id: core.WIRE[i.first_label] for i in items},
+    )
+    check(
+        "import-sheet: an unfilled sheet returns problems and no labels",
+        adj.import_labels(items, adj.parse_sheet(sheet))[0] == {}
+        and adj.import_labels(items, adj.parse_sheet(sheet))[1] != [],
+    )
     check(
         "a constant-label pair has no defined kappa",
         adj.cohen_kappa(["refines", "refines"], ["refines", "refines"]) is None,
     )
+
+    # --- the older harness's stored runs, imported without a model ---
+    def stored_entry(item: core.Item, verdict: str, *, malformed: bool = False) -> Row:
+        return {
+            "pair_ids": list(reversed(item.pair_ids)),
+            "expected": item.first_label,
+            "observed": "unrelated" if malformed else verdict,
+            "confidence": 0.0 if malformed else 0.9,
+            "quote_0": None if malformed else "q0",
+            "quote_1": None if malformed else "q1",
+            "malformed": malformed,
+        }
+
+    off_item = next(i for i in items if i.label == "UNRELATED")
+    malformed_item = next(i for i in items if i.label == "REVERSES" and i.directed)
+    stored_run = [
+        stored_entry(
+            i,
+            "reverses" if i.id == off_item.id else core.WIRE[i.label],
+            malformed=i.id == malformed_item.id,
+        )
+        for i in items
+    ]
+    stored = {
+        "model": "qwen3:8b",
+        "runs": 2,
+        "rows_a": [stored_entry(off_item, "refines")],
+        "rows_b": [*stored_run, *stored_run],
+    }
+    imported, import_problems = import_stored_runs(stored, items)
+    check(
+        "import-stored: two stage-(b) runs of every item, run-numbered from 1, "
+        "stage (a) left out",
+        import_problems == []
+        and len(imported) == 2 * len(items)
+        and {r["run"] for r in imported} == {1, 2}
+        and {r["item"] for r in imported} == {i.id for i in items},
+    )
+    by_row = {(r["run"], r["item"]): r for r in imported}
+    check(
+        "import-stored: a malformed reply is a failure scored wrong, never `unrelated`",
+        by_row[(1, malformed_item.id)]["verdict"] is None
+        and by_row[(1, malformed_item.id)]["failure"] == "malformed"
+        and by_row[(1, malformed_item.id)]["actionable"] is False,
+    )
+    check(
+        "import-stored: the stored answer and quotes decide `actionable`, as in production",
+        by_row[(2, off_item.id)]["verdict"] == "reverses"
+        and by_row[(2, off_item.id)]["actionable"] is True
+        and by_row[(1, off_item.id)]["failure"] is None,
+    )
+    imported_score = core.summarize(imported, items)
+    check(
+        "import-stored: scored with the screen's own `summarize`, against the "
+        "adjudicated labels, two items wrong",
+        imported_score["strict_accuracy"] == (len(items) - 2) / len(items)
+        and imported_score["failures"] == {"malformed": 2},
+    )
+    check(
+        "import-stored: the older harness stored no latency, so none is invented",
+        imported_score["median_latency_s"] is None
+        and core.vetoes(imported_score, imported_score) == ["V2"],
+    )
+    report = render_report(
+        {"qwen3:8b": imported}, items, baseline="qwen3:8b", resamples=300
+    )
+    check(
+        "the report prints the baseline's headroom replay with `n of N` item counts",
+        "items below 1.0 for qwen3:8b: 2 of 58" in report
+        and "| 2 of 2 |" in report
+        and "right in every run: 56 of 58" in report,
+    )
+    j_text = core.render_j_table(
+        core.reference_baseline(items)[0],
+        core.reference_baseline(items)[1]["per_item_strict"],
+        wins=[3, 4],
+        shuffles=1,
+        resamples=500,
+    )
+    check(
+        "the j-table prints the reference's misses and a row per win count, no model",
+        "wrong for the reference: 24 of 58" in j_text
+        and "| 3 | -1 |" in j_text
+        and "| 4 | 0 |" in j_text,
+    )
+    check(
+        "import-stored: a run missing an item is refused",
+        import_stored_runs({**stored, "rows_b": stored_run[:-1]}, items)[1] != [],
+    )
+    check(
+        "import-stored: a pair outside the fixture is refused",
+        import_stored_runs(
+            {**stored, "rows_b": [{**stored_run[0], "pair_ids": ["x", "y"]}]}, items
+        )[1]
+        != [],
+    )
+
     stamp_names = {"decision_revision/judge": judge_prompt}
     check(
         "the stamped prompt is the one whose hash production versions",
@@ -994,6 +1195,25 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--baseline", default=BASELINE)
     score.add_argument("--resamples", type=int, default=10_000)
 
+    jt = sub.add_parser(
+        "j-table", help="the J tolerance table on the adjudicated labels; no model"
+    )
+    jt.add_argument("--shuffles", type=int, default=10)
+    jt.add_argument("--resamples", type=int, default=10_000)
+    jt.add_argument(
+        "--wins",
+        default="3,4,5,6,7,8,9,10,12,14,16,18,20,22,24",
+        help="comma-separated win counts",
+    )
+
+    stored_cmd = sub.add_parser(
+        "import-stored",
+        help="read a stored run of evals/decision_revisions/ into this screen's "
+        "run format; no model",
+    )
+    common(stored_cmd)
+    stored_cmd.add_argument("--stored", type=pathlib.Path, required=True)
+
     sheet = sub.add_parser(
         "blind-sheet", help="write the blind labelling sheet for a second adjudicator"
     )
@@ -1005,6 +1225,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     adjudicate.add_argument("--sheet", type=pathlib.Path, required=True)
     adjudicate.add_argument("--seed", type=int, default=adj.SEED)
+
+    imported = sub.add_parser(
+        "import-sheet",
+        help="write a filled sheet's labels, keyed by fixture id, to a JSON file",
+    )
+    imported.add_argument("--sheet", type=pathlib.Path, required=True)
+    imported.add_argument("--out", type=pathlib.Path, required=True)
+    imported.add_argument("--labeller", required=True)
+    imported.add_argument("--seed", type=int, default=adj.SEED)
     return parser
 
 
@@ -1033,6 +1262,59 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(adj.render(result))
         return 1 if result.problems else 0
+    if args.stage == "import-sheet":
+        labels, problems = adj.import_labels(
+            items,
+            adj.parse_sheet(args.sheet.read_text(encoding="utf-8")),
+            seed=args.seed,
+        )
+        if problems:
+            print("SHEET REJECTED, nothing imported:\n" + "\n".join(problems))
+            return 1
+        args.out.write_text(
+            json.dumps(
+                {"labeller": args.labeller, "seed": args.seed, "labels": labels},
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"imported {len(labels)} labels into {args.out}")
+        return 0
+
+    if args.stage == "j-table":
+        name, ref = core.reference_baseline(items)
+        print(
+            core.render_j_table(
+                name,
+                ref["per_item_strict"],
+                wins=[int(w) for w in args.wins.split(",")],
+                shuffles=args.shuffles,
+                resamples=args.resamples,
+            )
+        )
+        return 0
+
+    if args.stage == "import-stored":
+        stored_runs = json.loads(args.stored.read_text(encoding="utf-8"))
+        imported_rows, why = import_stored_runs(stored_runs, items)
+        if why:
+            print("STORED RUN REJECTED, nothing written:\n" + "\n".join(why))
+            return 1
+        out = runs_path(args.runs_dir, str(stored_runs["model"]))
+        save_runs(
+            out,
+            {
+                "imported_from": args.stored.name,
+                "judge_prompt_version": stored_runs.get("judge_prompt_version"),
+                "generated_at": stored_runs.get("generated_at"),
+                "latency": "not stored by the older harness",
+            },
+            imported_rows,
+        )
+        print(f"imported {len(imported_rows)} rows into {out}")
+        return 0
 
     if args.stage == "forecast" or (args.stage == "run" and args.dry_run):
         models = args.models.split(",") if args.stage == "forecast" else [args.model]

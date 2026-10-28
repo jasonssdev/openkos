@@ -13,15 +13,17 @@ Subcommands:
 - `forecast`  the call count and Ollama wall-clock a run would cost, and the
               model-free baselines. Never contacts a model. `run --dry-run` is
               the same.
+- `stage0`    warm-up and timed calls per model on calibration inputs that
+              are not fixture items; contacts Ollama, scores nothing.
 - `run`       one model, every item, N seeded runs; cached by row.
 - `score`     the numbers and the draft decision rule for the stored runs.
 - `blind-sheet` / `adjudicate`  the blind second adjudication: write the sheet a
               second labeller fills in, then compare it with the fixture's
               labels. No model; see `README.md`, "Second adjudication".
 
-STATUS: DRAFT. `PREREGISTRATION-DRAFT.md` is blocked on the owner's blind
-adjudication; no model has been run. Read `README.md` before trusting any
-number. Model-free check: `--self-test`.
+STATUS: `PREREGISTRATION.md` registers this screen when it merges, before any
+scored call; Stage 0 (`stage0`) has run and no scored call has. Read `README.md`
+before trusting any number. Model-free check: `--self-test`.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ sys.path.append(str(REPO_ROOT / "evals"))
 
 import edge_blind_adjudication as adj  # noqa: E402
 import edge_screen_core as core  # noqa: E402
+import stage0_timing as s0  # noqa: E402
 from harness_stamp import (  # noqa: E402
     TimedBackend,
     build_stamp,
@@ -63,7 +66,13 @@ DEFAULT_RUNS_DIR: Final = (
     pathlib.Path.home() / "Dev/Projects/openkos-eval-runs/edge-typing-screen"
 )
 BASELINE: Final = "qwen3:8b"
-CANDIDATES: Final = ("gemma4:26b-a4b", "qwen3:14b", "qwen3.6:27b", "qwen3.6:35b-a3b")
+CANDIDATES: Final = (
+    "gemma4:26b-a4b",
+    "qwen3:14b",
+    "qwen3.6:27b",
+    "qwen3.6:35b-a3b",
+    "gemma2:27b",
+)
 DEFAULT_TIMEOUT: Final = 120.0
 LOAD_S: Final = 60.0
 ASSUMED_MEDIAN_LATENCY_S: Final[dict[str, float]] = {
@@ -72,10 +81,12 @@ ASSUMED_MEDIAN_LATENCY_S: Final[dict[str, float]] = {
     "qwen3:14b": 6.57,
     "qwen3.6:27b": 6.57,
     "qwen3.6:35b-a3b": 3.22,
+    "gemma2:27b": 6.57,
 }
 """ASSUMED per-call latencies, NOT measured for this task: the answer-call
-medians #1560 recorded, with `qwen3.6:27b` borrowing `qwen3:14b`'s because it
-has none (the volatility screen's table). `evals/edge_typing/README.md` measured
+medians #1560 recorded, with `qwen3.6:27b` and `gemma2:27b` (a candidate by
+the owner's decision of 2026-10-27) borrowing `qwen3:14b`'s because they have
+none (the volatility screen's table). `evals/edge_typing/README.md` measured
 `qwen3:8b` at about 1.3 s per edge on 145-character documents, so these are
 probably high for the small documents and about right for the ADR pairs (up to
 12,000 characters); a stage-0 timing of three calls per model replaces them
@@ -164,6 +175,116 @@ def run_model(
                     if on_row is not None:
                         on_row(row)
     return rows
+
+
+# --- stage 0 -----------------------------------------------------------------
+
+STAGE0_SMALL_CALLS: Final = 3
+STAGE0_TIMEOUT: Final = 240.0
+"""Stage 0 measures slow models rather than cutting them off at the screen's
+own timeout, which Stage 0 is what sets."""
+STAGE0_ADR_IDS: Final = (
+    "0025-temporal-direction-never-comes-from-the-model",
+    "0044-the-quiet-engine-arc-precedes-interoperability",
+)
+"""Two ADRs that are not in the fixture (10.4 KB together; the largest scored
+pair is about 12 KB), so the large calibration call is ADR-sized and scores
+nothing."""
+
+
+def calibration_items(
+    repo_root: pathlib.Path = REPO_ROOT,
+) -> tuple[core.Item, core.Item]:
+    """`(small, large)`: two items that are in no way scored items.
+
+    The small one is a pair of 100-200 character concept documents like the
+    constructed stratum; the large one is a pair of ADRs outside the fixture, like
+    the ADR stratum. Neither id is a fixture id, and `--self-test` pins that."""
+
+    def doc(id_: str, type_: str, title: str, text: str) -> core.Doc:
+        return core.Doc(
+            id=id_, type=type_, title=title, text=text, language="en", source={}
+        )
+
+    small = core.Item(
+        id="stage0-small",
+        stratum="calibration",
+        source=doc(
+            "concepts/sourdough-starter",
+            "Concept",
+            "Sourdough Starter",
+            "# Sourdough Starter\n\nA sourdough starter is a live culture of flour and "
+            "water. The loaf recipe uses it in place of commercial yeast.",
+        ),
+        target=doc(
+            "concepts/loaf-recipe",
+            "Concept",
+            "Loaf Recipe",
+            "# Loaf Recipe\n\nThe loaf recipe makes one country loaf from flour, water, "
+            "salt and a ripe starter.",
+        ),
+        label="references",
+        alt_label=None,
+        trap_type=None,
+        how="calibration only; never scored",
+    )
+    adrs = []
+    for stem in STAGE0_ADR_IDS:
+        text = (repo_root / "docs" / "adr" / f"{stem}.md").read_text(encoding="utf-8")
+        adrs.append(
+            doc(
+                f"decisions/{stem}",
+                "Decision",
+                text.splitlines()[0].lstrip("# ").strip(),
+                text,
+            )
+        )
+    large = core.Item(
+        id="stage0-large",
+        stratum="calibration",
+        source=adrs[0],
+        target=adrs[1],
+        label="references",
+        alt_label=None,
+        trap_type=None,
+        how="calibration only; never scored",
+    )
+    return small, large
+
+
+def stage0_model(model: str, runs_dir: pathlib.Path) -> dict[str, Any]:
+    """Warm-up, then 3 timed small calls and 1 timed large call, seed 1, on the
+    calibration items. Returns the stamp (digest) and the latencies."""
+    small, large = calibration_items()
+    stamp = build_stamp(model=model, prompts={"edge_typing/system": et._SYSTEM_PROMPT})
+    if stamp_problems(stamp):
+        raise SystemExit(f"cannot stamp {model}: {stamp_problems(stamp)}")
+    client = OllamaClient(
+        model=model,
+        max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
+        context_window=DEFAULT_CONTEXT_WINDOW,
+        timeout=STAGE0_TIMEOUT,
+        seed=1,
+    )
+    with tempfile.TemporaryDirectory(prefix="et-stage0-") as scratch:
+        root = pathlib.Path(scratch)
+        warm, _ = run_item(client, small, "default", root)
+        rows = [
+            run_item(client, small, "default", root)[0]
+            for _ in range(STAGE0_SMALL_CALLS)
+        ]
+        big, _ = run_item(client, large, "default", root)
+    failures = [r["failure"] for r in [warm, *rows, big] if r["failure"]]
+    return {
+        "model": model,
+        "digest": stamp["model"]["digest"],
+        "stamp": stamp,
+        "warmup_s": warm["latency_s"],
+        "small_s": [r["latency_s"] for r in rows],
+        "large_s": [big["latency_s"]],
+        "failures": failures,
+        "large_chars": len(large.source.text) + len(large.target.text),
+    }
 
 
 # --- storage -----------------------------------------------------------------
@@ -276,7 +397,7 @@ def render_report(
         "",
         "Labels: the first author's"
         + (
-            f", with {adjudicated} item(s) resolved by a second adjudicator."
+            f", with {adjudicated} disagreement(s) adjudicated."
             if adjudicated
             else "; NO second adjudication is recorded yet. Read every number as a"
             " measurement against one person's labels."
@@ -410,12 +531,12 @@ def _self_test() -> int:
         and core.class_balance(items)
         == {
             "caused_by": 3,
-            "depends_on": 5,
+            "depends_on": 4,
             "member_of": 4,
             "part_of": 3,
             "produced_by": 4,
-            "references": 21,
-            "related_to": 9,
+            "references": 24,
+            "related_to": 7,
         },
     )
     check(
@@ -455,6 +576,19 @@ def _self_test() -> int:
         sorted(i.id for i in items if i.trap_type is not None)
         == sorted(i.id for i in items if i.stratum == "constructed" and i.trap_type)
         and sum(i.trap_type is not None for i in items) == 9,
+    )
+    small_cal, large_cal = calibration_items()
+    check(
+        "stage 0 calls no scored item: both calibration ids and every doc are outside the fixture",
+        not {small_cal.id, large_cal.id} & set(by_item)
+        and not {d.id for c in (small_cal, large_cal) for d in (c.source, c.target)}
+        & {d.id for i in items for d in (i.source, i.target)},
+    )
+    check(
+        "the large calibration pair is ADR-sized, below the largest scored pair",
+        8_000
+        < len(large_cal.source.text) + len(large_cal.target.text)
+        < max(len(i.source.text) + len(i.target.text) for i in items),
     )
     largest = max(
         len(et._SYSTEM_PROMPT) + len(i.source.text) + len(i.target.text) + 400
@@ -554,10 +688,10 @@ def _self_test() -> int:
 
         # The registered floors.
         check(
-            "the baselines are 21, 9 and 12 of 49 strict; the commonest label is 21 of 49",
+            "the baselines are 24, 7 and 10 of 49 strict; the commonest label is 24 of 49",
             [round(table[n]["strict_accuracy"] * 49) for n in core.BASELINE_NAMES]
-            == [21, 9, 12]
-            and core.majority_baseline(items) == 21 / 49,
+            == [24, 7, 10]
+            and core.majority_baseline(items) == 24 / 49,
         )
         check(
             "the reference for rule J is `always references`",
@@ -569,8 +703,8 @@ def _self_test() -> int:
             if not any(table[n]["per_item_strict"][i.id] for n in core.BASELINE_NAMES)
         ]
         check(
-            "16 items are right under no model-free baseline, so the fixture discriminates",
-            len(nobody) == 16,
+            "15 items are right under no model-free baseline, so the fixture discriminates",
+            len(nobody) == 15,
         )
         ref_scores = core.reference_baseline(items)[1]["per_item_strict"]
         wrong = [k for k, v in ref_scores.items() if v == 0.0]
@@ -584,6 +718,19 @@ def _self_test() -> int:
         check(
             "rule J needs four wins over the reference with no loss, and three do not clear it",
             clears(4) and not clears(3),
+        )
+        j_text = core.render_j_table(
+            "always references",
+            ref_scores,
+            wins=[3, 4],
+            shuffles=1,
+            resamples=500,
+        )
+        check(
+            "the j-table prints the reference's misses and a row per win count, no model",
+            "wrong for the reference: 25 of 49" in j_text
+            and "| 3 | -1 |" in j_text
+            and "| 4 | 0 |" in j_text,
         )
 
         # Direction: the trap, production's object-type correction, its withdrawal.
@@ -681,7 +828,13 @@ def _self_test() -> int:
     check("the report applies the selection rule", "SELECTED" in report)
     check(
         "the report says whose labels it scores against",
-        "NO second adjudication is recorded yet" in report,
+        (
+            f"{sum(i.adjudication is not None for i in items)} disagreement(s)"
+            " adjudicated"
+            if any(i.adjudication is not None for i in items)
+            else "NO second adjudication is recorded yet"
+        )
+        in report,
     )
     text = render_forecast(
         items,
@@ -696,9 +849,9 @@ def _self_test() -> int:
     )
     check(
         "the forecast prints the baselines, the reference and the discrimination without a model",
-        "always references: 0.429 (21 of 49)" in text
+        "always references: 0.490 (24 of 49)" in text
         and "reference baseline (rule J): always references" in text
-        and "no model-free baseline gets right (strict): 16 of 49" in text,
+        and "no model-free baseline gets right (strict): 15 of 49" in text,
     )
     check("the forecast says its latencies are assumed", "assumed" in text)
 
@@ -865,13 +1018,35 @@ def _self_test() -> int:
     )
     check(
         "a flagged alternative is a disagreement that says so",
-        len(alt_hit.disagreements) == sum(i.ambiguous for i in items)
-        and all(d.is_alt for d in alt_hit.disagreements),
+        alt_hit.disagreements != [] and all(d.is_alt for d in alt_hit.disagreements),
+    )
+    recorded = adj.adjudicate(
+        items,
+        adj.parse_sheet(
+            fill(lambda i: i.adjudication["second"] if i.adjudication else i.label)
+        ),
+    )
+    check(
+        "the recorded second labels reproduce 38 of 49, kappa 0.696, 11 disagreements",
+        recorded.agreed == 38
+        and len(recorded.disagreements) == 11
+        and recorded.kappa is not None
+        and abs(recorded.kappa - 0.696) < 5e-4,
     )
     blank = adj.adjudicate(items, adj.parse_sheet(sheet))
     check("an unfilled sheet is rejected, not scored", blank.problems != [])
     bad = adj.adjudicate(items, adj.parse_sheet(fill(lambda i: "maybe")))
     check("an invalid label is rejected, not scored", bad.problems != [])
+    got, why = adj.import_labels(items, adj.parse_sheet(fill(lambda i: i.first_label)))
+    check(
+        "import-sheet: a filled sheet maps every fixture id to its label",
+        why == [] and got == {i.id: i.first_label for i in items},
+    )
+    check(
+        "import-sheet: an unfilled sheet returns problems and no labels",
+        adj.import_labels(items, adj.parse_sheet(sheet))[0] == {}
+        and adj.import_labels(items, adj.parse_sheet(sheet))[1] != [],
+    )
     check(
         "a constant-label pair has no defined kappa",
         adj.cohen_kappa(["part_of", "part_of"], ["part_of", "part_of"]) is None,
@@ -972,6 +1147,24 @@ def build_parser() -> argparse.ArgumentParser:
     fc.add_argument("--models", default=",".join([BASELINE, *CANDIDATES]))
     fc.add_argument("--runs", type=int, default=3)
 
+    st0 = sub.add_parser(
+        "stage0",
+        help="timed calibration calls per model (never a scored item); contacts Ollama",
+    )
+    common(st0)
+    st0.add_argument("--models", default=",".join([BASELINE, *CANDIDATES]))
+
+    jt = sub.add_parser(
+        "j-table", help="the J tolerance table on the resolved labels; no model"
+    )
+    jt.add_argument("--shuffles", type=int, default=10)
+    jt.add_argument("--resamples", type=int, default=10_000)
+    jt.add_argument(
+        "--wins",
+        default="3,4,5,6,7,8,9,10,12,14,16,18,20,22,24,25",
+        help="comma-separated win counts",
+    )
+
     run = sub.add_parser("run", help="one model, every item")
     common(run)
     run.add_argument("--model", required=True)
@@ -997,6 +1190,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     adjudicate.add_argument("--sheet", type=pathlib.Path, required=True)
     adjudicate.add_argument("--seed", type=int, default=adj.SEED)
+
+    imported = sub.add_parser(
+        "import-sheet",
+        help="write a filled sheet's labels, keyed by fixture id, to a JSON file",
+    )
+    imported.add_argument("--sheet", type=pathlib.Path, required=True)
+    imported.add_argument("--out", type=pathlib.Path, required=True)
+    imported.add_argument("--labeller", required=True)
+    imported.add_argument("--seed", type=int, default=adj.SEED)
     return parser
 
 
@@ -1025,6 +1227,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(adj.render(result))
         return 1 if result.problems else 0
+    if args.stage == "import-sheet":
+        labels, problems = adj.import_labels(
+            items,
+            adj.parse_sheet(args.sheet.read_text(encoding="utf-8")),
+            seed=args.seed,
+        )
+        if problems:
+            print("SHEET REJECTED, nothing imported:\n" + "\n".join(problems))
+            return 1
+        args.out.write_text(
+            json.dumps(
+                {"labeller": args.labeller, "seed": args.seed, "labels": labels},
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"imported {len(labels)} labels into {args.out}")
+        return 0
+
+    if args.stage == "stage0":
+        results = []
+        for model in args.models.split(","):
+            measured = stage0_model(model, args.runs_dir)
+            results.append(measured)
+            print(json.dumps(measured, ensure_ascii=False))
+            s0.unload(model)
+        args.runs_dir.mkdir(parents=True, exist_ok=True)
+        (args.runs_dir / "stage0.json").write_text(
+            json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+        return 0
+
+    if args.stage == "j-table":
+        name, ref = core.reference_baseline(items)
+        print(
+            core.render_j_table(
+                name,
+                ref["per_item_strict"],
+                wins=[int(w) for w in args.wins.split(",")],
+                shuffles=args.shuffles,
+                resamples=args.resamples,
+            )
+        )
+        return 0
 
     arms = list(core.ARMS)
     if args.stage == "forecast" or (args.stage == "run" and args.dry_run):

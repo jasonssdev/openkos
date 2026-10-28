@@ -678,6 +678,7 @@ def _bound_bodies(
     *,
     llm: LLMBackend | None,
     question: str,
+    query_aware: bool = False,
 ) -> tuple[list[str], list[bool]]:
     """`bodies`, each clipped to its share of the context window, and which
     of them were clipped (#882).
@@ -729,6 +730,7 @@ def _bound_bodies(
             budget=share,
             windows=prompt_budget.chunk_lines(body, _CONTEXT_CHUNK_TARGET),
             marker=CONTEXT_ELISION_MARKER,
+            query=question if query_aware else None,
         )
         bounded.append(text)
         flags.append(was_bounded)
@@ -778,6 +780,7 @@ def _bound_with_history(
     *,
     llm: LLMBackend | None,
     question: str,
+    query_aware: bool = False,
 ) -> tuple[list[str], list[bool], list[bool]]:
     """The nested budget split of design.md Decision 4: `labels`/`bodies`
     are already in FINAL send order (a hit immediately followed by its own
@@ -873,6 +876,7 @@ def _bound_with_history(
                 budget=share,
                 windows=prompt_budget.chunk_lines(body, _CONTEXT_CHUNK_TARGET),
                 marker=CONTEXT_ELISION_MARKER,
+                query=question if query_aware else None,
             )
             excerpted, omitted = _classify_bound(was_bounded, text, body)
             bounded_bodies[entry_index] = text
@@ -933,6 +937,7 @@ def _assemble_context(
     question: str = "",
     omitted_titles_out: list[str] | None = None,
     revision_history: bool = False,
+    query_aware_excerpts: bool = False,
     deprecated: frozenset[str] = frozenset(),
     history_truncated_out: list[str] | None = None,
     omitted_ids_out: list[str] | None = None,
@@ -1145,7 +1150,12 @@ def _assemble_context(
 
     if history_attached:
         bounded_bodies, excerpted_flags, omitted_flags = _bound_with_history(
-            labels, bodies, holders, llm=llm, question=question
+            labels,
+            bodies,
+            holders,
+            llm=llm,
+            question=question,
+            query_aware=query_aware_excerpts,
         )
         context_blocks = []
         kept: list[Citation] = []
@@ -1173,7 +1183,11 @@ def _assemble_context(
         return context_blocks, kept
 
     bounded_bodies, bounded_flags = _bound_bodies(
-        labels, bodies, llm=llm, question=question
+        labels,
+        bodies,
+        llm=llm,
+        question=question,
+        query_aware=query_aware_excerpts,
     )
     context_blocks = []
     kept = []
@@ -1459,6 +1473,7 @@ def answer(
     sufficiency_check: bool = False,
     sufficiency_llm: LLMBackend | None = None,
     revision_history: bool = False,
+    query_aware_excerpts: bool = False,
     progress: ProgressCallback | None = None,
 ) -> AnswerResult:
     """Answer `question` from `bundle_dir` using `llm`, citing the concepts used.
@@ -1608,6 +1623,7 @@ def answer(
         question=question,
         omitted_titles_out=omitted_titles,
         revision_history=walk_history_enabled,
+        query_aware_excerpts=query_aware_excerpts,
         deprecated=deprecated,
         history_truncated_out=history_truncated_titles,
         omitted_ids_out=omitted_ids,

@@ -235,6 +235,7 @@ def _unbounded_bodies(
     *,
     llm: Any,
     question: str,
+    query_aware: bool = False,
 ) -> tuple[list[str], list[bool]]:
     """`_bound_bodies` as it behaved BEFORE #882: send every body whole.
 

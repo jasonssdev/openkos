@@ -6,13 +6,14 @@ on its own -- `raw/` sits outside it by design, so the workspace root is
 where the engine's own files live, not the OKF bundle root.
 """
 
+import json
 import math
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Final, NamedTuple
+from typing import Final, Literal, NamedTuple
 from urllib.parse import urlsplit
 
 from openkos import fsio
@@ -434,6 +435,16 @@ transcripts (`evals/transcript_decisions/`) found it recovers about three times
 as many hand-annotated decisions as the general pass, at high precision, but
 short of the bar set for making it the default. So it stays opt-in, and off
 restores the pre-pass path byte-for-byte."""
+
+DEFAULT_QUERY_AWARE_EXCERPTS = False
+"""Packaged default for `query_aware_excerpts` (#1647): whether `query`, when a
+retrieved document exceeds its share of the prompt window, keeps the 800-char
+windows that best match the question (BM25 over that document's windows,
+model-free, no extra call) instead of evenly spaced ones.
+
+`False`, and deliberately so: the choice is unmeasured until it is scored on
+`evals/retrieval_gold` against a pre-registered decision rule (umbrella
+#1652). Off, every prompt is byte-identical to a run with the key absent."""
 
 DEFAULT_REVISION_HISTORY = False
 """Packaged default for `revision_history` (#1014 piece b): whether `query`
@@ -1149,14 +1160,28 @@ _UNATTENDED_INT_FLOORS: Final = {
 """Each integer key of `unattended:` and its inclusive lower bound."""
 
 
+InboxRefusalReason = Literal["invalid", "inside_workspace", "not_a_directory"]
+
+
+class InboxRejected(ValueError):
+    """`unattended.inbox` was refused. `reason` names why, so the settings
+    change can answer in the person's terms without parsing the message
+    (ADR-0078); the message is the one the config read always raised."""
+
+    def __init__(self, message: str, reason: InboxRefusalReason) -> None:
+        super().__init__(message)
+        self.reason: InboxRefusalReason = reason
+
+
 def _validate_unattended_inbox(root: Path, value: object, prefix: str) -> Path:
     """Resolve `unattended.inbox` against `root`, refusing the engine's own
     trees. Symlinks are resolved first so a link into `raw/` cannot smuggle
     the engine's own sources back in as an inbox."""
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(
+        raise InboxRejected(
             f"{prefix}: 'unattended.inbox' must be a non-blank path string, "
-            f"got {value!r}"
+            f"got {value!r}",
+            "invalid",
         )
     resolved_root = root.resolve()
     try:
@@ -1165,9 +1190,10 @@ def _validate_unattended_inbox(root: Path, value: object, prefix: str) -> Path:
         # so a home that is (or holds) the workspace cannot bypass them.
         expanded = Path(value.strip()).expanduser()
     except RuntimeError as exc:  # no resolvable home for `~` or `~user`
-        raise ValueError(
+        raise InboxRejected(
             f"{prefix}: 'unattended.inbox' starts with '~' but that home "
-            f"directory cannot be determined, got {value!r}"
+            f"directory cannot be determined, got {value!r}",
+            "invalid",
         ) from exc
     inbox = (resolved_root / expanded).resolve()
     layout = WorkspaceLayout(resolved_root)
@@ -1178,22 +1204,32 @@ def _validate_unattended_inbox(root: Path, value: object, prefix: str) -> Path:
     )
     for label, tree in forbidden:
         if inbox == tree or tree in inbox.parents:
-            raise ValueError(
+            raise InboxRejected(
                 f"{prefix}: 'unattended.inbox' must not be or sit inside "
                 f"{label} -- the inbox is an external folder the engine "
-                f"copies from, got {value!r}"
+                f"copies from, got {value!r}",
+                "inside_workspace",
             )
     if inbox == resolved_root or inbox in resolved_root.parents:
-        raise ValueError(
+        raise InboxRejected(
             f"{prefix}: 'unattended.inbox' must not be the workspace root "
-            f"or a folder containing it, got {value!r}"
+            f"or a folder containing it, got {value!r}",
+            "inside_workspace",
         )
     if not inbox.is_dir():
-        raise ValueError(
+        raise InboxRejected(
             f"{prefix}: 'unattended.inbox' must name an existing directory, "
-            f"got {value!r}"
+            f"got {value!r}",
+            "not_a_directory",
         )
     return inbox
+
+
+def resolve_unattended_inbox(root: Path, value: str) -> Path:
+    """`value` as `unattended.inbox` would resolve it for the workspace at
+    `root`, or `InboxRejected` with the reason `openkos.yaml` would refuse it
+    for. The settings change checks a folder with the check the read applies."""
+    return _validate_unattended_inbox(root, value, "openkos.yaml")
 
 
 def _read_unattended(root: Path, raw: object, prefix: str) -> UnattendedConfig:
@@ -1519,6 +1555,13 @@ class Config:
     `DEFAULT_ATTACH_AT_INGEST` when the key is absent or explicitly null. Added
     LAST and DEFAULTED, like `revision_history`, so a positional or partial
     `Config(...)` construction elsewhere is unchanged."""
+    query_aware_excerpts: bool = DEFAULT_QUERY_AWARE_EXCERPTS
+    """Whether `query` chooses the windows of an over-budget context block by
+    BM25 similarity to the question (#1647), defaulting to
+    `DEFAULT_QUERY_AWARE_EXCERPTS` (`False`) when the key is absent or
+    explicitly null. The application layer passes this value explicitly to
+    `answer`'s `query_aware_excerpts` kwarg, so the default lives in ONE
+    place. Added LAST and DEFAULTED, like `transcript_decisions`."""
     transcript_decisions: bool = DEFAULT_TRANSCRIPT_DECISIONS
     """Whether ingest runs the transcript decision pass on a meeting-shaped
     source (#1348), defaulting to `DEFAULT_TRANSCRIPT_DECISIONS` (`False`)
@@ -1603,6 +1646,7 @@ def parse_config(root: Path, text: str) -> Config:
     type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
     rationale_language = raw.get("rationale_language")
     revision_history = raw.get("revision_history")
+    query_aware_excerpts = raw.get("query_aware_excerpts")
     transcript_decisions = raw.get("transcript_decisions")
     attach_at_ingest = raw.get("attach_at_ingest")
     backend = raw.get("backend")
@@ -1889,6 +1933,12 @@ def parse_config(root: Path, text: str) -> Config:
             f"{layout.config_path.name}: 'revision_history' must be a "
             f"boolean, got {type(revision_history).__name__}"
         )
+    if query_aware_excerpts is not None and not isinstance(query_aware_excerpts, bool):
+        # Same narrow `isinstance(x, bool)` guard as `revision_history`.
+        raise ValueError(
+            f"{layout.config_path.name}: 'query_aware_excerpts' must be a "
+            f"boolean, got {type(query_aware_excerpts).__name__}"
+        )
     if transcript_decisions is not None and not isinstance(transcript_decisions, bool):
         # Same narrow `isinstance(x, bool)` guard as `revision_history`: YAML
         # resolves `1` to `int`, and this key gates an extra model call per
@@ -2086,6 +2136,11 @@ def parse_config(root: Path, text: str) -> Config:
             revision_history
             if revision_history is not None
             else DEFAULT_REVISION_HISTORY
+        ),
+        query_aware_excerpts=(
+            query_aware_excerpts
+            if query_aware_excerpts is not None
+            else DEFAULT_QUERY_AWARE_EXCERPTS
         ),
         backend=resolved_backend,
         base_url=resolved_base_url,
@@ -2469,6 +2524,123 @@ def set_type_tier(yaml_text: str, concept_type: str, tier: str) -> str:
 
     new_lines.insert(insert_at, f"{insert_indent}{concept_type}: {tier}\n")
     return "".join(new_lines)
+
+
+_UNATTENDED_HEADER: Final = "unattended:"
+_INBOX_LINE: Final = re.compile(r"^([ \t]+)inbox:(?:[ \t]|$)")
+
+
+def _unattended_block(lines: list[str]) -> tuple[int, int] | None:
+    """`(header, end)` of the live column-0 `unattended:` block: `end` is the
+    index just past its last indented line. `None` when there is no live
+    section; `ValueError` on a second header or a header that is not a block
+    mapping (`{}` is allowed)."""
+    header: int | None = None
+    for index, line in enumerate(lines):
+        content, _ = _split_line_ending(line)
+        if not content.startswith(_UNATTENDED_HEADER):
+            continue
+        if header is not None:
+            raise ValueError("openkos.yaml: multiple 'unattended:' keys found")
+        rest = content[len(_UNATTENDED_HEADER) :].strip()
+        if rest and not rest.startswith("#") and rest != "{}":
+            raise ValueError(
+                "openkos.yaml: 'unattended' must be a block mapping to be edited"
+            )
+        header = index
+    if header is None:
+        return None
+    end = header + 1
+    for index in range(header + 1, len(lines)):
+        content, _ = _split_line_ending(lines[index])
+        if content.strip() and not content.startswith((" ", "\t", "#")):
+            break
+        if content.strip() and not content.startswith("#"):
+            end = index + 1
+    return header, end
+
+
+def _inbox_line_index(lines: list[str], block: tuple[int, int]) -> int | None:
+    found: int | None = None
+    for index in range(block[0] + 1, block[1]):
+        if _INBOX_LINE.match(_split_line_ending(lines[index])[0]):
+            if found is not None:
+                raise ValueError("openkos.yaml: multiple 'inbox:' keys found")
+            found = index
+    return found
+
+
+def unattended_inbox_line(yaml_text: str) -> str | None:
+    """The value text of the live `unattended.inbox` line, `None` when there is
+    none. Refuses the shapes `set_unattended_inbox` refuses, so a caller can
+    ask whether two versions of the file disagree about this one line."""
+    lines = yaml_text.splitlines(keepends=True)
+    block = _unattended_block(lines)
+    index = _inbox_line_index(lines, block) if block is not None else None
+    if index is None:
+        return None
+    content, _ = _split_line_ending(lines[index])
+    return content.split("inbox:", 1)[1].strip() or None
+
+
+def set_unattended_inbox(yaml_text: str, inbox: str | None) -> str:
+    """Return `yaml_text` with `unattended.inbox` set to `inbox` (`None`
+    removes it), by comment-safe text surgery, never a YAML round-trip: every
+    other line stays byte-identical, line endings included.
+
+    The value is written as a double-quoted scalar (a JSON string is one), so
+    a path with spaces, `#` or `:` reads back exactly. An existing line is
+    replaced whole, its trailing comment with it; a missing key goes inside
+    the live section, and a missing section is appended at the end. Values are
+    written as given: the caller validates the folder.
+
+    Fail-closed. Raises `ValueError` on a shape it cannot edit (two keys, a
+    non-block section) and when the result does not parse back to exactly
+    `inbox`; the caller writes nothing."""
+    lines = yaml_text.splitlines(keepends=True)
+    block = _unattended_block(lines)
+    index = _inbox_line_index(lines, block) if block is not None else None
+    ending = "\r\n" if "\r\n" in yaml_text else "\n"
+    value = None if inbox is None else json.dumps(inbox, ensure_ascii=False)
+    if index is not None:
+        content, line_end = _split_line_ending(lines[index])
+        if value is None:
+            del lines[index]
+        else:
+            indent = content.split("inbox:", 1)[0]
+            lines[index] = f"{indent}inbox: {value}{line_end}"
+    elif value is not None and block is not None:
+        header_content, header_end = _split_line_ending(lines[block[0]])
+        if header_content[len(_UNATTENDED_HEADER) :].strip() == "{}":
+            lines[block[0]] = f"{_UNATTENDED_HEADER}{header_end or ending}"
+        if not lines[block[1] - 1].endswith(("\n", "\r")):
+            lines[block[1] - 1] += ending
+        lines.insert(block[1], f"  inbox: {value}{ending}")
+    elif value is not None:
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            lines[-1] += ending
+        lines += [f"{_UNATTENDED_HEADER}{ending}", f"  inbox: {value}{ending}"]
+    new_text = "".join(lines)
+    _check_unattended_inbox(new_text, inbox)
+    return new_text
+
+
+def _check_unattended_inbox(text: str, desired: str | None) -> None:
+    """Raise `ValueError` unless `text` parses to a mapping whose
+    `unattended.inbox` is exactly `desired` (`None`: no such key)."""
+    try:
+        raw = okf.load_unique_key_yaml(text)
+    except okf.FrontmatterError as exc:
+        raise ValueError(f"openkos.yaml: invalid YAML after the edit -- {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("openkos.yaml: expected a mapping at the document root")
+    section = raw.get("unattended")
+    actual = section.get("inbox") if isinstance(section, dict) else None
+    if actual != desired:
+        raise ValueError(
+            "openkos.yaml: unattended.inbox did not read back as written; "
+            "edit the file by hand"
+        )
 
 
 MODEL_SETTINGS_KEYS: Final = (

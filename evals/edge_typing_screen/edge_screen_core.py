@@ -10,7 +10,7 @@ aggregate numbers, the zero-model baselines, the paired bootstrap, the vetoes
 and the forecast. The runner (`run_edge_typing_screen.py`) owns the model.
 
 The labels are ONE author's until the repository owner's blind adjudication is
-recorded (`PREREGISTRATION-DRAFT.md`); read `README.md` before trusting any
+recorded (`PREREGISTRATION.md`); read `README.md` before trusting any
 number computed from them.
 
 Imports only the standard library and the production modules that carry the
@@ -64,7 +64,7 @@ FAILURE_ABS_CAP: Final = 0.05
 FAILURE_MARGIN: Final = 0.02
 LATENCY_RATIO_CAP: Final = 2.0
 TRAP_MARGIN: Final = 0.10
-"""The vetoes of `PREREGISTRATION-DRAFT.md`."""
+"""The vetoes of `PREREGISTRATION.md`."""
 
 BASELINE_NAMES: Final = ("always references", "always related_to", "type signature")
 
@@ -150,9 +150,14 @@ def _item(raw: Mapping[str, Any], docs: Mapping[str, Doc]) -> Item:
             raise ValueError(
                 f"{item_id}: adjudication needs first/second/resolved/reason"
             )
-        if record["resolved"] != label or record["first"] == label:
+        if record["resolved"] != label:
             raise ValueError(f"{item_id}: adjudication must resolve to `label`")
-        if alt != record["first"]:
+        if record["first"] == label:
+            # Resolved to the first author: the losing second label is the
+            # alternative a careful reader could still defend.
+            if alt != record["second"]:
+                raise ValueError(f"{item_id}: the second label must stay as alt_label")
+        elif alt != record["first"]:
             raise ValueError(f"{item_id}: the first label must stay as alt_label")
     if not str(raw.get("how", "")).strip():
         raise ValueError(f"{item_id}: every label states how it was decided")
@@ -557,6 +562,107 @@ def justified(delta_vs_reference: Mapping[str, float]) -> bool:
     """The task key is justified for a model only if its paired gain over the
     strongest model-free predictor has a positive 95% lower bound."""
     return delta_vs_reference["lo"] > 0
+
+
+def j_tolerance(
+    reference: Mapping[str, float],
+    *,
+    wins: int,
+    shuffle_seed: int | None = None,
+    resamples: int = 10_000,
+) -> int:
+    """How many items a candidate can lose and still clear J when it wins `wins`.
+
+    The reference scores each item 0 or 1. The candidate matches it except that it
+    WINS `wins` of the items the reference gets wrong (to 1.0) and LOSES the
+    most losses it can afford of the items the reference gets right (to 0.0); the
+    answer is the largest loss count whose paired gain (the screen's bootstrap,
+    seed 42) still has a positive 95% lower bound. -1 means no loss count clears
+    it, losing nothing included.
+
+    Which items are won and lost moves the bootstrap by one or so, so the choice is
+    explicit: by default the first wrong items and the first right items in sorted
+    id order, or, with `shuffle_seed`, that seeded shuffle of each list."""
+    ids = sorted(reference)
+    wrong = [i for i in ids if reference[i] == 0.0]
+    right = [i for i in ids if reference[i] == 1.0]
+    if wins > len(wrong):
+        raise ValueError(
+            f"cannot win {wins} items: the reference gets only {len(wrong)} wrong"
+        )
+    if shuffle_seed is not None:
+        rng = random.Random(shuffle_seed)  # noqa: S311 -- arrangement, not secrets
+        rng.shuffle(wrong)
+        rng.shuffle(right)
+    best = -1
+    for losses in range(len(right) + 1):
+        candidate = dict(reference)
+        candidate.update(dict.fromkeys(wrong[:wins], 1.0))
+        candidate.update(dict.fromkeys(right[:losses], 0.0))
+        if justified(paired_bootstrap(candidate, reference, resamples=resamples)):
+            best = losses
+        else:
+            break
+    return best
+
+
+def j_table_rows(
+    reference: Mapping[str, float],
+    *,
+    wins: Sequence[int],
+    shuffles: int,
+    resamples: int = 10_000,
+) -> list[dict[str, int]]:
+    """`j_tolerance` per win count: in id order, and its lowest and highest value
+    over `shuffles` seeded arrangements (seeds 1 to `shuffles`)."""
+    rows: list[dict[str, int]] = []
+    for count in wins:
+        by_id = j_tolerance(reference, wins=count, resamples=resamples)
+        shuffled = [
+            j_tolerance(reference, wins=count, shuffle_seed=seed, resamples=resamples)
+            for seed in range(1, shuffles + 1)
+        ]
+        rows.append(
+            {
+                "wins": count,
+                "by_id": by_id,
+                "low": min([by_id, *shuffled]),
+                "high": max([by_id, *shuffled]),
+            }
+        )
+    return rows
+
+
+def render_j_table(
+    name: str,
+    reference: Mapping[str, float],
+    *,
+    wins: Sequence[int],
+    shuffles: int,
+    resamples: int = 10_000,
+) -> str:
+    """The J tolerance table as markdown, from the labels alone (no model)."""
+    wrong = sum(v == 0.0 for v in reference.values())
+    lines = [
+        f"# J tolerance table (no model contacted); reference: {name}",
+        "",
+        f"wrong for the reference: {wrong} of {len(reference)}; "
+        f"bootstrap {resamples} resamples, seed 42",
+        "A candidate matches the reference except it wins the stated number of the "
+        "items the reference gets wrong and loses up to the stated number of the "
+        "items it gets right; the cell is the most losses that keep the 95% lower "
+        "bound of the paired gain above 0 (-1: none, losing nothing included).",
+        "",
+        f"| wins | lose at most (id order) | range over {shuffles} shuffles |",
+        "| --- | --- | --- |",
+    ]
+    for row in j_table_rows(
+        reference, wins=wins, shuffles=shuffles, resamples=resamples
+    ):
+        lines.append(
+            f"| {row['wins']} | {row['by_id']} | {row['low']} to {row['high']} |"
+        )
+    return "\n".join(lines)
 
 
 # --- forecast ----------------------------------------------------------------
