@@ -1407,6 +1407,16 @@ def _unevidenced_titles(
     )
 
 
+def _removed_titles(
+    before: list[ExtractionResult], after: list[ExtractionResult]
+) -> tuple[str, ...]:
+    """Titles in `before` that `after` no longer holds, in order, de-duplicated.
+    Compared by identity: every filter here returns the SAME instances it kept,
+    so this names what a stage removed without changing what it removes (#1642)."""
+    kept = {id(result) for result in after}
+    return tuple(dict.fromkeys(r.title for r in before if id(r) not in kept))
+
+
 def _drop_framing_objects(
     results: list[ExtractionResult], *, framing_shaped: bool
 ) -> list[ExtractionResult]:
@@ -3188,6 +3198,14 @@ class ExtractionReport:
     model, a recombination points at extraction quality. The pre-#780
     merged list made the notice report a Spanish-titled recombination as a
     "wrong-language" drop, sending the operator to the wrong subsystem."""
+    framing_dropped_titles: tuple[str, ...] = ()
+    """Titles `_drop_framing_objects` removed (#1642): meeting-shaped object
+    titles on a meeting-shaped source, which have no single-object floor.
+    Diagnostic only -- read by the zero-object notice so an operator can see
+    WHICH stage emptied the extraction after the language gate."""
+    twin_dropped_titles: tuple[str, ...] = ()
+    """Titles `_drop_source_title_twins` removed (#1642); same purpose and
+    same diagnostic-only status as `framing_dropped_titles`."""
     participant_judge_selected_titles: tuple[str, ...] = ()
     """`Person`/`Organization` titles (#668 design D5) the judge ITSELF
     selected -- present in the judge's own echoed selection, not restored
@@ -3499,10 +3517,14 @@ def extract_concept(
         results, wrong_language_dropped, recombined_dropped = (
             _drop_wrong_language_titles(results, source_text=source_text)
         )
+    before_filters = results
     results = _drop_framing_objects(
         results, framing_shaped=_framing_shaped(source_title, source_text)
     )
+    framing_dropped = _removed_titles(before_filters, results)
+    before_filters = results
     results = _drop_source_title_twins(results, source_title=source_title)
+    twin_dropped = _removed_titles(before_filters, results)
     # #584: the list is final and filtered here, which is the only place the
     # trigger's "the source returned exactly one object" is a true statement
     # about the source. Additions then take the same cap as everything else.
@@ -3533,6 +3555,8 @@ def extract_concept(
             ),
             wrong_language_dropped_titles=wrong_language_dropped,
             recombined_dropped_titles=recombined_dropped,
+            framing_dropped_titles=framing_dropped,
+            twin_dropped_titles=twin_dropped,
             # The LEGACY single-run path reports the advisory too (#712 D5).
             # `cli/main.py` picks `extract_concept_union if union_judge else
             # extract_concept`, so leaving it out here would store
@@ -3907,24 +3931,21 @@ def extract_concept_union(
         # the IDENTICAL prompt twice and merges, which is a different shape
         # from a one-window fan-out and should not be described as one.
         _report(on_progress, "extracting pass 1/2")
-        run1 = _drop_framing_objects(
-            _strip_ungrounded_expansions(
-                _extract_once(source_text, source_title, llm),
-                source_text=source_text,
-            ),
-            framing_shaped=framing_shaped,
+        raw1 = _strip_ungrounded_expansions(
+            _extract_once(source_text, source_title, llm),
+            source_text=source_text,
         )
+        run1 = _drop_framing_objects(raw1, framing_shaped=framing_shaped)
         _report(on_progress, "extracting pass 2/2")
-        run2 = _drop_framing_objects(
-            _strip_ungrounded_expansions(
-                _extract_once(source_text, source_title, llm),
-                source_text=source_text,
-            ),
-            framing_shaped=framing_shaped,
+        raw2 = _strip_ungrounded_expansions(
+            _extract_once(source_text, source_title, llm),
+            source_text=source_text,
         )
-        merged = _drop_source_title_twins(
-            _merge_union(run1 + run2), source_title=source_title
-        )
+        run2 = _drop_framing_objects(raw2, framing_shaped=framing_shaped)
+        framing_dropped = _removed_titles(raw1 + raw2, run1 + run2)
+        union_merged = _merge_union(run1 + run2)
+        merged = _drop_source_title_twins(union_merged, source_title=source_title)
+        twin_dropped = _removed_titles(union_merged, merged)
         chunk_count = 1
         skipped_chunks: tuple[int, ...] = ()
         run_count = 2
@@ -3979,10 +4000,10 @@ def extract_concept_union(
         deduped, wrong_language_dropped, recombined_dropped = (
             _drop_wrong_language_titles(deduped, source_text=source_text)
         )
-        merged = _drop_source_title_twins(
-            _drop_framing_objects(deduped, framing_shaped=framing_shaped),
-            source_title=source_title,
-        )
+        framed = _drop_framing_objects(deduped, framing_shaped=framing_shaped)
+        framing_dropped = _removed_titles(deduped, framed)
+        merged = _drop_source_title_twins(framed, source_title=source_title)
+        twin_dropped = _removed_titles(framed, merged)
         run_count = 1
 
     # #584, symmetrically with `extract_concept`: the merged list is final
@@ -4100,6 +4121,8 @@ def extract_concept_union(
                 reask_added_titles=reask_added_titles,
                 wrong_language_dropped_titles=wrong_language_dropped,
                 recombined_dropped_titles=recombined_dropped,
+                framing_dropped_titles=framing_dropped,
+                twin_dropped_titles=twin_dropped,
                 decision_pass_added_titles=tuple(r.title for r in pass_decisions),
                 participant_capture_runs=participant_capture_runs,
                 participant_capture_added_titles=participant_capture_added_titles,
@@ -4304,6 +4327,8 @@ def extract_concept_union(
             ),
             wrong_language_dropped_titles=wrong_language_dropped,
             recombined_dropped_titles=recombined_dropped,
+            framing_dropped_titles=framing_dropped,
+            twin_dropped_titles=twin_dropped,
             participant_judge_selected_titles=participant_judge_selected_titles,
             participant_readmitted_titles=participant_readmitted_titles,
             participant_unreadmitted_discarded_titles=participant_unreadmitted_discarded_titles,
