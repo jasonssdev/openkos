@@ -9,10 +9,12 @@ at query time), on **development material only**:
 - **(b) proposal versus commitment.** A discarded or still-open proposal is
   stored as a Decision, with no commitment language in its evidence.
 
-This directory holds the **model-free parts and a DRAFT pre-registration**
-([`PREREGISTRATION-1649.md`](PREREGISTRATION-1649.md)). No model has been run and
-no sheet has been labelled. Part of the umbrella #1652; see the pre-registration
-for the hypotheses, arms, decision rule, forecast and what this cannot show.
+This directory holds the model-free parts, the registered pre-registration
+([`PREREGISTRATION-1649.md`](PREREGISTRATION-1649.md)) and the result of the run
+([`RESULTS-1649.md`](RESULTS-1649.md)): the prompt clause is INCONCLUSIVE and is
+not adopted; the commitment guard was NOT RUN (Stage 0 FAIL). Part of the umbrella
+#1652; see the pre-registration for the hypotheses, arms, decision rule, forecast
+and what this cannot show.
 
 ```bash
 uv run python -u evals/decision_fidelity/build_sheets.py --self-test    # no model
@@ -116,3 +118,9 @@ report), not run as a model arm.
 Deviation (pre-registered in advance, see "Deviations"): the labels are written by Claude
 models on the owner's delegation, not by the owner. Kappa describes two readings of one
 rubric, not the owner's judgment. Kappa 0.811 is above the 0.6 downgrade threshold.
+
+- `line_labels.json`: 841 distinct evidence lines produced by the two arms (351 committed, 234 open,
+  233 none, 23 discarded), keyed by line. Two independent Claude readers (Sonnet, Opus) labelled the
+  arm-blind sheet; a blind third Opus reading adjudicated the 209 disagreements. Cohen's kappa on
+  committed versus not is 0.596, below the registered 0.6; see [`RESULTS-1649.md`](RESULTS-1649.md)
+  for the consequence and the other deviations.
