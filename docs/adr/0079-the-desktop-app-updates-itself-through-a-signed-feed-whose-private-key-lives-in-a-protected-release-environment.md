@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0079: The desktop app updates itself through a signed feed whose private key lives in a protected release environment"
 description: The desktop app adopts the Tauri updater plugin with a feed on GitHub releases and an in-app prompt that never installs silently. The updater private key and its password are encrypted secrets of a GitHub `release` environment that needs the owner's approval for every deployment, with an offline backup; the public key is committed in tauri.conf.json.
-status: Proposed
+status: Accepted
 date: 2026-10-27
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0079: The desktop app updates itself through a signed feed whose private key lives in a protected release environment
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-27
 
 ## Context
