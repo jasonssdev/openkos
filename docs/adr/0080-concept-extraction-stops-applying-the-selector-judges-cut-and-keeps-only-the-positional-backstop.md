@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0080: Concept extraction stops applying the selector judge's cut and keeps only the positional backstop"
 description: Proposes that the union extractor skip the selector-judge call by default and keep the pre-judge ceiling of 24 and the positional backstop of 20, because the pre-registered backstop-only comparison came back ADOPT-CANDIDATE while the cut showed no measured benefit. It prices what moves downstream and what the evidence cannot show.
-status: Proposed
+status: Accepted
 date: 2026-10-27
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0080: Concept extraction stops applying the selector judge's cut and keeps only the positional backstop
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-27
 
 ## Context
