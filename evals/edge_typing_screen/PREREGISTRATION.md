@@ -1,16 +1,15 @@
-# Pre-registration (DRAFT): the edge-typing model screen (#1563)
+# Pre-registration: the edge-typing model screen (#1563)
 
-**Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third
-adjudication"), the owner's questions are decided and the J table is recomputed;
-still blocked on Stage 0.** Nothing below binds until a final version of this
-file is merged to `main` before
-any scored model call (#1556: pre-register, and merge the pre-registration, before
-any run). No model has been called in preparing this draft; every number in it was
-computed by `run_edge_typing_screen.py forecast`, `j-table` or `--self-test`, which
-contact none. A measurement: it adopts nothing and changes no production code, default,
-prompt or task key. Part of #1556; refs #1563, #1557.
+**Status: REGISTERED when this file merges to `main`, which happens before any scored
+model call (#1556: pre-register, and merge the pre-registration, before any run).** The labels
+are adjudicated (see "Third adjudication"), the owner's questions are decided (see "Decisions
+the owner made"), the J table is recomputed and Stage 0 is done. Everything below binds from
+the merge; a change after it is a new registration, not an edit to this one. No scored call has
+been made: Stage 0 called only calibration inputs that are not fixture items. A measurement:
+it adopts nothing and changes no production code, default, prompt or task key. Part of #1556;
+refs #1563, #1557.
 
-## Before this can be registered
+## Before this could be registered
 
 1. **Done, with two deviations (below).** The 49 items were labelled blind a second
    time with the sheet from `run_edge_typing_screen.py blind-sheet`, by a Claude model
@@ -24,9 +23,8 @@ prompt or task key. Part of #1556; refs #1563, #1557.
    pins that four wins and no loss clear J and three do not.
 3. **Done.** The three questions are decided (owner, 2026-10-27; see "Decisions the
    owner made").
-4. **Stage 0** (below) replaces the assumed latencies and records the model
-   digests (`ollama list`); neither was queried for this draft, because the
-   server is reserved for another job.
+4. **Done.** Stage 0 (below) measured the latencies and recorded the model digests; the
+   forecast is recomputed from them and is within the budget.
 
 ## Second labelling: recorded, with a deviation (read first)
 
@@ -35,7 +33,9 @@ Claude model labelled the sheet blind (it read only the blind sheet, none of
 `fixture.json`, the README, this draft or any other label). Agreement below is therefore
 measured against a **Claude labeller, not the owner**, so it is a statement about two
 readings of the same rubric, not about the owner's judgment. The owner's own review of
-every disagreement, and every resolution, is still owed. The labels were imported with
+every disagreement, and every resolution, was not performed before registration (the
+owner delegated it, and it is not one of the preconditions above); the owner can still
+override a resolution, but only as a recorded amendment before any scored call. The labels were imported with
 `run_edge_typing_screen.py import-sheet` into [`second_labels.json`](second_labels.json) (labels keyed by
 fixture id, plus the labeller and seed). The filled sheet itself is not committed, per
 the README.
@@ -164,9 +164,9 @@ accurate model the most direction-blind)?
   #1556 screens' list: `gemma4:26b-a4b`, `qwen3:14b`, `qwen3.6:27b`,
   `qwen3.6:35b-a3b`, plus `gemma2:27b`, the documented recommendation for this key
   (#650), added by the owner's decision 2. Judge-only models are not candidates.
-- Model digests: `TO RECORD` at registration (the harness stamps the full digest
-  in-band on every run, and a run whose stamped digest differs from the table is
-  void).
+- Model digests: the table under "Forecast and budget" (recorded by Stage 0; the
+  harness also stamps the full digest in-band on every run, and a run whose stamped
+  digest differs from the table is void).
 
 ## Metrics
 
@@ -217,45 +217,84 @@ resamples, seed 42).
   does not make; a J pass alone would not support one, and a selection would still
   owe the specific-precision and direction numbers a reading.
 
-## Forecast and budget (Ollama wall-clock; ASSUMED, not measured)
+## Forecast and budget (Ollama wall-clock; MEASURED by Stage 0)
 
 Calls: 49 items x 1 arm x 3 runs = **147 per model; 882 for six models.**
 
-Latencies are **assumptions** for this task, not measurements: #1560's answer-call
-medians (`qwen3:8b` 4.75 s, `gemma4:26b-a4b` 2.83 s, `qwen3:14b` 6.57 s,
-`qwen3.6:35b-a3b` 3.22 s; `qwen3.6:27b` and `gemma2:27b` borrow 6.57 s). A reply is a short JSON
-object, so they are probably high for the 109 to 219 character documents
-(`evals/edge_typing/` measured about 1.3 s per edge on `qwen3:8b`), and probably low
-for the six ADR items, whose prompts run to 12,000 characters. One load per model,
-60 s.
+**Stage 0 (run 2026-10-27 with `run_edge_typing_screen.py stage0`; no scored item was
+called).** Per model, in order: one warm-up call (this is the model load, and is in no
+statistic below), three timed calls on a small calibration pair, and one timed call on a
+large one, all seed 1, timeout 240 s, server defaults, one model at a time and the model
+unloaded before the next. The calibration pairs are in no way fixture items: the small one is
+two concept documents (`stage0-small`, 229 characters; the smallest scored pair is 237), the
+large one is ADR-0025 and ADR-0044, which are not in the fixture (`stage0-large`, 10,380
+characters; the largest scored pair is 12,337). `--self-test` pins that neither shares an id
+with a fixture item. No call failed. n = 4 timed calls per model, so the p95 (nearest rank)
+is the large call; read it as the cost of an ADR-sized pair, not as a tail estimate.
 
-| model | calls x assumed s + load | forecast |
+| model | digest (sha256, as `/api/tags` reports it) | warm-up (load) s | small median s (n=3) | ADR-size s (n=1) | median s (n=4) | p95 s (n=4) | forecast min |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `qwen3:8b` | `500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41` | 6.7 | 0.98 | 8.90 | 0.98 | 8.90 | 5.7 |
+| `gemma4:26b-a4b` | `001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c` | 12.8 | 1.07 | 6.35 | 1.08 | 6.35 | 4.9 |
+| `qwen3:14b` | `bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8` | 12.2 | 1.82 | 14.24 | 1.82 | 14.24 | 9.6 |
+| `qwen3.6:27b` | `bcbdbd4bcf86f2c4a56cd1698fb31f9434f7dd99752f71b636c750aaa67a49a5` | 35.3 | 13.38 | 46.33 | 13.39 | 46.33 | 46.5 |
+| `qwen3.6:35b-a3b` | `a7eb95c53bcf96b4bdd008d0fab4a5dac88047d9c1a7a9ab88ed453423fbd87c` | 22.8 | 1.13 | 5.88 | 1.14 | 5.88 | 5.0 |
+| `gemma2:27b` | `53261bc9c192c1cb5fcc898dd3aa15da093f5ab6f08e17e48cf838bb1c58abfe` | 23.4 | 2.30 | 29.45 | 2.31 | 29.45 | 16.9 |
+
+**How the forecast is built.** Latency is not constant across the 49 items (237 to 12,337
+characters), so the median of the four timed calls would understate the ADR items and the
+large call alone would overstate the rest. Each item's latency is interpolated linearly in
+its pair's character count between the small and the large measurement (never below the
+small one, extrapolated past 10,380 characters), summed over the 49 items, times 3 runs, plus
+the model's measured warm-up in place of the assumed 60 s load. Two points are a thin basis
+for a line; this is an estimate, the scored runs will report their own medians, and the
+forecast carries no claim beyond the budget check below.
+
+| model | mean s per call (interpolated) | forecast |
 | --- | --- | --- |
-| `qwen3:8b` | 147 x 4.75 + 60 | 12.6 min |
-| `gemma4:26b-a4b` | 147 x 2.83 + 60 | 7.9 min |
-| `qwen3:14b` | 147 x 6.57 + 60 | 17.1 min |
-| `qwen3.6:27b` | 147 x 6.57 + 60 | 17.1 min |
-| `qwen3.6:35b-a3b` | 147 x 3.22 + 60 | 8.9 min |
-| `gemma2:27b` | 147 x 6.57 + 60 | 17.1 min |
-| **screen total** | | **about 1.35 h** |
-| confirmation (5 seeds, baseline + one candidate, assuming `qwen3:14b`) | 2 x 245 calls | about 0.80 h |
+| `qwen3:8b` | 2.27 | 5.7 min |
+| `gemma4:26b-a4b` | 1.93 | 4.9 min |
+| `qwen3:14b` | 3.84 | 9.6 min |
+| `qwen3.6:27b` | 18.74 | 46.5 min |
+| `qwen3.6:35b-a3b` | 1.91 | 5.0 min |
+| `gemma2:27b` | 6.72 | 16.9 min |
+| **screen total** | | **1.48 h** |
+| confirmation (5 seeds, baseline + `qwen3:14b`, the draft's assumption) | 2 x 245 calls | 0.42 h |
+| confirmation (5 seeds, baseline + `qwen3.6:27b`, the slowest candidate) | 2 x 245 calls | 1.43 h |
+| confirmation (3 seeds, baseline + `qwen3.6:27b`) | 2 x 147 calls | 0.86 h |
 
-**Budget: 2.5 h of Ollama wall-clock** from the first scored call; the assumed
-worst case above is about 2.2 h. **Stage 0 before the screen:** three timed calls
-per model on a small item and one on an ADR item, which replace the assumed
-latencies in this table and set the per-call timeout (4x the baseline's median,
-floor 60 s, as in #1557). If the measured total would exceed the budget the
-confirmation drops to 3 seeds; if the screen itself would exceed it, the slowest
-candidate is dropped before any scored call, not after. One Ollama job at a time,
-models one at a time, server defaults, and this work the only user of the server.
-The harness never contacts a model in `--self-test`, `forecast`, `blind-sheet` or
-`adjudicate`.
+**Budget: 2.5 h of Ollama wall-clock** from the first scored call. The measured screen
+total, **1.48 h, is within it**, so no candidate is dropped before the screen. With the
+confirmation, the total is 1.89 h when the selected candidate is `qwen3:14b`, within
+budget; if the selected candidate were `qwen3.6:27b`, five seeds would make it
+2.91 h, over budget, so the registered rule applies and the confirmation uses 3
+seeds (2.34 h, within budget). The slowest candidate on these numbers is
+`qwen3.6:27b`, at 18.7 s per call against `qwen3:8b`'s 2.3.
+
+**Per-call timeout.** Four times the baseline's median (0.98 s), floor 60 s,
+as in #1557: **60 s**, passed to `run` as `--timeout 60` (the harness default is 120 s).
+Read this before the screen runs: `qwen3.6:27b` took 46.3 s on the 10,380
+character pair and the largest scored pair is 12,337, so that model may time out on the ADR
+items; a timeout is a failure and scores 0, and V1 counts it. The rule is the registered one
+and is not changed here.
+
+**Observed, not a decision.** On the Stage 0 medians, V2 (median call latency <= 2.0x the
+baseline's, 1.97 s) would pass `gemma4:26b-a4b` (1.08),
+`qwen3:14b` (1.82) and `qwen3.6:35b-a3b` (1.14), and
+would not pass `gemma2:27b` (2.31) or `qwen3.6:27b` (13.39). V2 is
+applied on the scored runs' medians, not on these four calls; every candidate stays in the
+screen.
+
+One Ollama job at a time, models one at a time, server defaults, and this work the only user
+of the server. The harness never contacts a model in `--self-test`, `forecast`, `blind-sheet`
+or `adjudicate`; `stage0` and `run` do.
 
 ## Commands
 
 ```sh
 OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/edge_typing_screen/run_edge_typing_screen.py forecast --runs 3
-uv run python -u evals/edge_typing_screen/run_edge_typing_screen.py run --model qwen3:8b --runs 3
+uv run python -u evals/edge_typing_screen/run_edge_typing_screen.py stage0   # Stage 0, already run; calls only calibration inputs
+uv run python -u evals/edge_typing_screen/run_edge_typing_screen.py run --model qwen3:8b --runs 3 --timeout 60
 uv run python evals/edge_typing_screen/run_edge_typing_screen.py score
 ```
 
@@ -273,7 +312,8 @@ recommended.
    documented per-task recommendation (#650) and the only model with prior evidence on
    this task, so a screen without it could neither keep nor drop that recommendation.
    It is in the harness's candidate list, with an assumed latency borrowed from
-   `qwen3:14b` until Stage 0 measures it; the model must be pulled before the screen.
+   `qwen3:14b` until Stage 0 measured it (installed; its measured latency and digest are in
+   the table under "Forecast and budget").
 3. **Pooled decides, with a stratum guard.** Decided by the owner, 2026-10-27. The
    registered statistic stays pooled over all 49 items and every stratum is reported;
    in addition a selected candidate's paired gain over the baseline must have a point

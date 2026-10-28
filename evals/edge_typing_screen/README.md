@@ -1,9 +1,10 @@
 # Edge-typing screen (#1563)
 
-A measurement harness for the `edge_typing` task key. **It has not been run, and
-it is not registered:** [`PREREGISTRATION-DRAFT.md`](PREREGISTRATION-DRAFT.md) is a
-draft; its labels are adjudicated (see "Second adjudication") and it is blocked on the
-owner's open questions and Stage 0. No model has been called. Part of #1556; refs #1563.
+A measurement harness for the `edge_typing` task key. **The scored screen has not
+been run:** [`PREREGISTRATION.md`](PREREGISTRATION.md) registers it when it merges to
+`main`, before any scored call. Its labels are adjudicated (see "Second adjudication"), the
+owner's questions are decided and Stage 0 (`stage0`, calibration inputs only, never a
+fixture item) has measured the latencies and recorded the digests. Part of #1556; refs #1563.
 
 It does not duplicate [`evals/edge_typing/`](../edge_typing/README.md). That
 harness is a regression gate for prompt changes on one model: a constructed
@@ -240,7 +241,7 @@ reversed-orientation item and the type that would be right the other way round.
    that way (it prefers `related_to`). Which is the intended behaviour decides
    whether the dominant stratum rewards or punishes the model, and whether the key
    is worth a call at all: `references` adds no claim beyond the link that already
-   exists. **Decided by the owner, 2026-10-27: yes** (pre-registration draft,
+   exists. **Decided by the owner, 2026-10-27: yes** (pre-registration,
    "Decisions the owner made").
 2. **Should the 14 good-life links exist as candidate edges?** The `Compiled into:`
    lines of the two Source documents produce six of them (g09 to g14) in the
@@ -264,7 +265,7 @@ resolution is the item's `adjudication` record in `fixture.json`, listed in
 losing one stays as `alt_label`. `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
 those labels, keyed by fixture id, to [`second_labels.json`](second_labels.json); the
 filled sheet is not committed. Agreement is measured against that labeller, and no
-disagreement is resolved (see the pre-registration draft).
+disagreement is resolved (see the pre-registration).
 
 Not done. The commands below write the blind sheet and, once the owner has filled
 it, compare it with the first author's labels. Neither command contacts a model.

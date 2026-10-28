@@ -52,7 +52,7 @@ FAILURE_ABS_CAP: Final = 0.10
 FAILURE_MARGIN: Final = 0.02
 LATENCY_RATIO_CAP: Final = 2.0
 FABRICATION_MARGIN: Final = 0.10
-"""The registered vetoes (see `PREREGISTRATION-DRAFT.md`)."""
+"""The registered vetoes (see `PREREGISTRATION.md`)."""
 
 UNION_THRESHOLD: Final = 0.30
 """Token-overlap (Jaccard) at which the model-free `sentence_union` baseline

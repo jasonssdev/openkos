@@ -481,7 +481,7 @@ def test_j_tolerance_grows_with_wins_and_is_pinned_at_the_edges() -> None:
 
 
 def test_the_j_bar_on_the_real_reference_is_pinned() -> None:
-    """The numbers `PREREGISTRATION-DRAFT.md` quotes for the J bar."""
+    """The numbers `PREREGISTRATION.md` quotes for the J bar."""
     cases = core.load_fixture()
     name, reference = core.reference_baseline(cases)
     assert name == "sentence_union"
