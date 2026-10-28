@@ -26,7 +26,7 @@ verified app the release built, signed with the project's key for that version.
    `release` environment, the loud failure without the key, the uploads, the
    prerelease flag, and the same path on every pull request with a throwaway key.
 4. Docs: the install page (the check, the off switch, the owner's key steps),
-   the wording brief, the roadmap, the architecture, and ADR-0080 for what the
+   the wording brief, the roadmap, the architecture, and ADR-0081 for what the
    follow-on settled.
 
 ### Out of Scope
@@ -48,9 +48,9 @@ person's confirmation.
 
 - **`createUpdaterArtifacts`.** ADR-0079 turns it on but requires the archive
   to be made from the re-signed, checked app; the bundler archives before the
-  re-sign. ADR-0080 settles the order: the build script makes and signs it.
+  re-sign. ADR-0081 settles the order: the build script makes and signs it.
 - **The CSP.** ADR-0079 says the CSP must name the connection. The CSP governs
-  the web view, and the request is the shell's, so it stays unchanged (ADR-0080).
+  the web view, and the request is the shell's, so it stays unchanged (ADR-0081).
 - **The off switch.** "The check can be turned off" is a choice about the app,
   not a library, so it lives in the shell's configuration directory, next to
   the remembered workspace, and is changed from Settings > Updates.

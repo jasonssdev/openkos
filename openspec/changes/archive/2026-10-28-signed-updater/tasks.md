@@ -2,7 +2,7 @@
 
 Refs #1624. Proposal: `proposal.md`. Specs: `specs/desktop-shell`,
 `specs/desktop-settings`, `specs/desktop-client`, `specs/desktop-packaging`.
-ADR-0079, ADR-0080.
+ADR-0079, ADR-0081.
 
 Strict TDD is ON, runner `uv run pytest`, `cargo test` and `pnpm test`.
 
@@ -27,7 +27,7 @@ Strict TDD is ON, runner `uv run pytest`, `cargo test` and `pnpm test`.
   each layer; mutations of the confirmation guard, the dialog guard and the
   launch check were killed.
 - [x] 4. [DOC] `docs/install-desktop.md`, `docs/decision-wording.md`,
-  `docs/roadmap.md`, `docs/architecture.md`, ADR-0080; the deltas merged into
+  `docs/roadmap.md`, `docs/architecture.md`, ADR-0081; the deltas merged into
   `openspec/specs/` and the change archived.
 
 ## Owed

@@ -408,7 +408,7 @@ permission, and `notify_watch_budget` MUST take no text from the page.
 The shell MUST check for a newer build of the app only through the Tauri updater
 plugin (ADR-0079), from Rust; no capability MUST give the web view the plugin's
 own commands, and the web view's content security policy MUST NOT name the
-feed's hosts (ADR-0080). The feed MUST be exactly
+feed's hosts (ADR-0081). The feed MUST be exactly
 `https://github.com/jasonssdev/openkos/releases/latest/download/latest.json`,
 over https, with no `dangerous*` option, and `requireSignedVersion` MUST be on.
 The public key MUST be committed in `tauri.conf.json`.

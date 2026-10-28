@@ -1,6 +1,6 @@
 """`desktop/scripts/build-app.sh --release`: refuses before building anything (#1624).
 
-A release build makes and signs the update archive (ADR-0079, ADR-0080), so it
+A release build makes and signs the update archive (ADR-0079, ADR-0081), so it
 needs the signing key and a version the updater can compare. Both are checked
 before the first build step, which is what these tests run: the script exits
 long before it would need macOS, Rust or pnpm.

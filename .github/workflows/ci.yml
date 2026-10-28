@@ -559,7 +559,7 @@ jobs:
 
       # A throwaway updater key, made for this run and never kept, so every
       # pull request makes the update archive from the re-signed .app, unpacks
-      # and verifies it and signs it exactly as a release does (ADR-0080). It
+      # and verifies it and signs it exactly as a release does (ADR-0081). It
       # is not the project's key, which only the release environment holds.
       - name: Build the app and smoke-check its engine
         run: |

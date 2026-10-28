@@ -1,6 +1,6 @@
 ---
 type: Decision
-title: "ADR-0080: The update archive is made and signed by the build script after the ad-hoc re-sign"
+title: "ADR-0081: The update archive is made and signed by the build script after the ad-hoc re-sign"
 description: The desktop update archive is made by build-app.sh from the deep ad-hoc re-signed, smoke-checked .app, unpacked and verified, then signed with `tauri signer sign --app-version`, instead of by Tauri's createUpdaterArtifacts during `cargo tauri build`; the updater requires the signed version, and the update check runs in the shell, so the web view's CSP does not widen.
 status: Proposed
 date: 2026-10-28
@@ -12,7 +12,7 @@ timestamp: 2026-10-28T00:00:00Z
 sensitivity: public
 ---
 
-# ADR-0080: The update archive is made and signed by the build script after the ad-hoc re-sign
+# ADR-0081: The update archive is made and signed by the build script after the ad-hoc re-sign
 
 - **Status:** Proposed
 - **Date:** 2026-10-28

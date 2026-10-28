@@ -11,7 +11,7 @@ build the app as `VERSION`, and after the deep ad-hoc re-sign, the verification
 and the engine smoke check MUST make `build/desktop/OpenKOS.app.tar.gz` from
 that same `.app` with `COPYFILE_DISABLE=1`, unpack it and verify the copy with
 `codesign --verify --deep --strict`, then sign it with
-`cargo tauri signer sign --app-version VERSION` (ADR-0080). `createUpdaterArtifacts`
+`cargo tauri signer sign --app-version VERSION` (ADR-0081). `createUpdaterArtifacts`
 MUST stay off. CI's macOS bundle job MUST run this path on every pull request
 with a key generated for the run, never the project's.
 

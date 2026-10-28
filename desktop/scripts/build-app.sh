@@ -12,7 +12,7 @@
 #   7. build the .dmg from that verified .app;
 #   8. with --release, make the update archive from that same verified .app,
 #      unpack it and verify the copy, then sign it with the updater key
-#      (ADR-0079, ADR-0080).
+#      (ADR-0079, ADR-0081).
 #
 # Any failure stops the build before the .dmg is written. Needs macOS on Apple
 # Silicon, uv, Node and pnpm (desktop/package.json pins both), the Rust

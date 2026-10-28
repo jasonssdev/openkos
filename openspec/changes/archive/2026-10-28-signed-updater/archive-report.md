@@ -17,7 +17,7 @@
 - The release job runs in the `release` environment, refuses to start without
   the signing secrets or with the placeholder public key, and uploads the
   archive, its signature and the feed. The archive is made by `build-app.sh`
-  from the re-signed, verified app (ADR-0080).
+  from the re-signed, verified app (ADR-0081).
 - The public key in `tauri.conf.json` is a marked placeholder until the owner
   generates the real pair.
 
@@ -39,7 +39,7 @@ No MODIFIED, REMOVED or RENAMED headings.
 ## Requirement-vs-Code Check
 
 The requirements were written against the shipped code, not the task list. The
-CSP and `createUpdaterArtifacts` statements follow ADR-0080, not ADR-0079's
+CSP and `createUpdaterArtifacts` statements follow ADR-0081, not ADR-0079's
 wording, and say so.
 
 ## Left Open

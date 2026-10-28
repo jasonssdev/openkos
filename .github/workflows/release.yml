@@ -220,7 +220,7 @@ jobs:
       # The same script CI runs: it re-signs ad hoc, smoke-checks the engine
       # inside the .app and only then writes build/desktop/OpenKOS.dmg. With
       # --release it builds the app as this tag's version and makes the update
-      # archive from that same verified .app, then signs it (ADR-0080).
+      # archive from that same verified .app, then signs it (ADR-0081).
       - name: Build the app and smoke-check its engine
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
