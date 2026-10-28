@@ -8,7 +8,9 @@
 //! thing the shell keeps itself is the remote backend's API key, in the
 //! operating system's keychain, handed to the engine as its environment
 //! (ADR-0070), and the workspace the user chose, in its own configuration
-//! directory. A workspace is created by the engine's own `init` (#1487).
+//! directory. A workspace is created by the engine's own `init` (#1487). The
+//! shell also checks for and installs the app's own signed updates, only once
+//! the person confirms (ADR-0079).
 
 pub mod apikey;
 pub mod browser;
@@ -17,6 +19,7 @@ pub mod engine;
 pub mod locator;
 pub mod notify;
 pub mod supervisor;
+pub mod update;
 pub mod watch;
 pub mod workspace;
 
@@ -28,6 +31,8 @@ use apikey::{ApiKeys, KeyCommandError};
 use supervisor::{EngineState, Supervisor, SupervisorConfig, Unlocated};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_updater::UpdaterExt;
+use update::{Found, Pending, UpdateCheck, UpdateChoice, UpdateCommandError, UpdateSettings};
 use watch::{Watch, WatchChoice, WatchConfig, WatchStatus, WatchSupervisor};
 use workspace::{Choice, ChoiceStatus, WorkspaceCommandError, Workspaces};
 
@@ -207,6 +212,99 @@ async fn open_runtime_download() -> Result<(), String> {
     browser::open_runtime_download()
 }
 
+/// The update found by the last check, held until the person confirms it.
+type HeldUpdate = Pending<tauri_plugin_updater::Update>;
+
+/// Whether the person lets the app check for its own updates (ADR-0079).
+#[tauri::command]
+fn update_settings(choice: tauri::State<'_, UpdateChoice>) -> UpdateSettings {
+    UpdateSettings {
+        check: choice.is_on(),
+    }
+}
+
+/// Turn update checks on or off. Off also forgets an update on offer.
+#[tauri::command]
+fn set_update_check(
+    on: bool,
+    choice: tauri::State<'_, UpdateChoice>,
+    pending: tauri::State<'_, HeldUpdate>,
+) -> Result<UpdateSettings, UpdateCommandError> {
+    choice.set(on).map_err(|error| {
+        UpdateCommandError::new(
+            "choice_unkept",
+            format!("the choice could not be kept: {error}"),
+        )
+    })?;
+    if !on {
+        pending.hold(None, None);
+    }
+    Ok(UpdateSettings {
+        check: choice.is_on(),
+    })
+}
+
+/// Ask the feed whether a newer build exists. Off asks nothing; a failure is
+/// quiet. What it finds is only shown: nothing is downloaded here.
+#[tauri::command]
+async fn check_for_update(
+    app: tauri::AppHandle,
+    choice: tauri::State<'_, UpdateChoice>,
+    pending: tauri::State<'_, HeldUpdate>,
+) -> Result<UpdateCheck, UpdateCommandError> {
+    let (check, update) = update::check_when_on(choice.is_on(), || async {
+        let found = app.updater()?.check().await.inspect_err(|error| {
+            eprintln!("openkos-desktop: the update check failed: {error}");
+        })?;
+        Ok::<_, tauri_plugin_updater::Error>(found.map(|update| {
+            let found = Found {
+                version: update.version.clone(),
+                current_version: update.current_version.clone(),
+                notes: update.body.clone(),
+            };
+            (found, update)
+        }))
+    })
+    .await;
+    let version = match &check {
+        UpdateCheck::Available { version, .. } => Some(version.clone()),
+        _ => None,
+    };
+    pending.hold(version, update);
+    Ok(check)
+}
+
+/// Download, verify and install the update the person confirmed, by the
+/// version they were shown, then restart into it. The plugin checks the
+/// archive's signature against the compiled-in public key before it replaces
+/// anything.
+#[tauri::command]
+async fn install_update(
+    version: String,
+    app: tauri::AppHandle,
+    pending: tauri::State<'_, HeldUpdate>,
+) -> Result<(), UpdateCommandError> {
+    let update = pending.take(&version)?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|error| {
+            eprintln!("openkos-desktop: the update could not be installed: {error}");
+            UpdateCommandError::new(
+                "install_failed",
+                "the update could not be downloaded, verified or installed",
+            )
+        })?;
+    // The new build starts its own engine and watch; stop these first.
+    if let Some(watch) = app.try_state::<Watch>() {
+        watch.shutdown();
+    }
+    if let Some(supervisor) = app.try_state::<Supervisor>() {
+        supervisor.shutdown();
+    }
+    app.restart();
+}
+
 /// Run the engine's `init` in `folder`, with no terminal, so it writes the
 /// recommended defaults without prompting.
 fn run_engine_init(folder: &Path) -> Result<(), WorkspaceCommandError> {
@@ -222,7 +320,10 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        // Used only from the commands above, never by the page directly.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(keys)
+        .manage(HeldUpdate::default())
         .on_window_event(|window, event| {
             // Files dropped on the window go to the page as a plain DOM event;
             // it only quotes them, and the person agrees before anything is added.
@@ -242,6 +343,7 @@ pub fn run() {
             // The shell's own directory, never the workspace.
             let config_dir = app.path().app_config_dir()?;
             let workspaces = Arc::new(Workspaces::new(Choice::new(&config_dir)));
+            app.manage(UpdateChoice::new(&config_dir));
             let chosen = Arc::clone(&workspaces);
             let watch_environ = Arc::clone(&environ);
             // Started before the window opens, so the engine warms up meanwhile.
@@ -292,7 +394,11 @@ pub fn run() {
             pick_inbox_folder,
             pick_workspace_folder,
             pick_files,
-            open_runtime_download
+            open_runtime_download,
+            update_settings,
+            set_update_check,
+            check_for_update,
+            install_update
         ])
         .build(tauri::generate_context!())
         .expect("the desktop shell could not be built");
