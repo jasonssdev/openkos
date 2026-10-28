@@ -468,6 +468,38 @@ The card says where the AI model runs in one line: "On this Mac." or "In the clo
 
 Nothing changed and no key typed simply closes the form.
 
+### Watch a folder
+
+A card after the AI model card, drawn once the library's settings have been read. It says what happens before anything is turned on ([ADR-0078](adr/0078-the-inbox-watch-in-the-desktop-app-needs-a-supervised-daemon-so-it-is-a-design-decision-not-a-setting.md)). **(H)** for the whole section.
+
+- "OpenKOS can watch a folder on your Mac and add the files you put in it."
+- "Text files (like .txt and .md) that stay unchanged for a short while are added to your library by themselves, using the AI model, up to the daily limit set for it. Other files are ignored, and your folder is never changed."
+- "A file you edit after it was added becomes a new version."
+- "Combining pages, connections and replacing an older version are never done by themselves. They wait in To review for you."
+- The daemon's other jobs are named, not hidden: "Watching also keeps your library in order. While it is on, OpenKOS tries again to save changes that couldn't be saved, and now and then goes over your library to refresh search and look for pages to review. That uses the AI model too, within the same daily limit."
+- "Watching stops when you quit OpenKOS or open another library."
+
+**Choose a folder…** opens the system's folder window (the shell opens it) and previews the folder; nothing is written yet. The card then asks "Watch '{folder}'?", naming the folder as OpenKOS will keep it, with **Start watching** and **Cancel**. Start watching saves the folder in the library's settings and then starts the watch ("OpenKOS is watching '{folder}'."). A folder that is already the saved one only starts the watch. With a folder saved the card shows it and offers **Stop watching** while it watches, **Start watching** while it does not, and **Choose another folder…**. **Stop watching** stops the watch and takes the folder out of the library's settings ("OpenKOS stopped watching."); when the folder cannot be taken out: "Watching is off, but the folder is still saved in your library's settings." The choice is remembered for each library, so opening another library does not start the watch there.
+
+**The status.** A stopped watch is visible without looking for it: the card starts with one line and a badge, and the foot of the sidebar keeps a quiet entry on every screen, which opens Settings. Four states, each with its own words, and nothing is shown before the watch was ever turned on:
+
+| State | Card | Sidebar |
+| --- | --- | --- |
+| On | **On** "Watching is on." | **Watching: on** |
+| Stopped by you | **Off** "Watching is off." (a folder is saved and not watched, or you stopped it) | **Watching: off** |
+| Stopped on the limit | **Paused** "Watching is paused. The AI model reached the limit set for it, so OpenKOS is waiting before it adds more files. It carries on by itself when the limit allows." | **Watching: paused** |
+| Failed | **Stopped** "Watching stopped because something went wrong.", with **Start again** and, behind **Show details**, what OpenKOS reported | **Watching: stopped** |
+
+"Paused" is read from the library's record of its last unattended job, not from the daemon, which keeps running while it waits. The page asks about it now and then, so a change shows without opening Settings.
+
+| Situation | Code or reason | Message |
+| --- | --- | --- |
+| The folder is part of the library | `inbox_inside_workspace` | "That folder is part of your library. Choose a folder outside it." |
+| Not a folder | `inbox_not_a_directory` | "That isn't a folder. Choose a folder." |
+| Any other folder the library refuses | `invalid_inbox` | "OpenKOS can't use that folder. Please choose another." |
+| The settings changed meanwhile, OpenKOS is busy, the file has edits OpenKOS did not make, no answer | `stale`, `workspace_busy`, `write_refused` | As for the AI model above |
+| The folder was saved, the watch did not start | `watch_choice_unkept`, `no_workspace` | "The folder was saved, but watching didn't start." followed by "OpenKOS couldn't remember your choice." or "Open a library first." |
+
 ### Earlier decisions
 
 Two lists follow the AI model card, each drawn only while it has something in it. **Pages you settled** names each pair ("'{first title}' and '{second title}'") with **Undo**; **Disagreements you left as they are** names each with **Point this out again** (one found inside a combined page is named by that page alone). Both do what Undo does in To review, with the same confirmations and refusals (`not_reconciled`, `not_declined`, `stale`), shown at the top of the screen; the lists are then read again. A list that cannot be read is simply not shown.

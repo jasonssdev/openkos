@@ -4994,6 +4994,36 @@
         "title": "TierPlan",
         "type": "object"
       },
+      "UnattendedActivity": {
+        "description": "The unattended engine's latest outcome. `budget_exhausted`: the newest\nwatch or maintenance job ended because the model-call budget ran out (the\ndaemon idles and records it; it does not exit). `last_job` is the newest\njob of any kind. `jobs_unreadable` is a record that exists but cannot be\nread, which is not the same as no history.",
+        "properties": {
+          "budget_exhausted": {
+            "title": "Budget Exhausted",
+            "type": "boolean"
+          },
+          "jobs_unreadable": {
+            "title": "Jobs Unreadable",
+            "type": "boolean"
+          },
+          "last_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "last_job",
+          "budget_exhausted",
+          "jobs_unreadable"
+        ],
+        "title": "UnattendedActivity",
+        "type": "object"
+      },
       "UnmergeApplyRequest": {
         "description": "The version the unmerge preview issued (echoed unchanged) and how long to\nwait for the workspace lock; a client can shorten the wait only.",
         "properties": {
@@ -9989,6 +10019,69 @@
           }
         ],
         "summary": "Tier Preview"
+      }
+    },
+    "/v1/unattended": {
+      "get": {
+        "operationId": "unattended_v1_unattended_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnattendedActivity"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Unattended"
       }
     },
     "/v1/unmerge/apply": {

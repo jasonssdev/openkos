@@ -145,7 +145,13 @@ def enqueue_volatility(
     )
 
 
-def record_failed_job(root: Path, kind: str = "maintenance") -> None:
+def record_job(
+    root: Path,
+    kind: str,
+    outcome: str,
+    *,
+    detail_code: str | None = None,
+) -> None:
     layout = config.WorkspaceLayout(root)
     conn = jobs_store.open_jobs(layout.openkos_dir / "jobs.db")
     try:
@@ -153,15 +159,19 @@ def record_failed_job(root: Path, kind: str = "maintenance") -> None:
         jobs_store.finish_job(
             conn,
             job_id,
-            outcome="failed",
+            outcome=outcome,
             ended_at="2026-10-14T10:01:00Z",
             chat_calls=0,
             units_done=0,
             units_deferred=3,
-            detail_code="boom",
+            detail_code=detail_code,
         )
     finally:
         conn.close()
+
+
+def record_failed_job(root: Path, kind: str = "maintenance") -> None:
+    record_job(root, kind, "failed", detail_code="boom")
 
 
 def enqueue_relation(

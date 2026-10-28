@@ -21,6 +21,10 @@ serde_json = "1"
 tauri = { version = "2", features = [] }
 # The system folder picker for the workspace, opened only from Rust (ADR-0071).
 tauri-plugin-dialog = "2"
+# The notification for a stopped inbox watch (ADR-0078), shown only from Rust
+# with fixed text. Pinned to an exact version, and no capability gives the page
+# a notification permission. The Windows 7 shim is off: only macOS ships.
+tauri-plugin-notification = { version = "=2.6.0", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
