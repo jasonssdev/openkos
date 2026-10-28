@@ -52,7 +52,9 @@ sys.path.append(str(REPO_ROOT / "evals" / "query_grounding"))
 
 import gold_bundle as bundle_mod  # noqa: E402
 import gold_core as core  # noqa: E402
+import gold_corpus  # noqa: E402
 import gold_delivery as delivery  # noqa: E402
+import gold_overlap as overlap_mod  # noqa: E402
 import harness_stamp  # noqa: E402
 
 from openkos import lifecycle, prompt_budget, sensitivity  # noqa: E402
@@ -67,6 +69,12 @@ from openkos.state.vectorstore import (  # noqa: E402
 )
 
 QUESTIONS_PATH: Final = HERE / "questions.draft.json"
+QUESTIONS_V1_PATH: Final = HERE / "questions.v1.json"
+# The frozen v1 set (ids, languages, kinds, texts). Judgments are written
+# against it, so a change must be a new set, never an edit.
+QUESTIONS_V1_SHA256: Final = (
+    "22baff7b222182c8a0c4af81d48d19794b14a67ea028115d66c0fefc0271d60d"
+)
 EMBED_MODEL: Final = "bge-m3"
 
 
@@ -125,14 +133,18 @@ def retrieve_channels(
 
 
 def build_workspace(
-    root: pathlib.Path, embedder: Embedder | None, *, model_tag: str
+    root: pathlib.Path,
+    embedder: Embedder | None,
+    *,
+    model_tag: str,
+    corpus: gold_corpus.Corpus = gold_corpus.DRAFT,
 ) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
     """Materialize the bundle and build its derived stores.
 
     With an embedder: the production `reindex` (FTS + vectors). Without one
     (`--fts-only`): `fts.refresh_fts_index`, the function `reindex` itself
     calls for the lexical store, so no model is contacted."""
-    bundle = bundle_mod.write_bundle(root)
+    bundle = corpus.materialize(root)
     fts_path = root / ".openkos" / "fts.db"
     vectors_path = root / ".openkos" / "vectors.db"
     if embedder is None:
@@ -161,11 +173,12 @@ def run_all(
     *,
     embedder: Embedder | None,
     model_tag: str,
+    corpus: gold_corpus.Corpus = gold_corpus.DRAFT,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         bundle, fts_path, vectors_path = build_workspace(
-            root, embedder, model_tag=model_tag
+            root, embedder, model_tag=model_tag, corpus=corpus
         )
         excluded = excluded_ids(bundle)
         fts_index = fts_mod.open_fts_index_readonly(fts_path)
@@ -198,7 +211,7 @@ def run_all(
     return {
         "kind": core.RUN_KIND,
         "stamp": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
-        "bundle": bundle_mod.BUNDLE_ID,
+        "bundle": corpus.bundle_id,
         "embed_model": None if embedder is None else model_tag,
         "channels": channels,
         "ks": list(core.KS),
@@ -268,8 +281,30 @@ def assemble_blocks(
 # --------------------------------------------------------------------------- #
 
 
-def _load_questions(path: pathlib.Path) -> list[core.Question]:
-    questions, problems = core.parse_questions(json.loads(path.read_text("utf-8")))
+def _corpus(args: argparse.Namespace) -> gold_corpus.Corpus:
+    workspace = getattr(args, "workspace", None)
+    if workspace is None:
+        return gold_corpus.DRAFT
+    return gold_corpus.from_workspace(workspace)
+
+
+def _questions_path(args: argparse.Namespace) -> pathlib.Path:
+    if args.questions is not None:
+        return pathlib.Path(args.questions)
+    return QUESTIONS_V1_PATH if getattr(args, "workspace", None) else QUESTIONS_PATH
+
+
+def _load_questions(
+    path: pathlib.Path, corpus: gold_corpus.Corpus = gold_corpus.DRAFT
+) -> list[core.Question]:
+    raw = json.loads(path.read_text("utf-8"))
+    declared = raw.get("bundle")
+    if declared is not None and declared != corpus.bundle_id:
+        raise SystemExit(
+            f"{path.name} is written for bundle {declared!r}, not {corpus.bundle_id!r}; "
+            "pass the matching --workspace (or none for the draft bundle)"
+        )
+    questions, problems = core.parse_questions(raw)
     if problems:
         raise SystemExit("question set rejected:\n  - " + "\n  - ".join(problems))
     return questions
@@ -288,13 +323,16 @@ def _write_json(path: pathlib.Path, data: object) -> None:
 
 def cmd_run(args: argparse.Namespace) -> int:
     _refuse_inside_repo(args.out)
-    questions = _load_questions(args.questions)
+    corpus = _corpus(args)
+    questions = _load_questions(_questions_path(args), corpus)
     embedder: Embedder | None = None
     if not args.fts_only:
         from openkos.llm.ollama import OllamaClient
 
         embedder = OllamaClient(model=args.embed_model)
-    run = run_all(questions, embedder=embedder, model_tag=args.embed_model)
+    run = run_all(
+        questions, embedder=embedder, model_tag=args.embed_model, corpus=corpus
+    )
     # No chat prompt exists to stamp, so `build_stamp` does not apply; the two
     # identities that do (the checkout and the embedder's weights) are recorded.
     run["identity"] = {
@@ -310,11 +348,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_judge_sheet(args: argparse.Namespace) -> int:
     _refuse_inside_repo(args.out)
-    questions = _load_questions(args.questions)
+    corpus = _corpus(args)
+    questions = _load_questions(_questions_path(args), corpus)
     if args.run is not None:
         run = json.loads(args.run.read_text("utf-8"))
     elif args.pool == core.POOL_FTS_ONLY:
-        run = run_all(questions, embedder=None, model_tag=EMBED_MODEL)
+        run = run_all(questions, embedder=None, model_tag=EMBED_MODEL, corpus=corpus)
     else:
         raise SystemExit("--pool full needs --run RUN.json from `run` with embeddings")
     problem = core.run_problem(run, questions, args.pool)
@@ -323,7 +362,7 @@ def cmd_judge_sheet(args: argparse.Namespace) -> int:
     chosen = core.sample_questions(questions, args.sample, args.sample_seed)
     text, key = core.build_sheet(
         chosen,
-        bundle_mod.documents(),
+        corpus.documents(),
         core.pool_from_run(run, args.pool),
         mode=args.pool,
         seed=args.seed,
@@ -339,8 +378,9 @@ def cmd_judge_sheet(args: argparse.Namespace) -> int:
 
 
 def cmd_adjudicate(args: argparse.Namespace) -> int:
-    questions = _load_questions(args.questions)
-    docs = bundle_mod.documents()
+    corpus = _corpus(args)
+    questions = _load_questions(_questions_path(args), corpus)
+    docs = corpus.documents()
     key = json.loads(core.key_path_for(args.sheet, args.key).read_text("utf-8"))
     labels, problems = core.sheet_labels(args.sheet.read_text("utf-8"), key)
     if problems:
@@ -364,7 +404,7 @@ def cmd_adjudicate(args: argparse.Namespace) -> int:
         judgments = core.build_judgments(
             labels,
             questions,
-            bundle=bundle_mod.BUNDLE_ID,
+            bundle=corpus.bundle_id,
             pool_mode=key["mode"],
             judged_by=args.judged_by,
         )
@@ -377,22 +417,23 @@ def cmd_adjudicate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _doc_texts() -> dict[str, str]:
-    return {d.id: d.body for d in bundle_mod.documents()}
+def _doc_texts(corpus: gold_corpus.Corpus = gold_corpus.DRAFT) -> dict[str, str]:
+    return {d.id: d.body for d in corpus.documents()}
 
 
 def cmd_passage_sheet(args: argparse.Namespace) -> int:
     """The blind gold-passage annotation sheet. It is NOT filled here."""
     _refuse_inside_repo(args.out)
-    questions = _load_questions(args.questions)
+    corpus = _corpus(args)
+    questions = _load_questions(_questions_path(args), corpus)
     judgments = json.loads(args.judgments.read_text("utf-8"))
     problems = core.validate_judgments(
-        judgments, questions, {d.id for d in bundle_mod.documents()}
+        judgments, questions, {d.id for d in corpus.documents()}
     )
     if problems:
         raise SystemExit("judgments rejected:\n  - " + "\n  - ".join(problems))
     table = judgments["judgments"]
-    docs = {d.id: (d.title, d.body) for d in bundle_mod.documents()}
+    docs = {d.id: (d.title, d.body) for d in corpus.documents()}
     text = delivery.build_passage_sheet(
         questions, table, docs, questions_sha=core.questions_sha256(questions)
     )
@@ -407,18 +448,19 @@ def cmd_passage_sheet(args: argparse.Namespace) -> int:
 def cmd_passages(args: argparse.Namespace) -> int:
     """A filled sheet to a passages file; every span must be verbatim."""
     _refuse_inside_repo(args.out)
-    questions = _load_questions(args.questions)
+    corpus = _corpus(args)
+    questions = _load_questions(_questions_path(args), corpus)
     sha = core.questions_sha256(questions)
     parsed, problems = delivery.parse_passage_sheet(args.sheet.read_text("utf-8"), sha)
     raw = {
         "kind": delivery.PASSAGES_KIND,
         "version": 1,
-        "bundle": bundle_mod.BUNDLE_ID,
+        "bundle": corpus.bundle_id,
         "questions_sha256": sha,
         "passages": parsed,
     }
     if not problems:
-        _, problems = delivery.load_passages(raw, questions, _doc_texts())
+        _, problems = delivery.load_passages(raw, questions, _doc_texts(corpus))
     if problems:
         raise SystemExit("sheet rejected:\n  - " + "\n  - ".join(problems))
     _write_json(args.out, raw)
@@ -433,6 +475,7 @@ def delivered_reports(
     *,
     context_window: int,
     max_generation_tokens: int,
+    corpus: gold_corpus.Corpus = gold_corpus.DRAFT,
 ) -> dict[str, Any]:
     """`fused@k` delivered-evidence summaries and per-question records."""
     if "fused" not in run.get("channels", []):
@@ -440,7 +483,7 @@ def delivered_reports(
     by_id = {q.id: q for q in questions}
     out: dict[str, Any] = {}
     with tempfile.TemporaryDirectory() as tmp:
-        bundle = bundle_mod.write_bundle(pathlib.Path(tmp))
+        bundle = corpus.materialize(pathlib.Path(tmp))
         for k in run["ks"]:
             records: dict[str, Any] = {}
             for qid, gold in sorted(passages.items()):
@@ -463,13 +506,14 @@ def delivered_reports(
 
 
 def cmd_delivered(args: argparse.Namespace) -> int:
-    questions = _load_questions(args.questions)
+    corpus = _corpus(args)
+    questions = _load_questions(_questions_path(args), corpus)
     run = json.loads(args.run.read_text("utf-8"))
     problem = core.run_problem(run, questions, core.POOL_FULL)
     if problem:
         raise SystemExit(problem)
     passages, problems = delivery.load_passages(
-        json.loads(args.passages.read_text("utf-8")), questions, _doc_texts()
+        json.loads(args.passages.read_text("utf-8")), questions, _doc_texts(corpus)
     )
     if problems:
         raise SystemExit("passages rejected:\n  - " + "\n  - ".join(problems))
@@ -479,6 +523,7 @@ def cmd_delivered(args: argparse.Namespace) -> int:
         questions,
         context_window=args.context_window,
         max_generation_tokens=args.max_generation_tokens,
+        corpus=corpus,
     )
     print(
         f"context window {args.context_window} tokens, reply reserve "
@@ -501,10 +546,11 @@ def cmd_delivered(args: argparse.Namespace) -> int:
 
 
 def cmd_score(args: argparse.Namespace) -> int:
-    questions = _load_questions(args.questions)
+    corpus = _corpus(args)
+    questions = _load_questions(_questions_path(args), corpus)
     run = json.loads(args.run.read_text("utf-8"))
     judgments = json.loads(args.judgments.read_text("utf-8"))
-    docs = {d.id for d in bundle_mod.documents()}
+    docs = {d.id for d in corpus.documents()}
     problems = core.validate_judgments(judgments, questions, docs)
     if problems:
         print("JUDGMENTS REJECTED, nothing scored:\n  - " + "\n  - ".join(problems))
@@ -515,6 +561,44 @@ def cmd_score(args: argparse.Namespace) -> int:
         _refuse_inside_repo(args.out)
         _write_json(args.out, report)
         print(f"wrote {args.out}")
+    return 0
+
+
+def check_questions(
+    questions: Sequence[core.Question], texts: dict[str, str]
+) -> tuple[list[overlap_mod.Overlap], list[str]]:
+    """Every authoring rule over a question set and its bundle's documents."""
+    entries = [
+        overlap_mod.Entry(q.id, q.question, q.vocab_gap, q.answers, q.passages)
+        for q in questions
+    ]
+    results, found = overlap_mod.check_all(entries, texts)
+    return results, core.authoring_problems(questions) + found
+
+
+def cmd_check_questions(args: argparse.Namespace) -> int:
+    """Model-free: flags a question that copies its answering document or
+    claims a vocabulary gap it does not have. Contacts no model."""
+    corpus = _corpus(args)
+    questions = _load_questions(_questions_path(args), corpus)
+    results, found = check_questions(questions, _doc_texts(corpus))
+    gap = sum(1 for q in questions if q.vocab_gap)
+    print(f"{len(questions)} questions, vocab_gap {gap} ({gap / len(questions):.1%})")
+    for language in core.LANGUAGES:
+        row = ", ".join(
+            f"{kind} {sum(1 for q in questions if q.language == language and q.kind == kind)}"
+            for kind in core.KINDS
+        )
+        print(f"  {language}: {row}")
+    longest = max((len(r.copied) for r in results), default=0)
+    print(
+        f"copy check: {sum(1 for r in results if r.copied)} question(s) share a "
+        f"{overlap_mod.COPY_RUN}-word run (longest flagged run {longest})"
+    )
+    if found:
+        print("RULES BROKEN:\n  - " + "\n  - ".join(found))
+        return 1
+    print("every authoring rule holds")
     return 0
 
 
@@ -1226,6 +1310,278 @@ def _self_test_delivery(c: _Checks, questions: list[core.Question]) -> None:
     )
 
 
+def _self_test_overlap(c: _Checks) -> None:
+    doc = (
+        "Raw readings of the stations are kept for ninety days before downsampling. "
+        "The BME280 sits inside a louvred radiation shield."
+    )
+    copied = overlap_mod.overlap("c1", "How are raw readings stations kept", [doc])
+    c.check(bool(copied.copied), "a 4-word run is flagged even with stop words dropped")
+    c.check(
+        not overlap_mod.overlap(
+            "c2", "How long are measurements retained", [doc]
+        ).copied,
+        "a paraphrase is not flagged",
+    )
+    c.check(
+        not overlap_mod.overlap("c3", "raw readings kept", [doc]).copied,
+        "a 3-word run is below the threshold",
+    )
+    c.check(
+        overlap_mod.content_words("búsqueda") == overlap_mod.content_words("BUSQUEDA"),
+        "accents and case fold",
+    )
+    c.check(
+        overlap_mod.content_words("reading") == overlap_mod.content_words("readings"),
+        "plural stems fold",
+    )
+    gap = overlap_mod.overlap("g1", "Which tier guarantees delivery", [doc])
+    c.check(
+        not overlap_mod.problems(gap, vocab_gap=True),
+        "a distant question holds the gap",
+    )
+    near = overlap_mod.overlap("g2", "How many days are raw readings kept", [doc])
+    c.check(
+        bool(overlap_mod.problems(near, vocab_gap=True)),
+        "a gap claim that shares the passage's words is flagged",
+    )
+    c.check(
+        not overlap_mod.problems(near, vocab_gap=False),
+        "the gap rule applies only to questions that claim it",
+    )
+    # The gap is measured against the passage, not the whole document.
+    passage = "The BME280 sits inside a louvred radiation shield."
+    far = overlap_mod.overlap(
+        "g3", "How many days are raw readings kept", [doc], [passage]
+    )
+    c.check(
+        not overlap_mod.problems(far, vocab_gap=True),
+        "the gap is measured against the passage",
+    )
+    texts = {"sources/a": doc}
+    question = "Which tier guarantees delivery"
+    entry = overlap_mod.Entry("e1", question, True, ("sources/a",), (passage,))
+    c.check(
+        not overlap_mod.check_all([entry], texts)[1], "a verbatim passage is accepted"
+    )
+    squashed = overlap_mod.Entry(
+        "e2",
+        question,
+        True,
+        ("sources/a",),
+        ("The BME280  sits\ninside a louvred radiation shield.",),
+    )
+    c.check(
+        not overlap_mod.check_all([squashed], texts)[1],
+        "passage whitespace is normalized",
+    )
+    invented = overlap_mod.Entry(
+        "e3", question, True, ("sources/a",), ("An invented sentence.",)
+    )
+    c.check(
+        any("verbatim" in p for p in overlap_mod.check_all([invented], texts)[1]),
+        "a passage that is not in the answers is refused",
+    )
+    bare = overlap_mod.Entry("e4", question, True, ("sources/a",))
+    c.check(
+        any("passages" in p for p in overlap_mod.check_all([bare], texts)[1]),
+        "a gap question without passages is refused",
+    )
+    ghost = overlap_mod.Entry("e5", "Which tier", False, ("sources/missing",))
+    c.check(
+        any("not in the bundle" in p for p in overlap_mod.check_all([ghost], texts)[1]),
+        "an unknown answer document is refused",
+    )
+
+
+def _authored_set(gap: int) -> list[core.Question]:
+    out: list[core.Question] = []
+    for i in range(42):
+        flag = i < gap
+        out.append(
+            core.Question(
+                f"a{i:02d}",
+                core.LANGUAGES[i % 2],
+                core.KINDS[(i // 2) % 3],
+                f"question {i}",
+                vocab_gap=flag,
+                answers=("sources/x",),
+                passages=("p",) if flag else (),
+            )
+        )
+    return out
+
+
+def _self_test_authoring(c: _Checks) -> None:
+    c.check(
+        not core.authoring_problems(_authored_set(12)),
+        "a well-formed authored set passes",
+    )
+    c.check(
+        any("vocab_gap share" in p for p in core.authoring_problems(_authored_set(5))),
+        "a set under 25% vocabulary-gap questions is refused",
+    )
+    c.check(
+        any("40 to 60" in p for p in core.authoring_problems(_authored_set(12)[:10])),
+        "a set outside 40 to 60 questions is refused",
+    )
+    thin = [
+        q
+        for q in _authored_set(12)
+        if not (q.language == "es" and q.kind == "enumeration")
+    ]
+    c.check(
+        any("es enumeration" in p for p in core.authoring_problems(thin)),
+        "a language/kind cell with no question is refused",
+    )
+    raw: dict[str, Any] = {
+        "questions": [
+            {
+                "id": "x1",
+                "language": "en",
+                "kind": "single-hop",
+                "question": "q?",
+                "vocab_gap": "yes",
+            },
+            {
+                "id": "x2",
+                "language": "en",
+                "kind": "single-hop",
+                "question": "q?",
+                "answers": "sources/a",
+            },
+        ]
+    }
+    problems = core.parse_questions(raw)[1]
+    c.check(len(problems) == 2, f"malformed author metadata is rejected: {problems}")
+    plain = core.Question("p", "en", "single-hop", "q?")
+    flagged = core.Question(
+        "p", "en", "single-hop", "q?", vocab_gap=True, answers=("d",)
+    )
+    c.check(
+        core.questions_sha256([plain]) == core.questions_sha256([flagged]),
+        "author metadata is outside the question hash",
+    )
+
+
+def _tree_digest(root: pathlib.Path) -> str:
+    h = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        h.update(str(path.relative_to(root)).encode())
+        if path.is_file():
+            h.update(path.read_bytes())
+    return h.hexdigest()
+
+
+def _self_test_workspace(c: _Checks) -> None:
+    from openkos.model import okf
+
+    def write(root: pathlib.Path, rel: str, title: str, body: str) -> None:
+        path = root / "bundle" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        meta: dict[str, object] = {
+            "type": "Concept",
+            "title": title,
+            "sensitivity": "private",
+        }
+        path.write_text(f"{okf.dump_frontmatter(meta)}{body}\n", encoding="utf-8")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = pathlib.Path(tmp) / "ws"
+        write(
+            ws,
+            "concepts/tides.md",
+            "Tides",
+            "# Tides\n\nThe harbour tide table is monthly.",
+        )
+        write(
+            ws, "sources/wind.md", "Wind", "# Wind\n\nGusts are the highest wind speed."
+        )
+        (ws / "bundle" / "index.md").write_text("# Index\n", encoding="utf-8")
+        (ws / "bundle" / "log.md").write_text("# Log\n", encoding="utf-8")
+        write(ws, ".state/side.md", "Side", "not a document")
+        corpus = gold_corpus.from_workspace(ws)
+        ids = [d.id for d in corpus.documents()]
+        c.check(
+            ids == ["concepts/tides", "sources/wind"], f"workspace documents: {ids}"
+        )
+        c.check(corpus.bundle_id == "retrieval-gold-v1", "workspace bundle id")
+        before = _tree_digest(ws)
+        questions = [
+            core.Question("w1", "en", "single-hop", "When is the tide table published"),
+            core.Question("w2", "en", "single-hop", "What is a gust of wind"),
+        ]
+        run = run_all(
+            questions, embedder=_StubEmbedder(), model_tag="stub", corpus=corpus
+        )
+        c.check(_tree_digest(ws) == before, "the workspace is never written")
+        c.check(
+            run["bundle"] == "retrieval-gold-v1", "the run names the workspace bundle"
+        )
+        c.check(run["channels"] == ["fts", "dense", "fused"], "a workspace run is full")
+        ranked = {d for r in run["rankings"].values() for d in r["fts"]}
+        c.check(ranked <= set(ids), "rankings carry workspace ids only")
+        c.check(
+            run["rankings"]["w1"]["fts"][:1] == ["concepts/tides"],
+            "the lexical channel finds the workspace document",
+        )
+        questions_file = pathlib.Path(tmp) / "q.json"
+        questions_file.write_text(
+            json.dumps(
+                {
+                    "bundle": "retrieval-gold-v1",
+                    "questions": [
+                        {
+                            "id": "w1",
+                            "language": "en",
+                            "kind": "single-hop",
+                            "question": "q",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        try:
+            _load_questions(questions_file, gold_corpus.DRAFT)
+            c.check(False, "questions for another bundle are refused")
+        except SystemExit:
+            c.check(True, "questions for another bundle are refused")
+        c.check(
+            len(_load_questions(questions_file, corpus)) == 1,
+            "questions for this bundle load",
+        )
+        copied = core.Question(
+            "w1",
+            "en",
+            "single-hop",
+            "The harbour tide table is monthly",
+            answers=("concepts/tides",),
+        )
+        results, found = check_questions([copied], _doc_texts(corpus))
+        c.check(
+            any("-word run" in p for p in found),
+            f"check_questions flags a copied question: {found}",
+        )
+        c.check(len(results) == 1, "check_questions reports every overlap")
+
+
+def _self_test_v1_set(c: _Checks) -> None:
+    raw = json.loads(QUESTIONS_V1_PATH.read_text("utf-8"))
+    questions, problems = core.parse_questions(raw)
+    c.check(not problems, f"questions.v1.json parses: {problems}")
+    c.check(
+        raw.get("bundle") == "retrieval-gold-v1", "questions.v1.json names its bundle"
+    )
+    found = core.authoring_problems(questions)
+    c.check(not found, f"questions.v1.json keeps the authoring rules: {found}")
+    c.check(
+        core.questions_sha256(questions) == QUESTIONS_V1_SHA256,
+        "questions.v1.json is frozen: its hash changed "
+        f"({core.questions_sha256(questions)}); a new set needs new judgments",
+    )
+
+
 def _self_test() -> int:
     c = _Checks()
     _self_test_metrics(c)
@@ -1238,6 +1594,10 @@ def _self_test() -> int:
     _self_test_judgments(c, questions, doc_ids)
     _self_test_pipeline(c, questions, doc_ids)
     _self_test_delivery(c, questions)
+    _self_test_overlap(c)
+    _self_test_authoring(c)
+    _self_test_workspace(c)
+    _self_test_v1_set(c)
     print(f"self-test: {c.total - len(c.failures)}/{c.total} passed")
     return 1 if c.failures else 0
 
@@ -1252,7 +1612,19 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     def paths(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--questions", type=pathlib.Path, default=QUESTIONS_PATH)
+        p.add_argument(
+            "--questions",
+            type=pathlib.Path,
+            default=None,
+            help="default: questions.v1.json with --workspace, else questions.draft.json",
+        )
+        p.add_argument(
+            "--workspace",
+            type=pathlib.Path,
+            default=None,
+            help="a workspace built by build_bundle.py (its bundle/ is read, "
+            "never written); default: the 35-document draft bundle",
+        )
 
     run = sub.add_parser("run", help="retrieve every question and store the rankings")
     paths(run)
@@ -1316,6 +1688,12 @@ def _parser() -> argparse.ArgumentParser:
     score.add_argument("--judgments", type=pathlib.Path, required=True)
     score.add_argument("--out", type=pathlib.Path, default=None)
     score.set_defaults(func=cmd_score)
+
+    chk = sub.add_parser(
+        "check-questions", help="model-free authoring rules over a question set"
+    )
+    paths(chk)
+    chk.set_defaults(func=cmd_check_questions)
 
     cmp_ = sub.add_parser("compare", help="seeded paired bootstrap of two scores")
     cmp_.add_argument("--base", type=pathlib.Path, required=True)
