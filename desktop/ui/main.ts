@@ -9,6 +9,7 @@
 import {
   createApiKeys,
   createClient,
+  createUpdates,
   createWatch,
   createWorkspaces,
   openRuntimeDownload,
@@ -25,9 +26,9 @@ import { LabelModel } from "./label/model.ts";
 import { keepHereAction, labelChoice } from "./label/render.ts";
 import { ReviewModel } from "./review/model.ts";
 import { renderReview } from "./review/render.ts";
-import { SettingsModel, cloudOn, watchKind } from "./settings/model.ts";
+import { SettingsModel, cloudOn, updateOffered, watchKind } from "./settings/model.ts";
 import { renderSettings } from "./settings/render.ts";
-import { WATCH_STATUS, WORDS as SETTINGS_WORDS } from "./settings/wording.ts";
+import { UPDATES, WATCH_STATUS, WORDS as SETTINGS_WORDS } from "./settings/wording.ts";
 import { SetupModel, WelcomeModel } from "./setup/model.ts";
 import { renderSetup, renderWelcome } from "./setup/render.ts";
 import { SearchModel } from "./search/model.ts";
@@ -61,8 +62,9 @@ const live = { status: element("review-live-status"), alert: element("review-liv
 const engineFooter = el("div");
 const cloudFooter = el("div");
 const watchFooter = el("div");
+const updateFooter = el("div");
 const settingsFooter = el("div");
-const footer = el("div", { class: "ui-sidebar__foot" }, cloudFooter, watchFooter, settingsFooter, engineFooter);
+const footer = el("div", { class: "ui-sidebar__foot" }, updateFooter, cloudFooter, watchFooter, settingsFooter, engineFooter);
 const statusRoot = el("div", { class: "ui-view", attrs: { "data-screen": "status" } });
 const askRoot = el("div", { class: "ui-view", attrs: { "data-screen": "ask" } });
 askRoot.hidden = true;
@@ -101,6 +103,7 @@ const settings = new SettingsModel({
   keys: createApiKeys(invoke),
   workspaces: createWorkspaces(invoke),
   watch: createWatch(invoke),
+  updates: createUpdates(invoke),
 });
 let settingsNote: string | null = null;
 settings.subscribe((next) => {
@@ -276,6 +279,15 @@ function paintSettingsEntry(): void {
         : [uiButton(WATCH_STATUS.footer[watching], () => show("settings"), { variant: "quiet", size: "sm", focusKey: "nav:watch" })]),
     ),
   );
+  // A newer version is offered without a visit to Settings, and installed only from there (ADR-0079).
+  const offered = updateOffered(settings.state);
+  redraw(updateFooter, `update:${offered}`, () =>
+    updateFooter.replaceChildren(
+      ...(offered === null
+        ? []
+        : [uiButton(UPDATES.footer(offered), () => show("settings"), { variant: "quiet", size: "sm", focusKey: "nav:update" })]),
+    ),
+  );
   redraw(settingsFooter, "settings", () =>
     settingsFooter.replaceChildren(
       navItem({ id: "settings", label: SETTINGS_WORDS.navLabel }, view === "settings", () => show("settings")),
@@ -306,6 +318,7 @@ function show(next: View): void {
   shell.nav.hidden = next === "welcome";
   settingsFooter.hidden = next === "welcome";
   watchFooter.hidden = next === "welcome";
+  updateFooter.hidden = next === "welcome";
   setup?.watch(next === "setup");
   paintNav();
   paintSettingsEntry();
@@ -465,6 +478,8 @@ paintNav();
 paintSettingsEntry();
 void tick();
 setInterval(() => void tick(), POLL_MS);
+// Once per launch, with no engine needed; the shell asks nothing when the person turned checking off.
+void settings.startUpdates();
 // The daemon can stop by itself, on a failure or on the AI model's limit, so
 // the watch is asked about now and then rather than only when Settings opens.
 setInterval(() => void settings.refreshWatch(), WATCH_POLL_MS);

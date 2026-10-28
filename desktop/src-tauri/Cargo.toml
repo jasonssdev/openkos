@@ -25,6 +25,10 @@ tauri-plugin-dialog = "2"
 # with fixed text. Pinned to an exact version, and no capability gives the page
 # a notification permission. The Windows 7 shim is off: only macOS ships.
 tauri-plugin-notification = { version = "=2.6.0", default-features = false }
+# The app's own signed updates (ADR-0079), checked and installed only from Rust,
+# and only once the person confirms. Pinned to an exact version; the Windows
+# and Linux archive formats (`zip`) are off: only macOS ships.
+tauri-plugin-updater = { version = "=2.13.3", default-features = false, features = ["rustls-tls", "system-proxy"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
