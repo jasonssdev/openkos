@@ -25,6 +25,7 @@ uv run python -u evals/decision_fidelity/score_fidelity.py --self-test  # no mod
 | `fidelity_ami.py` | Reads the AMI archive and rendered transcripts; builds the three blind sheets; imports a filled sheet. |
 | `build_sheets.py` | CLI for the sheets and the import, plus a synthetic archive for the tests. |
 | `score_fidelity.py` | CLI for the pre-run gate (`stage0`) and for scoring stored arms (`score`). |
+| `run_decision_fidelity.py` | The run driver: the `A0` and `A1` model arms, interleaved, resumable, stamped, stopped at the registered budget; writes the `runs-A0.json` and `runs-A1.json` that `score_fidelity.py` reads. The only file here that calls a model. |
 | `prompt_value_clause.md` | The treatment text for the prompt arm: the one `value:` bullet of `decision_pass.md`, replaced. |
 
 ## Eligibility (fail-closed, no override)
@@ -69,6 +70,23 @@ uv run python -u evals/decision_fidelity/build_sheets.py import-labels --sheet c
   arms, with context and no arm or run on it.
 
 Labels are `committed`, `discarded`, `open` or `none` (rubric on each sheet).
+
+## The run driver
+
+```bash
+uv run python -u evals/decision_fidelity/run_decision_fidelity.py --self-test    # no model
+uv run python -u evals/decision_fidelity/run_decision_fidelity.py --transcripts <dir> --preflight   # no model
+uv run python -u evals/decision_fidelity/run_decision_fidelity.py --transcripts <dir> --wait-gpu
+```
+
+`--preflight` checks eligibility, the registered configuration, the sha256 pin of
+every development transcript and the window count, and calls no model. The real
+run stores one file per (arm, run, meeting) cell under `--out-dir` (default
+`~/openkos-eval-runs/decision-fidelity/runs`, never inside the repository), so
+the same command resumes after a stop; it halts at the registered 15 h of
+accumulated model time and marks the arms `PARTIAL -- NOT THE PRE-REGISTERED
+RESULT`. A resume refuses when the model digest, a prompt hash or a pinned source
+file moved under the stored cells.
 
 ## What the scorer does
 
