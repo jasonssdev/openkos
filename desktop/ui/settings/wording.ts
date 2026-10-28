@@ -2,7 +2,7 @@
 // apart from the DOM so it can be tested. Plain words only: no engine words,
 // never a command, and never a key. A refusal is worded from its code or
 // reason, never from the engine's or the shell's text.
-import { ApiError, ApiKeyError, EngineUnreachable, WatchError, type Schemas } from "../../client/index.ts";
+import { ApiError, ApiKeyError, EngineUnreachable, UpdateError, WatchError, type Schemas } from "../../client/index.ts";
 
 /** The fixed words of the screen. */
 export const WORDS = {
@@ -127,6 +127,55 @@ export const WATCH_STATUS = {
   badge: { on: "On", stopped: "Off", budget: "Paused", failed: "Stopped" },
   footer: { on: "Watching: on", stopped: "Watching: off", budget: "Watching: paused", failed: "Watching: stopped" },
 } as const;
+
+/**
+ * The "Updates" card and the sidebar's offer (docs/decision-wording.md,
+ * "Updates"). The app never updates by itself (ADR-0079): it says what is
+ * available and installs only when the person confirms.
+ */
+export const UPDATES = {
+  title: "Updates",
+  intro:
+    "OpenKOS can check for a newer version of the app when it opens. It asks the OpenKOS project's release page on GitHub, and nothing from your library is sent. Nothing is installed until you say so.",
+  on: "OpenKOS checks for updates when it opens.",
+  off: "OpenKOS doesn't check for updates. You can still check now.",
+  turnOff: "Stop checking",
+  turnOn: "Check when OpenKOS opens",
+  switching: "Saving…",
+  checkNow: "Check now",
+  checking: "Checking…",
+  upToDate: "You have the latest version.",
+  failed: "OpenKOS couldn't check for updates. It keeps working as it is. Try again later.",
+  available: (version: string, current: string): string => `OpenKOS ${version} is available. You have ${current}.`,
+  notes: "What's new",
+  install: "Install and restart…",
+  installing: "Installing…",
+  confirmTitle: (version: string): string => `Install OpenKOS ${version}?`,
+  confirmLines: [
+    "OpenKOS will download the new version, check that it was signed by the OpenKOS project, install it and restart.",
+    "Your library stays as it is. Anything running now, like watching a folder, stops and starts again with the app.",
+  ],
+  confirm: "Install and restart",
+  cancel: "Not now",
+  footer: (version: string): string => `Update available: ${version}`,
+  installFailed: "The update couldn't be installed. Try again later.",
+  offerGone: "That update is no longer on offer. Check again.",
+  choiceUnkept: "OpenKOS couldn't remember your choice. Nothing was changed.",
+} as const;
+
+/** Why an update command was refused, from the shell's reason alone. */
+export function updateFailure(error: unknown): string {
+  const reason = error instanceof UpdateError ? error.reason : "unknown";
+  switch (reason) {
+    case "no_update":
+    case "update_changed":
+      return UPDATES.offerGone;
+    case "choice_unkept":
+      return UPDATES.choiceUnkept;
+    default:
+      return UPDATES.installFailed;
+  }
+}
 
 /** Why the folder could not be chosen or saved, from the engine's code alone. */
 export function watchFailure(error: unknown): string {

@@ -375,7 +375,8 @@ def test_run_query_threads_revision_history(
 def test_run_query_threads_query_aware_excerpts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`cfg.query_aware_excerpts` reaches `answer` from this one place (#1647)."""
+    """`cfg.query_aware_excerpts` reaches `answer` from this one place (#1647);
+    a workspace that never set the key gets the default, on (ADR-0082)."""
     captured: dict[str, object] = {}
 
     def fake_answer(question: str, **kwargs: object) -> AnswerResult:
@@ -384,19 +385,19 @@ def test_run_query_threads_query_aware_excerpts(
 
     monkeypatch.setattr(query_service, "answer", fake_answer)
 
+    default_dir = tmp_path / "default"
+    default_dir.mkdir()
+    _run(default_dir, monkeypatch)
+    assert captured["query_aware_excerpts"] is True
+
     off_dir = tmp_path / "off"
     off_dir.mkdir()
-    _run(off_dir, monkeypatch)
-    assert captured["query_aware_excerpts"] is False
-
-    on_dir = tmp_path / "on"
-    on_dir.mkdir()
-    layout, cfg = _workspace(on_dir)
+    layout, cfg = _workspace(off_dir)
     captured.clear()
     query_service.run_query(
         "a question",
         layout=layout,
-        cfg=dataclasses.replace(cfg, query_aware_excerpts=True),
+        cfg=dataclasses.replace(cfg, query_aware_excerpts=False),
         llm=_FakeLLM(),
         embedder=_FakeEmbedder(),
         limit=5,
@@ -404,7 +405,7 @@ def test_run_query_threads_query_aware_excerpts(
         include_confidential=False,
         local_exemption=False,
     )
-    assert captured["query_aware_excerpts"] is True
+    assert captured["query_aware_excerpts"] is False
 
 
 # --- the sufficiency client (#1560) ------------------------------------------

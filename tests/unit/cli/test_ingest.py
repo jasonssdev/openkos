@@ -1409,6 +1409,7 @@ def test_batch_cost_gate_prints_counts_and_confirms_once(
     files cost ~3 calls each (two extraction passes plus the judge), never
     "one extraction per file"."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
     _simulate_tty(monkeypatch)
 
@@ -1425,6 +1426,42 @@ def test_batch_cost_gate_prints_counts_and_confirms_once(
     assert result.output.count("Proceed") == 1
 
 
+def test_batch_cost_gate_bills_no_judge_call_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-0080: the selector judge is off by default, so two small union-path
+    prose files are estimated at two extraction passes each (~4), not three."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes"], input="n\n")
+
+    assert "2 file(s) -> ~4 LLM call(s)" in result.stderr
+
+
+def test_estimate_bills_an_unreadable_file_without_a_judge_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fail-open per-file bill follows `selector_judge` too (ADR-0080)."""
+    if os.name != "posix" or os.geteuid() == 0:
+        pytest.skip("permission-based unreadability needs a non-root POSIX user")
+    _init_workspace(tmp_path, monkeypatch)
+    locked = tmp_path / "locked.txt"
+    locked.write_text("Beta notes.", encoding="utf-8")
+    locked.chmod(0)
+    layout = config.WorkspaceLayout(tmp_path)
+    cfg = config.read_config(tmp_path)
+    try:
+        estimate = main._estimate_batch_calls(
+            [locked], layout, cfg, include_confidential=False, re_extract=False
+        )
+    finally:
+        locked.chmod(0o644)
+
+    assert estimate.calls == 2
+
+
 def test_batch_cost_gate_counts_windows_for_a_chunking_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1433,6 +1470,7 @@ def test_batch_cost_gate_counts_windows_for_a_chunking_source(
     call per file (announced 3, made ~16). The gate must announce a
     fan-out-aware estimate and say which source will split."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     line = "La plataforma registra la decision y su justificacion en el acta.\n"
     big = line * (30_000 // len(line) + 1)
     _write_notes(tmp_path, {"small.txt": "Alpha notes.", "big.txt": big})
@@ -1495,6 +1533,7 @@ def test_batch_cost_gate_bills_zero_for_blank_and_undecodable_sources(
     (Source-only degrade). One healthy small file keeps the total honest:
     only ITS ~3 calls are announced."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     notes = tmp_path / "notes"
     notes.mkdir()
     (notes / "real.txt").write_text("Alpha notes.", encoding="utf-8")
@@ -1514,6 +1553,7 @@ def test_batch_cost_gate_bills_a_legacy_encoded_source(
     """#1224: a legacy-encoded text file is extracted, so the gate bills it
     (it used to be billed zero as "undecodable")."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     notes = tmp_path / "notes"
     notes.mkdir()
     (notes / "legacy.txt").write_bytes("Reuni\u00f3n\rok\r".encode("mac_roman"))
@@ -1536,6 +1576,7 @@ def test_estimate_bills_an_unreadable_file_at_the_unchunked_cost(
     if os.name != "posix" or os.geteuid() == 0:
         pytest.skip("permission-based unreadability needs a non-root POSIX user")
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     locked = tmp_path / "locked.txt"
     locked.write_text("Beta notes.", encoding="utf-8")
     locked.chmod(0)
@@ -1782,6 +1823,7 @@ def test_batch_summary_counts_files_that_finished_with_an_extraction_notice(
     (#754), which quarantines its Source; `b.txt`'s judge answers, so that
     file carries nothing."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     _patch_sequenced_llm(
         monkeypatch,
         [
@@ -1984,6 +2026,7 @@ def test_batch_summary_never_counts_one_file_under_both_notice_and_degraded(
     failure this guards against is a single file counted twice -- which
     only the full line can show, since each term alone still reads 1."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     _patch_sequenced_llm(
         monkeypatch,
         [
@@ -2039,6 +2082,7 @@ def test_batch_summary_notice_term_pluralizes_like_every_other_count(
     close on `2 with an extraction notice.` -- the run's LAST word (#349),
     read by an operator who was not watching the stderr it summarizes."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     _patch_sequenced_llm(
         monkeypatch,
         [

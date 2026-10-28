@@ -8,7 +8,10 @@ import {
   ApiError,
   ApiKeyError,
   retryWhileBusy,
+  UpdateError,
   type Schemas,
+  type UpdateCheck,
+  type UpdateSettings,
   type WatchStatus,
   type WorkspaceChoice,
 } from "../../client/index.ts";
@@ -23,6 +26,7 @@ import {
   keyFailure,
   saveFailure,
   savedNote,
+  updateFailure,
   watchFailure,
   watchCommandFailure,
 } from "./wording.ts";
@@ -84,6 +88,13 @@ export interface SettingsPorts {
     /** Ask the shell to raise the notification that the watch paused on the limit. */
     notifyBudgetStop(): Promise<void>;
   };
+  /** The app's own updates (ADR-0079): the shell checks, and installs only what the person confirms. */
+  updates: {
+    settings(): Promise<UpdateSettings>;
+    setCheck(on: boolean): Promise<UpdateSettings>;
+    check(): Promise<UpdateCheck>;
+    install(version: string): Promise<void>;
+  };
 }
 
 export type Where = "local" | "cloud";
@@ -136,6 +147,15 @@ export interface SettingsState {
   stoppedByYou: boolean;
   /** The engine's latest unattended job outcome; `null` until read. */
   activity: Activity | null;
+  /** Whether the app checks for updates; `null` until read. */
+  updates: UpdateSettings | null;
+  /** What the last check found; `null` before one ran. */
+  update: UpdateCheck | null;
+  updateBusy: "checking" | "switching" | "installing" | null;
+  /** The person asked to install the update on offer: the confirmation is open. */
+  updateConfirm: boolean;
+  /** Why the last update command was refused. */
+  updateProblem: string | null;
 }
 
 /**
@@ -153,6 +173,11 @@ export function watchKind(state: Pick<SettingsState, "watch" | "activity" | "inb
   if (watch.state === "failed") return "failed";
   if (!watch.wanted) return state.stoppedByYou || state.inbox?.inbox ? "stopped" : null;
   return state.activity?.budget_exhausted ? "budget" : "on";
+}
+
+/** The version on offer, or `null`: the sidebar names it until it is installed or turned off. */
+export function updateOffered(state: Pick<SettingsState, "update">): string | null {
+  return state.update?.state === "available" ? state.update.version : null;
 }
 
 /** A cloud model is on: the shell shows it while it lasts. */
@@ -189,6 +214,11 @@ export class SettingsModel {
     watchConfirm: null,
     stoppedByYou: false,
     activity: null,
+    updates: null,
+    update: null,
+    updateBusy: null,
+    updateConfirm: false,
+    updateProblem: null,
   };
 
   readonly #ports: SettingsPorts;
@@ -582,6 +612,70 @@ export class SettingsModel {
       }
     }
     this.#set({ watchBusy: null, note: WATCH.stoppedNote });
+  }
+
+  /**
+   * Read whether the app checks for updates, then check once. The shell asks
+   * nothing when checking is off. Needs no engine: an update may be the fix
+   * for one that does not start.
+   */
+  async startUpdates(): Promise<void> {
+    const [read] = await Promise.allSettled([this.#ports.updates.settings()]);
+    if (read.status === "fulfilled") this.#set({ updates: read.value });
+    await this.checkForUpdate();
+  }
+
+  /** Ask the shell whether a newer version exists. Nothing is downloaded; a failure is quiet. */
+  async checkForUpdate(): Promise<void> {
+    if (this.state.updateBusy !== null) return;
+    this.#set({ updateBusy: "checking", updateProblem: null });
+    let update: UpdateCheck;
+    try {
+      update = await this.#ports.updates.check();
+    } catch {
+      update = { state: "failed" };
+    }
+    this.#set({ updateBusy: null, update });
+  }
+
+  /** Turn checking on or off. Off forgets the version on offer. */
+  async setUpdateCheck(on: boolean): Promise<void> {
+    if (this.state.updateBusy !== null) return;
+    this.#set({ updateBusy: "switching", updateProblem: null });
+    try {
+      const updates = await this.#ports.updates.setCheck(on);
+      this.#set({ updateBusy: null, updates, ...(on ? {} : { update: { state: "off" as const }, updateConfirm: false }) });
+    } catch (error) {
+      this.#set({ updateBusy: null, updateProblem: updateFailure(error) });
+    }
+  }
+
+  /** The person asked to install the version on offer: ask them to confirm first. */
+  askInstall(): void {
+    if (updateOffered(this.state) === null || this.state.updateBusy !== null) return;
+    this.#set({ updateConfirm: true, updateProblem: null });
+  }
+
+  /** Not now: nothing is downloaded. */
+  cancelInstall(): void {
+    this.#set({ updateConfirm: false });
+  }
+
+  /**
+   * The person confirmed: install the version they were shown. The shell
+   * restarts the app into it, so success never comes back here.
+   */
+  async confirmInstall(): Promise<void> {
+    const version = updateOffered(this.state);
+    if (!this.state.updateConfirm || version === null || this.state.updateBusy !== null) return;
+    this.#set({ updateConfirm: false, updateBusy: "installing", updateProblem: null });
+    try {
+      await this.#ports.updates.install(version);
+      this.#set({ updateBusy: null });
+    } catch (error) {
+      const gone = error instanceof UpdateError && (error.reason === "update_changed" || error.reason === "no_update");
+      this.#set({ updateBusy: null, updateProblem: updateFailure(error), ...(gone ? { update: null } : {}) });
+    }
   }
 
   openLibrary(): Promise<void> {

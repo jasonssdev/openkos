@@ -15,6 +15,7 @@ export type { EngineState, ReadyEngine } from "./engine.ts";
 export * from "./errors.ts";
 export * from "./shell.ts";
 export * from "./setup.ts";
+export * from "./update.ts";
 export * from "./watch.ts";
 export * from "./workspace.ts";
 export type { components, paths } from "./schema";

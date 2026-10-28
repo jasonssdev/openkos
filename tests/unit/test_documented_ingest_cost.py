@@ -158,19 +158,24 @@ def _source_of(chars: int) -> str:
 
 
 def _observe(
-    chars: int, *, title: str, reply: str = _REPLY
+    chars: int, *, title: str, reply: str = _REPLY, selector_judge: bool = False
 ) -> tuple[int, concept.ExtractionReport]:
     """One real `extract_concept_union` pass; returns its call count and the
-    report that says which conditional branches ran."""
+    report that says which conditional branches ran. The selector judge is off
+    unless asked for, because off is the default the table documents
+    (ADR-0080)."""
     llm = _CountingLLM(reply)
     outcome = concept.extract_concept_union(
-        _source_of(chars), source_title=title, llm=llm
+        _source_of(chars),
+        source_title=title,
+        llm=llm,
+        selector_judge=selector_judge,
     )
     return llm.calls, outcome.report
 
 
-def _observed_calls(chars: int, *, title: str) -> int:
-    return _observe(chars, title=title)[0]
+def _observed_calls(chars: int, *, title: str, selector_judge: bool = False) -> int:
+    return _observe(chars, title=title, selector_judge=selector_judge)[0]
 
 
 def _documented_rows() -> list[tuple[str, int, int, int]]:
@@ -272,8 +277,10 @@ def test_a_single_surviving_candidate_skips_the_judge(pages: int, title: str) ->
     would silently halve the documented cost of every row. Across every size
     and both columns for the same reason as the re-ask above: what survives
     the merge is branch-specific."""
-    _, sole = _observe(pages * _PAGE_CHARS, title=title, reply=_SOLE_REPLY)
-    _, pair = _observe(pages * _PAGE_CHARS, title=title)
+    _, sole = _observe(
+        pages * _PAGE_CHARS, title=title, reply=_SOLE_REPLY, selector_judge=True
+    )
+    _, pair = _observe(pages * _PAGE_CHARS, title=title, selector_judge=True)
 
     assert sole.judge_status == "skipped"
     assert pair.judge_status != "skipped"
@@ -306,8 +313,10 @@ def test_the_two_conditional_branches_cancel_in_the_documented_total(
     satisfied when only ONE of the two differs, so a regression that left the
     judge running on the sole-object arm while the re-ask still fired would
     keep the tuples unequal and slip through."""
-    sole_calls, sole = _observe(pages * _PAGE_CHARS, title=title, reply=_SOLE_REPLY)
-    pair_calls, pair = _observe(pages * _PAGE_CHARS, title=title)
+    sole_calls, sole = _observe(
+        pages * _PAGE_CHARS, title=title, reply=_SOLE_REPLY, selector_judge=True
+    )
+    pair_calls, pair = _observe(pages * _PAGE_CHARS, title=title, selector_judge=True)
 
     assert sole_calls == pair_calls
     assert sole.reask_runs != pair.reask_runs
@@ -350,13 +359,19 @@ def test_a_failing_judge_costs_exactly_one_extra_call_for_the_retry() -> None:
 
     healthy = _CountingLLM()
     concept.extract_concept_union(
-        _source_of(chars), source_title=_PROSE_TITLE, llm=healthy
+        _source_of(chars),
+        source_title=_PROSE_TITLE,
+        llm=healthy,
+        selector_judge=True,
     )
 
     # An extraction-shaped array is not a judge object, so both attempts fail.
     failing = _CountingLLM(judge_reply=_REPLY)
     outcome = concept.extract_concept_union(
-        _source_of(chars), source_title=_PROSE_TITLE, llm=failing
+        _source_of(chars),
+        source_title=_PROSE_TITLE,
+        llm=failing,
+        selector_judge=True,
     )
 
     assert healthy.judge_calls == 1
@@ -371,11 +386,30 @@ def test_the_ordinary_path_pays_nothing_for_the_retry() -> None:
     also fired on success would double a call on every source in a batch."""
     llm = _CountingLLM()
     outcome = concept.extract_concept_union(
-        _source_of(5 * _PAGE_CHARS), source_title=_PROSE_TITLE, llm=llm
+        _source_of(5 * _PAGE_CHARS),
+        source_title=_PROSE_TITLE,
+        llm=llm,
+        selector_judge=True,
     )
 
     assert outcome.report.judge_status == "ok"
     assert llm.judge_calls == 1
+
+
+@pytest.mark.parametrize("pages", _DOCUMENTED_PAGES)
+@pytest.mark.parametrize("title", [_PROSE_TITLE, _MEETING_TITLE])
+def test_the_default_makes_no_judge_call_and_the_judge_adds_exactly_one(
+    pages: int, title: str
+) -> None:
+    """ADR-0080: the documented table is the judge-off path, and turning the
+    selector judge on adds exactly one call on every row."""
+    chars = pages * _PAGE_CHARS
+    off_calls, off = _observe(chars, title=title)
+    on_calls, on = _observe(chars, title=title, selector_judge=True)
+
+    assert off.judge_status == "skipped"
+    assert on.judge_status == "ok"
+    assert on_calls - off_calls == 1
 
 
 # --- issue #775: the cost-gate estimator is pinned against the same pipeline
@@ -383,16 +417,23 @@ def test_the_ordinary_path_pays_nothing_for_the_retry() -> None:
 
 @pytest.mark.parametrize("pages", _DOCUMENTED_PAGES)
 @pytest.mark.parametrize("title", [_PROSE_TITLE, _MEETING_TITLE])
-def test_estimate_matches_the_observed_ordinary_path(pages: int, title: str) -> None:
+@pytest.mark.parametrize("selector_judge", [False, True])
+def test_estimate_matches_the_observed_ordinary_path(
+    pages: int, title: str, selector_judge: bool
+) -> None:
     """`estimate_extraction_calls` -- the number `ingest`'s batch cost gate
     announces (#775) -- must equal what the real union pipeline spends on the
     ordinary path (multi-candidate reply, judge answers first try), for every
     documented row. Observed, not re-derived: a changed fan-out shape must
     fail this, exactly as it fails the table test above."""
     text = _source_of(pages * _PAGE_CHARS)
-    estimate = concept.estimate_extraction_calls(text, source_title=title)
+    estimate = concept.estimate_extraction_calls(
+        text, source_title=title, selector_judge=selector_judge
+    )
 
-    assert estimate.calls == _observed_calls(pages * _PAGE_CHARS, title=title)
+    assert estimate.calls == _observed_calls(
+        pages * _PAGE_CHARS, title=title, selector_judge=selector_judge
+    )
 
 
 def test_estimate_reports_windows_only_when_the_source_fans_out() -> None:
@@ -407,7 +448,11 @@ def test_estimate_reports_windows_only_when_the_source_fans_out() -> None:
 
     assert small.windows == 0
     assert big.windows == len(concept._chunk_lines(big_text))
-    assert big.calls == big.windows + 1
+    assert big.calls == big.windows
+    judged = concept.estimate_extraction_calls(
+        big_text, source_title=_PROSE_TITLE, selector_judge=True
+    )
+    assert judged.calls == judged.windows + 1
 
 
 def test_estimate_single_run_path_counts_extraction_passes_only() -> None:

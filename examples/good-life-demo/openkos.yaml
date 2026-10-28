@@ -79,9 +79,16 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # reports whether each is installed.
                           # Valid tasks: extraction, adjudication, edge_typing,
                           # volatility_typing, contradiction, sufficiency.
-# union_judge: true       # union-of-runs + selector-judge extraction (default
-                          # on); set false to restore the single-run, single-cap
-                          # extraction path byte-for-byte
+# union_judge: true       # union-of-runs extraction (default on); set false to
+                          # restore the single-run, single-cap extraction path
+                          # byte-for-byte
+# selector_judge: false   # after the union, ask one model call to cut the
+                          # merged candidates (default OFF). Off keeps the
+                          # ceiling of 24 and the positional backstop of 20
+                          # and saves a call per source; on restores the
+                          # judge's cut, which keeps bundles about a third
+                          # smaller at a measured cost in coverage. Applies
+                          # only under `union_judge`.
 # sufficiency_check: true # before answering, ask one cheap model call whether
                           # the retrieved context can answer the question at
                           # all, and refuse instead of answering from the
@@ -96,11 +103,11 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # history (default OFF). UNMEASURED --
                           # no harness has scored its citation quality or
                           # prompt-budget cost yet. Not recommended to enable.
-# query_aware_excerpts: false  # when a retrieved document is too long for its
-                          # share of the prompt window, keep the passages that
-                          # best match the question (BM25, no extra model call)
-                          # instead of evenly spaced ones (default OFF,
-                          # unmeasured). Off is byte-identical to the key absent.
+# query_aware_excerpts: false # turn OFF choosing the passages of an over-long
+                          # retrieved document by their match to the question
+                          # (default on; no extra model call). `false` restores
+                          # evenly spaced passages. A document that fits is
+                          # sent unchanged either way.
 # attach_at_ingest: false  # turn OFF revising an existing concept at ingest
                           # (default ON). When a newly extracted object has
                           # the same type and normalized title as an existing

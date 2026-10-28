@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { ApiError, ApiKeyError, EngineUnreachable, WatchError, type Schemas } from "../../client/index.ts";
+import { ApiError, ApiKeyError, EngineUnreachable, UpdateError, WatchError, type Schemas } from "../../client/index.ts";
 import {
+  UPDATES,
   WATCH,
   WATCH_STATUS,
   WORDS,
@@ -10,6 +11,7 @@ import {
   keyFailure,
   saveFailure,
   savedNote,
+  updateFailure,
   watchCommandFailure,
   watchFailure,
   whereItRuns,
@@ -83,6 +85,31 @@ describe("the settings wording", () => {
     expect(WATCH.what.join(" ")).toMatch(/To review/);
     expect(WATCH.also).toMatch(/tries again to save/);
     expect(WATCH.also).toMatch(/AI model too, within the same daily limit/);
+  });
+
+  it("uses no engine word about updates, and promises nothing is installed unasked", () => {
+    const strings = Object.values(UPDATES).flatMap((v) => (typeof v === "function" ? [] : Array.isArray(v) ? v : [v]));
+    const sentences = [
+      ...strings,
+      UPDATES.available("0.7.0", "0.6.0"),
+      UPDATES.confirmTitle("0.7.0"),
+      UPDATES.footer("0.7.0"),
+      ...[...["choice_unkept", "no_update", "update_changed", "install_failed", "unknown"].map((r) => new UpdateError(r as never, "d")), null].map(updateFailure),
+    ];
+    for (const sentence of sentences) expect(sentence).not.toMatch(ENGINE_WORDS);
+    // ADR-0079, "Three": never silent, and where the check goes.
+    expect(UPDATES.intro).toMatch(/Nothing is installed until you say so/);
+    expect(UPDATES.intro).toMatch(/GitHub/);
+    expect(UPDATES.intro).toMatch(/nothing from your library is sent/);
+    expect(UPDATES.confirmLines.join(" ")).toMatch(/signed by the OpenKOS project/);
+  });
+
+  it("words a refused update from the shell's reason alone", () => {
+    expect(updateFailure(new UpdateError("install_failed", "shell text"))).toBe(UPDATES.installFailed);
+    expect(updateFailure(new UpdateError("update_changed", "shell text"))).toBe(UPDATES.offerGone);
+    expect(updateFailure(new UpdateError("no_update", "shell text"))).toBe(UPDATES.offerGone);
+    expect(updateFailure(new UpdateError("choice_unkept", "shell text"))).toBe(UPDATES.choiceUnkept);
+    expect(updateFailure(new Error("shell text"))).not.toContain("shell text");
   });
 
   it("words a refused folder from the engine's code alone", () => {
@@ -165,5 +192,11 @@ describe("docs/decision-wording.md", () => {
     expect(settings).toContain(WORDS.searchRebuild);
     expect(settings).toContain(WORDS.keyNotSupported);
     expect(settings).toContain(WORDS.libraryFromOutside);
+  });
+
+  it("states the updates card word for word", () => {
+    const fixed = Object.values(UPDATES).flatMap((v) => (typeof v === "function" ? [] : Array.isArray(v) ? v : [v]));
+    const lines = [...fixed, UPDATES.available("{version}", "{current}"), UPDATES.confirmTitle("{version}"), UPDATES.footer("{version}")];
+    for (const line of lines) expect(settings).toContain(line);
   });
 });

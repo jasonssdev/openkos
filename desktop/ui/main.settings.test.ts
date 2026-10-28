@@ -22,6 +22,10 @@ const invoke = vi.fn(async (command: string) => {
       return { source: "remembered", path: "/Users/me/library", valid: true };
     case "watch_state":
       return watchState;
+    case "update_settings":
+      return { check: true };
+    case "check_for_update":
+      return { state: "available", version: "0.7.0", current_version: "0.6.0", notes: "What changed." };
     default:
       throw new Error(`unexpected ${command}`);
   }
@@ -160,5 +164,22 @@ describe("settings in the app", () => {
     status?.click();
     expect(view("settings").hidden).toBe(true);
     expect(button(footer(), "Settings")?.getAttribute("aria-current")).toBeNull();
+  });
+});
+
+describe("the app's updates", () => {
+  it("checks once at launch, and offers what it found at the foot of the sidebar", () => {
+    const checks = invoke.mock.calls.filter(([command]) => command === "check_for_update");
+    expect(checks).toHaveLength(1);
+    expect(button(footer(), "Update available: 0.7.0")).toBeDefined();
+  });
+
+  it("opens Settings from that line, showing the version and its notes, and installs nothing", async () => {
+    button(footer(), "Update available: 0.7.0")?.click();
+    await settle();
+    expect(view("settings").hidden).toBe(false);
+    expect(view("settings").textContent).toContain("OpenKOS 0.7.0 is available. You have 0.6.0.");
+    expect(view("settings").textContent).toContain("What changed.");
+    expect(invoke.mock.calls.some(([command]) => command === "install_update")).toBe(false);
   });
 });

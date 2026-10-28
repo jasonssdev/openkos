@@ -557,5 +557,14 @@ jobs:
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version 2.12.3 --locked
 
+      # A throwaway updater key, made for this run and never kept, so every
+      # pull request makes the update archive from the re-signed .app, unpacks
+      # and verifies it and signs it exactly as a release does (ADR-0081). It
+      # is not the project's key, which only the release environment holds.
       - name: Build the app and smoke-check its engine
-        run: desktop/scripts/build-app.sh
+        run: |
+          key_dir="$(mktemp -d)"
+          cargo tauri signer generate --ci -p throwaway -w "${key_dir}/updater.key"
+          TAURI_SIGNING_PRIVATE_KEY="$(cat "${key_dir}/updater.key")" \
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD=throwaway \
+            desktop/scripts/build-app.sh --release 0.0.0-ci
