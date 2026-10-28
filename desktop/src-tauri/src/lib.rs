@@ -16,6 +16,7 @@ pub mod dropped;
 pub mod engine;
 pub mod locator;
 pub mod supervisor;
+pub mod watch;
 pub mod workspace;
 
 use std::path::Path;
@@ -26,6 +27,7 @@ use apikey::{ApiKeys, KeyCommandError};
 use supervisor::{EngineState, Supervisor, SupervisorConfig, Unlocated};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
+use watch::{Watch, WatchChoice, WatchConfig, WatchStatus, WatchSupervisor};
 use workspace::{Choice, ChoiceStatus, WorkspaceCommandError, Workspaces};
 
 /// How long the engine's `init` may take: a development engine under `uv run`
@@ -72,17 +74,60 @@ fn workspace_choice_status(workspaces: tauri::State<'_, Arc<Workspaces>>) -> Cho
     workspaces.status(locator::workspace_from_process().as_deref())
 }
 
+/// The workspace the shell serves now, when it is one.
+fn current_workspace(workspaces: &Workspaces) -> Option<std::path::PathBuf> {
+    let status = workspaces.status(locator::workspace_from_process().as_deref());
+    status
+        .path
+        .filter(|_| status.valid)
+        .map(std::path::PathBuf::from)
+}
+
+/// The inbox watch: whether the person turned it on for the current workspace
+/// and what its daemon is doing (ADR-0078).
+#[tauri::command]
+fn watch_state(
+    watch: tauri::State<'_, Watch>,
+    workspaces: tauri::State<'_, Arc<Workspaces>>,
+) -> WatchStatus {
+    watch.status(current_workspace(&workspaces).as_deref())
+}
+
+/// Turn the inbox watch on or off for the current workspace. On runs the
+/// whole daemon; the choice is remembered for this workspace only.
+#[tauri::command]
+async fn set_watch(
+    on: bool,
+    watch: tauri::State<'_, Watch>,
+    workspaces: tauri::State<'_, Arc<Workspaces>>,
+) -> Result<WatchStatus, WorkspaceCommandError> {
+    let workspace = current_workspace(&workspaces).ok_or_else(|| {
+        WorkspaceCommandError::new("no_workspace", "no workspace is open to watch for")
+    })?;
+    watch.turn(&workspace, on).map_err(|error| {
+        WorkspaceCommandError::new(
+            "watch_choice_unkept",
+            format!("the choice could not be kept: {error}"),
+        )
+    })?;
+    Ok(watch.status(Some(&workspace)))
+}
+
 /// Open the existing workspace at `path`, remember it and restart the engine
-/// on it.
+/// on it. The watch follows: its daemon stops and starts again only where the
+/// person turned it on.
 #[tauri::command]
 async fn open_workspace(
     path: String,
     workspaces: tauri::State<'_, Arc<Workspaces>>,
     supervisor: tauri::State<'_, Supervisor>,
+    watch: tauri::State<'_, Watch>,
 ) -> Result<ChoiceStatus, WorkspaceCommandError> {
-    workspaces.open(locator::workspace_from_process().as_deref(), &path, &|| {
+    let status = workspaces.open(locator::workspace_from_process().as_deref(), &path, &|| {
         supervisor.restart()
-    })
+    })?;
+    watch.follow_workspace(current_workspace(&workspaces).as_deref());
+    Ok(status)
 }
 
 /// Create a workspace in the empty or missing folder `path` with the engine's
@@ -92,13 +137,16 @@ async fn create_workspace(
     path: String,
     workspaces: tauri::State<'_, Arc<Workspaces>>,
     supervisor: tauri::State<'_, Supervisor>,
+    watch: tauri::State<'_, Watch>,
 ) -> Result<ChoiceStatus, WorkspaceCommandError> {
-    workspaces.create(
+    let status = workspaces.create(
         locator::workspace_from_process().as_deref(),
         &path,
         &run_engine_init,
         &|| supervisor.restart(),
-    )
+    )?;
+    watch.follow_workspace(current_workspace(&workspaces).as_deref());
+    Ok(status)
 }
 
 /// Ask the user for a folder with the system's own picker. `None` when they
@@ -109,6 +157,18 @@ async fn pick_workspace_folder(app: tauri::AppHandle) -> Option<String> {
         .file()
         .set_title("Choose a folder for your OpenKOS workspace")
         .set_can_create_directories(true)
+        .blocking_pick_folder()
+        .and_then(|picked| picked.into_path().ok())
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// Ask the user for the folder to watch with the system's own picker. `None`
+/// when they cancel. Only the shell opens the dialog.
+#[tauri::command]
+async fn pick_inbox_folder(app: tauri::AppHandle) -> Option<String> {
+    app.dialog()
+        .file()
+        .set_title("Choose a folder to watch for new files")
         .blocking_pick_folder()
         .and_then(|picked| picked.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned())
@@ -173,6 +233,7 @@ pub fn run() {
             let config_dir = app.path().app_config_dir()?;
             let workspaces = Arc::new(Workspaces::new(Choice::new(&config_dir)));
             let chosen = Arc::clone(&workspaces);
+            let watch_environ = Arc::clone(&environ);
             // Started before the window opens, so the engine warms up meanwhile.
             let supervisor = Supervisor::start_with_env(
                 Box::new(move || {
@@ -183,6 +244,26 @@ pub fn run() {
                 SupervisorConfig::default(),
             );
             app.manage(supervisor);
+            // The watch's daemon is a second sidecar, idle until the person
+            // turns it on; it resumes only where they already did.
+            let located = Arc::clone(&workspaces);
+            let watch = Watch::new(
+                WatchChoice::new(&config_dir),
+                WatchSupervisor::new(
+                    Box::new(move || {
+                        locator::locate_daemon_from_process(located.remembered().as_deref())
+                            .map_err(Unlocated::from)
+                    }),
+                    Box::new(move || watch_environ.engine_env()),
+                    // The macOS notification is raised from here (ADR-0078).
+                    Box::new(|reason, detail| {
+                        eprintln!("openkos-desktop: the inbox watch failed ({reason}): {detail}");
+                    }),
+                    WatchConfig::default(),
+                ),
+            );
+            watch.follow_workspace(current_workspace(&workspaces).as_deref());
+            app.manage(watch);
             app.manage(workspaces);
             Ok(())
         })
@@ -194,6 +275,9 @@ pub fn run() {
             workspace_choice_status,
             open_workspace,
             create_workspace,
+            watch_state,
+            set_watch,
+            pick_inbox_folder,
             pick_workspace_folder,
             pick_files,
             open_runtime_download
@@ -203,10 +287,13 @@ pub fn run() {
     app.run(|handle, event| {
         // A graceful exit stops the engine itself; a force-quit is covered by
         // the engine's stdin lifeline, which closes with this process.
-        if let tauri::RunEvent::Exit = event
-            && let Some(supervisor) = handle.try_state::<Supervisor>()
-        {
-            supervisor.shutdown();
+        if let tauri::RunEvent::Exit = event {
+            if let Some(watch) = handle.try_state::<Watch>() {
+                watch.shutdown();
+            }
+            if let Some(supervisor) = handle.try_state::<Supervisor>() {
+                supervisor.shutdown();
+            }
         }
     });
 }
