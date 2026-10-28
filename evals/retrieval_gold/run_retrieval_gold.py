@@ -325,6 +325,7 @@ def assemble_blocks(
     question: str,
     context_window: int = prompt_budget.PLANNING_CONTEXT_WINDOW,
     max_generation_tokens: int = prompt_budget.REPLY_RESERVE,
+    query_aware: bool = False,
 ) -> Assembled:
     """The final context blocks `answer()` would send for `concept_ids`.
 
@@ -339,6 +340,7 @@ def assemble_blocks(
         list(concept_ids),
         llm=_WindowLLM(context_window, max_generation_tokens),
         question=question,
+        query_aware_excerpts=query_aware,
         omitted_ids_out=omitted_ids,
         omitted_titles_out=[],
     )
@@ -620,6 +622,7 @@ def delivered_reports(
     context_window: int,
     max_generation_tokens: int,
     corpus: gold_corpus.Corpus = gold_corpus.DRAFT,
+    query_aware: bool = False,
 ) -> dict[str, Any]:
     """`fused@k` delivered-evidence summaries and per-question records."""
     if "fused" not in run.get("channels", []):
@@ -638,6 +641,7 @@ def delivered_reports(
                     question=by_id[qid].question,
                     context_window=context_window,
                     max_generation_tokens=max_generation_tokens,
+                    query_aware=query_aware,
                 )
                 records[qid] = delivery.question_record(
                     gold, retrieved=retrieved, blocks=got.blocks, omitted=got.omitted
@@ -668,10 +672,12 @@ def cmd_delivered(args: argparse.Namespace) -> int:
         context_window=args.context_window,
         max_generation_tokens=args.max_generation_tokens,
         corpus=corpus,
+        query_aware=args.query_aware,
     )
     print(
         f"context window {args.context_window} tokens, reply reserve "
-        f"{args.max_generation_tokens}; no model contacted"
+        f"{args.max_generation_tokens}; query-aware excerpts "
+        f"{'on' if args.query_aware else 'off'}; no model contacted"
     )
     print(delivery.render_report({k: v["summary"] for k, v in result.items()}))
     if args.out is not None:
@@ -682,10 +688,41 @@ def cmd_delivered(args: argparse.Namespace) -> int:
                 "kind": "retrieval-gold-delivered",
                 "context_window": args.context_window,
                 "max_generation_tokens": args.max_generation_tokens,
+                "query_aware": args.query_aware,
+                "questions_sha256": core.questions_sha256(questions),
                 "results": result,
             },
         )
         print(f"wrote {args.out}")
+    return 0
+
+
+def cmd_delivered_compare(args: argparse.Namespace) -> int:
+    corpus = _corpus(args)
+    questions = _load_questions(_questions_path(args), corpus)
+    base = json.loads(args.base.read_text("utf-8"))
+    cand = json.loads(args.cand.read_text("utf-8"))
+    sha = core.questions_sha256(questions)
+    for name, doc in (("base", base), ("cand", cand)):
+        if (
+            doc.get("kind") != "retrieval-gold-delivered"
+            or doc.get("questions_sha256") != sha
+        ):
+            raise SystemExit(f"{name} is not a delivered file for this question set")
+    if bool(base.get("query_aware")) == bool(cand.get("query_aware")):
+        raise SystemExit("base and cand must differ in query_aware")
+    out = delivery.compare_delivered(
+        base["results"],
+        cand["results"],
+        questions,
+        resamples=args.resamples,
+        seed=args.seed,
+        vocab_gap={
+            q["id"]: bool(q.get("vocab_gap"))
+            for q in json.loads(_questions_path(args).read_text("utf-8"))["questions"]
+        },
+    )
+    print(delivery.render_comparison(out))
     return 0
 
 
@@ -1440,6 +1477,57 @@ def _self_test_delivery(c: _Checks, questions: list[core.Question]) -> None:
         "e2e: a window too small to hold the document does not deliver its last line",
     )
 
+    # -- query-aware excerpts: the opt-in arm of the same shipped seam -------- #
+    with tempfile.TemporaryDirectory() as tmp:
+        qbundle = bundle_mod.write_bundle(pathlib.Path(tmp))
+        template = next(iter(sorted(qbundle.rglob("*.md"))))
+        meta_text = template.read_text("utf-8")
+        needle = "The zebrafinch quorum was settled at forty-one seats."
+        filler = [
+            f"Paragraph {i} " + ("lorem ipsum dolor sit amet " * 28).strip()
+            for i in range(40)
+        ]
+        filler[17] = needle
+        front = meta_text.split("---", 2)
+        doc = f"---{front[1]}---\n\n" + "\n\n".join(filler) + "\n"
+        (qbundle / "sources").mkdir(exist_ok=True)
+        (qbundle / "sources" / "zz-needle.md").write_text(doc, encoding="utf-8")
+        ask = "What was the zebrafinch quorum?"
+        qa_off = assemble_blocks(
+            qbundle,
+            ["sources/zz-needle"],
+            question=ask,
+            context_window=2500,
+            max_generation_tokens=500,
+        )
+        qa_on = assemble_blocks(
+            qbundle,
+            ["sources/zz-needle"],
+            question=ask,
+            context_window=2500,
+            max_generation_tokens=500,
+            query_aware=True,
+        )
+        c.check(
+            needle not in qa_off.blocks["sources/zz-needle"],
+            "query-aware arm: even coverage drops the middle needle",
+        )
+        c.check(
+            needle in qa_on.blocks["sources/zz-needle"],
+            "query-aware arm: the question-matched window is delivered",
+        )
+        c.check(
+            assemble_blocks(
+                qbundle,
+                ["sources/zz-needle"],
+                question=ask,
+                context_window=2500,
+                max_generation_tokens=500,
+            ).blocks
+            == qa_off.blocks,
+            "query_aware defaults to the shipped even coverage",
+        )
+
     # -- the aggregate: n of N, splits, retrieved/delivered gap -------------- #
     recs = {
         "a": {
@@ -1481,6 +1569,74 @@ def _self_test_delivery(c: _Checks, questions: list[core.Question]) -> None:
     c.check(
         "1 of 4" in delivery.render_report({"fused@5": rep}), "report prints n of N"
     )
+
+    # -- the paired comparison of two settings ------------------------------- #
+    def arm(flags: dict[str, bool]) -> dict[str, Any]:
+        records = {
+            q: {
+                "delivered": v,
+                "retrieved": True,
+                "status": {"d": delivery.DELIVERED if v else delivery.TRIMMED},
+            }
+            for q, v in flags.items()
+        }
+        return {
+            "fused@5": {
+                "records": records,
+                "summary": delivery.summarize(records, qs[:4]),
+            }
+        }
+
+    off = arm({"a": False, "b": False, "c": True, "d": False})
+    gain = arm({"a": True, "b": True, "c": True, "d": False})
+    cmp_up = delivery.compare_delivered(off, gain, qs[:4], resamples=500, seed=1)
+    row = cmp_up["fused@5"]
+    c.check(
+        row["n"] == 4 and row["base_delivered"] == 1 and row["cand_delivered"] == 3,
+        f"comparison counts: {row}",
+    )
+    c.check(abs(row["mean_diff"] - 0.5) < 1e-9, "comparison mean difference")
+    c.check(row["improved"] == 2 and row["regressed"] == 0, "improved/regressed")
+    c.check(
+        row["lower_95_one_sided"] <= row["mean_diff"], "lower bound is below the mean"
+    )
+    lose_es = arm({"a": True, "b": True, "c": False, "d": False})
+    cmp_es = delivery.compare_delivered(
+        arm({"a": True, "b": True, "c": True, "d": False}),
+        lose_es,
+        qs[:4],
+        resamples=200,
+        seed=1,
+    )["fused@5"]
+    c.check(
+        not cmp_es["language_drop_ok"] and cmp_es["by_language"]["es"]["diff"] == -0.5,
+        "a language stratum dropping more than 0.03 is flagged",
+    )
+    gapped = delivery.compare_delivered(
+        off,
+        gain,
+        qs[:4],
+        resamples=50,
+        seed=1,
+        vocab_gap={"a": True, "b": True, "c": False, "d": False},
+    )["fused@5"]["by_vocab_gap"]
+    c.check(
+        gapped["vocab_gap"]["n"] == 2 and gapped["vocab_gap"]["diff"] == 1.0,
+        f"vocab-gap stratum: {gapped}",
+    )
+    same = delivery.compare_delivered(off, off, qs[:4], resamples=200, seed=1)
+    c.check(
+        same["fused@5"]["mean_diff"] == 0.0
+        and same["fused@5"]["lower_95_one_sided"] == 0.0,
+        "identical arms compare to exactly zero",
+    )
+    try:
+        delivery.compare_delivered(
+            off, arm({"a": True, "b": True}), qs[:4], resamples=50, seed=1
+        )
+        c.check(False, "arms over different questions are refused")
+    except ValueError:
+        c.check(True, "arms over different questions are refused")
 
     # -- the blind passage sheet round-trips and is not pre-filled ----------- #
     sheet = delivery.build_passage_sheet(
@@ -2333,7 +2489,23 @@ def _parser() -> argparse.ArgumentParser:
     dv.add_argument(
         "--max-generation-tokens", type=int, default=prompt_budget.REPLY_RESERVE
     )
+    dv.add_argument(
+        "--query-aware",
+        action="store_true",
+        help="assemble with query_aware_excerpts on (default off, the shipped default)",
+    )
     dv.set_defaults(func=cmd_delivered)
+
+    dc = sub.add_parser(
+        "delivered-compare",
+        help="paired comparison of two `delivered --out` files (no model)",
+    )
+    paths(dc)
+    dc.add_argument("--base", type=pathlib.Path, required=True)
+    dc.add_argument("--cand", type=pathlib.Path, required=True)
+    dc.add_argument("--resamples", type=int, default=core.RESAMPLES)
+    dc.add_argument("--seed", type=int, default=core.BOOTSTRAP_SEED)
+    dc.set_defaults(func=cmd_delivered_compare)
 
     score = sub.add_parser("score", help="score a run against judgments")
     paths(score)

@@ -537,6 +537,13 @@ uv run python evals/retrieval_gold/run_retrieval_gold.py delivered \
     --run RUN.json --passages ~/openkos-eval-runs/retrieval-gold/passages.json
 ```
 
+`delivered --query-aware` assembles with `query_aware_excerpts` on (default off, the
+shipped default), and `delivered-compare --base OFF.json --cand ON.json` (both written
+with `--out`) prints the paired comparison: the paired bootstrap of per-question
+`delivered` at a one-sided 95% lower bound, the difference by language, kind and
+vocabulary-gap stratum, and the loss counts of each arm. The registered use is
+[`PREREGISTRATION-1647.md`](PREREGISTRATION-1647.md).
+
 `RUN.json` is a `run` with embeddings (the `fused` channel). Filled sheets and the
 passages file stay outside the repository, like the judgment sheet: the commands
 refuse a path inside it. `--self-test` shows the metric can fail (a span in an
