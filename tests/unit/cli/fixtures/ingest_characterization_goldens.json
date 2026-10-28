@@ -11,7 +11,7 @@
   },
   "batch_non_tty": {
     "exit_code": 1,
-    "stderr": "2 file(s) -> ~6 LLM call(s) (estimate; this can take a while). Pass --auto to skip this prompt.\nopenkos ingest: refusing to write without confirmation -- stdin is not a TTY; re-run with --auto.\n",
+    "stderr": "2 file(s) -> ~4 LLM call(s) (estimate; this can take a while). Pass --auto to skip this prompt.\nopenkos ingest: refusing to write without confirmation -- stdin is not a TTY; re-run with --auto.\n",
     "stdout": ""
   },
   "batch_refused_file": {

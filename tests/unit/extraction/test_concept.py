@@ -1136,7 +1136,10 @@ def test_union_framing_drop_applies_per_run_before_merge() -> None:
     )
 
     outcome = concept_mod.extract_concept_union(
-        "Meeting notes.", source_title="Team Meeting", llm=llm
+        "Meeting notes.",
+        source_title="Team Meeting",
+        llm=llm,
+        selector_judge=True,
     )
 
     assert "Meeting Discussion on Remote Control Design" not in {
@@ -2825,7 +2828,10 @@ def test_union_runs_extraction_twice_below_the_chunk_threshold() -> None:
     llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism", "Epictetus")])
 
     outcome = concept_mod.extract_concept_union(
-        "Some notes.", source_title="Notes", llm=llm
+        "Some notes.",
+        source_title="Notes",
+        llm=llm,
+        selector_judge=True,
     )
 
     # 2 extraction calls + 1 judge call.
@@ -2883,6 +2889,7 @@ def test_union_twin_kept_by_one_runs_floor_is_dropped_from_the_merged_union() ->
         "Notes on what is up to us.",
         source_title="Dichotomy of Control",
         llm=llm,
+        selector_judge=True,
     )
 
     assert [r.title for r in outcome.objects] == ["Epictetus", "Stoicism"]
@@ -2993,7 +3000,10 @@ def test_union_chunked_source_makes_exactly_chunks_plus_one_calls() -> None:
     llm = _SequencedLLM(replies)
 
     outcome = concept_mod.extract_concept_union(
-        text, source_title="Weekly Notes", llm=llm
+        text,
+        source_title="Weekly Notes",
+        llm=llm,
+        selector_judge=True,
     )
 
     assert len(llm.calls) == len(windows) + 1
@@ -3014,7 +3024,9 @@ def test_union_chunked_meeting_source_spends_one_extra_capture_call() -> None:
     replies.append(_keep_reply("Frame the Essay Around Control", "Stoicism"))
     llm = _SequencedLLM(replies)
 
-    outcome = concept_mod.extract_concept_union(text, source_title="Meeting", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        text, source_title="Meeting", llm=llm, selector_judge=True
+    )
 
     assert len(llm.calls) == len(windows) + 2
     assert outcome.report.runs == 1
@@ -3038,7 +3050,9 @@ def test_union_ceiling_caps_judge_input_at_24_candidates() -> None:
     judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 25)))
     llm = _SequencedLLM([run1, run2, judge_reply])
 
-    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm, selector_judge=True
+    )
 
     judge_call = llm.calls[2]
     judge_user_content = judge_call[1]["content"]
@@ -3072,7 +3086,10 @@ def test_chunked_ceiling_interleaves_across_windows() -> None:
     llm = _SequencedLLM(replies)
 
     outcome = concept_mod.extract_concept_union(
-        text, source_title="Weekly Notes", llm=llm
+        text,
+        source_title="Weekly Notes",
+        llm=llm,
+        selector_judge=True,
     )
 
     judge_content = llm.calls[-1][1]["content"]
@@ -3116,7 +3133,10 @@ def test_ceiling_survives_a_cross_window_duplicate_title() -> None:
     llm = _SequencedLLM(replies)
 
     outcome = concept_mod.extract_concept_union(
-        text, source_title="Weekly Notes", llm=llm
+        text,
+        source_title="Weekly Notes",
+        llm=llm,
+        selector_judge=True,
     )
 
     # 26 merged, 13 per window: each window contributes 12, each loses its
@@ -3152,7 +3172,10 @@ def test_participant_capture_survives_the_ceiling_as_its_own_group() -> None:
     llm = _SequencedLLM(replies)
 
     outcome = concept_mod.extract_concept_union(
-        text, source_title="Team Meeting", llm=llm
+        text,
+        source_title="Team Meeting",
+        llm=llm,
+        selector_judge=True,
     )
 
     judge_content = llm.calls[-1][1]["content"]
@@ -3172,7 +3195,9 @@ def test_union_judge_success_reports_judged_out_titles() -> None:
     run2 = _array(_CONCEPT_ITEM)
     llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
 
-    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm, selector_judge=True
+    )
 
     assert outcome.report.judge_status == "ok"
     assert outcome.report.judged_out_titles == ("Zettelkasten App",)
@@ -3190,7 +3215,9 @@ def test_union_judge_title_match_is_normalized_not_raw() -> None:
     run2 = _array(_CONCEPT_ITEM)
     llm = _SequencedLLM([run1, run2, _keep_reply("stoicism", "Epictetus")])
 
-    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm, selector_judge=True
+    )
 
     assert {r.title for r in outcome.objects} == {"Stoicism", "Epictetus"}
     assert "Stoicism" not in outcome.report.judged_out_titles
@@ -3213,7 +3240,9 @@ def test_union_same_title_different_type_candidates_are_both_admitted() -> None:
     run2 = _array()
     llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
 
-    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm, selector_judge=True
+    )
 
     assert [(r.type, r.title) for r in outcome.objects] == [
         ("Concept", "Stoicism"),
@@ -3357,7 +3386,10 @@ def test_person_not_readmitted_from_non_meeting_source() -> None:
     llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
 
     outcome = concept_mod.extract_concept_union(
-        "A technical article.", source_title="API Reference Guide", llm=llm
+        "A technical article.",
+        source_title="API Reference Guide",
+        llm=llm,
+        selector_judge=True,
     )
 
     titles = {r.title for r in outcome.objects}
@@ -3382,7 +3414,10 @@ def test_participant_readmitted_reported_separately_from_judge_selected() -> Non
     llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism")])
 
     outcome = concept_mod.extract_concept_union(
-        "Team meeting notes.", source_title="Team Meeting", llm=llm
+        "Team meeting notes.",
+        source_title="Team Meeting",
+        llm=llm,
+        selector_judge=True,
     )
 
     assert outcome.report.participant_readmitted_titles == ("Alex Rivera",)
@@ -3400,7 +3435,10 @@ def test_participant_selected_by_judge_reported_in_selected_not_readmitted() -> 
     llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism", "Jordan Ellis")])
 
     outcome = concept_mod.extract_concept_union(
-        "Team meeting notes.", source_title="Team Meeting", llm=llm
+        "Team meeting notes.",
+        source_title="Team Meeting",
+        llm=llm,
+        selector_judge=True,
     )
 
     assert outcome.report.participant_judge_selected_titles == ("Jordan Ellis",)
@@ -3445,7 +3483,10 @@ def test_name_only_participant_on_non_meeting_source_is_not_readmitted() -> None
     llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
 
     outcome = concept_mod.extract_concept_union(
-        "A technical article.", source_title="API Reference Guide", llm=llm
+        "A technical article.",
+        source_title="API Reference Guide",
+        llm=llm,
+        selector_judge=True,
     )
 
     assert "Alex Rivera" not in {r.title for r in outcome.objects}
@@ -3483,7 +3524,10 @@ def test_participant_capture_pass_joins_candidates_before_judge_on_meeting_sourc
     )
 
     outcome = concept_mod.extract_concept_union(
-        "Team meeting notes.", source_title="Team Meeting", llm=llm
+        "Team meeting notes.",
+        source_title="Team Meeting",
+        llm=llm,
+        selector_judge=True,
     )
 
     titles = {r.title for r in outcome.objects}
@@ -3539,7 +3583,10 @@ def test_participant_capture_pass_does_not_fire_on_non_meeting_source() -> None:
     llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism", "Epictetus")])
 
     outcome = concept_mod.extract_concept_union(
-        "A technical article.", source_title="API Reference Guide", llm=llm
+        "A technical article.",
+        source_title="API Reference Guide",
+        llm=llm,
+        selector_judge=True,
     )
 
     assert len(llm.calls) == 3
@@ -3621,7 +3668,9 @@ def test_union_judge_failure_degrades_to_the_full_backstopped_union(
     run2 = _array(_PERSON_ITEM)
     llm = _SequencedLLM([run1, run2, judge_failure])
 
-    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm, selector_judge=True
+    )
 
     assert outcome.report.judge_status == "failed"
     assert {r.title for r in outcome.objects} == {"Stoicism", "Epictetus"}
@@ -3699,7 +3748,9 @@ def test_union_full_line_echo_reply_is_salvaged_end_to_end() -> None:
     )
     llm = _SequencedLLM([run1, _array(), echo])
 
-    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm, selector_judge=True
+    )
 
     assert outcome.report.judge_status == "ok"
     assert [r.title for r in outcome.objects] == ["Stoicism"]
@@ -3861,6 +3912,7 @@ def test_union_sole_droppable_twin_re_asks_before_the_judge() -> None:
         "Notes on what is up to us, and on freedom from destructive emotion.",
         source_title=_DICHOTOMY_TWIN_TITLE,
         llm=llm,
+        selector_judge=True,
     )
 
     # 2 extraction runs + 1 re-ask + 1 judge call.
@@ -5908,7 +5960,10 @@ def test_capture_still_skips_code_titled_prose_source() -> None:
     llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism", "Epictetus")])
 
     outcome = concept_mod.extract_concept_union(
-        "A technical article.", source_title="TS3005a transcript", llm=llm
+        "A technical article.",
+        source_title="TS3005a transcript",
+        llm=llm,
+        selector_judge=True,
     )
 
     assert len(llm.calls) == 3
@@ -5997,7 +6052,11 @@ def test_union_names_the_judge_phase() -> None:
     llm = _FakeLLM(reply=_array(_CONCEPT_ITEM, _ENTITY_ITEM))
 
     concept_mod.extract_concept_union(
-        "A short source.", source_title="Notes", llm=llm, on_progress=seen.append
+        "A short source.",
+        source_title="Notes",
+        llm=llm,
+        on_progress=seen.append,
+        selector_judge=True,
     )
 
     judging = [p for p in seen if p.startswith("judging ")]
@@ -6930,7 +6989,9 @@ def test_union_skips_the_positional_cap_when_the_judge_is_unavailable() -> None:
     without limit."""
     llm = _SequencedLLM([_many_items(23), _array(), "not json", "not json"])
 
-    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm, selector_judge=True
+    )
 
     assert outcome.report.judge_status == "failed"
     assert len(outcome.objects) == 23
@@ -6945,7 +7006,9 @@ def test_the_skipped_cap_is_still_bounded_by_the_pre_judge_ceiling() -> None:
     keeps an unavailable judge from storing an unbounded set."""
     llm = _SequencedLLM([_many_items(40), _array(), "not json", "not json"])
 
-    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm, selector_judge=True
+    )
 
     assert outcome.report.judge_status == "failed"
     assert len(outcome.objects) == concept_mod._MAX_JUDGE_CANDIDATES
@@ -6959,7 +7022,9 @@ def test_the_cap_still_applies_when_the_judge_selected_normally() -> None:
     judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 24)))
     llm = _SequencedLLM([_many_items(23), _array(), judge_reply])
 
-    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm, selector_judge=True
+    )
 
     assert outcome.report.judge_status == "ok"
     assert len(outcome.objects) == concept_mod._UNION_BACKSTOP
@@ -6976,7 +7041,9 @@ def test_the_cap_still_applies_when_the_judge_replied_but_matched_nothing() -> N
     the skip is a second decision, not a detail of this one."""
     llm = _SequencedLLM([_many_items(23), _array(), _keep_reply("Nothing Matching")])
 
-    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm, selector_judge=True
+    )
 
     assert outcome.report.judge_status == "empty"
     assert len(outcome.objects) == concept_mod._UNION_BACKSTOP
@@ -7252,6 +7319,7 @@ def test_union_carries_the_judge_failure_causes_onto_the_report() -> None:
         "Un documento breve sobre trazabilidad y respaldos.",
         source_title="Notas",
         llm=llm,
+        selector_judge=True,
     )
 
     assert outcome.report.judge_status == "failed"
@@ -7283,6 +7351,7 @@ def test_union_carries_a_recovered_failure_onto_the_report() -> None:
         "Un documento breve sobre trazabilidad y respaldos.",
         source_title="Notas",
         llm=llm,
+        selector_judge=True,
     )
 
     assert outcome.report.judge_status == "ok"

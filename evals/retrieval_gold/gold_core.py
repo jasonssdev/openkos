@@ -310,6 +310,43 @@ def paired_bootstrap(
     return PairedDelta(n=n, mean=mean, lo=means[lo_index], hi=means[hi_index])
 
 
+def stratum_ids(questions: Sequence[Question], name: str) -> set[str]:
+    """Question ids of a named subset: `all`, a stratum (`vocab-gap`, `plain`),
+    a language or a kind."""
+    if name == "all":
+        return {q.id for q in questions}
+    for stratum, gap in STRATA:
+        if name == stratum:
+            return {q.id for q in questions if q.vocab_gap is gap}
+    if name in LANGUAGES:
+        return {q.id for q in questions if q.language == name}
+    if name in KINDS:
+        return {q.id for q in questions if q.kind == name}
+    raise ValueError(f"unknown subset {name!r}")
+
+
+def compare_channels(
+    base_report: Mapping[str, Any],
+    cand_report: Mapping[str, Any],
+    base_channel: str,
+    cand_channel: str,
+    metric: str,
+    *,
+    ids: Collection[str] | None = None,
+    resamples: int = RESAMPLES,
+    seed: int = BOOTSTRAP_SEED,
+) -> PairedDelta:
+    """Paired bootstrap of `cand_channel` minus `base_channel` over questions,
+    optionally restricted to `ids`. The two channels may live in one scored
+    report (fused - dense on the same run) or in two."""
+    base = per_question_metric(base_report, base_channel, metric)
+    cand = per_question_metric(cand_report, cand_channel, metric)
+    if ids is not None:
+        base = {q: v for q, v in base.items() if q in ids}
+        cand = {q: v for q, v in cand.items() if q in ids}
+    return paired_bootstrap(base, cand, resamples=resamples, seed=seed)
+
+
 # --------------------------------------------------------------------------- #
 # Judgments                                                                    #
 # --------------------------------------------------------------------------- #

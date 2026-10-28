@@ -684,15 +684,31 @@ def cmd_check_questions(args: argparse.Namespace) -> int:
 
 def cmd_compare(args: argparse.Namespace) -> int:
     base = json.loads(args.base.read_text("utf-8"))
-    cand = json.loads(args.cand.read_text("utf-8"))
-    delta = core.paired_bootstrap(
-        core.per_question_metric(base, args.channel, args.metric),
-        core.per_question_metric(cand, args.channel, args.metric),
+    cand = json.loads(args.cand.read_text("utf-8")) if args.cand else base
+    base_channel = args.base_channel or args.channel
+    cand_channel = args.cand_channel or args.channel
+    ids = None
+    subset = ""
+    if args.subset != "all":
+        qpath = args.questions or QUESTIONS_V1_PATH
+        raw = json.loads(qpath.read_text("utf-8"))
+        questions, problems = core.parse_questions(raw)
+        if problems:
+            raise SystemExit("question set rejected:\n  - " + "\n  - ".join(problems))
+        ids = core.stratum_ids(questions, args.subset)
+        subset = f" [{args.subset}]"
+    delta = core.compare_channels(
+        base,
+        cand,
+        base_channel,
+        cand_channel,
+        args.metric,
+        ids=ids,
         resamples=args.resamples,
         seed=args.seed,
     )
     print(
-        f"{args.channel} {args.metric}: candidate - baseline = {delta.mean:+.4f} "
+        f"{args.metric}{subset}: {cand_channel} - {base_channel} = {delta.mean:+.4f} "
         f"[{delta.lo:+.4f}, {delta.hi:+.4f}] over {delta.n} questions "
         f"(seed {args.seed}, {args.resamples} resamples)"
     )
@@ -787,6 +803,45 @@ def _self_test_metrics(c: _Checks) -> None:
         c.check(False, "bootstrap refuses unpaired items")
     except ValueError:
         c.check(True, "bootstrap refuses unpaired items")
+    # Cross-channel and stratum-restricted comparison inside one scored report.
+    report = {
+        "per_question": {
+            "q1": {"dense": {"recall@5": 1.0}, "fused": {"recall@5": 0.0}},
+            "q2": {"dense": {"recall@5": 1.0}, "fused": {"recall@5": 1.0}},
+            "q3": {"dense": {"recall@5": 0.0}, "fused": {"recall@5": 1.0}},
+        }
+    }
+    cross = core.compare_channels(
+        report, report, "dense", "fused", "recall@5", resamples=200, seed=1
+    )
+    c.check(cross.n == 3 and abs(cross.mean) < 1e-12, "cross-channel mean is paired")
+    only = core.compare_channels(
+        report,
+        report,
+        "dense",
+        "fused",
+        "recall@5",
+        ids={"q1", "q2"},
+        resamples=200,
+        seed=1,
+    )
+    c.check(only.n == 2 and abs(only.mean + 0.5) < 1e-12, "stratum restricts the items")
+    try:
+        core.compare_channels(
+            report, report, "dense", "fused", "recall@5", ids={"zz"}, resamples=5
+        )
+        c.check(False, "an empty stratum is refused")
+    except ValueError:
+        c.check(True, "an empty stratum is refused")
+    qs = [
+        core.Question("q1", "en", "single-hop", "x", vocab_gap=True),
+        core.Question("q2", "es", "multi-hop", "y"),
+    ]
+    c.check(core.stratum_ids(qs, "vocab-gap") == {"q1"}, "stratum vocab-gap")
+    c.check(core.stratum_ids(qs, "plain") == {"q2"}, "stratum plain")
+    c.check(core.stratum_ids(qs, "es") == {"q2"}, "stratum language")
+    c.check(core.stratum_ids(qs, "multi-hop") == {"q2"}, "stratum kind")
+    c.check(core.stratum_ids(qs, "all") == {"q1", "q2"}, "stratum all")
 
 
 def _self_test_questions(c: _Checks) -> list[core.Question]:
@@ -1983,10 +2038,31 @@ def _parser() -> argparse.ArgumentParser:
     paths(chk)
     chk.set_defaults(func=cmd_check_questions)
 
-    cmp_ = sub.add_parser("compare", help="seeded paired bootstrap of two scores")
+    cmp_ = sub.add_parser(
+        "compare",
+        help="seeded paired bootstrap, candidate minus baseline (model-free)",
+    )
     cmp_.add_argument("--base", type=pathlib.Path, required=True)
-    cmp_.add_argument("--cand", type=pathlib.Path, required=True)
+    cmp_.add_argument(
+        "--cand",
+        type=pathlib.Path,
+        default=None,
+        help="default: the same scores file as --base (compare two channels of a run)",
+    )
     cmp_.add_argument("--channel", choices=core.CHANNELS, default="fused")
+    cmp_.add_argument("--base-channel", choices=core.CHANNELS, default=None)
+    cmp_.add_argument("--cand-channel", choices=core.CHANNELS, default=None)
+    cmp_.add_argument(
+        "--subset",
+        default="all",
+        help="all, vocab-gap, plain, a language (en, es) or a kind; needs the question set",
+    )
+    cmp_.add_argument(
+        "--questions",
+        type=pathlib.Path,
+        default=None,
+        help="default: questions.v1.json",
+    )
     cmp_.add_argument("--metric", default="ndcg@10")
     cmp_.add_argument("--resamples", type=int, default=core.RESAMPLES)
     cmp_.add_argument("--seed", type=int, default=core.BOOTSTRAP_SEED)
