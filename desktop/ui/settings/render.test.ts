@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Schemas } from "../../client/index.ts";
 import type { SettingsModel, SettingsState } from "./model.ts";
 import { renderSettings } from "./render.ts";
-import { WATCH, WATCH_STATUS, WORDS } from "./wording.ts";
+import { UPDATES, WATCH, WATCH_STATUS, WORDS } from "./wording.ts";
 
 type Settings = Schemas["ModelSettings"];
 
@@ -53,6 +53,11 @@ const READY: SettingsState = {
   watchConfirm: null,
   stoppedByYou: false,
   activity: null,
+  updates: null,
+  update: null,
+  updateBusy: null,
+  updateConfirm: false,
+  updateProblem: null,
 };
 
 const NO_FOLDER = { inbox: null, quiet_seconds: 30, max_calls_per_day: 500 };
@@ -89,6 +94,11 @@ const METHODS = [
   "confirmWatch",
   "startWatch",
   "stopWatch",
+  "checkForUpdate",
+  "setUpdateCheck",
+  "askInstall",
+  "cancelInstall",
+  "confirmInstall",
 ] as const;
 
 function fakeModel() {
@@ -442,5 +452,90 @@ describe("renderSettings", () => {
     expect(busy?.getAttribute("aria-busy")).toBe("true");
     expect(held?.textContent).toBe("Undo");
     expect(held?.disabled).toBe(true);
+  });
+
+  it("says whether the app checks for updates, and lets the person turn it off or check now", () => {
+    const node = root();
+    const model = fakeModel();
+    renderSettings(node, model, { ...READY, updates: { check: true }, update: { state: "up_to_date" } });
+
+    const titles = Array.from(node.querySelectorAll(".ui-card__title"), (t) => t.textContent);
+    expect(titles).toEqual(["AI model", UPDATES.title, "Library"]);
+    expect(node.textContent).toContain(UPDATES.intro);
+    expect(node.textContent).toContain(UPDATES.on);
+    expect(node.textContent).toContain(UPDATES.upToDate);
+    button(node, UPDATES.turnOff)?.click();
+    expect(model.setUpdateCheck).toHaveBeenCalledWith(false);
+    button(node, UPDATES.checkNow)?.click();
+    expect(model.checkForUpdate).toHaveBeenCalledOnce();
+
+    renderSettings(node, model, { ...READY, updates: { check: false }, update: { state: "off" } });
+    expect(node.textContent).toContain(UPDATES.off);
+    button(node, UPDATES.turnOn)?.click();
+    expect(model.setUpdateCheck).toHaveBeenCalledWith(true);
+  });
+
+  it("shows a newer version and its notes, and asks before installing", () => {
+    const node = root();
+    const model = fakeModel();
+    const update = { state: "available", version: "0.7.0", current_version: "0.6.0", notes: "What changed." } as const;
+    renderSettings(node, model, { ...READY, updates: { check: true }, update });
+
+    expect(node.textContent).toContain(UPDATES.available("0.7.0", "0.6.0"));
+    expect(node.textContent).toContain("What changed.");
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    button(node, UPDATES.install)?.click();
+    expect(model.askInstall).toHaveBeenCalledOnce();
+    expect(model.confirmInstall).not.toHaveBeenCalled();
+  });
+
+  it("confirms the install in a dialog that starts on not now", () => {
+    const node = root();
+    const model = fakeModel();
+    const update = { state: "available", version: "0.7.0", current_version: "0.6.0", notes: null } as const;
+    const state = { ...READY, updates: { check: true }, update, updateConfirm: true };
+    renderSettings(node, model, state);
+    renderSettings(node, model, state);
+
+    expect(document.querySelectorAll('[role="alertdialog"]')).toHaveLength(1);
+    const dialog = document.querySelector('[role="alertdialog"]') as HTMLElement;
+    expect(dialog.querySelector("h2")?.textContent).toBe(UPDATES.confirmTitle("0.7.0"));
+    expect(Array.from(dialog.querySelectorAll("p"), (p) => p.textContent)).toEqual([...UPDATES.confirmLines]);
+    expect(document.activeElement?.textContent).toBe(UPDATES.cancel);
+
+    button(dialog, UPDATES.confirm)?.click();
+    expect(model.confirmInstall).toHaveBeenCalledOnce();
+  });
+
+  it("closes the install dialog on not now", () => {
+    const node = root();
+    const model = fakeModel();
+    const update = { state: "available", version: "0.7.0", current_version: "0.6.0", notes: null } as const;
+    renderSettings(node, model, { ...READY, updates: { check: true }, update, updateConfirm: true });
+
+    button(document, UPDATES.cancel)?.click();
+    expect(model.cancelInstall).toHaveBeenCalledOnce();
+    expect(model.confirmInstall).not.toHaveBeenCalled();
+
+    renderSettings(node, model, { ...READY, updates: { check: true }, update, updateConfirm: false });
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+
+  it("says quietly when a check failed, and why an install was refused", () => {
+    const node = root();
+    renderSettings(node, fakeModel(), {
+      ...READY,
+      updates: { check: true },
+      update: { state: "failed" },
+      updateProblem: UPDATES.installFailed,
+    });
+    expect(node.textContent).toContain(UPDATES.failed);
+    expect(node.querySelector('[role="alert"]')?.textContent).toContain(UPDATES.installFailed);
+  });
+
+  it("keeps the updates card when the engine is not running", () => {
+    const node = root();
+    renderSettings(node, fakeModel(), { ...READY, phase: "failed", settings: null, updates: { check: true }, update: null });
+    expect(Array.from(node.querySelectorAll(".ui-card__title"), (t) => t.textContent)).toEqual([UPDATES.title]);
   });
 });

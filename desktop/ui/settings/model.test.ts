@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   ApiKeyError,
+  UpdateError,
   WatchError,
   WorkspaceError,
   type Schemas,
+  type UpdateCheck,
   type WatchStatus,
   type WorkspaceChoice,
 } from "../../client/index.ts";
@@ -13,12 +15,13 @@ import {
   LOCAL_MODELS,
   SettingsModel,
   cloudOn,
+  updateOffered,
   watchKind,
   type SettingsApi,
   type SettingsPorts,
   type SettingsState,
 } from "./model.ts";
-import { WATCH, WORDS, savedNote } from "./wording.ts";
+import { UPDATES, WATCH, WORDS, savedNote } from "./wording.ts";
 
 type Settings = Schemas["ModelSettings"];
 type Preview = Schemas["ModelSettingsPreview"];
@@ -114,8 +117,12 @@ function setup(
     inbox?: string | null;
     watch?: WatchStatus;
     activity?: Activity;
+    check?: boolean;
+    found?: UpdateCheck;
+    install?: Error;
   } = {},
 ) {
+  let checking = over.check ?? true;
   const activity: Activity = over.activity ?? IDLE;
   let current = over.settings ?? LOCAL;
   let inbox: Inbox = { inbox: over.inbox ?? null, quiet_seconds: 30, max_calls_per_day: 500 };
@@ -183,6 +190,17 @@ function setup(
   } satisfies SettingsApi;
   const keySet = over.keySet ?? false;
   const ports = {
+    updates: {
+      settings: vi.fn(async () => ({ check: checking })),
+      setCheck: vi.fn(async (on: boolean) => {
+        checking = on;
+        return { check: on };
+      }),
+      check: vi.fn(async (): Promise<UpdateCheck> => (checking ? (over.found ?? { state: "up_to_date" }) : { state: "off" })),
+      install: vi.fn(async (_version: string) => {
+        if (over.install) throw over.install;
+      }),
+    },
     watch: {
       state: vi.fn(async () => watch),
       set: vi.fn(async (on: boolean): Promise<WatchStatus> => {
@@ -1027,5 +1045,127 @@ describe("the packaged local models", () => {
     const source = readFileSync(new URL("../../../src/openkos/config.py", import.meta.url), "utf8");
     expect(source).toContain(`DEFAULT_MODEL = "${LOCAL_MODELS.model}"`);
     expect(source).toContain(`DEFAULT_EMBEDDING_MODEL = "${LOCAL_MODELS.embeddingModel}"`);
+  });
+});
+
+const NEWER: UpdateCheck = { state: "available", version: "0.7.0", current_version: "0.6.0", notes: "What changed." };
+
+describe("the app's updates", () => {
+  it("reads whether the app checks, with no engine running", async () => {
+    const { model, ports } = setup({ check: false });
+
+    await model.startUpdates();
+
+    expect(model.state.updates).toEqual({ check: false });
+    expect(model.state.update).toEqual({ state: "off" });
+    expect(ports.updates.install).not.toHaveBeenCalled();
+  });
+
+  it("shows a newer version and its notes without downloading anything", async () => {
+    const { model, ports } = setup({ found: NEWER });
+
+    await model.startUpdates();
+
+    expect(model.state.update).toEqual(NEWER);
+    expect(updateOffered(model.state)).toBe("0.7.0");
+    expect(ports.updates.install).not.toHaveBeenCalled();
+  });
+
+  it("offers nothing when the app is up to date, checking is off, or the check failed", async () => {
+    for (const found of [{ state: "up_to_date" }, { state: "off" }, { state: "failed" }] as UpdateCheck[]) {
+      const { model } = setup({ found });
+      await model.startUpdates();
+      expect(updateOffered(model.state)).toBeNull();
+    }
+  });
+
+  it("treats a check the shell could not answer as a quiet failure", async () => {
+    const { model, ports } = setup();
+    ports.updates.check.mockRejectedValueOnce(new UpdateError("unknown", "x"));
+
+    await model.checkForUpdate();
+
+    expect(model.state.update).toEqual({ state: "failed" });
+    expect(model.state.updateBusy).toBeNull();
+  });
+
+  it("installs only after the person confirms, and only the version they were shown", async () => {
+    const { model, ports } = setup({ found: NEWER });
+    await model.startUpdates();
+
+    model.askInstall();
+    expect(model.state.updateConfirm).toBe(true);
+    expect(ports.updates.install).not.toHaveBeenCalled();
+
+    await model.confirmInstall();
+
+    expect(ports.updates.install).toHaveBeenCalledTimes(1);
+    expect(ports.updates.install).toHaveBeenCalledWith("0.7.0");
+    expect(model.state.updateConfirm).toBe(false);
+  });
+
+  it("installs nothing when the person says not now", async () => {
+    const { model, ports } = setup({ found: NEWER });
+    await model.startUpdates();
+
+    model.askInstall();
+    model.cancelInstall();
+    await model.confirmInstall();
+
+    expect(model.state.updateConfirm).toBe(false);
+    expect(ports.updates.install).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing when no update is on offer", async () => {
+    const { model, ports } = setup();
+    await model.startUpdates();
+
+    model.askInstall();
+    await model.confirmInstall();
+
+    expect(model.state.updateConfirm).toBe(false);
+    expect(ports.updates.install).not.toHaveBeenCalled();
+  });
+
+  it("says why an install failed, and drops an offer the shell no longer holds", async () => {
+    const failed = setup({ found: NEWER, install: new UpdateError("install_failed", "x") });
+    await failed.model.startUpdates();
+    failed.model.askInstall();
+    await failed.model.confirmInstall();
+    expect(failed.model.state.updateProblem).toBe(UPDATES.installFailed);
+    expect(failed.model.state.updateBusy).toBeNull();
+    expect(updateOffered(failed.model.state)).toBe("0.7.0");
+
+    const gone = setup({ found: NEWER, install: new UpdateError("update_changed", "x") });
+    await gone.model.startUpdates();
+    gone.model.askInstall();
+    await gone.model.confirmInstall();
+    expect(gone.model.state.updateProblem).toBe(UPDATES.offerGone);
+    expect(updateOffered(gone.model.state)).toBeNull();
+  });
+
+  it("turns checking off, which forgets the offer, and on again", async () => {
+    const { model, ports } = setup({ found: NEWER });
+    await model.startUpdates();
+
+    await model.setUpdateCheck(false);
+
+    expect(ports.updates.setCheck).toHaveBeenCalledWith(false);
+    expect(model.state.updates).toEqual({ check: false });
+    expect(updateOffered(model.state)).toBeNull();
+
+    await model.setUpdateCheck(true);
+    expect(model.state.updates).toEqual({ check: true });
+  });
+
+  it("keeps the choice as it was when the shell could not remember it", async () => {
+    const { model, ports } = setup();
+    await model.startUpdates();
+    ports.updates.setCheck.mockRejectedValueOnce(new UpdateError("choice_unkept", "x"));
+
+    await model.setUpdateCheck(false);
+
+    expect(model.state.updates).toEqual({ check: true });
+    expect(model.state.updateProblem).toBe(UPDATES.choiceUnkept);
   });
 });

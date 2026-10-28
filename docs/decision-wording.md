@@ -504,6 +504,22 @@ A card after the AI model card, drawn once the library's settings have been read
 
 Two lists follow the AI model card, each drawn only while it has something in it. **Pages you settled** names each pair ("'{first title}' and '{second title}'") with **Undo**; **Disagreements you left as they are** names each with **Point this out again** (one found inside a combined page is named by that page alone). Both do what Undo does in To review, with the same confirmations and refusals (`not_reconciled`, `not_declined`, `stale`), shown at the top of the screen; the lists are then read again. A list that cannot be read is simply not shown.
 
+### Updates
+
+A card before Library, drawn once the shell has said whether it checks; it is drawn even while the engine is not running, since a newer version may be what fixes one that does not start. The app never updates by itself ([ADR-0079](adr/0079-the-desktop-app-updates-itself-through-a-signed-feed-whose-private-key-lives-in-a-protected-release-environment.md)).
+
+- "OpenKOS can check for a newer version of the app when it opens. It asks the OpenKOS project's release page on GitHub, and nothing from your library is sent. Nothing is installed until you say so."
+- Then whether it checks: "OpenKOS checks for updates when it opens." with **Stop checking**, or "OpenKOS doesn't check for updates. You can still check now." with **Check when OpenKOS opens** ("Saving…"). The choice belongs to the app, not to a library. **Check now** ("Checking…") asks once either way.
+- What the last check found: "You have the latest version."; "OpenKOS couldn't check for updates. It keeps working as it is. Try again later." (a failed check says nothing anywhere else); or "OpenKOS {version} is available. You have {current}.", with "What's new" and the release's notes when it has them, and **Install and restart…** ("Installing…").
+- **Install and restart…** downloads nothing. It opens "Install OpenKOS {version}?", which starts on **Not now**: "OpenKOS will download the new version, check that it was signed by the OpenKOS project, install it and restart." and "Your library stays as it is. Anything running now, like watching a folder, stops and starts again with the app.", with **Install and restart**. Only that installs, and only the version shown.
+- While a version is on offer, the foot of the sidebar keeps a quiet entry, "Update available: {version}", which opens Settings.
+
+| Situation | Reason | Message |
+| --- | --- | --- |
+| The download, the signature check or the install failed | `install_failed` | "The update couldn't be installed. Try again later." |
+| The version shown is no longer the one on offer | `update_changed`, `no_update` | "That update is no longer on offer. Check again." |
+| The choice to check could not be kept | `choice_unkept` | "OpenKOS couldn't remember your choice. Nothing was changed." |
+
 ### Library
 
 "Your library is the folder where OpenKOS keeps everything.", then "Folder" and the folder. **Open another library…** ("Opening…") and **Create a new library…** ("Setting up…") open the system's folder window; once a folder is accepted, "Opening your library…" until the app runs on it. A refused folder uses the welcome's messages (above). When the library was chosen outside the app: "This copy of OpenKOS is set to use a library chosen outside the app, so it can't be changed here.", with no buttons.

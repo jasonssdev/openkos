@@ -19,19 +19,67 @@ import {
   uiButton,
   uiCard,
 } from "../system/index.ts";
-import { type DraftField, type SettingsModel, type SettingsState, type UndoList, type UndoRow, type WatchKind, watchKind } from "./model.ts";
-import { WATCH, WATCH_STATUS, WORDS, modelFacts, whereItRuns } from "./wording.ts";
+import {
+  type DraftField,
+  type SettingsModel,
+  type SettingsState,
+  type UndoList,
+  type UndoRow,
+  type WatchKind,
+  updateOffered,
+  watchKind,
+} from "./model.ts";
+import { UPDATES, WATCH, WATCH_STATUS, WORDS, modelFacts, whereItRuns } from "./wording.ts";
 
 type Dialog = ReturnType<typeof openDialog>;
 
 /** The warning dialog each model has open, so a redraw never opens a second one. */
 const dialogs = new WeakMap<SettingsModel, Dialog>();
+/** The install confirmation each model has open, likewise. */
+const installDialogs = new WeakMap<SettingsModel, Dialog>();
 
 /** Redraws the settings screen into `root`, keeping focus on the same control. */
 export function renderSettings(root: HTMLElement, model: SettingsModel, state: SettingsState): void {
   const key = state.editing ? `settings:edit:${state.draft.where}` : "settings";
   redraw(root, key, () => root.replaceChildren(...screen(model, state)));
   warning(model, state);
+  installConfirmation(model, state);
+}
+
+/**
+ * The confirmation before an update is installed (ADR-0079): nothing is
+ * downloaded until the person says yes, and it starts on "Not now".
+ */
+function installConfirmation(model: SettingsModel, state: SettingsState): void {
+  const open = installDialogs.get(model);
+  const version = updateOffered(state);
+  if (!state.updateConfirm || version === null) {
+    if (open) {
+      installDialogs.delete(model);
+      open.close();
+    }
+    return;
+  }
+  if (open) return;
+  const forget = () => installDialogs.delete(model);
+  installDialogs.set(
+    model,
+    openDialog({
+      title: UPDATES.confirmTitle(version),
+      body: UPDATES.confirmLines.map((line) => el("p", {}, line)),
+      confirmLabel: UPDATES.confirm,
+      cancelLabel: UPDATES.cancel,
+      destructive: true,
+      onConfirm: () => {
+        forget();
+        return model.confirmInstall();
+      },
+      onCancel: () => {
+        forget();
+        model.cancelInstall();
+      },
+    }),
+  );
 }
 
 function warning(model: SettingsModel, state: SettingsState): void {
@@ -71,9 +119,10 @@ function screen(model: SettingsModel, state: SettingsState): HTMLElement[] {
   if (state.settings === null) {
     if (state.phase === "failed") {
       const retry = uiButton(WORDS.tryAgain, () => model.load(), { size: "sm", focusKey: "settings:retry" });
-      return [header, callout("error", WORDS.loadFailed, { actions: [retry], live: "alert" })];
+      return [header, callout("error", WORDS.loadFailed, { actions: [retry], live: "alert" }), ...updatesCard(model, state)];
     }
-    return [header, skeleton(3, WORDS.loading)];
+    // Updates need no engine: a newer version may be what fixes one that does not start.
+    return [header, skeleton(3, WORDS.loading), ...updatesCard(model, state)];
   }
   const notes = [
     state.note ? callout("success", state.note, { live: "status" }) : null,
@@ -83,6 +132,7 @@ function screen(model: SettingsModel, state: SettingsState): HTMLElement[] {
     ...watchCard(model, state),
     ...undoCard(model, state, "settled", WORDS.settledTitle, WORDS.undo),
     ...undoCard(model, state, "declined", WORDS.declinedTitle, WORDS.pointOutAgain),
+    ...updatesCard(model, state),
     libraryCard(model, state),
   ];
 }
@@ -295,6 +345,53 @@ function undoCard(model: SettingsModel, state: SettingsState, list: UndoList, ti
       ),
     ),
   ];
+}
+
+/**
+ * "Updates": whether the app checks, what the last check found, and the
+ * install, which only asks for a confirmation here (ADR-0079). Drawn once the
+ * shell has said whether it checks.
+ */
+function updatesCard(model: SettingsModel, state: SettingsState): HTMLElement[] {
+  const { updates, update, updateBusy: busy } = state;
+  if (updates === null) return [];
+  const body: HTMLElement[] = [el("p", {}, UPDATES.intro), el("p", {}, updates.check ? UPDATES.on : UPDATES.off)];
+  if (update?.state === "up_to_date") body.push(el("p", {}, UPDATES.upToDate));
+  if (update?.state === "failed") body.push(el("p", { class: "ui-field__hint" }, UPDATES.failed));
+  if (update?.state === "available") {
+    body.push(el("p", { class: "ui-field__label", attrs: { role: "status" } }, UPDATES.available(update.version, update.current_version)));
+    if (update.notes) body.push(el("p", { class: "ui-field__label" }, UPDATES.notes), el("p", {}, update.notes));
+  }
+  if (state.updateProblem) body.push(callout("error", state.updateProblem, { live: "alert" }));
+  const actions: HTMLButtonElement[] = [];
+  if (update?.state === "available") {
+    actions.push(
+      uiButton(UPDATES.install, () => model.askInstall(), {
+        variant: "primary",
+        loading: busy === "installing",
+        loadingLabel: UPDATES.installing,
+        disabled: busy !== null && busy !== "installing",
+        focusKey: "settings:update-install",
+      }),
+    );
+  }
+  actions.push(
+    uiButton(UPDATES.checkNow, () => model.checkForUpdate(), {
+      loading: busy === "checking",
+      loadingLabel: UPDATES.checking,
+      disabled: busy !== null && busy !== "checking",
+      focusKey: "settings:update-check",
+    }),
+    uiButton(updates.check ? UPDATES.turnOff : UPDATES.turnOn, () => model.setUpdateCheck(!updates.check), {
+      variant: "quiet",
+      loading: busy === "switching",
+      loadingLabel: UPDATES.switching,
+      disabled: busy !== null && busy !== "switching",
+      focusKey: "settings:update-switch",
+    }),
+  );
+  body.push(el("div", { class: "ui-actions" }, ...actions));
+  return [uiCard({ title: UPDATES.title, headingLevel: 2 }, ...body)];
 }
 
 function libraryCard(model: SettingsModel, state: SettingsState): HTMLElement {
