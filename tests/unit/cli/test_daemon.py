@@ -2098,3 +2098,94 @@ def test_daemon_start_leaves_a_live_workspaces_log_alone(
     assert result.exit_code == 0, result.output
     assert (log_dir / f"{digest}.log").exists()
     assert "removed log" not in result.stderr
+
+
+# --- the stdin lifeline (ADR-0078) ----------------------------------------------
+class _BoundedStop(StopToken):
+    """A stop token whose idle wait gives the stop `within` seconds to arrive
+    and fails the test, rather than hanging it, when it does not."""
+
+    def __init__(self, within: float = 5.0) -> None:
+        super().__init__()
+        self._within = within
+        self.idle = threading.Event()
+
+    def wait(self, timeout: float, **kwargs: object) -> bool:
+        self.idle.set()
+        deadline = datetime.now(UTC) + timedelta(seconds=self._within)
+        while not self.is_set():
+            if datetime.now(UTC) > deadline:
+                raise AssertionError("the stop never arrived")
+            threading.Event().wait(0.01)
+        return True
+
+
+def test_end_of_input_on_the_lifeline_stops_the_daemon_gracefully(root: Path) -> None:
+    code = daemon_module.serve(
+        root,
+        once=False,
+        ports=_fake_ports(_Git()),
+        stop=_BoundedStop(),
+        install_signals=False,
+        lifeline=io.BytesIO(b""),
+    )
+
+    assert code == 0
+
+
+def test_an_open_lifeline_keeps_the_daemon_running_until_it_closes(
+    root: Path,
+) -> None:
+    import os
+
+    read_fd, write_fd = os.pipe()
+    stop = _BoundedStop()
+    codes: list[int] = []
+    thread = threading.Thread(
+        target=lambda: codes.append(
+            daemon_module.serve(
+                root,
+                once=False,
+                ports=_fake_ports(_Git()),
+                stop=stop,
+                install_signals=False,
+                lifeline=os.fdopen(read_fd, "rb"),
+            )
+        )
+    )
+    thread.start()
+    try:
+        assert stop.idle.wait(timeout=10), "the daemon never idled"
+        threading.Event().wait(0.3)
+        assert not stop.is_set(), "an open lifeline must not stop the daemon"
+    finally:
+        os.close(write_fd)
+        thread.join(timeout=10)
+    assert not thread.is_alive()
+    assert codes == [0]
+    assert stop.is_set()
+
+
+def test_the_verb_hands_its_stdin_to_the_daemon_only_when_asked(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[object] = []
+
+    def fake(root: Path, *, once: bool, lifeline: object = None) -> int:
+        seen.append(lifeline)
+        return 0
+
+    monkeypatch.setattr(daemon_module, "serve", fake)
+    monkeypatch.chdir(root)
+
+    assert cli.invoke(app, ["daemon"]).exit_code == 0
+    assert cli.invoke(app, ["daemon", "--stop-on-stdin-eof"], input="").exit_code == 0
+
+    assert seen[0] is None
+    assert seen[1] is not None
+
+
+def test_the_lifeline_flag_is_not_advertised() -> None:
+    result = cli.invoke(app, ["daemon", "--help"])
+
+    assert "stop-on-stdin-eof" not in result.output

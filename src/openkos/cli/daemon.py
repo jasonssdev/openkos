@@ -39,11 +39,13 @@ Those helpers are reached by attribute at call time, so a test that patches
 
 import dataclasses
 import logging
+import os
 import signal
+import threading
 import types
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import typer
 
@@ -615,6 +617,34 @@ def _open_notifier(
     return opened.notifier
 
 
+_LIFELINE_READ_BYTES = 4096
+"""How much of the lifeline one read discards; its content is never used."""
+
+
+def _watch_lifeline(stream: BinaryIO, token: StopToken) -> None:
+    """Discard `stream` until EOF, then ask the daemon to stop.
+
+    The desktop shell holds the other end of the daemon's stdin open for as
+    long as it lives (ADR-0078), so EOF means the shell is gone by any route,
+    a force-quit included, and the daemon finishes the work in progress and
+    exits as it does on SIGTERM. A closed stream is the same as EOF."""
+    try:
+        try:
+            fd = stream.fileno()
+        except OSError, ValueError:  # not fd-backed (an in-memory stream)
+            while stream.read(_LIFELINE_READ_BYTES):
+                pass
+        else:
+            # Raw `os.read`, not the buffered reader: a daemon thread parked in
+            # `BufferedReader.read` holds its lock, and interpreter shutdown
+            # aborts ("could not acquire lock") when it does.
+            while os.read(fd, _LIFELINE_READ_BYTES):
+                pass
+    except OSError, ValueError:
+        pass
+    token.set()
+
+
 def serve(
     root: Path,
     *,
@@ -622,12 +652,16 @@ def serve(
     ports: RunnerPorts | None = None,
     stop: StopToken | None = None,
     install_signals: bool = True,
+    lifeline: BinaryIO | None = None,
 ) -> int:
     """Run the daemon for the workspace at `root`; the process exit code.
 
     `--once` runs every due job in order and returns. Otherwise the loop runs the
     due jobs, then idles on `StopToken.wait` (a lock-free poll, interruptible by
     a signal) until a stop is requested. A stop returns 0.
+
+    `lifeline`, when given, is read on a background thread and its EOF is a
+    stop request (`_watch_lifeline`): how a supervising shell ends the daemon.
     """
     reason = config.require_workspace(root)
     if reason is not None:
@@ -645,6 +679,13 @@ def serve(
     token = stop if stop is not None else StopToken()
     notifier: watch_notify.ChangeNotifier | None = None
     previous = _install_stop_handlers(token) if install_signals else {}
+    if lifeline is not None:
+        threading.Thread(
+            target=_watch_lifeline,
+            args=(lifeline, token),
+            name="daemon-lifeline",
+            daemon=True,
+        ).start()
     logsetup.configure_logging("daemon", root=root)
     try:
         # Startup is where the logs are made, and a daemon starts rarely (a
