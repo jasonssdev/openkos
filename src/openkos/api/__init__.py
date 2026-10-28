@@ -82,9 +82,11 @@ from openkos.api._reads import (
     KindCounts,
     PendingReport,
     PendingRow,
+    UnattendedActivity,
     WorkspaceStatus,
     pending_report,
     status,
+    unattended_activity,
 )
 from openkos.api._refresh import KindRefresh, QueueRefresh, refresh_decision_queue
 from openkos.api._search import (
@@ -407,6 +409,7 @@ __all__ = [
     "TierChanged",
     "TierDetail",
     "TierPlan",
+    "UnattendedActivity",
     "UndoStale",
     "UnmergeInterrupted",
     "UnmergePreview",
@@ -475,4 +478,5 @@ __all__ = [
     "search_index",
     "setup_readiness",
     "status",
+    "unattended_activity",
 ]

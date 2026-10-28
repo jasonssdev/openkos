@@ -801,6 +801,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/unattended": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Unattended */
+        get: operations["unattended_v1_unattended_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/unmerge/apply": {
         parameters: {
             query?: never;
@@ -2997,6 +3014,21 @@ export interface components {
             tier: string;
             /** Type Name */
             type_name: string;
+        };
+        /**
+         * UnattendedActivity
+         * @description The unattended engine's latest outcome. `budget_exhausted`: the newest
+         *     watch or maintenance job ended because the model-call budget ran out (the
+         *     daemon idles and records it; it does not exit). `last_job` is the newest
+         *     job of any kind. `jobs_unreadable` is a record that exists but cannot be
+         *     read, which is not the same as no history.
+         */
+        UnattendedActivity: {
+            /** Budget Exhausted */
+            budget_exhausted: boolean;
+            /** Jobs Unreadable */
+            jobs_unreadable: boolean;
+            last_job: components["schemas"]["JobSummary"] | null;
         };
         /**
          * UnmergeApplyRequest
@@ -6800,6 +6832,62 @@ export interface operations {
             };
             /** @description Content Too Large */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    unattended_v1_unattended_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnattendedActivity"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
