@@ -119,3 +119,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0078](0078-the-inbox-watch-in-the-desktop-app-needs-a-supervised-daemon-so-it-is-a-design-decision-not-a-setting.md) | The inbox watch in the desktop app needs a supervised daemon, so it is a design decision, not a setting | Accepted | 2026-10-27 |
 | [0079](0079-the-desktop-app-updates-itself-through-a-signed-feed-whose-private-key-lives-in-a-protected-release-environment.md) | The desktop app updates itself through a signed feed whose private key lives in a protected release environment | Accepted | 2026-10-27 |
 | [0080](0080-concept-extraction-stops-applying-the-selector-judges-cut-and-keeps-only-the-positional-backstop.md) | Concept extraction stops applying the selector judge's cut and keeps only the positional backstop | Accepted | 2026-10-27 |
+| [0082](0082-query-aware-excerpts-become-the-default.md) | Query-aware excerpts become the default | Proposed | 2026-10-28 |

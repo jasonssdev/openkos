@@ -446,15 +446,18 @@ as many hand-annotated decisions as the general pass, at high precision, but
 short of the bar set for making it the default. So it stays opt-in, and off
 restores the pre-pass path byte-for-byte."""
 
-DEFAULT_QUERY_AWARE_EXCERPTS = False
+DEFAULT_QUERY_AWARE_EXCERPTS = True
 """Packaged default for `query_aware_excerpts` (#1647): whether `query`, when a
 retrieved document exceeds its share of the prompt window, keeps the 800-char
 windows that best match the question (BM25 over that document's windows,
 model-free, no extra call) instead of evenly spaced ones.
 
-`False`, and deliberately so: the choice is unmeasured until it is scored on
-`evals/retrieval_gold` against a pre-registered decision rule (umbrella
-#1652). Off, every prompt is byte-identical to a run with the key absent."""
+`True` (ADR-0082): the pre-registered comparison on `evals/retrieval_gold`
+(`RESULTS-1647.md`, umbrella #1652) raised the share of questions whose gold
+passage reaches the prompt from 13 to 25 of 54 at k=5 and from 6 to 18 at k=8.
+A document that fits its share is sent unchanged either way, so the key only
+moves prompts that were already being trimmed. `false` restores the even
+coverage exactly."""
 
 DEFAULT_REVISION_HISTORY = False
 """Packaged default for `revision_history` (#1014 piece b): whether `query`
@@ -1568,7 +1571,7 @@ class Config:
     query_aware_excerpts: bool = DEFAULT_QUERY_AWARE_EXCERPTS
     """Whether `query` chooses the windows of an over-budget context block by
     BM25 similarity to the question (#1647), defaulting to
-    `DEFAULT_QUERY_AWARE_EXCERPTS` (`False`) when the key is absent or
+    `DEFAULT_QUERY_AWARE_EXCERPTS` (`True`) when the key is absent or
     explicitly null. The application layer passes this value explicitly to
     `answer`'s `query_aware_excerpts` kwarg, so the default lives in ONE
     place. Added LAST and DEFAULTED, like `transcript_decisions`."""

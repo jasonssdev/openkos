@@ -1031,9 +1031,10 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # retrieved context can answer at all; false removes it
 # revision_history: false # attach each retrieved concept's earlier versions as
                           # labelled history (default off, unmeasured)
-# query_aware_excerpts: false # keep the passages of an over-long retrieved
-                          # document that best match the question (default off,
-                          # unmeasured; no extra model call)
+# query_aware_excerpts: false # turn OFF keeping the passages of an over-long
+                          # retrieved document that best match the question
+                          # (default on; no extra model call); false restores
+                          # evenly spaced passages
 # attach_at_ingest: false # turn OFF revising an existing concept at ingest
                           # (default on); false restores `-2` copies
 # transcript_decisions: true  # on a meeting-shaped source, add a decision pass

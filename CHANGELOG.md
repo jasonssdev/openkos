@@ -22,6 +22,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- `query` now keeps the passages of an over-long retrieved document that best match the question, instead of evenly spaced ones (ADR-0082, proposed). A pre-registered comparison on the retrieval gold set found the gold passage reached the prompt for 25 of 54 questions instead of 13 at 5 documents, and 18 instead of 6 at 8. A document that fits its share of the context window is sent unchanged, so only prompts that were already being trimmed differ; the choice is made without any extra model call. The windows are picked by keyword match, so context a reader expected at the start or end of a long document can now be dropped. Set `query_aware_excerpts: false` in `openkos.yaml` to restore the evenly spaced passages exactly (#1647).
 - Extraction no longer asks a judge to cut the merged candidates by default (ADR-0080). A new key, `selector_judge`, is off by default: the union extractor keeps its ceiling of 24 candidates and its positional cut to 20, and a source costs one model call fewer (up to two fewer on the bound the consent screen quotes). The comparison that decided this found no coverage lost and no measurable benefit from the judge's cut, at the price of about 1.5 times the objects and more identity-review rows for sources the judge used to thin. Set `selector_judge: true` in `openkos.yaml` to keep the old behaviour exactly. `union_judge` keeps its name, meaning and default.
 
 ## [0.6.0] - 2026-10-17
