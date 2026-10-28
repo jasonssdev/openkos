@@ -96,6 +96,11 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); unp
                           # history (default OFF). UNMEASURED --
                           # no harness has scored its citation quality or
                           # prompt-budget cost yet. Not recommended to enable.
+# query_aware_excerpts: false  # when a retrieved document is too long for its
+                          # share of the prompt window, keep the passages that
+                          # best match the question (BM25, no extra model call)
+                          # instead of evenly spaced ones (default OFF,
+                          # unmeasured). Off is byte-identical to the key absent.
 # attach_at_ingest: false  # turn OFF revising an existing concept at ingest
                           # (default ON). When a newly extracted object has
                           # the same type and normalized title as an existing
