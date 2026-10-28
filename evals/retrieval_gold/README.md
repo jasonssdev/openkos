@@ -565,7 +565,8 @@ elided region scores 0, an invented span is refused).
   project and Spanish ones over meetings; cross-language retrieval is not measured.
 - **No answer quality, no abstention.** Every question is answerable from the bundle.
 - **Not a pre-registration.** The baseline and every candidate technique need their own
-  pre-registration (arms, metric, bar, `n`) before any run. This directory has none.
+  pre-registration (arms, metric, bar, `n`) before any run. This README registers none;
+  the registrations are the `PREREGISTRATION-<issue>.md` files listed under "Files".
 
 ## Commands
 
@@ -645,6 +646,9 @@ be resolved by hand; the command never merges them.
 | `gold_bundle.py` | The 35-document draft bundle, built from committed material. Not to be judged. |
 | `build_bundle.py` | Builds the gold bundle with production `ingest`; `plan`, `build`, `--self-test`. Refuses a pending translation. |
 | `translate_meetings.py` | Translates the 12 development meetings into Spanish; `run`, `sample-sheet`, `pin`, `--self-test`. |
+| `prereg_tools.py`, `gold_prereg.py` | Model-free pieces of the registrations below: chunk counts, the length diagnostic, the vocabulary-gap stratum, the leak audit, three-list fusion, the distance aggregators. Pure, `--self-test`. |
+| `PREREGISTRATION-1648.md` | Registered on merge: does the dense channel favour long documents (diagnostic first, then arms). |
+| `PREREGISTRATION-1650.md` | Registered on merge: index the questions a Decision answers (doc2query), measured on the vocabulary-gap stratum. |
 | `bundle_sources.json` | The selected sources with their sha256, language, kind and tier, and what was excluded and why. |
 | `questions.draft.json` | The draft question set for the 35-document draft bundle; no judgments. |
 | `questions.v1.json` | The frozen, model-authored question set for `bundle-v1`; no judgments. |
