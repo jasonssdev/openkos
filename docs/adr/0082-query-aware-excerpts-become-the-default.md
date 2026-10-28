@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0082: Query-aware excerpts become the default"
 description: Proposes that query choose the passages of an over-long retrieved document by their BM25 match to the question by default, because the pre-registered comparison on the retrieval gold set raised delivered gold evidence from 13 to 25 of 54 questions at 5 documents and from 6 to 18 at 8, with no language or kind regressing.
-status: Proposed
+status: Accepted
 date: 2026-10-28
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0082: Query-aware excerpts become the default
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-28
 
 ## Context
