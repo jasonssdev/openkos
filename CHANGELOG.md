@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Fixed
+
+- `ingest` now says which filter emptied a source. When extraction ends with no concept and a candidate was removed as a framing object (a meeting-shaped title) or as a twin of the source title, the notice names those titles and the filter, where before it printed only "no concept extracted". The language gate keeps every candidate rather than empty a source, so a Spanish meeting that came out empty was losing its survivor to a later filter, not to the gate. Diagnostic only: which objects are kept is unchanged (#1642).
+
 ## [0.7.0] - 2026-10-28
 
 The first release that ships the desktop app as an installer. The GitHub release carries `OpenKOS.dmg` for Apple Silicon Macs, built from the tagged source with the engine inside. It is signed ad hoc and not notarized, so macOS asks you to approve it once in System Settings; `docs/install-desktop.md` walks through it. From this version the app also updates itself, only when you confirm, from a feed signed with the project's updater key (ADR-0079, ADR-0081); builds before it cannot, so install this one from the release page. The app can now watch a folder for new files and accepts files dropped on its window. The package and the CLI are otherwise unchanged in how they are used.
