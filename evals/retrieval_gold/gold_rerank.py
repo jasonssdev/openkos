@@ -189,6 +189,7 @@ def score_pool(
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
     clock: Callable[[], float] = time.monotonic,
     deadline_s: float | None = None,
+    stamp: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score `wide[:pool]` of every question, one call per candidate.
 
@@ -207,6 +208,7 @@ def score_pool(
             "kind": CALLS_KIND,
             "complete": complete,
             "identity": dict(identity),
+            "stamp": None if stamp is None else dict(stamp),
             "questions_sha256": wide_run["questions_sha256"],
             "pool": pool,
             "calls": calls,
@@ -816,6 +818,16 @@ def _self_test_pool(c: _Checks) -> None:
         return ScoredCall(doc, 5, 2.0)
 
     out = score_pool(run, questions, counting, pool=50, identity=identity)
+    stamped = score_pool(
+        run,
+        questions[:1],
+        lambda q, d: ScoredCall(d, 5, 1.0),
+        pool=30,
+        identity=identity,
+        stamp={"stamp_version": 1},
+    )
+    c.check(stamped["stamp"] == {"stamp_version": 1}, "the harness stamp is stored")
+    c.check(out["stamp"] is None, "no stamp, no claim of one")
     c.check(out["kind"] == CALLS_KIND and out["complete"] is True, "complete calls")
     c.check(len(seen) == 4 * 50, f"one call per candidate: {len(seen)}")
     c.check(
@@ -1369,8 +1381,7 @@ def cmd_score_pool(args: argparse.Namespace) -> int:
         seed=SEED,
     )
     identity = {
-        "model": harness_stamp.model_identity(MODEL),
-        "harness": harness_stamp.git_identity(),
+        "model": MODEL,
         "prompt_sha256": PROMPT_SHA256,
         "temperature": TEMPERATURE,
         "seed": SEED,
@@ -1379,6 +1390,9 @@ def cmd_score_pool(args: argparse.Namespace) -> int:
         "first": args.first,
         "run_index": args.run_index,
     }
+    stamp = harness_stamp.build_stamp(
+        model=MODEL, prompts={"rerank/system": RERANK_SYSTEM}
+    )
     existing = _read_json(args.out) if args.out.exists() else None
     if existing is not None and existing.get("complete") is True:
         raise SystemExit(f"{args.out} is complete; refusing to overwrite it")
@@ -1391,6 +1405,7 @@ def cmd_score_pool(args: argparse.Namespace) -> int:
         existing=existing,
         checkpoint=lambda d: _write_json(args.out, d),
         deadline_s=args.deadline_hours * 3600.0,
+        stamp=stamp,
     )
     state = "complete" if result["complete"] else "INCOMPLETE (budget stop)"
     print(f"wrote {args.out}: {len(result['calls'])} questions, {state}")
