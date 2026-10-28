@@ -517,6 +517,32 @@ class ModelSettingsResponse(BaseModel):
     warnings: list[str]
 
 
+class InboxSettingsPreviewRequest(BaseModel):
+    """The folder to watch, or `null` to stop watching. The field is required,
+    so a client says which it means."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    inbox: Annotated[str, Field(max_length=2048)] | None
+
+
+class InboxSettingsApplyRequest(_EchoRequest):
+    """The version the inbox preview issued (echoed unchanged) and how long to
+    wait for the workspace lock; a client can shorten the wait only."""
+
+    version: api.InboxSettingsVersion
+    wait_seconds: float = Field(default=WRITE_WAIT_SECONDS, ge=0, le=WRITE_WAIT_SECONDS)
+
+
+class InboxSettingsResponse(BaseModel):
+    """What was written, and the warnings the apply raised along the way."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    changed: api.InboxSettingsChanged
+    warnings: list[str]
+
+
 class UnmergePreviewRequest(BaseModel):
     """Which merge to undo: the survivor and the absorbed concept, and whether
     the first step may discard an edit made to the survivor since its merge."""

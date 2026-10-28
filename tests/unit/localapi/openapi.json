@@ -1217,6 +1217,188 @@
         "title": "IdentityDetail",
         "type": "object"
       },
+      "InboxSettings": {
+        "description": "The watch folder (`None`: the watch is off, the default) and the two\nlimits the watch works within, as `unattended:` sets them: how long a file\nmust stay unchanged before it is added, and how many model calls the\nunattended runs may make in a day.",
+        "properties": {
+          "inbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inbox"
+          },
+          "max_calls_per_day": {
+            "title": "Max Calls Per Day",
+            "type": "integer"
+          },
+          "quiet_seconds": {
+            "title": "Quiet Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "inbox",
+          "quiet_seconds",
+          "max_calls_per_day"
+        ],
+        "title": "InboxSettings",
+        "type": "object"
+      },
+      "InboxSettingsApplyRequest": {
+        "description": "The version the inbox preview issued (echoed unchanged) and how long to\nwait for the workspace lock; a client can shorten the wait only.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/InboxSettingsVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "InboxSettingsApplyRequest",
+        "type": "object"
+      },
+      "InboxSettingsChange": {
+        "description": "The folder to watch, or `None` to stop watching.",
+        "properties": {
+          "inbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inbox"
+          }
+        },
+        "required": [
+          "inbox"
+        ],
+        "title": "InboxSettingsChange",
+        "type": "object"
+      },
+      "InboxSettingsChanged": {
+        "additionalProperties": false,
+        "description": "The folder was written. `commit_sha` is `None` when the commit could not\nbe made (the write itself landed).",
+        "properties": {
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/InboxSettings"
+          }
+        },
+        "required": [
+          "settings",
+          "commit_sha"
+        ],
+        "title": "InboxSettingsChanged",
+        "type": "object"
+      },
+      "InboxSettingsPreview": {
+        "description": "What the change would do: the settings now and after, and the version to\napply.",
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/InboxSettings"
+          },
+          "proposed": {
+            "$ref": "#/components/schemas/InboxSettings"
+          },
+          "version": {
+            "$ref": "#/components/schemas/InboxSettingsVersion"
+          }
+        },
+        "required": [
+          "current",
+          "proposed",
+          "version"
+        ],
+        "title": "InboxSettingsPreview",
+        "type": "object"
+      },
+      "InboxSettingsPreviewRequest": {
+        "additionalProperties": false,
+        "description": "The folder to watch, or `null` to stop watching. The field is required,\nso a client says which it means.",
+        "properties": {
+          "inbox": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inbox"
+          }
+        },
+        "required": [
+          "inbox"
+        ],
+        "title": "InboxSettingsPreviewRequest",
+        "type": "object"
+      },
+      "InboxSettingsResponse": {
+        "additionalProperties": false,
+        "description": "What was written, and the warnings the apply raised along the way.",
+        "properties": {
+          "changed": {
+            "$ref": "#/components/schemas/InboxSettingsChanged"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "changed",
+          "warnings"
+        ],
+        "title": "InboxSettingsResponse",
+        "type": "object"
+      },
+      "InboxSettingsVersion": {
+        "description": "The version a stateless caller applies a change against: echo it\nunchanged. `change` is the normalized request; `content_digest` covers it\nand the bytes of `openkos.yaml`.",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/InboxSettingsChange"
+          },
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "change",
+          "content_digest"
+        ],
+        "title": "InboxSettingsVersion",
+        "type": "object"
+      },
       "IngestBinding": {
         "description": "What consent was given to, beside the files. A change is stale.",
         "properties": {
@@ -8652,6 +8834,273 @@
           }
         ],
         "summary": "Stop Rebuild"
+      }
+    },
+    "/v1/settings/inbox": {
+      "get": {
+        "operationId": "inbox_settings_v1_settings_inbox_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Inbox Settings"
+      }
+    },
+    "/v1/settings/inbox/apply": {
+      "post": {
+        "operationId": "inbox_settings_apply_v1_settings_inbox_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboxSettingsApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Inbox Settings Apply"
+      }
+    },
+    "/v1/settings/inbox/preview": {
+      "post": {
+        "operationId": "inbox_settings_preview_v1_settings_inbox_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboxSettingsPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxSettingsPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Inbox Settings Preview"
       }
     },
     "/v1/settings/model": {
