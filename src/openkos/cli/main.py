@@ -11252,6 +11252,12 @@ def daemon_cmd(
         "--once",
         help="Run every job that is due once, then exit.",
     ),
+    stop_on_stdin_eof: bool = typer.Option(
+        False,
+        "--stop-on-stdin-eof",
+        hidden=True,
+        help="Stop gracefully when standard input closes (the desktop app's lifeline).",
+    ),
 ) -> None:
     """Run the unattended engine for the workspace in the current directory.
 
@@ -11274,7 +11280,11 @@ def daemon_cmd(
     write, so your own commands keep working while it runs. Refuses (exit 1)
     outside an initialized workspace.
     """
-    code = daemon_module.serve(Path.cwd(), once=once)
+    code = daemon_module.serve(
+        Path.cwd(),
+        once=once,
+        lifeline=sys.stdin.buffer if stop_on_stdin_eof else None,
+    )
     if code != 0:
         raise typer.Exit(code=code)
 

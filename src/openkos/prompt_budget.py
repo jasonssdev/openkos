@@ -23,6 +23,10 @@ as literals for that reason; a backend that advertises its own pinned values
 overrides them.
 """
 
+import bisect
+import math
+import re
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
@@ -153,12 +157,109 @@ def chunk_lines(text: str, target: int) -> list[str]:
     return chunks
 
 
+_TERM: Final = re.compile(r"\w+")
+_BM25_K1: Final = 1.2
+_BM25_B: Final = 0.75
+"""Okapi BM25's textbook constants. Not tuned: nothing here has been
+measured against a gold set yet (#1647 ships the choice behind an opt-in
+key until it has)."""
+
+
+def _terms(text: str) -> list[str]:
+    """Lowercased word tokens of `text`, single characters dropped.
+
+    Unicode-aware (`\\w`), so Spanish and other non-ASCII prose tokenizes;
+    no stemming and no stopword list, because the inverse-document-frequency
+    weight already discounts a word that is in most windows."""
+    return [term for term in _TERM.findall(text.lower()) if len(term) > 1]
+
+
+def _bm25_scores(windows: Sequence[str], query: str) -> list[float]:
+    """Okapi BM25 of each window against `query`, the windows of ONE document
+    being the corpus. Model-free and deterministic; `0.0` for every window
+    when the query has no usable term or matches none of them."""
+    query_terms = set(_terms(query))
+    if not query_terms or not windows:
+        return [0.0] * len(windows)
+    counts = [Counter(_terms(window)) for window in windows]
+    lengths = [sum(count.values()) for count in counts]
+    average = (sum(lengths) / len(lengths)) or 1.0
+    total = len(windows)
+    scores: list[float] = []
+    document_frequency = {
+        term: sum(1 for count in counts if term in count) for term in query_terms
+    }
+    for count, length in zip(counts, lengths, strict=True):
+        score = 0.0
+        for term in sorted(query_terms):
+            frequency = count.get(term, 0)
+            if not frequency:
+                continue
+            df = document_frequency[term]
+            idf = math.log(1 + (total - df + 0.5) / (df + 0.5))
+            norm = _BM25_K1 * (1 - _BM25_B + _BM25_B * length / average)
+            score += idf * frequency * (_BM25_K1 + 1) / (frequency + norm)
+        scores.append(score)
+    return scores
+
+
+def _query_aware_excerpt(
+    windows: Sequence[str], *, budget: int, marker: str, query: str
+) -> str | None:
+    """The best-scoring windows that fit `budget`, in document order, or
+    `None` when the query gives no signal (the caller then keeps even
+    coverage).
+
+    Greedy by `(-score, index)`: highest BM25 first, ties to the EARLIER
+    window, so the choice is deterministic. A window that no longer fits is
+    skipped and the next is tried, so the budget is spent. Zero-score
+    windows rank last, in document order, and only fill what is left.
+    Size accounting is the even-coverage rule exactly: window lengths, plus
+    one char across an adjacent pair and `len(marker)` across a gap."""
+    scores = _bm25_scores(windows, query)
+    if not any(scores):
+        return None
+    ranked = sorted(range(len(windows)), key=lambda index: (-scores[index], index))
+
+    def join_cost(left: int, right: int) -> int:
+        return 1 if right == left + 1 else len(marker)
+
+    picked: list[int] = []
+    size = 0
+    for index in ranked:
+        position = bisect.bisect_left(picked, index)
+        before = picked[position - 1] if position > 0 else None
+        after = picked[position] if position < len(picked) else None
+        added = len(windows[index])
+        if before is not None:
+            added += join_cost(before, index)
+        if after is not None:
+            added += join_cost(index, after)
+        if before is not None and after is not None:
+            added -= join_cost(before, after)
+        if size + added > budget:
+            continue
+        picked.insert(position, index)
+        size += added
+    if not picked:
+        return windows[ranked[0]][:budget]
+    parts: list[str] = []
+    previous: int | None = None
+    for index in picked:
+        if previous is not None:
+            parts.append(marker if index > previous + 1 else "\n")
+        parts.append(windows[index])
+        previous = index
+    return "".join(parts)
+
+
 def bounded_text(
     text: str,
     *,
     budget: int,
     windows: Sequence[str],
     marker: str = ELISION_MARKER,
+    query: str | None = None,
 ) -> tuple[str, bool]:
     """`text` if it fits `budget`, else a deterministic even-coverage
     excerpt of `windows` that does -- and whether it was excerpted.
@@ -186,11 +287,25 @@ def bounded_text(
     Left quadratic deliberately: the cut is not strictly monotonic in window
     count, because whether two picked windows are adjacent changes the join
     cost, so a binary search over counts could return a smaller excerpt than
-    one that fits."""
+    one that fits.
+
+    `query` (#1647, opt-in; `None` keeps everything above untouched) swaps
+    the choice of windows for the ones that best match the question by
+    BM25 (`_query_aware_excerpt`), under the same budget accounting and the
+    same marker/adjacency joining. A fitting text is still returned
+    unchanged, and a query with no usable term, or one that matches no
+    window, falls back to the even coverage described above."""
     if len(text) <= budget:
         return text, False
     if not windows:
         return "", True
+
+    if query is not None:
+        excerpt = _query_aware_excerpt(
+            windows, budget=budget, marker=marker, query=query
+        )
+        if excerpt is not None:
+            return excerpt, True
 
     total_windows = len(windows)
     for count in range(total_windows - 1, 1, -1):

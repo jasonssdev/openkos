@@ -87,6 +87,12 @@ INVALID_MODEL: Final = "invalid_model"
 INVALID_EMBEDDING_MODEL: Final = "invalid_embedding_model"
 BASE_URL_REQUIRED: Final = "base_url_required"
 
+# Inbox watch folder rows.
+INBOX_UNCHANGED: Final = "inbox_unchanged"
+INVALID_INBOX: Final = "invalid_inbox"
+INBOX_INSIDE_WORKSPACE: Final = "inbox_inside_workspace"
+INBOX_NOT_A_DIRECTORY: Final = "inbox_not_a_directory"
+
 # Sensitivity rows.
 PAGE_NOT_FOUND: Final = "page_not_found"
 SENSITIVITY_UNCHANGED: Final = "sensitivity_unchanged"
@@ -587,6 +593,30 @@ _SETTINGS_REFUSED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
 }
 
 
+_INBOX_REFUSED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
+    "invalid": (422, INVALID_INBOX, False, "the folder is not a usable path"),
+    "inside_workspace": (
+        422,
+        INBOX_INSIDE_WORKSPACE,
+        False,
+        "the folder cannot be the workspace or inside it: choose a folder "
+        "outside the knowledge base",
+    ),
+    "not_a_directory": (
+        422,
+        INBOX_NOT_A_DIRECTORY,
+        False,
+        "the folder does not exist",
+    ),
+    "unchanged": (
+        409,
+        INBOX_UNCHANGED,
+        False,
+        "the watch folder is already set that way",
+    ),
+}
+
+
 def outcome_problem(
     outcome: (
         api.NotApplied
@@ -601,6 +631,8 @@ def outcome_problem(
         | api.PullRefused
         | api.ModelSettingsRefused
         | api.ModelSettingsStale
+        | api.InboxSettingsRefused
+        | api.InboxSettingsStale
         | api.SensitivityRefused
         | api.SensitivityStale
         | api.RebuildRefused
@@ -612,6 +644,7 @@ def outcome_problem(
         api.UnmergeStale
         | api.UndoStale
         | api.ModelSettingsStale
+        | api.InboxSettingsStale
         | api.SensitivityStale,
     ):
         message = _STALE_MESSAGES["content_changed"]
@@ -643,6 +676,8 @@ def outcome_problem(
         row = _PULL_REFUSED.get(outcome.reason)
     elif isinstance(outcome, api.ModelSettingsRefused):
         row = _SETTINGS_REFUSED.get(outcome.reason)
+    elif isinstance(outcome, api.InboxSettingsRefused):
+        row = _INBOX_REFUSED.get(outcome.reason)
     elif isinstance(outcome, api.SensitivityRefused):
         row = _SENSITIVITY_REFUSED.get(outcome.reason)
     elif isinstance(outcome, api.RebuildRefused):
