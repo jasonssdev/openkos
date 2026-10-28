@@ -711,6 +711,8 @@ be resolved by hand; the command never merges them.
 | `generate_questions.py`, `gold_doc2query.py`, `doc2query_selftest.py` | The #1650 pre-run code: `generate` (the only GPU step) and `cost`; the registered prompts, output handling, cost bars, question store and the A1/A2/A3/C1 arms; their model-free checks, run by both `--self-test`s. |
 | `PREREGISTRATION-1648.md` | Registered on merge: does the dense channel favour long documents (diagnostic first, then arms). |
 | `PREREGISTRATION-1650.md` | Registered on merge: index the questions a Decision answers (doc2query), measured on the vocabulary-gap stratum. |
+| `PREREGISTRATION-1651.md` | Registered on merge: a chat model as a pointwise reranker over a widened fused pool, the cheapest path before any `llama-server` step. |
+| `gold_rerank.py` | Model-free parts of that registration (prompt parsing, the rerank arms, latency accounting, the decision rule) plus the two commands that call Ollama (`wide-run`, `score-pool`). `--self-test`. |
 | `bundle_sources.json` | The selected sources with their sha256, language, kind and tier, and what was excluded and why. |
 | `questions.draft.json` | The draft question set for the 35-document draft bundle; no judgments. |
 | `questions.v1.json` | The frozen, model-authored question set for `bundle-v1`; no judgments. |
