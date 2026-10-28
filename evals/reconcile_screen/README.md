@@ -1,9 +1,11 @@
 # `reconcile_screen` — does a model keep what two notes say when it merges them? (#1563)
 
-**Status: prepared, not run.** No model has been called for this screen. The labels
-are the first author's, checked by a blind second labeller and adjudicated by a third
-(neither the owner; see "Second labelling"; [`PREREGISTRATION-DRAFT.md`](PREREGISTRATION-DRAFT.md)
-lists what still blocks registration). It measures; it adopts nothing and changes no production code, default,
+**Status: prepared; the scored screen has not been run.** Stage 0 (`stage0`) has
+called each model on calibration cases that are not fixture cases, to measure latency and
+record digests. The labels are the first author's, checked by a blind second labeller and
+adjudicated by a third (neither the owner; see "Second labelling";
+[`PREREGISTRATION.md`](PREREGISTRATION.md) registers the screen when it merges to `main`,
+before any scored call). It measures; it adopts nothing and changes no production code, default,
 prompt or task key. Part of #1556; refs #1563, #1557.
 
 ```bash
@@ -131,7 +133,7 @@ Opus), blind to which annotator gave which label; both claims are resolved in th
 [`ADJUDICATION.md`](ADJUDICATION.md). `import-sheet --sheet <filled> --out second_labels.json --labeller <who>` writes
 those labels, keyed by fixture id, to [`second_labels.json`](second_labels.json); the
 filled sheet is not committed. Agreement is measured against that labeller, and no
-disagreement is resolved (see the pre-registration draft).
+disagreement is resolved (see the pre-registration).
 
 `blind-sheet` writes a sheet for the owner: each case's two notes, then its claims in a
 seeded shuffle, one question per claim ("which note states it": `A`, `B` or `AB`). It
@@ -155,6 +157,6 @@ has a `once` literal that occurs exactly once in each note, or is retired with a
 | `fixture.json` | the 15 cases, their claims and the first author's labels |
 | `reconcile_core.py` | fixture contract, scoring, baselines, fabrication, summaries, bootstrap, vetoes, forecast |
 | `reconcile_blind_adjudication.py` | the blind sheet and `adjudicate` |
-| `run_reconcile_screen.py` | `forecast`, `run`, `score`, `blind-sheet`, `adjudicate`, `--self-test` |
-| `PREREGISTRATION-DRAFT.md` | the draft pre-registration, blocked on the owner's labelling |
+| `run_reconcile_screen.py` | `forecast`, `stage0`, `run`, `score`, `blind-sheet`, `adjudicate`, `--self-test` |
+| `PREREGISTRATION.md` | the pre-registration (registered when it merges, before any scored call) |
 | `tests/unit/test_reconcile_screen_core.py` | the deterministic parts, executed |

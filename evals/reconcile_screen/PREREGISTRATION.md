@@ -1,16 +1,15 @@
-# Pre-registration (DRAFT): the merged-body reconciliation model screen (#1563)
+# Pre-registration: the merged-body reconciliation model screen (#1563)
 
-**Status: DRAFT. NOT REGISTERED. The labels are adjudicated (see "Third adjudication")
-and the owner's questions are decided and the J bar is recomputed; still blocked on
-Stage 0.** Nothing below binds until a final version of this file is merged to `main`
-before any scored model call
-(#1556: pre-register, and merge the pre-registration, before any run). No model has been
-called in preparing this draft; every number in it was computed by
-`run_reconcile_screen.py forecast`, `j-table` or `--self-test`, which contact none. A measurement: it
-adopts nothing and changes no production code, default, prompt or task key. Part of #1556;
-refs #1563, #1557.
+**Status: REGISTERED when this file merges to `main`, which happens before any scored model
+call (#1556: pre-register, and merge the pre-registration, before any run).** The labels are
+adjudicated (see "Third adjudication"), the owner's questions are decided (see "Decisions the
+owner made"), the J bar is recomputed and Stage 0 is done. Everything below binds from the
+merge; a change after it is a new registration, not an edit to this one. No scored call has
+been made: Stage 0 called only calibration inputs that are not fixture cases. A measurement: it
+adopts nothing and changes no production code, default, prompt or task key. Part of #1556; refs
+#1563, #1557.
 
-## Before this can be registered
+## Before this could be registered
 
 1. **Done, with two deviations (below).** The 121 claims were labelled blind a second
    time with the sheet from `run_reconcile_screen.py blind-sheet`, by a Claude model rather
@@ -25,9 +24,8 @@ refs #1563, #1557.
    and three do not.
 3. **Done.** The five questions are decided (owner, 2026-10-27; see "Decisions the owner
    made").
-4. **Stage 0** (below) replaces the assumed latencies and records the model digests
-   (`ollama list`). Neither was queried for this draft, because the server is reserved for
-   another job.
+4. **Done.** Stage 0 (below) measured the latencies and recorded the model digests; the
+   forecast is recomputed from them and is within the budget.
 
 ## Second labelling: recorded, with a deviation (read first)
 
@@ -36,7 +34,9 @@ Claude model labelled the sheet blind (it read only the blind sheet, none of
 `fixture.json`, the README, this draft or any other label). Agreement below is therefore
 measured against a **Claude labeller, not the owner**, so it is a statement about two
 readings of the same rubric, not about the owner's judgment. The owner's own review of
-every disagreement, and every resolution, is still owed. The labels were imported with
+every disagreement, and every resolution, was not performed before registration (the
+owner delegated it, and it is not one of the preconditions above); the owner can still
+override a resolution, but only as a recorded amendment before any scored call. The labels were imported with
 `run_reconcile_screen.py import-sheet` into [`second_labels.json`](second_labels.json) (labels keyed by
 fixture id, plus the labeller and seed). The filled sheet itself is not committed, per
 the README.
@@ -139,8 +139,9 @@ a second person? Secondarily: does the task need a different model than the glob
   candidate class.
 - **Scoring of failures:** a backend error, a timeout or a refused reply scores as the
   stacked body, the outcome production gives the user in that case.
-- Model digests: `TO RECORD` at registration (the harness stamps the full digest in-band on
-  every run, and a run whose stamped digest differs from the table is void).
+- Model digests: the table under "Forecast and budget" (recorded by Stage 0; the harness
+  also stamps the full digest in-band on every run, and a run whose stamped digest differs
+  from the table is void).
 
 ## Metrics
 
@@ -182,40 +183,81 @@ resolved labels, with a 95% percentile bootstrap over cases (10,000 resamples, s
   confirmation run on notes that ingest actually produced, because this fixture's notes are
   repository documents. Adoption is a separate decision this screen does not make.
 
-## Forecast and budget (Ollama wall-clock; ASSUMED, not measured)
+## Forecast and budget (Ollama wall-clock; MEASURED by Stage 0)
 
 Calls: 15 cases x 1 arm x 5 runs = **75 per model; 450 for six models.**
 
-Latencies are **assumptions**: twice #1560's answer-call medians (`qwen3:8b` 4.75 s,
-`gemma4:26b-a4b` 2.83 s, `qwen3:14b` 6.57 s, `qwen3.6:35b-a3b` 3.22 s), because a
-reconciliation reply is a whole rewritten document of a few hundred words, not a short
-answer. `qwen3.6:27b` and `gemma2:27b` borrow `qwen3:14b`'s. One load per model, 60 s.
+**Stage 0 (run 2026-10-27 with `run_reconcile_screen.py stage0`; no scored case was
+called).** Per model, in order: one warm-up call (this is the model load, and is in no
+statistic below), three timed calls on a small calibration case, and one timed call on a large
+one, all seed 1, timeout 240 s, server defaults, one model at a time and the model unloaded
+before the next. The calibration cases are in no way fixture cases: two notes about sourdough
+baking, which no fixture case is about (`stage0-small`, 267 characters of notes; the smallest
+scored case is 721) and (`stage0-large`, 2,151 characters; the largest scored case is 2,458).
+`--self-test` pins that neither shares an id or a note with a fixture case. No call failed and
+none was refused. n = 4 timed calls per model, so the p95 (nearest rank) is the large call; read
+it as the cost of the largest case, not as a tail estimate.
 
-| model | calls x assumed s + load | forecast |
+| model | digest (sha256, as `/api/tags` reports it) | warm-up (load) s | small median s (n=3) | large-case s (n=1) | median s (n=4) | p95 s (n=4) | forecast min |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `qwen3:8b` | `500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41` | 6.2 | 1.58 | 12.30 | 1.58 | 12.30 | 8.5 |
+| `gemma4:26b-a4b` | `001e5dafc3c77684c2307ebc6ab8e336e10c9b18eca52acf547d72fc83c3ca8c` | 16.3 | 1.18 | 9.76 | 1.19 | 9.76 | 6.9 |
+| `qwen3:14b` | `bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8` | 11.1 | 2.64 | 24.02 | 2.64 | 24.02 | 16.3 |
+| `qwen3.6:27b` | `bcbdbd4bcf86f2c4a56cd1698fb31f9434f7dd99752f71b636c750aaa67a49a5` | 24.1 | 6.40 | 53.35 | 6.41 | 53.35 | 36.5 |
+| `qwen3.6:35b-a3b` | `a7eb95c53bcf96b4bdd008d0fab4a5dac88047d9c1a7a9ab88ed453423fbd87c` | 21.9 | 1.09 | 10.73 | 1.09 | 10.73 | 7.5 |
+| `gemma2:27b` | `53261bc9c192c1cb5fcc898dd3aa15da093f5ab6f08e17e48cf838bb1c58abfe` | 21.4 | 4.70 | 34.57 | 4.70 | 34.57 | 24.1 |
+
+**How the forecast is built.** A reconciliation reply is a rewritten document, so latency
+tracks the notes' size: the small case is below every scored case, so the median of the four
+calls (which sits on the small ones) would understate the screen several-fold. Each case's
+latency is interpolated linearly in its two notes' combined character count between the small
+and the large measurement (never below the small one), summed over the 15 cases, times 5
+runs, plus the model's measured warm-up in place of the assumed 60 s load. Two points are a thin
+basis for a line; this is an estimate, the scored runs will report their own medians, and the
+forecast carries no claim beyond the budget check below.
+
+| model | mean s per call (interpolated) | forecast |
 | --- | --- | --- |
-| `qwen3:8b` | 75 x 9.50 + 60 | 12.9 min |
-| `gemma4:26b-a4b` | 75 x 5.66 + 60 | 8.1 min |
-| `qwen3:14b` | 75 x 13.14 + 60 | 17.4 min |
-| `qwen3.6:27b` | 75 x 13.14 + 60 | 17.4 min |
-| `qwen3.6:35b-a3b` | 75 x 6.44 + 60 | 9.1 min |
-| `gemma2:27b` | 75 x 13.14 + 60 | 17.4 min |
-| **screen total** | | **about 1.37 h** |
-| confirmation (5 seeds, baseline + one candidate, assuming `qwen3:14b`) | 2 x 75 calls | about 0.5 h |
+| `qwen3:8b` | 6.71 | 8.5 min |
+| `gemma4:26b-a4b` | 5.29 | 6.9 min |
+| `qwen3:14b` | 12.88 | 16.3 min |
+| `qwen3.6:27b` | 28.88 | 36.5 min |
+| `qwen3.6:35b-a3b` | 5.70 | 7.5 min |
+| `gemma2:27b` | 19.00 | 24.1 min |
+| **screen total** | | **1.66 h** |
+| confirmation (5 seeds, baseline + `qwen3:14b`, the draft's assumption) | 2 x 75 calls | 0.41 h |
+| confirmation (5 seeds, baseline + `qwen3.6:27b`, the slowest candidate) | 2 x 75 calls | 0.74 h |
 
-**Budget: 2.5 h of Ollama wall-clock** from the first scored call. **Stage 0 before the
-screen:** three timed calls per model on a small case and one on the largest, which replace the
-assumed latencies in this table and set the per-call timeout (4x the baseline's median, floor
-60 s, as in #1557; the harness default is 240 s). If the measured total would exceed the budget
-the confirmation drops to 3 seeds; if the screen itself would exceed it, the slowest candidate
-is dropped before any scored call, not after. One Ollama job at a time, models one at a time,
-server defaults, and this work the only user of the server. The harness never contacts a model
-in `--self-test`, `forecast`, `blind-sheet` or `adjudicate`.
+**Budget: 2.5 h of Ollama wall-clock** from the first scored call. The measured screen total,
+**1.66 h, is within it**, so no candidate is dropped before the screen. With the
+confirmation the total is 2.07 h when the selected candidate is `qwen3:14b` and
+2.40 h if it were `qwen3.6:27b`, the slowest (28.9 s per call against
+`qwen3:8b`'s 6.7); both are within budget, so the confirmation keeps its 5 seeds.
+
+**Per-call timeout.** Four times the baseline's median (1.58 s), floor 60 s,
+as in #1557: **60 s**, passed to `run` as `--timeout 60` (the harness default is 240 s). Read
+this before the screen runs: `qwen3.6:27b` took 53.3 s on the 2,151 character
+case, and its replies to the larger scored cases (up to 2,458 characters) may run past 60 s; a
+timeout scores as the stacked body and V1 counts it. `gemma2:27b` took 34.6 s. The rule is
+the registered one and is not changed here.
+
+**Observed, not a decision.** On the Stage 0 medians, V2 (median call latency <= 2.0x the
+baseline's, 3.17 s) would pass `gemma4:26b-a4b` (1.19) and
+`qwen3.6:35b-a3b` (1.09), and would not pass `qwen3:14b` (2.64),
+`gemma2:27b` (4.70) or `qwen3.6:27b` (6.41). Those medians sit on the small
+case; V2 is applied on the scored runs' medians, not on these four calls, and every candidate
+stays in the screen.
+
+One Ollama job at a time, models one at a time, server defaults, and this work the only user
+of the server. The harness never contacts a model in `--self-test`, `forecast`, `blind-sheet`
+or `adjudicate`; `stage0` and `run` do.
 
 ## Commands
 
 ```sh
 OLLAMA_HOST=http://127.0.0.1:1 uv run python evals/reconcile_screen/run_reconcile_screen.py forecast --runs 5
-uv run python -u evals/reconcile_screen/run_reconcile_screen.py run --model qwen3:8b --runs 5
+uv run python -u evals/reconcile_screen/run_reconcile_screen.py stage0   # Stage 0, already run; calls only calibration inputs
+uv run python -u evals/reconcile_screen/run_reconcile_screen.py run --model qwen3:8b --runs 5 --timeout 60
 uv run python evals/reconcile_screen/run_reconcile_screen.py score
 ```
 

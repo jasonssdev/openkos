@@ -10,7 +10,7 @@ aggregate numbers, the zero-model baselines, the paired bootstrap, the vetoes
 and the forecast. The runner (`run_edge_typing_screen.py`) owns the model.
 
 The labels are ONE author's until the repository owner's blind adjudication is
-recorded (`PREREGISTRATION-DRAFT.md`); read `README.md` before trusting any
+recorded (`PREREGISTRATION.md`); read `README.md` before trusting any
 number computed from them.
 
 Imports only the standard library and the production modules that carry the
@@ -64,7 +64,7 @@ FAILURE_ABS_CAP: Final = 0.05
 FAILURE_MARGIN: Final = 0.02
 LATENCY_RATIO_CAP: Final = 2.0
 TRAP_MARGIN: Final = 0.10
-"""The vetoes of `PREREGISTRATION-DRAFT.md`."""
+"""The vetoes of `PREREGISTRATION.md`."""
 
 BASELINE_NAMES: Final = ("always references", "always related_to", "type signature")
 

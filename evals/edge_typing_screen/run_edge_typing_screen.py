@@ -13,15 +13,17 @@ Subcommands:
 - `forecast`  the call count and Ollama wall-clock a run would cost, and the
               model-free baselines. Never contacts a model. `run --dry-run` is
               the same.
+- `stage0`    warm-up and timed calls per model on calibration inputs that
+              are not fixture items; contacts Ollama, scores nothing.
 - `run`       one model, every item, N seeded runs; cached by row.
 - `score`     the numbers and the draft decision rule for the stored runs.
 - `blind-sheet` / `adjudicate`  the blind second adjudication: write the sheet a
               second labeller fills in, then compare it with the fixture's
               labels. No model; see `README.md`, "Second adjudication".
 
-STATUS: DRAFT. `PREREGISTRATION-DRAFT.md` is blocked on the owner's blind
-adjudication; no model has been run. Read `README.md` before trusting any
-number. Model-free check: `--self-test`.
+STATUS: `PREREGISTRATION.md` registers this screen when it merges, before any
+scored call; Stage 0 (`stage0`) has run and no scored call has. Read `README.md`
+before trusting any number. Model-free check: `--self-test`.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ sys.path.append(str(REPO_ROOT / "evals"))
 
 import edge_blind_adjudication as adj  # noqa: E402
 import edge_screen_core as core  # noqa: E402
+import stage0_timing as s0  # noqa: E402
 from harness_stamp import (  # noqa: E402
     TimedBackend,
     build_stamp,
@@ -172,6 +175,116 @@ def run_model(
                     if on_row is not None:
                         on_row(row)
     return rows
+
+
+# --- stage 0 -----------------------------------------------------------------
+
+STAGE0_SMALL_CALLS: Final = 3
+STAGE0_TIMEOUT: Final = 240.0
+"""Stage 0 measures slow models rather than cutting them off at the screen's
+own timeout, which Stage 0 is what sets."""
+STAGE0_ADR_IDS: Final = (
+    "0025-temporal-direction-never-comes-from-the-model",
+    "0044-the-quiet-engine-arc-precedes-interoperability",
+)
+"""Two ADRs that are not in the fixture (10.4 KB together; the largest scored
+pair is about 12 KB), so the large calibration call is ADR-sized and scores
+nothing."""
+
+
+def calibration_items(
+    repo_root: pathlib.Path = REPO_ROOT,
+) -> tuple[core.Item, core.Item]:
+    """`(small, large)`: two items that are in no way scored items.
+
+    The small one is a pair of 100-200 character concept documents like the
+    constructed stratum; the large one is a pair of ADRs outside the fixture, like
+    the ADR stratum. Neither id is a fixture id, and `--self-test` pins that."""
+
+    def doc(id_: str, type_: str, title: str, text: str) -> core.Doc:
+        return core.Doc(
+            id=id_, type=type_, title=title, text=text, language="en", source={}
+        )
+
+    small = core.Item(
+        id="stage0-small",
+        stratum="calibration",
+        source=doc(
+            "concepts/sourdough-starter",
+            "Concept",
+            "Sourdough Starter",
+            "# Sourdough Starter\n\nA sourdough starter is a live culture of flour and "
+            "water. The loaf recipe uses it in place of commercial yeast.",
+        ),
+        target=doc(
+            "concepts/loaf-recipe",
+            "Concept",
+            "Loaf Recipe",
+            "# Loaf Recipe\n\nThe loaf recipe makes one country loaf from flour, water, "
+            "salt and a ripe starter.",
+        ),
+        label="references",
+        alt_label=None,
+        trap_type=None,
+        how="calibration only; never scored",
+    )
+    adrs = []
+    for stem in STAGE0_ADR_IDS:
+        text = (repo_root / "docs" / "adr" / f"{stem}.md").read_text(encoding="utf-8")
+        adrs.append(
+            doc(
+                f"decisions/{stem}",
+                "Decision",
+                text.splitlines()[0].lstrip("# ").strip(),
+                text,
+            )
+        )
+    large = core.Item(
+        id="stage0-large",
+        stratum="calibration",
+        source=adrs[0],
+        target=adrs[1],
+        label="references",
+        alt_label=None,
+        trap_type=None,
+        how="calibration only; never scored",
+    )
+    return small, large
+
+
+def stage0_model(model: str, runs_dir: pathlib.Path) -> dict[str, Any]:
+    """Warm-up, then 3 timed small calls and 1 timed large call, seed 1, on the
+    calibration items. Returns the stamp (digest) and the latencies."""
+    small, large = calibration_items()
+    stamp = build_stamp(model=model, prompts={"edge_typing/system": et._SYSTEM_PROMPT})
+    if stamp_problems(stamp):
+        raise SystemExit(f"cannot stamp {model}: {stamp_problems(stamp)}")
+    client = OllamaClient(
+        model=model,
+        max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
+        context_window=DEFAULT_CONTEXT_WINDOW,
+        timeout=STAGE0_TIMEOUT,
+        seed=1,
+    )
+    with tempfile.TemporaryDirectory(prefix="et-stage0-") as scratch:
+        root = pathlib.Path(scratch)
+        warm, _ = run_item(client, small, "default", root)
+        rows = [
+            run_item(client, small, "default", root)[0]
+            for _ in range(STAGE0_SMALL_CALLS)
+        ]
+        big, _ = run_item(client, large, "default", root)
+    failures = [r["failure"] for r in [warm, *rows, big] if r["failure"]]
+    return {
+        "model": model,
+        "digest": stamp["model"]["digest"],
+        "stamp": stamp,
+        "warmup_s": warm["latency_s"],
+        "small_s": [r["latency_s"] for r in rows],
+        "large_s": [big["latency_s"]],
+        "failures": failures,
+        "large_chars": len(large.source.text) + len(large.target.text),
+    }
 
 
 # --- storage -----------------------------------------------------------------
@@ -463,6 +576,19 @@ def _self_test() -> int:
         sorted(i.id for i in items if i.trap_type is not None)
         == sorted(i.id for i in items if i.stratum == "constructed" and i.trap_type)
         and sum(i.trap_type is not None for i in items) == 9,
+    )
+    small_cal, large_cal = calibration_items()
+    check(
+        "stage 0 calls no scored item: both calibration ids and every doc are outside the fixture",
+        not {small_cal.id, large_cal.id} & set(by_item)
+        and not {d.id for c in (small_cal, large_cal) for d in (c.source, c.target)}
+        & {d.id for i in items for d in (i.source, i.target)},
+    )
+    check(
+        "the large calibration pair is ADR-sized, below the largest scored pair",
+        8_000
+        < len(large_cal.source.text) + len(large_cal.target.text)
+        < max(len(i.source.text) + len(i.target.text) for i in items),
     )
     largest = max(
         len(et._SYSTEM_PROMPT) + len(i.source.text) + len(i.target.text) + 400
@@ -1021,6 +1147,13 @@ def build_parser() -> argparse.ArgumentParser:
     fc.add_argument("--models", default=",".join([BASELINE, *CANDIDATES]))
     fc.add_argument("--runs", type=int, default=3)
 
+    st0 = sub.add_parser(
+        "stage0",
+        help="timed calibration calls per model (never a scored item); contacts Ollama",
+    )
+    common(st0)
+    st0.add_argument("--models", default=",".join([BASELINE, *CANDIDATES]))
+
     jt = sub.add_parser(
         "j-table", help="the J tolerance table on the resolved labels; no model"
     )
@@ -1113,6 +1246,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             encoding="utf-8",
         )
         print(f"imported {len(labels)} labels into {args.out}")
+        return 0
+
+    if args.stage == "stage0":
+        results = []
+        for model in args.models.split(","):
+            measured = stage0_model(model, args.runs_dir)
+            results.append(measured)
+            print(json.dumps(measured, ensure_ascii=False))
+            s0.unload(model)
+        args.runs_dir.mkdir(parents=True, exist_ok=True)
+        (args.runs_dir / "stage0.json").write_text(
+            json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
         return 0
 
     if args.stage == "j-table":
