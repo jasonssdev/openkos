@@ -39,7 +39,15 @@ The two values must match exactly. If they do not, delete the file and download 
 
 ## Download
 
-Only after the sections above: the installer is the `OpenKOS.dmg` asset of the [latest release](https://github.com/jasonssdev/openkos/releases/latest).
+Only after the sections above: [download `OpenKOS.dmg`](https://github.com/jasonssdev/openkos/releases/latest/download/OpenKOS.dmg), the asset of the [latest release](https://github.com/jasonssdev/openkos/releases/latest). Its checksum is at [`OpenKOS.dmg.sha256`](https://github.com/jasonssdev/openkos/releases/latest/download/OpenKOS.dmg.sha256). The app does not update itself; to move to a newer build, download the new installer and replace the app.
+
+## What happens on first launch
+
+The app asks you to pick or create an empty folder for your library, runs the engine's own setup in it, then walks you through installing Ollama and downloading the models ([ADR-0071](adr/0071-the-desktop-shell-remembers-the-chosen-workspace-in-its-own-config-directory-and-creates-one-with-the-engines-init.md)). Your files stay in that folder on your machine. The app asks for no account and sends nothing to a cloud service; it reaches the network only to pull models. Later launches reopen the same folder.
+
+## Uninstall
+
+Drag **OpenKOS** from Applications to the Trash. That removes the app only. Your library folder is yours and stays where you put it. To also forget the remembered folder, delete `~/Library/Application Support/io.github.jasonssdev.openkos/`. If you stored a remote backend's API key in the app, remove the `io.github.jasonssdev.openkos` item from Keychain Access.
 
 ## This is a developer build
 
