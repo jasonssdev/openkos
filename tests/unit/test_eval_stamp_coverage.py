@@ -43,6 +43,7 @@ EXEMPT: dict[str, str] = {
     "query_identity/run_query_identity_probe.py": "embedding model only, zero chat calls",
     "stage0_timing.py": "posts only keep_alive=0 to unload a model; no chat call and no stored result (the runners' `stage0` stamp their calls)",
     "retrieval_stability/run_retrieval_stability_probe.py": "retrieval only: the chat LLM is a stub",
+    "retrieval_gold/gold_doc2query.py": "the generation loop over an injected chat object, no client and no entry point; `generate_questions.py` builds the client and stamps every file it stores",
     "retrieval_gold/run_retrieval_gold.py": "embedding model only, zero chat calls; the stored run records the harness commit and the embedder digest itself",
     "section_coverage/run_embedding_coverage_probe.py": "embedding model only, zero chat calls",
     "transcript_decisions/thesis_metric.py": "embedding model only, zero chat calls; scores stored runs that carry their own stamp",
