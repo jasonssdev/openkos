@@ -616,6 +616,16 @@ uv run python evals/retrieval_gold/run_retrieval_gold.py compare \
     --channel fused --metric ndcg@10
 ```
 
+`compare` also contrasts two channels of one scored run, optionally on a subset
+(`all`, `vocab-gap`, `plain`, `en`, `es`, or a kind), with the same seeded paired
+bootstrap and no model:
+
+```bash
+uv run python evals/retrieval_gold/run_retrieval_gold.py compare \
+    --base ~/openkos-eval-runs/retrieval-gold/scores-v1.json \
+    --base-channel dense --cand-channel fused --metric recall@5 --subset vocab-gap
+```
+
 For the built gold bundle the same commands take `--workspace`, which also selects
 `questions.v1.json`; the full pool needs a `run` with embeddings (bge-m3 through Ollama,
 zero chat calls):
@@ -652,3 +662,5 @@ be resolved by hand; the command never merges them.
 | `bundle_sources.json` | The selected sources with their sha256, language, kind and tier, and what was excluded and why. |
 | `questions.draft.json` | The draft question set for the 35-document draft bundle; no judgments. |
 | `questions.v1.json` | The frozen, model-authored question set for `bundle-v1`; no judgments. |
+| `judgments-v1.json` | The relevance judgments for `bundle-v1` (document ids and grades only; sources are AMI CC BY 4.0 and the repo's synthetic notes). |
+| `RESULTS-v1-baseline.md` | The v1 baseline: who judged, agreement, scores and paired contrasts. |
