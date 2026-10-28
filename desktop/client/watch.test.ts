@@ -64,6 +64,14 @@ describe("the watch commands", () => {
     }
   });
 
+  it("asks the shell to tell the person the watch paused, with no text of its own", async () => {
+    const { invoke, calls } = fakeInvoke(() => null);
+
+    await createWatch(invoke).notifyBudgetStop();
+
+    expect(calls).toEqual([{ command: "notify_watch_budget", args: undefined }]);
+  });
+
   it("refuses a state the shell never sends", async () => {
     for (const odd of [null, "on", { state: "sleeping", wanted: true }, { state: "on", wanted: "yes" }, { wanted: true }]) {
       const { invoke } = fakeInvoke(() => odd);
@@ -90,7 +98,7 @@ describe("the watch commands", () => {
 describe("the shell's side of the contract", () => {
   it("registers every command the wrapper calls", () => {
     const handler = /generate_handler!\[([^\]]*)\]/.exec(LIB)?.[1] ?? "";
-    for (const command of ["watch_state", "set_watch", "pick_inbox_folder"]) {
+    for (const command of ["watch_state", "set_watch", "pick_inbox_folder", "notify_watch_budget"]) {
       expect(handler).toMatch(new RegExp(`\\b${command}\\b`));
       expect(LIB).toMatch(new RegExp(`async fn ${command}\\(|fn ${command}\\(`));
     }

@@ -81,6 +81,8 @@ export interface SettingsPorts {
     state(): Promise<WatchStatus>;
     set(on: boolean): Promise<WatchStatus>;
     pickFolder(): Promise<string | null>;
+    /** Ask the shell to raise the notification that the watch paused on the limit. */
+    notifyBudgetStop(): Promise<void>;
   };
 }
 
@@ -194,6 +196,9 @@ export class SettingsModel {
   #api: SettingsApi | null = null;
   #pending: Preview | null = null;
   #watchPending: InboxPreview | null = null;
+  /** The first look at the watch has been taken: a stop already there is not news. */
+  #baselined = false;
+  #wasPaused = false;
 
   constructor(ports: SettingsPorts) {
     this.#ports = ports;
@@ -243,6 +248,7 @@ export class SettingsModel {
       ...(library.status === "fulfilled" ? { library: library.value } : {}),
       librarySwitching: false,
     });
+    this.#noticeBudgetStop();
     await this.#loadUndoLists(api);
   }
 
@@ -460,6 +466,22 @@ export class SettingsModel {
       if (read.status === "fulfilled") activity = read.value;
     }
     this.#set({ watch: state, activity });
+    this.#noticeBudgetStop();
+  }
+
+  /**
+   * The daemon idles on a spent budget and exits with no code, so the shell
+   * cannot tell the person; the page sees it first, in the job record, and asks
+   * the shell for the notification once per stop. A stop already there when the
+   * app first looked is not announced, and a failure is the shell's to raise.
+   */
+  #noticeBudgetStop(): void {
+    if (this.state.watch === null) return;
+    const paused = watchKind(this.state) === "budget";
+    const announce = this.#baselined && paused && !this.#wasPaused;
+    this.#baselined = true;
+    this.#wasPaused = paused;
+    if (announce) void this.#ports.watch.notifyBudgetStop().catch(() => {});
   }
 
   /** Choose the folder to watch and preview it; nothing is written until `confirmWatch`. */

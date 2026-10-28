@@ -80,6 +80,13 @@ export function createWatch(invoke: Invoke) {
     async set(on: boolean): Promise<WatchStatus> {
       return status(await run(invoke, "set_watch", { on }));
     },
+    /**
+     * Raise the macOS notification that the watch paused on the AI model's
+     * limit. The text is the shell's: the page cannot choose it.
+     */
+    async notifyBudgetStop(): Promise<void> {
+      await run(invoke, "notify_watch_budget");
+    },
     /** The system folder picker for the folder to watch; `null` when the user cancels. */
     async pickFolder(): Promise<string | null> {
       const answer = await run(invoke, "pick_inbox_folder");

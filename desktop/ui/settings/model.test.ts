@@ -190,6 +190,7 @@ function setup(
         return watch;
       }),
       pickFolder: vi.fn(async (): Promise<string | null> => FOLDER),
+      notifyBudgetStop: vi.fn(async () => {}),
     },
     keys: {
       set: vi.fn(async (_key: string) => {}),
@@ -950,6 +951,65 @@ describe("the watch status", () => {
 
     expect(model.state.activity).toEqual(SPENT);
     expect(model.state.watch).toEqual(ON);
+  });
+
+  it("does not notify for a stop that was already there when the app looked first", async () => {
+    const { model, ports } = await connected({ inbox: FOLDER, watch: ON, activity: SPENT });
+
+    await model.refreshWatch();
+
+    expect(watchKind(model.state)).toBe("budget");
+    expect(ports.watch.notifyBudgetStop).not.toHaveBeenCalled();
+  });
+
+  it("notifies once when the daemon stops on the limit while the app is open", async () => {
+    const { model, api, ports } = await connected({ inbox: FOLDER, watch: ON });
+    api.unattendedActivity.mockResolvedValue(SPENT);
+
+    await model.refreshWatch();
+    await model.refreshWatch();
+
+    expect(ports.watch.notifyBudgetStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies again when the limit is reached again after a clean pass", async () => {
+    const { model, api, ports } = await connected({ inbox: FOLDER, watch: ON });
+    for (const next of [SPENT, IDLE, SPENT]) {
+      api.unattendedActivity.mockResolvedValue(next);
+      await model.refreshWatch();
+    }
+
+    expect(ports.watch.notifyBudgetStop).toHaveBeenCalledTimes(2);
+  });
+
+  it("notices a stop that arrives while Settings reloads, not only on the timer", async () => {
+    const { model, api, ports } = await connected({ inbox: FOLDER, watch: ON });
+    api.unattendedActivity.mockResolvedValue(SPENT);
+
+    await model.load();
+    await model.refreshWatch();
+
+    expect(ports.watch.notifyBudgetStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a failure to the shell, which raises its own notification", async () => {
+    const { model, ports } = await connected({ inbox: FOLDER, watch: ON });
+    ports.watch.state.mockResolvedValue({ state: "failed", reason: "exited", detail: "x", wanted: true });
+
+    await model.refreshWatch();
+
+    expect(watchKind(model.state)).toBe("failed");
+    expect(ports.watch.notifyBudgetStop).not.toHaveBeenCalled();
+  });
+
+  it("carries on when the notification cannot be shown", async () => {
+    const { model, api, ports } = await connected({ inbox: FOLDER, watch: ON });
+    ports.watch.notifyBudgetStop.mockRejectedValue(new WatchError("unknown", "x"));
+    api.unattendedActivity.mockResolvedValue(SPENT);
+
+    await expect(model.refreshWatch()).resolves.toBeUndefined();
+
+    expect(watchKind(model.state)).toBe("budget");
   });
 
   it("starts a failed watch over with Start again", async () => {
