@@ -555,7 +555,7 @@ be resolved by hand; the command never merges them.
 | `build_bundle.py` | Builds the gold bundle with production `ingest`; `plan`, `build`, `--self-test`. Refuses a pending translation. |
 | `translate_meetings.py` | Translates the 12 development meetings into Spanish; `run`, `sample-sheet`, `pin`, `--self-test`. |
 | `prereg_tools.py`, `gold_prereg.py` | Model-free pieces of the registrations below: chunk counts, the length diagnostic, the vocabulary-gap stratum, the leak audit, three-list fusion, the distance aggregators. Pure, `--self-test`. |
-| `PREREGISTRATION-1648.md` | Draft: does the dense channel favour long documents (diagnostic first, then arms). |
-| `PREREGISTRATION-1650.md` | Draft: index the questions a Decision answers (doc2query), measured on the vocabulary-gap stratum. |
+| `PREREGISTRATION-1648.md` | Registered on merge: does the dense channel favour long documents (diagnostic first, then arms). |
+| `PREREGISTRATION-1650.md` | Registered on merge: index the questions a Decision answers (doc2query), measured on the vocabulary-gap stratum. |
 | `bundle_sources.json` | The selected sources with their sha256, language, kind and tier, and what was excluded and why. |
 | `questions.draft.json` | The draft question set; no judgments. |

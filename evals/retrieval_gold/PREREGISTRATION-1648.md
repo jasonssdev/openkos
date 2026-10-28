@@ -1,10 +1,11 @@
 # Pre-registration: does the dense channel favour long documents? (#1648)
 
-**Status: DRAFT. Registered when this file merges, before any measured run.** A
-change after the merge is a new registration, not an edit. Part of #1652. Nothing
-in this file has been run: no model was contacted, and the bundle and question set
-it is measured on (the v1 set of #1609) do not exist yet. Items marked
-**Owner confirms** carry a recommended default and are the only open choices.
+**Status: registered when this file merges to main; no model run before the merge
+and before the listed pre-run code lands.** A change after the merge is a new
+registration, not an edit. Part of #1652. Nothing in this file has been run: no
+model was contacted, and the bundle and question set it is measured on (the v1 set
+of #1609) do not exist yet. The owner-confirm items below were confirmed at their
+recommended defaults on 2026-10-27 under the owner's standing delegation.
 
 ## The question
 
@@ -210,7 +211,10 @@ uv run python evals/retrieval_gold/prereg_tools.py length-diagnostic \
     --out ~/openkos-eval-runs/retrieval-gold/length-diagnostic.json
 ```
 
-## Owner confirms (recommended default first)
+## Owner confirms (confirmed 2026-10-27 under the owner's standing delegation)
+
+All items below are confirmed at the recommended default (the first option), except
+where a deviation is recorded.
 
 1. **Primary arm: T1.** Default T1 (no free parameter). Alternative: T2 as co-primary, at the
    price of a multiplicity correction and a `lambda` chosen on development data.

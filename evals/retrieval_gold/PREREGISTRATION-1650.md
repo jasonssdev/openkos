@@ -1,10 +1,11 @@
 # Pre-registration: index the questions a Decision answers (#1650)
 
-**Status: DRAFT. Registered when this file merges, before any measured run.** A
-change after the merge is a new registration, not an edit. Part of #1652. Nothing
-in this file has been run: no model was contacted, and the bundle and question set
-it is measured on (the v1 set of #1609) do not exist yet. Items marked
-**Owner confirms** carry a recommended default and are the only open choices.
+**Status: registered when this file merges to main; no model run before the merge
+and before the listed pre-run code lands.** A change after the merge is a new
+registration, not an edit. Part of #1652. Nothing in this file has been run: no
+model was contacted, and the bundle and question set it is measured on (the v1 set
+of #1609) do not exist yet. The owner-confirm items below were confirmed at their
+recommended defaults on 2026-10-27 under the owner's standing delegation.
 
 ## The question
 
@@ -224,7 +225,10 @@ uv run python evals/retrieval_gold/prereg_tools.py stratum-compare \
     --base scores-a0.json --cand scores-a2.json --metric ndcg@5
 ```
 
-## Owner confirms (recommended default first)
+## Owner confirms (confirmed 2026-10-27 under the owner's standing delegation)
+
+All items below are confirmed at the recommended default (the first option), except
+where a deviation is recorded.
 
 1. **Storage: (a) frontmatter key** on the Decision, decided by ADR on adoption. Alternative: (b)
    sidecar, if the questions should stay out of the concept file.
@@ -232,8 +236,11 @@ uv run python evals/retrieval_gold/prereg_tools.py stratum-compare \
    expansion cannot be shown to help a gap that v1 does not have. Alternative: author 15 to 20
    paraphrase questions about existing Decisions, written without reading the Decision text
    (from the Source passage only), before any generation.
-3. **Faithfulness review:** default a model reviewer of a different family from `qwen3`, with a
-   spot check by the owner of a random 10, as was done for the translations. Alternative: the
-   owner reviews all 30.
+3. **Faithfulness review:** a model reviewer of a different family from `qwen3`, then a
+   SECOND Claude reviewer, blind to the first reviewer's verdicts and a different model from
+   it, over the same 30 questions. **Deviation, recorded:** the registered default was a spot
+   check by the owner of a random 10; it is replaced by this second reviewer, so **no human
+   reviews the generated questions**. Where the two reviewers disagree, the question counts as
+   a "no" for the 27-of-30 bar.
 4. **Margin: +0.05 nDCG@5 on the stratum.** Default as derived; lower it only if the stratum
    turns out large.
