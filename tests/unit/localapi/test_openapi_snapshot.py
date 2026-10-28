@@ -138,6 +138,7 @@ _ROUTE_ERRORS: dict[tuple[str, str], set[str]] = {
     ("get", "/v1/health"): set(),
     ("get", "/v1/status"): set(),
     ("get", "/v1/pending"): {"503"},
+    ("get", "/v1/unattended"): set(),
     ("get", "/v1/decisions"): set(),
     ("post", "/v1/decisions/{decision_key}/preview"): {"409", "413"},
     ("post", "/v1/decisions/{decision_key}/preview-finding"): {"409", "413"},

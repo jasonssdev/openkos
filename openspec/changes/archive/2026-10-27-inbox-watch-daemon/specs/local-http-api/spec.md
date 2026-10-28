@@ -42,3 +42,27 @@ NOT start or stop any process.
 - GIVEN a workspace that watches a folder
 - WHEN a preview with `inbox: null` is applied
 - THEN `openkos.yaml` has no `unattended.inbox` and `inbox_settings` reads `null`
+
+### Requirement: The Latest Unattended Outcome Is Served Under `/v1/unattended`
+
+The server MUST serve `GET /v1/unattended`, calling `unattended_activity` with
+the launch's workspace and answering `{last_job, budget_exhausted,
+jobs_unreadable}`. It MUST be read-only: it MUST take no lock, make no model call,
+write nothing and never create the job record. Because the daemon idles on a
+spent budget rather than exiting, this is how a client learns that the watch
+paused on the budget.
+
+#### Scenario: A workspace that never ran the daemon has no history
+
+- GIVEN a workspace with no job record
+- WHEN `GET /v1/unattended` is sent
+- THEN the response is 200 with `last_job` null and `budget_exhausted` false,
+  and nothing was written
+
+#### Scenario: A spent budget is served with its job
+
+- GIVEN the newest watch job ended `budget_exhausted` and another writer holds
+  the workspace lock
+- WHEN `GET /v1/unattended` is sent
+- THEN the response is 200 with `budget_exhausted` true and that job as
+  `last_job`
