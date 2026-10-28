@@ -15,6 +15,7 @@ export type { EngineState, ReadyEngine } from "./engine.ts";
 export * from "./errors.ts";
 export * from "./shell.ts";
 export * from "./setup.ts";
+export * from "./watch.ts";
 export * from "./workspace.ts";
 export type { components, paths } from "./schema";
 
@@ -210,6 +211,12 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
       call("post", "/v1/settings/model/preview", { body }),
     applyModelSettings: (body: Schemas["ModelSettingsApplyRequest"]) =>
       call("post", "/v1/settings/model/apply", { body }),
+    inboxSettings: () => call("get", "/v1/settings/inbox"),
+    previewInboxSettings: (body: Schemas["InboxSettingsPreviewRequest"]) =>
+      call("post", "/v1/settings/inbox/preview", { body }),
+    applyInboxSettings: (body: Schemas["InboxSettingsApplyRequest"]) =>
+      call("post", "/v1/settings/inbox/apply", { body }),
+    unattendedActivity: () => call("get", "/v1/unattended"),
     declinedContradictions: () => call("get", "/v1/declined-contradictions"),
     previewReopenContradiction: (body: Schemas["ContradictionReopenPreviewRequest"]) =>
       call("post", "/v1/contradictions/reopen/preview", { body }),

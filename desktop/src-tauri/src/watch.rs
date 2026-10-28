@@ -263,11 +263,10 @@ impl Drop for WatchSupervisor {
 }
 
 fn fail(shared: &Shared, launch: &Launch, reason: String, detail: String) {
-    shared.finish(WatchState::Failed {
-        reason: reason.clone(),
-        detail: detail.clone(),
-    });
+    // Raised before the state is published, so whoever observes `Failed`
+    // finds the notification already raised.
     (launch.on_failed)(&reason, &detail);
+    shared.finish(WatchState::Failed { reason, detail });
 }
 
 /// The supervision loop: start, watch, restart within the budget, stop.
@@ -679,6 +678,29 @@ mod tests {
         assert_eq!(
             sup.wait_for(WAIT, |s| matches!(s, WatchState::NoWorkspace)),
             Some(WatchState::NoWorkspace)
+        );
+        sup.disable();
+    }
+
+    #[test]
+    fn the_failure_is_raised_before_the_failed_state_is_published() {
+        let raised = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&raised);
+        let sup = WatchSupervisor::new(
+            Box::new(|| Err(Unlocated::Failed("the workspace is missing".to_owned()))),
+            Box::new(EngineEnv::default),
+            Box::new(move |_, _| {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                count.fetch_add(1, Ordering::SeqCst);
+            }),
+            fast(3),
+        );
+        sup.enable();
+        sup.wait_for(WAIT, is_failed).expect("failed");
+        assert_eq!(
+            raised.load(Ordering::SeqCst),
+            1,
+            "whoever sees Failed must find the notification already raised"
         );
         sup.disable();
     }

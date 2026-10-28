@@ -191,6 +191,13 @@ def make_router() -> APIRouter:
     def pending(workspace: api.Workspace = Depends(_workspace)) -> api.PendingReport:  # noqa: B008
         return invoke(lambda: api.pending_report(workspace))
 
+    @router.get("/unattended")
+    def unattended(
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.UnattendedActivity:
+        # Reads the job record read-only: no lock, no model, nothing created.
+        return invoke(lambda: api.unattended_activity(workspace))
+
     @router.get("/decisions")
     def decisions(workspace: api.Workspace = Depends(_workspace)) -> DecisionList:  # noqa: B008
         return DecisionList(

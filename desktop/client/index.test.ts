@@ -232,6 +232,22 @@ describe("the requests", () => {
         },
       },
     ],
+    ["inboxSettings", (c) => c.inboxSettings(), "GET", "/v1/settings/inbox", null],
+    [
+      "previewInboxSettings",
+      (c) => c.previewInboxSettings({ inbox: "/Users/me/Inbox" }),
+      "POST",
+      "/v1/settings/inbox/preview",
+      { inbox: "/Users/me/Inbox" },
+    ],
+    [
+      "applyInboxSettings",
+      (c) => c.applyInboxSettings({ version: { change: { inbox: null }, content_digest: "d" } }),
+      "POST",
+      "/v1/settings/inbox/apply",
+      { version: { change: { inbox: null }, content_digest: "d" } },
+    ],
+    ["unattendedActivity", (c) => c.unattendedActivity(), "GET", "/v1/unattended", null],
     [
       "applyReopen",
       (c) => c.applyReopen({ version: { member_ids: ["a", "b"], content_digest: "d" } }),

@@ -16,6 +16,7 @@ from typing import Literal, Protocol
 from openkos.api._workspace import Workspace
 from openkos.application import pending_queue_report
 from openkos.application import status as application_status
+from openkos.application import unattended_activity as application_unattended
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,19 @@ class PendingReport:
     open_rows: tuple[PendingRow, ...]
     stats: tuple[KindCounts, ...]
     attention: tuple[JobSummary, ...]
+    jobs_unreadable: bool
+
+
+@dataclass(frozen=True)
+class UnattendedActivity:
+    """The unattended engine's latest outcome. `budget_exhausted`: the newest
+    watch or maintenance job ended because the model-call budget ran out (the
+    daemon idles and records it; it does not exit). `last_job` is the newest
+    job of any kind. `jobs_unreadable` is a record that exists but cannot be
+    read, which is not the same as no history."""
+
+    last_job: JobSummary | None
+    budget_exhausted: bool
     jobs_unreadable: bool
 
 
@@ -229,4 +243,16 @@ def pending_report(workspace: Workspace) -> PendingReport:
         ),
         attention=tuple(_job_summary(job) for job in raw.attention),
         jobs_unreadable=raw.jobs_unreadable,
+    )
+
+
+def unattended_activity(workspace: Workspace) -> UnattendedActivity:
+    """The latest unattended job and whether the budget is spent. Takes no
+    lock, builds no client, writes nothing, and never creates the job record."""
+    activity = application_unattended.read_unattended_activity(workspace._layout)
+    last = activity.last_job
+    return UnattendedActivity(
+        last_job=None if last is None else _job_summary(last),
+        budget_exhausted=activity.budget_exhausted,
+        jobs_unreadable=activity.jobs_unreadable,
     )
