@@ -1,13 +1,13 @@
 # Pre-registration: Decision fidelity, concrete values and commitment (#1649)
 
-**Status: DRAFT. Registered when this file merges to `main`, which happens before any
-model call of this measurement (#1556: pre-register, and merge the pre-registration,
-before any run).** From the merge, everything below binds; a change after it is a new
-registration, not an edit to this one, and any deviation is disclosed in `RESULTS-1649.md`.
-Until then this is a proposal and the owner-confirm items at the end are open. The model-free
+**Status: Registered when this file merges to `main`; no model run before the merge and
+before the gold is labelled (#1556: pre-register, and merge the pre-registration, before any
+run).** From the merge, everything below binds; a change after it is a new registration, not an
+edit to this one, and any deviation is disclosed in `RESULTS-1649.md`. The owner-confirm items at
+the end are confirmed. The model-free
 harness (`fidelity_core.py`, `fidelity_ami.py`, `build_sheets.py`, `score_fidelity.py`) is
 committed with this file and has been exercised only by its `--self-test` and unit tests.
-No sheet has been labelled and no model has run. Part of #1652; refs #1649.
+No sheet has been labelled and no model has run at the time of writing. Part of #1652; refs #1649.
 
 ## Question
 
@@ -226,14 +226,15 @@ rendered transcripts); the per-window times are the stored runs', not a measurem
 - **Truth.** OpenKOS preserves representations; a `committed` line is one the participants settled in the
   transcript, not a correct or implemented decision.
 
-## Owner-confirm items (recommended defaults)
+## Owner-confirm items (confirmed)
 
-1. **Scope to the opt-in pass.** Register the pass only, as above? *Default: yes;* the default extraction
-   path has no evidence line to check. A second registration could cover it.
-2. **Margins** (`-0.05` recall, `+0.10` value, `-0.05` proposals). *Default: as written.*
-3. **15 runs per LLM arm.** *Default: 15;* 20 costs ~3 h more.
-4. **Double labelling of the cue and line sheets by Claude, value sheet once.** *Default: as written.*
-5. **Guard demotes in production (Concept), scored as a drop here.** *Default: confirm demotion over a
-   hard drop before any production change.*
-6. **Label the value gold before merge or after?** *Default: after merge, before any run, as the procedure
-   says; labels are blind to outputs either way.*
+All six confirmed 2026-10-27 under the owner's standing delegation to take recommended defaults.
+
+1. **Scope to the opt-in pass: yes.** The default extraction path has no evidence line to check; a
+   second registration could cover it.
+2. **Margins as written** (`-0.05` recall, `+0.10` value, `-0.05` proposals).
+3. **15 runs per LLM arm.**
+4. **Labelling scheme as written:** cue and line sheets labelled twice by Claude, value sheet once.
+5. **Production guard = demote to a Concept**, scored here as a drop. The demotion is to be confirmed
+   again before any production change.
+6. **Label the gold after merge, before any run, blind to outputs.**
