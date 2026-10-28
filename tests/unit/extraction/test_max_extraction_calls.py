@@ -9,6 +9,7 @@ built to spend as many calls as each mechanism allows and assert the observed
 count never passes the bound.
 """
 
+import itertools
 from collections.abc import Sequence
 
 import pytest
@@ -91,16 +92,24 @@ _SHORT = 3_000
 @pytest.mark.parametrize("title", [_PROSE_TITLE, _MEETING_TITLE])
 @pytest.mark.parametrize("reply", [_SOLE, _TWO])
 @pytest.mark.parametrize("decisions", [False, True])
+@pytest.mark.parametrize("selector", [False, True])
 def test_the_union_path_never_passes_the_bound_on_a_chunked_source(
-    title: str, reply: str, decisions: bool
+    title: str, reply: str, decisions: bool, selector: bool
 ) -> None:
     text = _source_of(_CHUNKED)
     llm = _Adversary(reply)
     concept.extract_concept_union(
-        text, source_title=title, llm=llm, transcript_decisions=decisions
+        text,
+        source_title=title,
+        llm=llm,
+        transcript_decisions=decisions,
+        selector_judge=selector,
     )
     bound = concept.max_extraction_calls(
-        text, union_judge=True, transcript_decisions=decisions
+        text,
+        union_judge=True,
+        transcript_decisions=decisions,
+        selector_judge=selector,
     )
     assert llm.calls <= bound
     # The adversary really did spend the retries: one extra call per window.
@@ -113,8 +122,9 @@ def test_the_union_path_never_passes_the_bound_on_a_chunked_source(
 @pytest.mark.parametrize("title", [_PROSE_TITLE, _MEETING_TITLE])
 @pytest.mark.parametrize("reply", [_SOLE, _TWO])
 @pytest.mark.parametrize("decisions", [False, True])
+@pytest.mark.parametrize("selector", [False, True])
 def test_the_union_path_never_passes_the_bound_on_a_short_source(
-    title: str, reply: str, decisions: bool
+    title: str, reply: str, decisions: bool, selector: bool
 ) -> None:
     text = _source_of(_SHORT)
 
@@ -130,10 +140,17 @@ def test_the_union_path_never_passes_the_bound_on_a_short_source(
 
     llm = _NoRaise(reply)
     concept.extract_concept_union(
-        text, source_title=title, llm=llm, transcript_decisions=decisions
+        text,
+        source_title=title,
+        llm=llm,
+        transcript_decisions=decisions,
+        selector_judge=selector,
     )
     assert llm.calls <= concept.max_extraction_calls(
-        text, union_judge=True, transcript_decisions=decisions
+        text,
+        union_judge=True,
+        transcript_decisions=decisions,
+        selector_judge=selector,
     )
 
 
@@ -154,29 +171,38 @@ def test_the_bound_is_never_below_the_ordinary_estimate() -> None:
     for chars in (_SHORT, 13_000, 19_000, _CHUNKED):
         text = _source_of(chars)
         for title in (_PROSE_TITLE, _MEETING_TITLE):
-            for union in (False, True):
-                for decisions in (False, True):
-                    estimate = concept.estimate_extraction_calls(
-                        text,
-                        source_title=title,
-                        union_judge=union,
-                        transcript_decisions=decisions,
-                    ).calls
-                    bound = concept.max_extraction_calls(
-                        text, union_judge=union, transcript_decisions=decisions
-                    )
-                    assert bound >= estimate
+            for union, decisions, selector in itertools.product(
+                (False, True), repeat=3
+            ):
+                estimate = concept.estimate_extraction_calls(
+                    text,
+                    source_title=title,
+                    union_judge=union,
+                    transcript_decisions=decisions,
+                    selector_judge=selector,
+                ).calls
+                bound = concept.max_extraction_calls(
+                    text,
+                    union_judge=union,
+                    transcript_decisions=decisions,
+                    selector_judge=selector,
+                )
+                assert bound >= estimate
 
 
 def test_the_bound_on_a_short_source_is_the_sum_of_every_mechanism() -> None:
     """Two passes, the re-ask, the participant pass and the decision pass with
-    its retry (a short source is one window), and both judge attempts: the
-    meeting-shaped reading is the costlier one, and the bound takes it whatever
-    the title."""
+    its retry (a short source is one window), and, with the selector judge on,
+    both judge attempts: the meeting-shaped reading is the costlier one, and the
+    bound takes it whatever the title. The judge's attempts are absent by
+    default (ADR-0080)."""
     text = _source_of(_SHORT)
     assert concept.max_extraction_calls(
-        text, union_judge=True, transcript_decisions=True
+        text, union_judge=True, transcript_decisions=True, selector_judge=True
     ) == (2 + 1 + 1 + 2 + judge.JUDGE_ATTEMPTS)
+    assert concept.max_extraction_calls(
+        text, union_judge=True, transcript_decisions=True
+    ) == (2 + 1 + 1 + 2)
     assert concept.max_extraction_calls(
         text, union_judge=False, transcript_decisions=False
     ) == (2 + 1)

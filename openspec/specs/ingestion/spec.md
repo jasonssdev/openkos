@@ -6,7 +6,7 @@
 it gates the workspace, reads the configuration, builds the LLM client,
 and performs every snapshot read, then delegates to the ingest
 application service, which stages a bounded list of derived objects —
-zero up to a post-judge backstop cap of 20, each classified across the
+zero up to a backstop cap of 20, each classified across the
 9-type derived-object vocabulary (`Concept`, `Entity`, `Place`, `Event`,
 `Procedure`, `Decision`, `Project`, `Person`, `Organization`) — alongside
 the generated Source concept. `ingest` itself owns argument parsing,
@@ -184,7 +184,7 @@ from that mapping (see "Source Tag Lift And Re-Ingest Union"); otherwise
 `source_frontmatter` is absent and `tags` carries only what this
 capability otherwise resolves. In addition, `ingest` MUST attempt LLM-driven
 extraction of a **bounded list** of derived objects —
-zero up to a post-judge backstop cap of 20 — each of a type in the 9-type
+zero up to a backstop cap of 20 — each of a type in the 9-type
 classifiable
 vocabulary (`{Concept, Entity, Place, Event, Procedure, Decision, Project,
 Person, Organization}`) from the source. WHEN extraction succeeds, for EACH
@@ -880,7 +880,8 @@ degrade, and MUST exit 0.
 writes (Phase A) before Phase B writes any of them. The number of derived
 objects written for a single source MUST NOT exceed a backstop cap of 20,
 applied exactly once, after union construction and judge selection (or after
-the judge-failure degrade) — never as a pre-judge truncation. The one
+the judge-failure degrade, or directly after union construction when the
+selector judge is off) — never as a pre-judge truncation. The one
 exception is the judge-unavailable degrade, in which the judge could not
 rank the candidates: the cap MUST NOT be applied, because a positional cut
 on an unranked set discards by arrival order, and the set remains bounded by
@@ -977,7 +978,7 @@ itself introduces no separate staging path.
 
 ### Requirement: Judge-Failure Degrade Is Reported, Ingest Still Succeeds
 
-WHEN the extraction judge call fails (raises `BackendError`, returns an
+WHEN the selector judge is enabled and the extraction judge call fails (raises `BackendError`, returns an
 empty or unparseable reply), `ingest` MUST proceed with the merged-union
 candidates truncated by the backstop cap rather than falling back to
 Source-only, MUST emit a note to stderr distinct from the Source-only
@@ -985,8 +986,8 @@ degrade notice, and MUST exit 0.
 
 #### Scenario: Judge failure keeps validated candidates, not just the Source
 
-- GIVEN a fake LLM backend whose base extraction succeeds but whose judge
-  call raises `BackendError`
+- GIVEN `selector_judge: true` and a fake LLM backend whose base extraction
+  succeeds but whose judge call raises `BackendError`
 - WHEN `openkos ingest <path>` runs
 - THEN the merged-union candidates (backstop-truncated) are written as
   derived objects, a judge-failure note appears on stderr, and the exit
@@ -2525,7 +2526,8 @@ extract (disclosed as `N unchanged -- extraction will be skipped`). The
 skip prediction MUST reuse the same retryable-debt predicate `ingest`'s
 own skip decision reads, and MUST fail open — a file whose state cannot be
 read is billed at the full estimate, never silently dropped from the count.
-The estimate targets the ordinary path; reply-dependent calls (judge retry,
+The estimate counts the selector judge's one call only when `selector_judge`
+is on. The estimate targets the ordinary path; reply-dependent calls (judge retry,
 re-ask, single-candidate judge skip) are out of its scope, exactly as they
 are out of the documented cost table's.
 
@@ -2537,6 +2539,12 @@ are out of the documented cost table's.
 - THEN it names the splitting source's approximate window count and the
   total is the sum of both files' ordinary-path estimates, marked `~` and
   `estimate`
+
+#### Scenario: The default does not bill a judge call
+
+- GIVEN a small prose file and `selector_judge` off
+- WHEN the batch cost gate renders
+- THEN the file is estimated at 2 calls, and 3 with `selector_judge: true`
 
 #### Scenario: A convergent re-ingest is billed at zero
 

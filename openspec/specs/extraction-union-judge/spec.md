@@ -4,9 +4,9 @@
 
 Replace the blind, position-based `_MAX_OBJECTS_PER_SOURCE` truncation with a
 union-of-runs + selector-judge pipeline: run extraction twice (or once per
-chunk), merge candidates deterministically, let a judge select the genuine
-subset from a closed candidate list, and apply a numeric backstop cap only
-after judge selection — never before it.
+chunk), merge candidates deterministically, optionally (`selector_judge`, off
+by default) let a judge select the genuine subset from a closed candidate list,
+and apply a numeric backstop cap only after that selection — never before it.
 
 ## Requirements
 
@@ -87,7 +87,8 @@ candidate with the richer body/description, not by first-occurrence order.
 
 ### Requirement: Judge Selection Over a Closed Candidate List
 
-The judge MUST be given the complete merged candidate list and source text
+WHEN the selector judge is enabled (see "The Selector Judge Is Opt-In"), the
+judge MUST be given the complete merged candidate list and source text
 in one call, and MUST only select from that closed list — it MUST NOT
 introduce candidates absent from the union.
 
@@ -98,9 +99,16 @@ introduce candidates absent from the union.
 - THEN the reference is discarded before the selection is admitted and does not
   appear in the final selected set
 
+#### Scenario: Selector judge off makes no judge call
+
+- GIVEN `selector_judge` is off (the default)
+- WHEN extraction completes
+- THEN no judge call is made and every candidate that survived the pre-judge
+  ceiling goes on to the backstop
+
 ### Requirement: Judge Failure Fails Closed to the Backstopped Union
 
-WHEN the judge call raises `BackendError`, returns an empty reply, or returns
+WHEN the selector judge is enabled and its call raises `BackendError`, returns an empty reply, or returns
 a reply that fails parsing/validation, the system MUST NOT discard the
 extraction work. It MUST fall back to the full merged union, left unranked
 and without the backstop cap (see "Backstop Cap Applied Once, After Judge
@@ -140,7 +148,10 @@ emit a note to stderr. Extraction MUST NOT raise in this path.
 ### Requirement: Backstop Cap Applied Once, After Judge Selection
 
 The system MUST apply a fixed backstop cap of 20 objects exactly once, after
-judge selection (or after the empty-selection degrade), never before. The cap
+judge selection (or after the empty-selection degrade), never before. WHEN the
+selector judge is off, the cap MUST be applied to the merged set that survived
+the pre-judge ceiling of 24, positionally; the judge status is then `skipped`,
+which is a status the cap applies under. The cap
 MUST NOT be user-configurable. WHEN the judge is unavailable (both judge
 attempts failed, so nothing ranked the candidates), the system MUST NOT apply
 the cap, because a positional cut on an unranked set discards by arrival
@@ -160,6 +171,13 @@ candidates.
 - WHEN the backstop is applied
 - THEN no more than 20 objects are returned
 
+#### Scenario: Selector judge off caps the ceiling-bounded set positionally
+
+- GIVEN `selector_judge` is off and a merged union of 25 distinct candidates
+- WHEN extraction completes
+- THEN the pre-judge ceiling keeps 24, no judge call is made, and the backstop
+  keeps the first 20
+
 #### Scenario: Judge unavailable keeps the unranked set whole
 
 - GIVEN a merged union of more than 20 candidates and a judge that failed on
@@ -172,7 +190,8 @@ candidates.
 
 `ExtractionReport` MUST record, alongside existing fields, whether the union
 path or judge-only path was used, whether the judge call succeeded, and the
-pre-backstop and post-backstop candidate counts.
+pre-backstop and post-backstop candidate counts. WHEN the selector judge did
+not run, the judge status MUST be `skipped`.
 
 #### Scenario: Report distinguishes judge success from degrade
 
@@ -182,9 +201,11 @@ pre-backstop and post-backstop candidate counts.
 
 ### Requirement: Opt-Out Configuration Flag
 
-The system MUST expose a configuration flag that disables the union+judge
-pipeline and restores the single-run, single-cap path byte-for-byte. The
-flag's default MUST be enabled (union+judge ON).
+The system MUST expose a configuration flag, `union_judge`, that disables the
+union-of-runs extractor and restores the single-run, single-cap path
+byte-for-byte. The flag's default MUST be enabled. The flag governs the
+union-of-runs extractor only; whether the selector judge runs under it is
+governed by `selector_judge`.
 
 #### Scenario: Flag disabled restores single-run behavior
 
@@ -194,8 +215,9 @@ flag's default MUST be enabled (union+judge ON).
 
 ### Requirement: Judge Re-Admission Set Extended to Person/Organization (Additive Only)
 
-The judge re-admission path (the deterministic step that restores a
-candidate the judge dropped, applied AFTER judge selection) MUST use a
+WHEN the selector judge runs, the judge re-admission path (the deterministic
+step that restores a candidate the judge dropped, applied AFTER judge
+selection) MUST use a
 distinct set covering `Procedure`, `Person`, and `Organization`. This set
 MUST NOT be used at either deletion site (source-title twin-drop or
 framing-object drop): those deletion predicates MUST remain scoped to
@@ -236,7 +258,8 @@ predicate.
 
 ### Requirement: Judge Re-Admission Scoped to Meeting-Shaped Sources
 
-Judge re-admission of `Person`/`Organization` candidates MUST only apply to
+WHEN the selector judge runs, judge re-admission of `Person`/`Organization`
+candidates MUST only apply to
 transcript/meeting-shaped sources, using the same shape test as
 `_is_meeting_shaped` — the source's TITLE or its CONTENT shape. A
 non-meeting-shaped source (for example a technical article that merely
@@ -409,7 +432,7 @@ raising.
 ### Requirement: Extraction Exposes An Upper Bound On Its Calls
 
 `extraction.concept` MUST expose `max_extraction_calls(source_text, *,
-union_judge, transcript_decisions)`, a pure function that returns a number of
+union_judge, transcript_decisions, selector_judge=False)`, a pure function that returns a number of
 chat calls no extraction of `source_text` can exceed, whatever the model
 replies and whatever title the source is given. It MUST count each mechanism at
 its maximum: two calls per window on a chunked source (the window's retry), two
@@ -417,7 +440,8 @@ below the threshold (the union path's two passes, or the single-run path's
 retry of an empty reply), one re-ask, and on the union path one participant
 pass for a meeting-shaped source, two calls per window (one window below the
 threshold) for the decision pass when `transcript_decisions` is on and the
-source is meeting-shaped, and `JUDGE_ATTEMPTS` judge calls. Because the title
+source is meeting-shaped, and, only when `selector_judge` is on,
+`JUDGE_ATTEMPTS` judge calls. Because the title
 decides whether a source reads as a meeting, which moves the chunking threshold
 and the meeting-only passes, it MUST return the larger of the two readings.
 Blank text MUST return 0. It MUST never be below `estimate_extraction_calls`
@@ -425,10 +449,17 @@ for the same text and settings.
 
 #### Scenario: Every mechanism at its maximum on a short source
 
-- GIVEN a short source, the union path and the decision pass on
+- GIVEN a short source, the union path, the decision pass and the selector
+  judge on
 - WHEN the bound is computed
 - THEN it is two passes, one re-ask, one participant pass, two decision calls
   and every judge attempt
+
+#### Scenario: The selector judge off removes its attempts from the bound
+
+- GIVEN the same source with `selector_judge` off
+- WHEN the bound is computed
+- THEN it is smaller by exactly `JUDGE_ATTEMPTS`
 
 #### Scenario: Adversarial replies stay within the bound
 
@@ -436,3 +467,39 @@ for the same text and settings.
   never give the judge or the decision pass a usable reply
 - WHEN `extract_concept_union` runs
 - THEN the calls made are at most the bound and at least two per window
+
+## ADDED Requirements
+
+### Requirement: The Selector Judge Is Opt-In
+
+The system MUST expose a boolean configuration key `selector_judge` whose
+packaged default is `false`. WHEN it is off, `extract_concept_union` MUST make
+no judge call, MUST report the judge status `skipped`, and MUST apply the
+pre-judge ceiling of 24 merged candidates and then the positional backstop of
+20, so the extractor keeps the ceiling-bounded set cut positionally. WHEN it is
+`true`, the selector judge MUST run exactly as specified by the judge
+requirements of this capability. The key MUST be validated as a boolean and
+never coerced: a non-boolean value (including an integer) MUST be refused with
+an error naming the key, and an explicit null MUST fall back to the default.
+The key MUST have no effect when `union_judge` is off, because the single-run
+path has no judge.
+
+#### Scenario: The default makes no judge call
+
+- GIVEN a workspace whose `openkos.yaml` does not name `selector_judge`
+- WHEN `openkos ingest <path>` extracts a source below the chunk threshold
+- THEN exactly two extraction calls are made, no judge call is made, and the
+  report's judge status is `skipped`
+
+#### Scenario: The key turns the judge back on
+
+- GIVEN `selector_judge: true`
+- WHEN the same source is extracted
+- THEN the judge call is made and the judge's selection is applied before the
+  backstop, exactly as before this key existed
+
+#### Scenario: A non-boolean value is refused
+
+- GIVEN `selector_judge: 1` in `openkos.yaml`
+- WHEN the configuration is read
+- THEN reading fails with an error naming `selector_judge`

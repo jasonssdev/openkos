@@ -2018,6 +2018,7 @@ def estimate_extraction_calls(
     source_title: str,
     union_judge: bool = True,
     transcript_decisions: bool = False,
+    selector_judge: bool = False,
 ) -> ExtractionCallEstimate:
     """Estimate the ordinary-path model-call cost of extracting one source
     (#775): the answer `ingest`'s batch cost gate announces BEFORE any model
@@ -2040,8 +2041,10 @@ def estimate_extraction_calls(
     decisions = (
         (windows if chunked else 1) if transcript_decisions and meeting_shaped else 0
     )
+    # ADR-0080: the selector judge's one call is spent only when it is on.
+    judge = 1 if selector_judge else 0
     return ExtractionCallEstimate(
-        calls=passes + participant + decisions + 1, windows=windows
+        calls=passes + participant + decisions + judge, windows=windows
     )
 
 
@@ -2051,6 +2054,7 @@ def _max_calls_for(
     meeting_shaped: bool,
     union_judge: bool,
     transcript_decisions: bool,
+    selector_judge: bool,
 ) -> int:
     """The most chat calls one extraction can make under one reading of the
     source's shape: every mechanism that may spend a call, at its maximum."""
@@ -2070,7 +2074,8 @@ def _max_calls_for(
         if transcript_decisions and meeting_shaped
         else 0
     )
-    return passes + reask + participant + decisions + judge_mod.JUDGE_ATTEMPTS
+    judge = judge_mod.JUDGE_ATTEMPTS if selector_judge else 0
+    return passes + reask + participant + decisions + judge
 
 
 def max_extraction_calls(
@@ -2078,6 +2083,7 @@ def max_extraction_calls(
     *,
     union_judge: bool,
     transcript_decisions: bool,
+    selector_judge: bool = False,
 ) -> int:
     """An upper bound on the chat calls extracting `source_text` can make
     (#1496), whatever the model replies and whatever title the Source takes.
@@ -2099,6 +2105,7 @@ def max_extraction_calls(
             meeting_shaped=meeting_shaped,
             union_judge=union_judge,
             transcript_decisions=transcript_decisions,
+            selector_judge=selector_judge,
         )
         for meeting_shaped in (False, True)
     )
@@ -3765,6 +3772,7 @@ def extract_concept_union(
     on_progress: ProgressHook | None = None,
     concurrent: bool = False,
     transcript_decisions: bool = False,
+    selector_judge: bool = False,
 ) -> ExtractionOutcome:
     """Union-of-runs + selector-judge orchestrator (design D1, #456): a
     SIBLING to `extract_concept` in this same module, replacing the blind
@@ -3865,6 +3873,11 @@ def extract_concept_union(
     positional backstop cannot cut them. With no pass Decision -- the pass
     off, empty, or failed -- the general pass's Decisions flow through
     unchanged. The legacy `extract_concept` path does not take it.
+
+    `selector_judge` (ADR-0080, off by default) decides whether the selector
+    judge runs at all. Off, no judge call is made, `report.judge_status` is
+    `"skipped"` and the positional backstop cuts the ceiling-bounded set;
+    on, the judge runs exactly as it always has.
     """
     # Computed ONCE for the whole union path (#673): the same single
     # `_is_meeting_shaped` verdict feeds framing-object enforcement here,
@@ -4143,7 +4156,7 @@ def extract_concept_union(
     # both identical retries. Bounded here, only when the judge will
     # actually run (the single-candidate skip below never sends it).
     judge_prompt_source = source_text
-    if len(judge_input) > 1:
+    if selector_judge and len(judge_input) > 1:
         judge_prompt_source, judge_prompt_bounded = _bounded_prompt_source(
             source_text,
             overhead_chars=judge_mod.prompt_overhead_chars(
@@ -4160,7 +4173,15 @@ def extract_concept_union(
         if judge_prompt_bounded:
             bounded_prompt_calls = (*bounded_prompt_calls, BOUNDED_CALL_JUDGE)
 
-    if len(judge_input) == 1:
+    if not selector_judge:
+        # ADR-0080: the selector judge is opt-in. No call, no cut: the set is
+        # the ceiling-bounded union and the positional backstop applies to
+        # it, the arm the backstop-only comparison measured. "skipped" is the
+        # value for "judge not run", shared with the two skips below.
+        kept = judge_input
+        judge_status = "skipped"
+        judged_out_titles: tuple[str, ...] = ()
+    elif len(judge_input) == 1:
         # A single candidate makes the judge call a provable no-op (#644):
         # every possible outcome keeps that candidate -- its title echoed
         # back keeps it, `None` (failed) keeps the full one-candidate set,
@@ -4173,7 +4194,7 @@ def extract_concept_union(
         # run", shared with the empty-union skip above.
         kept = judge_input
         judge_status = "skipped"
-        judged_out_titles: tuple[str, ...] = ()
+        judged_out_titles = ()
     elif (
         selected := _run_judge(judge_prompt_source, judge_input, llm, on_progress)
     ) is None:

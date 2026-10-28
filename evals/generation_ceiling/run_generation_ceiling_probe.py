@@ -408,6 +408,7 @@ def run_fixture(
                     source_title=fixture.title,
                     llm=llm,
                     on_progress=lambda phase: setattr(transport, "phase", phase),
+                    selector_judge=True,  # measured with the judge (ADR-0080)
                 )
                 objects = len(outcome.objects)
             except OllamaGenerationCapped:
