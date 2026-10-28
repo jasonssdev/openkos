@@ -160,6 +160,11 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 75
     if: github.repository == 'jasonssdev/openkos'
+    # The updater's private key and its password are secrets of this
+    # environment only (ADR-0079): it needs the owner's approval for every run
+    # and accepts only version tags, so a tag push alone signs nothing and no
+    # other job, and no pull request, can read them.
+    environment: release
     permissions:
       # The only job that writes to the repository: it creates the GitHub
       # release and uploads the installer to it. Nothing else needs it.
@@ -190,10 +195,49 @@ jobs:
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version 2.12.3 --locked
 
+      # Fail before anything is built when the signing key is not there, or
+      # when the committed public key is still the placeholder: an app built
+      # with it could never accept an update. The values are only tested for
+      # emptiness, never printed.
+      - name: Check the updater key is configured
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            echo "::error::the release environment has no TAURI_SIGNING_PRIVATE_KEY secret; see docs/install-desktop.md, 'For maintainers'" >&2
+            exit 1
+          fi
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
+            echo "::error::the release environment has no TAURI_SIGNING_PRIVATE_KEY_PASSWORD secret; the key must have a password (ADR-0079)" >&2
+            exit 1
+          fi
+          if grep -q "REPLACE-WITH-THE-OPENKOS-UPDATER-PUBLIC-KEY" desktop/src-tauri/tauri.conf.json; then
+            echo "::error::tauri.conf.json still carries the placeholder updater public key; commit the real one first" >&2
+            exit 1
+          fi
+
       # The same script CI runs: it re-signs ad hoc, smoke-checks the engine
-      # inside the .app and only then writes build/desktop/OpenKOS.dmg.
+      # inside the .app and only then writes build/desktop/OpenKOS.dmg. With
+      # --release it builds the app as this tag's version and makes the update
+      # archive from that same verified .app, then signs it (ADR-0080).
       - name: Build the app and smoke-check its engine
-        run: desktop/scripts/build-app.sh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: desktop/scripts/build-app.sh --release "${GITHUB_REF_NAME#v}"
+
+      # The feed every installed app reads from
+      # releases/latest/download/latest.json (ADR-0079).
+      - name: Write the update feed
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          uv run --no-project python desktop/scripts/update_feed.py \
+            --version "$version" \
+            --signature-file build/desktop/OpenKOS.app.tar.gz.sig \
+            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/OpenKOS.app.tar.gz" \
+            --notes "OpenKOS ${version}. What changed: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}" \
+            --out build/desktop/latest.json
 
       - name: Checksum the installer
         run: |
@@ -217,10 +261,19 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release edit "$GITHUB_REF_NAME" --notes "$notes"
           else
+            # A tag with a suffix (v1.0.0-rc.1) is a prerelease, which
+            # releases/latest skips: the feed never offers it.
+            prerelease=()
+            if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+              prerelease=(--prerelease)
+            fi
             gh release create "$GITHUB_REF_NAME" \
               --verify-tag \
+              "${prerelease[@]}" \
               --title "OpenKOS ${GITHUB_REF_NAME#v} (unsigned developer build)" \
               --notes "$notes"
           fi
           gh release upload "$GITHUB_REF_NAME" --clobber \
-            build/desktop/OpenKOS.dmg build/desktop/OpenKOS.dmg.sha256
+            build/desktop/OpenKOS.dmg build/desktop/OpenKOS.dmg.sha256 \
+            build/desktop/OpenKOS.app.tar.gz build/desktop/OpenKOS.app.tar.gz.sig \
+            build/desktop/latest.json
