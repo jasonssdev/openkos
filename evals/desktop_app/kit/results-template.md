@@ -28,10 +28,10 @@ Do not record the participant's name. Do not paste the recording or its screensh
 
 ### Screening (verbatim answers)
 
-1. "Have you ever opened Terminal, a command prompt or a shell, or typed a command into one?" (must be no): 
-2. "Have you used or read about OpenKOS before?" (must be no): 
-3. "Do you use a Mac regularly?" (must be yes): 
-4. "Are you comfortable reading English instructions on screen?" (must be yes): 
+1. "Have you ever opened Terminal, a command prompt or a shell, or typed a command into one?" (must be no):
+2. "Have you used or read about OpenKOS before?" (must be no):
+3. "Do you use a Mac regularly?" (must be yes):
+4. "Are you comfortable reading English instructions on screen?" (must be yes):
 
 Not a contributor, not in the owner's household, never watched it used: yes / no. Consent signed: yes / no.
 
@@ -51,11 +51,11 @@ For each step add evidence below (timestamps from the recording, one line each).
 
 ### Per-step evidence
 
-- **S1:** 
-- **S2:** models pulled and sizes; longest gap without a change in progress; the wording of the final screen: 
-- **S3:** time each file was added; time each was shown as ready: 
-- **S4:** each question typed (verbatim); each answer's latency; citation shown; did the participant name the file when asked; did the answer contain `AquaLift 330` (recorded, not scored): 
-- **S5:** wording of the decision as shown (copied); action taken; was a check needed and how long it took; queue state afterwards: 
+- **S1:**
+- **S2:** models pulled and sizes; longest gap without a change in progress; the wording of the final screen:
+- **S3:** time each file was added; time each was shown as ready:
+- **S4:** each question typed (verbatim); each answer's latency; citation shown; did the participant name the file when asked; did the answer contain `AquaLift 330` (recorded, not scored):
+- **S5:** wording of the decision as shown (copied); action taken; was a check needed and how long it took; queue state afterwards:
 
 ## Session-level checks
 
@@ -75,8 +75,8 @@ Every action the facilitator took, in order, with the time and the step it rescu
 
 ## Debrief (verbatim)
 
-1. "What did your choice in that last step do?" 
-2. "Was there anything you weren't sure about?" 
+1. "What did your choice in that last step do?"
+2. "Was there anything you weren't sure about?"
 
 ## Quotes
 
@@ -104,7 +104,7 @@ Apply the pre-registration's rules; do not add to them.
 - Interrupted by something outside the app: does not count; repeat with a new participant.
 
 **Verdict for this session:** exit met / not met / does not count
-**Failures filed as issues:** 
+**Failures filed as issues:**
 
 ## Dry-run section (fill only in a dry-run file)
 
@@ -112,10 +112,10 @@ The dry run is not a session. Its times read no bar. It exists to find what in t
 
 ### Confirmations the pre-registration requires
 
-- [ ] The two materials files put an identity decision in the review queue on the build under test. Decision wording shown: 
-- [ ] The default models' total size, from the machine: each model and its bytes: 
-- [ ] The step 2 download allowance, computed from them: 
-- [ ] Whether the identity decision needed the model's check first, and how long the check took: 
+- [ ] The two materials files put an identity decision in the review queue on the build under test. Decision wording shown:
+- [ ] The default models' total size, from the machine: each model and its bytes:
+- [ ] The step 2 download allowance, computed from them:
+- [ ] Whether the identity decision needed the model's check first, and how long the check took:
 
 ### Timings (informational, read no bar)
 
@@ -146,6 +146,6 @@ Confirmation that nothing under "Per-step bars" or "Verdict" in the pre-registra
 
 ### Reset to clean
 
-- [ ] The machine was erased and reinstalled and section 2 of `machine-preparation.md` re-verified: date, macOS build 
-- [ ] The bandwidth was re-measured and the allowance recomputed: 
-- [ ] The session files were re-placed: 
+- [ ] The machine was erased and reinstalled and section 2 of `machine-preparation.md` re-verified: date, macOS build
+- [ ] The bandwidth was re-measured and the allowance recomputed:
+- [ ] The session files were re-placed:
