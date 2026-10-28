@@ -1207,13 +1207,36 @@ def test_stage_derived_objects_union_judge_true_calls_extract_concept_union(
     )
 
     outcome = application_ingest.stage_derived_objects(
-        **_stage_kwargs(tmp_path, llm=llm, union_judge=True)  # type: ignore[arg-type]
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            llm=llm,
+            union_judge=True,
+            cfg=_default_cfg(selector_judge=True),
+        )
     )
     plans, skip_reason, _notice = outcome.plans, outcome.skip_reason, outcome.notices
 
     assert len(llm.calls) == 3
     assert len(plans) == 2
     assert skip_reason is None
+
+
+def test_stage_derived_objects_union_judge_true_makes_no_judge_call_by_default(
+    tmp_path: Path,
+) -> None:
+    """ADR-0080: with `selector_judge` off (the default) the union path makes
+    its 2 extraction calls and no judge call, and keeps both candidates."""
+    llm = _SequencedLLM(
+        [_concept_reply(), _concept_reply(title="Negative Visualization")]
+    )
+
+    outcome = application_ingest.stage_derived_objects(
+        **_stage_kwargs(tmp_path, llm=llm, union_judge=True)  # type: ignore[arg-type]
+    )
+
+    assert len(llm.calls) == 2
+    assert len(outcome.plans) == 2
+    assert outcome.skip_reason is None
 
 
 def test_ingest_judge_failure_keeps_the_merged_union_and_reports_distinctly(
@@ -1226,6 +1249,7 @@ def test_ingest_judge_failure_keeps_the_merged_union_and_reports_distinctly(
     (distinct wording from `_judge_selection_notice`/`_extraction_cap_notice`
     -- neither of which appears), and `ingest` exits 0."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
     run2 = _concept_reply(title="Negative Visualization")
     _patch_sequenced_llm(monkeypatch, [run1, run2, OllamaUnavailable("boom")])
@@ -1255,6 +1279,7 @@ def test_ingest_judge_empty_admission_keeps_the_merged_union_and_reports_distinc
     cause: the judge REPLIED, so "unavailable" (what #644's reporter was
     misled by) must not appear -- and `ingest` exits 0."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
     run2 = _concept_reply(title="Negative Visualization")
     _patch_sequenced_llm(monkeypatch, [run1, run2, '{"keep": ["A Fabricated Title"]}'])
@@ -1282,6 +1307,7 @@ def test_ingest_judge_failure_quarantines_the_source_with_extraction_notice(
     and the terminal notice discloses the marking, mirroring #585's
     sole-object notice."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
     run2 = _concept_reply(title="Negative Visualization")
     _patch_sequenced_llm(monkeypatch, [run1, run2, OllamaUnavailable("boom")])
@@ -1308,6 +1334,7 @@ def test_ingest_judge_empty_admission_quarantines_with_the_empty_token(
     distinct `judge-selection-empty` token -- the two causes stay tellable
     apart on disk exactly as #754 keeps them apart in the terminal."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
     run2 = _concept_reply(title="Negative Visualization")
     _patch_sequenced_llm(monkeypatch, [run1, run2, '{"keep": ["A Fabricated Title"]}'])
@@ -1462,6 +1489,7 @@ def test_a_judge_degrade_is_recorded_beside_the_evidence_notice(
     stderr names every condition that fired, so the run's own output stays
     complete even though the persisted key can only carry one."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     run = _multi_object_reply(_ungrounded_decision_reply(), _grounded_decision_reply())
     _patch_sequenced_llm(
         monkeypatch,
@@ -1581,6 +1609,7 @@ def test_reingest_with_re_extract_flag_runs_extraction(
     an unchanged, already-extracted source, reconciling create-only exactly
     as before #773."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     _first_healthy_ingest(tmp_path, monkeypatch)
 
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
@@ -1608,6 +1637,7 @@ def test_reingest_of_failed_extraction_retries_without_the_flag(
     extraction without needing `--re-extract`, and a now-healthy run clears
     the status and writes the objects."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     # Run 1: the BASE extraction call itself fails -> Source-only degrade.
     _patch_sequenced_llm(monkeypatch, [OllamaUnavailable("boom")])
     source = tmp_path / "notes.txt"
@@ -1647,6 +1677,7 @@ def test_reingest_of_quarantined_source_retries_and_self_clears(
     'quarantine self-clears on a later judged run' scenario, exercised from
     the marked-Source starting state."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
     run2 = _concept_reply(title="Negative Visualization")
     _patch_sequenced_llm(monkeypatch, [run1, run2, OllamaUnavailable("boom")])
@@ -1683,6 +1714,7 @@ def test_reingest_of_unparseable_prior_source_falls_through_to_extraction(
     about the previous extraction, so the skip does NOT fire and the full
     pre-#773 pipeline runs -- which also rebuilds the corrupted document."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     _first_healthy_ingest(tmp_path, monkeypatch)
     source_path = tmp_path / "bundle" / "sources" / "notes.md"
     source_path.write_text("no frontmatter here at all\n", encoding="utf-8")
@@ -3993,6 +4025,7 @@ def test_judge_degrade_is_recorded_beside_the_staging_drop_marker(
     lost its judge AND dropped a candidate in staging persists
     `judge-selection-unavailable`, never the staging marker."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     reply = _multi_object_reply(
         _concept_reply(title="Stoic Practice"),
         _entity_reply(title="Stoic Practice"),
@@ -6166,6 +6199,7 @@ def test_the_printed_judge_retry_remedy_reingests_in_place(
     path's digest) can never equal the raw path's digest. Before #865 that
     mismatch sent the remedy down the disambiguation branch."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     _patch_sequenced_llm(
         monkeypatch,
         [
@@ -6719,6 +6753,7 @@ def test_ingest_reports_the_unreadmitted_participant_when_the_judge_drops_it(
     `Person`, which the judge then dropped. BOTH notices must appear, because
     the two decisions are the finding."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     judge_reply = json.dumps({"keep": ["Ingestion Backlog"]})
     person_reply = json.dumps(
         [
@@ -6800,8 +6835,10 @@ def _capturing_extractor(seen: dict[str, object]) -> object:
         on_progress: object = None,
         concurrent: bool = False,
         transcript_decisions: bool = False,
+        selector_judge: bool = False,
     ) -> concept_mod.ExtractionOutcome:
         seen["concurrent"] = concurrent
+        seen["selector_judge"] = selector_judge
         return concept_mod.ExtractionOutcome(
             objects=[],
             report=concept_mod.ExtractionReport(
@@ -6848,6 +6885,29 @@ def test_stage_derived_objects_forwards_concurrent_extraction_from_config(
     )
 
     assert seen["concurrent"] is enabled
+
+
+@pytest.mark.parametrize("selector_judge", [True, False])
+def test_stage_derived_objects_forwards_selector_judge_from_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selector_judge: bool,
+) -> None:
+    """`cfg.selector_judge` reaches the union extractor (ADR-0080)."""
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        application_ingest, "extract_concept_union", _capturing_extractor(seen)
+    )
+
+    application_ingest.stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            cfg=_default_cfg(selector_judge=selector_judge),
+            union_judge=True,
+        )
+    )
+
+    assert seen["selector_judge"] is selector_judge
 
 
 def _enable_concurrent_extraction_single_run(tmp_path: Path) -> None:
@@ -7230,6 +7290,7 @@ def test_ingest_judge_unavailable_notice_names_both_compounding_failures(
     it. `_extraction_cap_notice` must stay silent, since there is no longer
     anything for it to report."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
     run2 = _concept_reply(title="Negative Visualization")
     # TWO failures: the retry (#754) must be exhausted before the degrade.
@@ -7291,6 +7352,7 @@ def test_ingest_says_a_source_is_unfiltered_when_the_ceiling_and_the_judge_both_
     CLI actually reaches them, which is the wiring neither of those can see.
     """
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     many = _many_grounded_concepts_reply(26)
     _patch_sequenced_llm(
         monkeypatch,
@@ -7317,6 +7379,7 @@ def test_ingest_stays_quiet_about_being_unfiltered_when_only_the_judge_fails(
     not the compound state, and claiming otherwise would make the louder
     line fire on the ordinary case it exists to stand out from."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# selector_judge: false", "selector_judge: true")
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
     run2 = _concept_reply(title="Negative Visualization")
     _patch_sequenced_llm(

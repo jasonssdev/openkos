@@ -555,7 +555,10 @@ def run_fixture(
             started = time.monotonic()
             try:
                 outcome = extract_concept_union(
-                    fixture.text, source_title=fixture.title, llm=llm
+                    fixture.text,
+                    source_title=fixture.title,
+                    llm=llm,
+                    selector_judge=True,  # measured with the judge (ADR-0080)
                 )
             except Exception as exc:
                 records.append(
