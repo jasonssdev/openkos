@@ -7935,3 +7935,54 @@ def test_validate_leaves_ordinary_prose_alone() -> None:
 
     assert result is not None
     assert result.body == body
+
+
+# --- Which filter emptied the source (#1642) ----------------------------------
+
+
+def test_report_names_framing_removals_without_changing_the_outcome() -> None:
+    """Diagnostic only: titles a later filter removed are named on the
+    report, and the surviving objects are exactly what they were before."""
+    llm = _FakeLLM(reply=_array(_SPANISH_FRAMING_EVENT_ITEM, _CONCEPT_ITEM))
+
+    outcome = concept_mod.extract_concept(
+        "Se propuso un plan y se acordó el versionado.",
+        source_title="Reunión con el equipo de producto",
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+    assert outcome.report.framing_dropped_titles == (
+        "Reunión con el equipo de producto",
+    )
+
+
+def test_union_report_names_framing_removals() -> None:
+    """The union path builds its own report; it must name the stage too."""
+    llm = _FakeLLM(reply=_array(_SPANISH_FRAMING_EVENT_ITEM))
+
+    outcome = concept_mod.extract_concept_union(
+        "Se propuso un plan y se acordó el versionado.",
+        source_title="Reunión con el equipo de producto",
+        llm=llm,
+    )
+
+    assert outcome.objects == []
+    assert outcome.report.framing_dropped_titles == (
+        "Reunión con el equipo de producto",
+    )
+
+
+def test_report_names_source_title_twin_removals() -> None:
+    llm = _FakeLLM(reply=_array(_MARIA_ITEM, _CALL_WITH_MARIA_TWIN_ITEM))
+
+    outcome = concept_mod.extract_concept(
+        "Maria and I talked about her move.",
+        source_title="Call with Maria Salazar — 2026-07-14",
+        llm=llm,
+    )
+
+    assert outcome.report.twin_dropped_titles == (
+        "Call with Maria Salazar — 2026-07-14",
+    )
+    assert outcome.report.framing_dropped_titles == ()

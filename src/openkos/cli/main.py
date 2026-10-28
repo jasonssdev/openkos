@@ -3418,6 +3418,33 @@ def _recombined_title_notice(report: ExtractionReport) -> str | None:
     )
 
 
+def _filtered_survivor_notice(report: ExtractionReport) -> str | None:
+    """Name the candidates a LATER filter removed when the extraction ended
+    empty (#1642), or `None` when anything was retained or nothing was removed.
+
+    The language gate keeps every candidate rather than empty a source, so a
+    zero-object run whose gate reported drops had a survivor that the framing
+    or source-title-twin filter then removed. Without this the notice cannot
+    say which stage emptied it. Diagnostic only: it reads the report and
+    changes no outcome."""
+    if report.retained:
+        return None
+    parts: list[str] = []
+    if report.framing_dropped_titles:
+        parts.append(
+            "removed as framing (meeting-shaped title): "
+            + ", ".join(report.framing_dropped_titles)
+        )
+    if report.twin_dropped_titles:
+        parts.append(
+            "removed as a twin of the source title: "
+            + ", ".join(report.twin_dropped_titles)
+        )
+    if not parts:
+        return None
+    return "no concept survived the filters; " + "; ".join(parts)
+
+
 def _bounded_prompt_notice(report: ExtractionReport) -> str | None:
     """Render the whole-source prompt bound advisory (#866), or `None` when
     every prompt fit -- which is the common case.
@@ -3907,6 +3934,7 @@ def _report_notice_texts(report: ExtractionReport) -> list[str]:
         _chunk_skip_notice(report),
         _wrong_language_notice(report),
         _recombined_title_notice(report),
+        _filtered_survivor_notice(report),
         _bounded_prompt_notice(report),
         _reask_notice(report),
         _optional_call_failure_notice(report),

@@ -6420,6 +6420,70 @@ def test_ingest_recombination_drop_notice_is_distinct_from_the_language_one(
     ).exists()
 
 
+def _chunked_spanish_text() -> str:
+    lines = [
+        "Ana: Revisamos el avance del proyecto y las decisiones pendientes "
+        "sobre la capa de almacenamiento con el equipo de datos.",
+        "Bruno: La migración terminó y los índices se regeneran con el "
+        "modelo nuevo; la búsqueda mejoró bastante en las pruebas.",
+    ]
+    blocks: list[str] = []
+    while sum(len(b) + 1 for b in blocks) <= 19_000:
+        blocks.append(f"{lines[len(blocks) % 2]} (bloque {len(blocks)})")
+    text = "\n".join(blocks)
+    assert len(text) > concept_mod._CHUNK_THRESHOLD
+    return text
+
+
+def test_zero_object_notice_names_the_survivor_the_framing_filter_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1642: the language gate's all-drop floor means a zero-object Spanish
+    meeting cannot be 'every title dropped by the gate' -- a candidate
+    survived it and a LATER stage removed it. The notice names that title and
+    the stage, so the next real run says which filter emptied the source."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    text = _chunked_spanish_text()
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = "[" + _concept_reply(title="Reunión de diseño del proyecto") + "]"
+    replies[1] = "[" + _concept_reply(title="Budget and Pricing Decision") + "]"
+    _patch_sequenced_llm(monkeypatch, replies)
+    (tmp_path / "notas.txt").write_text(text, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notas.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "dropped 1 wrong-language title(s)" in result.stderr
+    assert (
+        "no concept survived the filters; removed as "
+        "framing (meeting-shaped title): Reunión de diseño del proyecto"
+    ) in result.stderr
+    assert "no concept extracted from this source" in result.stderr
+
+
+def test_survivor_notice_is_silent_when_a_concept_is_retained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The additive notice only exists for an emptied extraction; an ordinary
+    run that also had a framing object removed prints nothing new."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    text = _chunked_spanish_text()
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = "[" + _concept_reply(title="Reunión de diseño del proyecto") + "]"
+    replies[1] = "[" + _concept_reply(title="Procedimiento de ingesta") + "]"
+    _patch_sequenced_llm(monkeypatch, replies)
+    (tmp_path / "notas.txt").write_text(text, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notas.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "no concept survived" not in result.stderr
+
+
 def test_judge_selection_notice_quotes_the_dropped_titles() -> None:
     """Issue #805, item 2: the dropped title is QUOTED.
 

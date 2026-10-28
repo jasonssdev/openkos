@@ -5,3 +5,5 @@
 The participant profile, the machine, the task script, what counts as help, the per-step bars and the verdict live in the pre-registration, [`PREREGISTRATION.md`](PREREGISTRATION.md), written before the app stages started.
 
 **Method.** One observed session with one participant, not a script: there is no runner and no `--self-test`, because nothing here is scored by code. [`materials/`](materials/) holds the two synthetic files the participant adds. A session's record goes under `results/`, one new file per session, never edited afterwards.
+
+**Kit.** [`kit/`](kit/) holds what the facilitator needs to run the dry run and the binding session: the [facilitator script](kit/facilitator-script.md), the [machine preparation](kit/machine-preparation.md) checklist, the [consent text](kit/consent.md) and the [results template](kit/results-template.md). The kit restates nothing it can point to; where it and the pre-registration differ, the pre-registration governs.
