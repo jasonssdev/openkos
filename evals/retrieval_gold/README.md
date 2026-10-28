@@ -419,6 +419,51 @@ Assumptions, all of them:
 7. `ingest` runs no judge-model stage (`gemma4:26b-a4b` serves only `adjudicate`,
    `contradictions` and the Ask sufficiency check), so there is no model swap.
 
+## Delivered evidence: does the passage reach the model
+
+`recall@k` scores document ids. `answer._assemble_context` then clips every block
+to its share of the context window (`_bound_bodies` -> `prompt_budget.bounded_text`),
+so a retrieved document can arrive without the sentence that answers the question
+([#1646](https://github.com/jasonssdev/openkos/issues/1646)). `delivered` measures
+that, with no chat call.
+
+- **Seam.** `assemble_blocks` calls `answer._assemble_context` itself with a
+  `_WindowLLM` that supplies only `context_window` and `max_generation_tokens` (the
+  two attributes `prompt_budget` reads) and whose `chat` raises. Nothing in `src/`
+  changed; the trimming under test is the shipped one. The defaults are the
+  planning window and reply reserve the bound falls back to; pass
+  `--context-window` and `--max-generation-tokens` for the configuration under study.
+- **Gold passage.** A verbatim span of a gold document (grade 1 or 2), in a
+  `retrieval-gold-passages` file written from a blind sheet. The loader refuses a
+  span not found verbatim, an unknown document or question, and a file written
+  for another question set. The question file is untouched.
+- **Metric.** Per question, every annotated gold document must have a span in its
+  final block (`delivered`; `any` is reported beside it), against `retrieved`
+  (every one reached assembly). A lost question is classified `not_retrieved`,
+  `omitted` (the budget dropped the block) or `trimmed` (sent, span elided). The
+  report prints `k of N` per `fused@k`, per language and per kind, and names the
+  questions that are not annotated instead of scoring them.
+- **Development series only.** The bundle is the one above; no thesis evaluation or
+  held-out series is read.
+
+```bash
+# no model: the blind annotation sheet, from adjudicated judgments (path OUTSIDE the repo)
+uv run python evals/retrieval_gold/run_retrieval_gold.py passage-sheet \
+    --judgments ~/openkos-eval-runs/retrieval-gold/judgments.json \
+    --out ~/openkos-eval-runs/retrieval-gold/passage-sheet.md
+# the annotator fills each `Passage:` line by hand, then (no model):
+uv run python evals/retrieval_gold/run_retrieval_gold.py passages \
+    --sheet ~/openkos-eval-runs/retrieval-gold/passage-sheet.md \
+    --out ~/openkos-eval-runs/retrieval-gold/passages.json
+uv run python evals/retrieval_gold/run_retrieval_gold.py delivered \
+    --run RUN.json --passages ~/openkos-eval-runs/retrieval-gold/passages.json
+```
+
+`RUN.json` is a `run` with embeddings (the `fused` channel). Filled sheets and the
+passages file stay outside the repository, like the judgment sheet: the commands
+refuse a path inside it. `--self-test` shows the metric can fail (a span in an
+elided region scores 0, an invented span is refused).
+
 ## What it cannot show
 
 - **Pool bias.** Judging every document for every question is not feasible, so a
@@ -503,6 +548,7 @@ be resolved by hand; the command never merges them.
 | File | Role |
 | --- | --- |
 | `run_retrieval_gold.py` | Retrieval through the production seams, the commands, `--self-test`. |
+| `gold_delivery.py` | The passage-file contract, the delivered/retrieved classification and aggregate, the blind passage sheet. Pure. |
 | `gold_core.py` | Metrics, bootstrap, kappa, the question and judgment contracts, the sheet. Pure. |
 | `gold_bundle.py` | The 35-document draft bundle, built from committed material. Not to be judged. |
 | `build_bundle.py` | Builds the gold bundle with production `ingest`; `plan`, `build`, `--self-test`. Refuses a pending translation. |
