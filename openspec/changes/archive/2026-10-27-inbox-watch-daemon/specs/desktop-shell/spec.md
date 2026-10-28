@@ -38,3 +38,27 @@ through the supervisor's failure callback. The shell MUST NOT start a login item
 - GIVEN a running daemon
 - WHEN the shell's end of its stdin closes
 - THEN the daemon stops by itself
+
+### Requirement: A Stopped Watch Raises A Notification With Fixed Text
+
+The shell MUST raise a macOS notification when the watch's daemon fails for good
+(from the supervisor's failure callback, once) and, when the page asks through
+`notify_watch_budget`, when the daemon paused on the AI model's limit. The text
+MUST be fixed in the shell, in the words of `docs/decision-wording.md`, and MUST
+NOT carry the daemon's own output, which is logged to stderr only. A refusal to
+show it (notifications turned off for the app) MUST NOT be an error. The
+notification plugin MUST be a dependency pinned to an exact version and MUST be
+used only from Rust: no capability MUST give the web view a notification
+permission, and `notify_watch_budget` MUST take no text from the page.
+
+#### Scenario: A failure raises one notification without the daemon's words
+
+- GIVEN a daemon that exits until its restart budget is spent
+- WHEN the failure callback runs
+- THEN one notification is shown and its text holds none of the daemon's output
+
+#### Scenario: The page cannot choose the text
+
+- GIVEN the page invokes `notify_watch_budget`
+- WHEN the shell handles it
+- THEN the fixed budget notice is shown
