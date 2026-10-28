@@ -101,3 +101,18 @@ form, no distractor), `mixed` (both), `wrong` (a distractor only), `missing`.
 The commitment guard is deterministic, so it is applied offline to stored runs
 (the `baseline+guard` and `prompt+guard` rows of the `score_fidelity.py`
 report), not run as a model arm.
+
+## Labels (`labels/`)
+
+- `value_gold.json`: 71 items, one blind labeller (a Claude Opus reading), 3 marked `exclude`.
+- `cue_labels.json`: 159 calibration turns (40 committed, 79 open, 35 none, 5 discarded).
+  Two blind readers (Claude Opus, Claude Sonnet) agreed on 140 of 159 (raw agreement 0.881,
+  Cohen's kappa 0.811); a third blind Opus reading, unaware of who said what, adjudicated the
+  19 disagreements. Agreed items keep the shared label.
+- `stage0.json`: the pre-run gate over those labels: 40 committed, 84 proposal-class,
+  sensitivity 0.475, specificity 0.560, verdict **FAIL** (gate: sensitivity >= 0.85,
+  specificity >= 0.50). Per the registration, the guard arm is not run.
+
+Deviation (pre-registered in advance, see "Deviations"): the labels are written by Claude
+models on the owner's delegation, not by the owner. Kappa describes two readings of one
+rubric, not the owner's judgment. Kappa 0.811 is above the 0.6 downgrade threshold.

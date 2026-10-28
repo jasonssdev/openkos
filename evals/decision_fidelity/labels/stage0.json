@@ -1,0 +1,33 @@
+{
+  "committed": 40,
+  "proposal": 84,
+  "sensitivity": 0.475,
+  "specificity": 0.5595238095238095,
+  "verdict": "FAIL",
+  "by_stratum": {
+    "cued_unlinked": {
+      "lines": 60,
+      "cue": 60,
+      "open": 25,
+      "none": 22,
+      "committed": 11,
+      "discarded": 2
+    },
+    "linked": {
+      "lines": 39,
+      "cue": 11,
+      "open": 14,
+      "committed": 23,
+      "discarded": 1,
+      "none": 1
+    },
+    "proposal": {
+      "lines": 60,
+      "cue": 10,
+      "open": 40,
+      "committed": 6,
+      "none": 12,
+      "discarded": 2
+    }
+  }
+}
