@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Schemas } from "../../client/index.ts";
 import type { SettingsModel, SettingsState } from "./model.ts";
 import { renderSettings } from "./render.ts";
-import { WORDS } from "./wording.ts";
+import { WATCH, WORDS } from "./wording.ts";
 
 type Settings = Schemas["ModelSettings"];
 
@@ -47,7 +47,17 @@ const READY: SettingsState = {
   settled: [],
   declined: [],
   undoing: null,
+  inbox: null,
+  watch: null,
+  watchBusy: null,
+  watchConfirm: null,
+  stoppedByYou: false,
 };
+
+const NO_FOLDER = { inbox: null, quiet_seconds: 30, max_calls_per_day: 500 };
+const WITH_FOLDER = { ...NO_FOLDER, inbox: "/Users/ana/Inbox" };
+const OFF = { state: "off", wanted: false } as const;
+const ON = { state: "on", attempt: 1, pid: 7, wanted: true } as const;
 
 const SETTLED_ROW = {
   key: "a|b",
@@ -73,6 +83,11 @@ const METHODS = [
   "openLibrary",
   "createLibrary",
   "undo",
+  "chooseWatchFolder",
+  "cancelWatch",
+  "confirmWatch",
+  "startWatch",
+  "stopWatch",
 ] as const;
 
 function fakeModel() {
@@ -298,6 +313,82 @@ describe("renderSettings", () => {
     expect(card.textContent).toContain("'Tea' and 'Coffee'");
     button(card, "Point this out again")?.click();
     expect(model.undo).toHaveBeenCalledWith("declined", "c|d|");
+  });
+
+  it("offers to watch a folder, saying what happens first and what else the watch does", () => {
+    const node = root();
+    const model = fakeModel();
+    renderSettings(node, model, { ...READY, inbox: NO_FOLDER, watch: OFF });
+
+    const titles = Array.from(node.querySelectorAll(".ui-card__title"), (t) => t.textContent);
+    expect(titles).toEqual(["AI model", WATCH.title, "Library"]);
+    const card = node.querySelectorAll(".ui-card")[1] as HTMLElement;
+    for (const line of [WATCH.intro, ...WATCH.what, WATCH.also, WATCH.stops]) expect(card.textContent).toContain(line);
+    expect(button(card, WATCH.stop)).toBeUndefined();
+    button(card, WATCH.choose)?.click();
+    expect(model.chooseWatchFolder).toHaveBeenCalledOnce();
+  });
+
+  it("draws no watch card until the engine has said what the folder is", () => {
+    const node = root();
+    renderSettings(node, fakeModel(), { ...READY, inbox: null, watch: OFF });
+
+    expect(node.textContent).not.toContain(WATCH.title);
+  });
+
+  it("asks before it starts, naming the folder, with Start watching and Cancel", () => {
+    const node = root();
+    const model = fakeModel();
+    renderSettings(node, model, { ...READY, inbox: NO_FOLDER, watch: OFF, watchConfirm: { folder: "/Users/ana/Inbox" } });
+
+    const card = node.querySelectorAll(".ui-card")[1] as HTMLElement;
+    expect(card.textContent).toContain(WATCH.confirmTitle("/Users/ana/Inbox"));
+    expect(button(card, WATCH.choose)).toBeUndefined();
+    button(card, WATCH.start)?.click();
+    expect(model.confirmWatch).toHaveBeenCalledOnce();
+    button(card, WATCH.cancel)?.click();
+    expect(model.cancelWatch).toHaveBeenCalledOnce();
+  });
+
+  it("shows the watched folder with Stop watching and Choose another folder", () => {
+    const node = root();
+    const model = fakeModel();
+    renderSettings(node, model, { ...READY, inbox: WITH_FOLDER, watch: ON });
+
+    const card = node.querySelectorAll(".ui-card")[1] as HTMLElement;
+    expect(card.querySelector("code")?.textContent).toBe("/Users/ana/Inbox");
+    button(card, WATCH.stop)?.click();
+    expect(model.stopWatch).toHaveBeenCalledOnce();
+    button(card, WATCH.chooseAnother)?.click();
+    expect(model.chooseWatchFolder).toHaveBeenCalledOnce();
+    expect(button(card, WATCH.start)).toBeUndefined();
+  });
+
+  it("offers Start watching for a saved folder that is not being watched", () => {
+    const node = root();
+    const model = fakeModel();
+    renderSettings(node, model, { ...READY, inbox: WITH_FOLDER, watch: OFF });
+
+    const card = node.querySelectorAll(".ui-card")[1] as HTMLElement;
+    button(card, WATCH.start)?.click();
+    expect(model.startWatch).toHaveBeenCalledOnce();
+    expect(button(card, WATCH.stop)).toBeUndefined();
+  });
+
+  it("shows what is being done while it is done", () => {
+    for (const [busy, label] of [
+      ["choosing", WATCH.choosing],
+      ["starting", WATCH.starting],
+      ["stopping", WATCH.stopping],
+    ] as const) {
+      const node = root();
+      const state =
+        busy === "choosing" ? { inbox: NO_FOLDER, watch: OFF } : { inbox: WITH_FOLDER, watch: busy === "starting" ? OFF : ON };
+      renderSettings(node, fakeModel(), { ...READY, ...state, watchBusy: busy });
+
+      const busyButton = Array.from(node.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.getAttribute("aria-busy") === "true");
+      expect(busyButton?.textContent).toBe(label);
+    }
   });
 
   it("shows the row being undone as busy and holds the other rows", () => {

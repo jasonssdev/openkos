@@ -2,7 +2,7 @@
 // apart from the DOM so it can be tested. Plain words only: no engine words,
 // never a command, and never a key. A refusal is worded from its code or
 // reason, never from the engine's or the shell's text.
-import { ApiError, ApiKeyError, EngineUnreachable, type Schemas } from "../../client/index.ts";
+import { ApiError, ApiKeyError, EngineUnreachable, WatchError, type Schemas } from "../../client/index.ts";
 
 /** The fixed words of the screen. */
 export const WORDS = {
@@ -65,6 +65,76 @@ export const WORDS = {
   creating: "Setting up…",
   switching: "Opening your library…",
 } as const;
+
+const NO_LIBRARY = "Open a library first.";
+
+/**
+ * The "Watch a folder" card (docs/decision-wording.md, "Watch a folder"). It
+ * says what happens before the watch is turned on (ADR-0078, "Three"), and that
+ * turning it on also runs the rest of what the engine does unattended ("Four").
+ */
+export const WATCH = {
+  title: "Watch a folder",
+  intro: "OpenKOS can watch a folder on your Mac and add the files you put in it.",
+  what: [
+    "Text files (like .txt and .md) that stay unchanged for a short while are added to your library by themselves, using the AI model, up to the daily limit set for it. Other files are ignored, and your folder is never changed.",
+    "A file you edit after it was added becomes a new version.",
+    "Combining pages, connections and replacing an older version are never done by themselves. They wait in To review for you.",
+  ],
+  also: "Watching also keeps your library in order. While it is on, OpenKOS tries again to save changes that couldn't be saved, and now and then goes over your library to refresh search and look for pages to review. That uses the AI model too, within the same daily limit.",
+  stops: "Watching stops when you quit OpenKOS or open another library.",
+  folder: "Folder",
+  choose: "Choose a folder…",
+  chooseAnother: "Choose another folder…",
+  choosing: "Choosing…",
+  start: "Start watching",
+  starting: "Starting…",
+  stop: "Stop watching",
+  stopping: "Stopping…",
+  cancel: "Cancel",
+  insideLibrary: "That folder is part of your library. Choose a folder outside it.",
+  notAFolder: "That isn't a folder. Choose a folder.",
+  cannotUse: "OpenKOS can't use that folder. Please choose another.",
+  noLibrary: NO_LIBRARY,
+  stoppedNote: "OpenKOS stopped watching.",
+  folderKept: "Watching is off, but the folder is still saved in your library's settings.",
+  confirmTitle: (folder: string): string => `Watch '${folder}'?`,
+  startedNote: (folder: string): string => `OpenKOS is watching '${folder}'.`,
+  /** The folder was saved but the shell could not start (or remember) the watch. */
+  notStarted: (error: unknown): string => {
+    const reason = error instanceof WatchError ? error.reason : "unknown";
+    const why =
+      reason === "no_workspace"
+        ? NO_LIBRARY
+        : reason === "watch_choice_unkept"
+          ? "OpenKOS couldn't remember your choice."
+          : "Something went wrong.";
+    return `The folder was saved, but watching didn't start. ${why}`;
+  },
+} as const;
+
+/** Why the folder could not be chosen or saved, from the engine's code alone. */
+export function watchFailure(error: unknown): string {
+  const code = error instanceof ApiError ? error.code : "";
+  switch (code) {
+    case "inbox_inside_workspace":
+      return WATCH.insideLibrary;
+    case "inbox_not_a_directory":
+      return WATCH.notAFolder;
+    case "invalid_inbox":
+      return WATCH.cannotUse;
+    default:
+      return saveFailure(error);
+  }
+}
+
+/** Why the watch could not be stopped, from the shell's reason alone. */
+export function watchCommandFailure(error: unknown): string {
+  const reason = error instanceof WatchError ? error.reason : "unknown";
+  return reason === "watch_choice_unkept"
+    ? "OpenKOS couldn't remember your choice. Nothing was changed."
+    : `Something went wrong. ${NOTHING_CHANGED}`;
+}
 
 type Settings = Schemas["ModelSettings"];
 

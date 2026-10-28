@@ -9,6 +9,7 @@
 import {
   createApiKeys,
   createClient,
+  createWatch,
   createWorkspaces,
   openRuntimeDownload,
   type EngineState,
@@ -94,7 +95,11 @@ let welcome: WelcomeModel | null = null;
 // Setup opens on its own once per session, not again after each restart.
 let setupOffered = false;
 // One for the whole session: the shell's commands work with no engine running.
-const settings = new SettingsModel({ keys: createApiKeys(invoke), workspaces: createWorkspaces(invoke) });
+const settings = new SettingsModel({
+  keys: createApiKeys(invoke),
+  workspaces: createWorkspaces(invoke),
+  watch: createWatch(invoke),
+});
 let settingsNote: string | null = null;
 settings.subscribe((next) => {
   renderSettings(settingsScreen, settings, next);

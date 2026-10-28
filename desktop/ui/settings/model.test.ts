@@ -1,8 +1,16 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, ApiKeyError, WorkspaceError, type Schemas, type WorkspaceChoice } from "../../client/index.ts";
+import {
+  ApiError,
+  ApiKeyError,
+  WatchError,
+  WorkspaceError,
+  type Schemas,
+  type WatchStatus,
+  type WorkspaceChoice,
+} from "../../client/index.ts";
 import { LOCAL_MODELS, SettingsModel, cloudOn, type SettingsApi, type SettingsPorts } from "./model.ts";
-import { WORDS, savedNote } from "./wording.ts";
+import { WATCH, WORDS, savedNote } from "./wording.ts";
 
 type Settings = Schemas["ModelSettings"];
 type Preview = Schemas["ModelSettingsPreview"];
@@ -65,10 +73,27 @@ const REVISES: Pair = { first_id: "a/old", second_id: "a/new", relation_type: "r
 const LEFT: Declined = { first_id: "b/x", second_id: "b/y", merged_absorbed_id: null, decided_at: "2026-10-01T00:00:00Z" };
 const INSIDE: Declined = { first_id: "c/whole", second_id: "b/y", merged_absorbed_id: "b/x", decided_at: "2026-10-02T00:00:00Z" };
 
+type Inbox = Schemas["InboxSettings"];
+type InboxPreview = Schemas["InboxSettingsPreview"];
+
+const FOLDER = "/Users/ana/Inbox";
+const OFF: WatchStatus = { state: "off", wanted: false };
+const ON: WatchStatus = { state: "on", attempt: 1, pid: 7, wanted: true };
+
 function setup(
-  over: { settings?: Settings; keySet?: boolean | Error; library?: WorkspaceChoice; pairs?: Pair[]; declined?: Declined[] } = {},
+  over: {
+    settings?: Settings;
+    keySet?: boolean | Error;
+    library?: WorkspaceChoice;
+    pairs?: Pair[];
+    declined?: Declined[];
+    inbox?: string | null;
+    watch?: WatchStatus;
+  } = {},
 ) {
   let current = over.settings ?? LOCAL;
+  let inbox: Inbox = { inbox: over.inbox ?? null, quiet_seconds: 30, max_calls_per_day: 500 };
+  let watch: WatchStatus = over.watch ?? OFF;
   let pairs = over.pairs ?? [];
   let declined = over.declined ?? [];
   const version = (n: string) => ({ n }) as never;
@@ -101,6 +126,20 @@ function setup(
       declined = [];
       return {} as Schemas["ContradictionReopenResponse"];
     }),
+    inboxSettings: vi.fn(async () => inbox),
+    previewInboxSettings: vi.fn(async (body: Schemas["InboxSettingsPreviewRequest"]): Promise<InboxPreview> => {
+      if (body.inbox === inbox.inbox) throw apiError("inbox_unchanged", 409);
+      return {
+        current: inbox,
+        proposed: { ...inbox, inbox: body.inbox === null ? null : `/resolved${body.inbox}` },
+        version: { change: { inbox: body.inbox }, content_digest: "i" },
+      };
+    }),
+    applyInboxSettings: vi.fn(async (body: Schemas["InboxSettingsApplyRequest"]) => {
+      const to = body.version.change.inbox;
+      inbox = { ...inbox, inbox: to === null ? null : `/resolved${to}` };
+      return { changed: { settings: inbox, commit_sha: "abc" }, warnings: [] };
+    }),
     modelSettings: vi.fn(async () => current),
     previewModelSettings: vi.fn(async (body: Schemas["ModelSettingsPreviewRequest"]): Promise<Preview> => {
       const proposed: Settings =
@@ -117,6 +156,14 @@ function setup(
   } satisfies SettingsApi;
   const keySet = over.keySet ?? false;
   const ports = {
+    watch: {
+      state: vi.fn(async () => watch),
+      set: vi.fn(async (on: boolean): Promise<WatchStatus> => {
+        watch = on ? ON : OFF;
+        return watch;
+      }),
+      pickFolder: vi.fn(async (): Promise<string | null> => FOLDER),
+    },
     keys: {
       set: vi.fn(async (_key: string) => {}),
       clear: vi.fn(async () => {}),
@@ -610,6 +657,196 @@ describe("decisions you can undo", () => {
     await Promise.all([model.undo("declined", key), model.undo("declined", key), model.undo("declined", "nope")]);
 
     expect(api.previewReopenContradiction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("watching a folder", () => {
+  it("reads the folder and the shell's watch beside the model", async () => {
+    const { model } = await connected({ inbox: FOLDER, watch: ON });
+
+    expect(model.state.inbox?.inbox).toBe(FOLDER);
+    expect(model.state.watch).toEqual(ON);
+  });
+
+  it("keeps the settings when the watch cannot be read", async () => {
+    const { model, api, ports } = setup();
+    ports.watch.state.mockRejectedValue(new WatchError("unknown", "x"));
+
+    await model.connect(api);
+
+    expect(model.state.phase).toBe("ready");
+    expect(model.state.watch).toBeNull();
+  });
+
+  it("previews the chosen folder and writes nothing until it is confirmed", async () => {
+    const { model, api, ports } = await connected();
+
+    await model.chooseWatchFolder();
+
+    expect(api.previewInboxSettings).toHaveBeenCalledWith({ inbox: FOLDER });
+    expect(model.state.watchConfirm).toEqual({ folder: `/resolved${FOLDER}` });
+    expect(api.applyInboxSettings).not.toHaveBeenCalled();
+    expect(ports.watch.set).not.toHaveBeenCalled();
+    expect(model.state.watchBusy).toBeNull();
+  });
+
+  it("does nothing when the folder window is closed", async () => {
+    const { model, api, ports } = await connected();
+    ports.watch.pickFolder.mockResolvedValue(null);
+
+    await model.chooseWatchFolder();
+
+    expect(api.previewInboxSettings).not.toHaveBeenCalled();
+    expect(model.state.watchConfirm).toBeNull();
+    expect(model.state.watchBusy).toBeNull();
+  });
+
+  it("saves the folder with the previewed version, then starts the watch, in that order", async () => {
+    const { model, api, ports } = await connected();
+    const order: string[] = [];
+    api.applyInboxSettings.mockImplementationOnce(async () => {
+      order.push("apply");
+      return {
+        changed: { settings: { inbox: `/resolved${FOLDER}`, quiet_seconds: 30, max_calls_per_day: 500 }, commit_sha: "a" },
+        warnings: [],
+      };
+    });
+    ports.watch.set.mockImplementationOnce(async () => {
+      order.push("start");
+      return ON;
+    });
+    await model.chooseWatchFolder();
+
+    await model.confirmWatch();
+
+    expect(order).toEqual(["apply", "start"]);
+    expect(api.applyInboxSettings).toHaveBeenCalledWith({ version: { change: { inbox: FOLDER }, content_digest: "i" } });
+    expect(ports.watch.set).toHaveBeenCalledWith(true);
+    expect(model.state.inbox?.inbox).toBe(`/resolved${FOLDER}`);
+    expect(model.state.watch).toEqual(ON);
+    expect(model.state.watchConfirm).toBeNull();
+    expect(model.state.note).toBe(WATCH.startedNote(`/resolved${FOLDER}`));
+    expect(model.state.problem).toBeNull();
+  });
+
+  it("does not write or start anything when the confirmation is cancelled", async () => {
+    const { model, api, ports } = await connected();
+    await model.chooseWatchFolder();
+
+    model.cancelWatch();
+    await model.confirmWatch();
+
+    expect(model.state.watchConfirm).toBeNull();
+    expect(api.applyInboxSettings).not.toHaveBeenCalled();
+    expect(ports.watch.set).not.toHaveBeenCalled();
+  });
+
+  it("says why a folder is refused, in plain words, and asks nothing further", async () => {
+    for (const [code, line] of [
+      ["inbox_inside_workspace", WATCH.insideLibrary],
+      ["inbox_not_a_directory", WATCH.notAFolder],
+      ["invalid_inbox", WATCH.cannotUse],
+    ] as const) {
+      const { model, api, ports } = await connected();
+      api.previewInboxSettings.mockRejectedValueOnce(apiError(code));
+
+      await model.chooseWatchFolder();
+
+      expect(model.state.problem).toBe(line);
+      expect(model.state.watchConfirm).toBeNull();
+      expect(model.state.watchBusy).toBeNull();
+      expect(ports.watch.set).not.toHaveBeenCalled();
+    }
+  });
+
+  it("starts the watch on a folder that is already saved without writing it again", async () => {
+    const { model, api, ports } = await connected({ inbox: FOLDER });
+
+    await model.chooseWatchFolder();
+    expect(model.state.watchConfirm).toEqual({ folder: FOLDER });
+    await model.confirmWatch();
+
+    expect(api.applyInboxSettings).not.toHaveBeenCalled();
+    expect(ports.watch.set).toHaveBeenCalledWith(true);
+    expect(model.state.watch).toEqual(ON);
+  });
+
+  it("starts a saved folder that is not being watched", async () => {
+    const { model, api, ports } = await connected({ inbox: FOLDER });
+
+    await model.startWatch();
+
+    expect(ports.watch.set).toHaveBeenCalledWith(true);
+    expect(api.applyInboxSettings).not.toHaveBeenCalled();
+    expect(model.state.watch).toEqual(ON);
+  });
+
+  it("reads the settings again and does not start when they changed meanwhile", async () => {
+    const { model, api, ports } = await connected();
+    await model.chooseWatchFolder();
+    api.applyInboxSettings.mockRejectedValueOnce(apiError("stale", 409));
+
+    await model.confirmWatch();
+
+    expect(model.state.problem).toBe("Your settings changed while you were editing them. Here they are now.");
+    expect(ports.watch.set).not.toHaveBeenCalled();
+    expect(api.inboxSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("says the folder was saved when the watch then cannot start", async () => {
+    const { model, ports } = await connected();
+    const refusal = new WatchError("watch_choice_unkept", "disk");
+    ports.watch.set.mockRejectedValueOnce(refusal);
+    await model.chooseWatchFolder();
+
+    await model.confirmWatch();
+
+    expect(model.state.problem).toBe(WATCH.notStarted(refusal));
+    expect(model.state.problem).toContain("saved");
+    expect(model.state.inbox?.inbox).toBe(`/resolved${FOLDER}`);
+    expect(model.state.watch).toEqual(OFF);
+  });
+
+  it("stops the watch first, then forgets the folder, and remembers the person stopped it", async () => {
+    const { model, api, ports } = await connected({ inbox: FOLDER, watch: ON });
+    const order: string[] = [];
+    ports.watch.set.mockImplementationOnce(async () => {
+      order.push("stop");
+      return OFF;
+    });
+    api.applyInboxSettings.mockImplementationOnce(async () => {
+      order.push("forget");
+      return { changed: { settings: { inbox: null, quiet_seconds: 30, max_calls_per_day: 500 }, commit_sha: "a" }, warnings: [] };
+    });
+
+    await model.stopWatch();
+
+    expect(order).toEqual(["stop", "forget"]);
+    expect(ports.watch.set).toHaveBeenCalledWith(false);
+    expect(api.previewInboxSettings).toHaveBeenCalledWith({ inbox: null });
+    expect(model.state.inbox?.inbox).toBeNull();
+    expect(model.state.watch).toEqual(OFF);
+    expect(model.state.stoppedByYou).toBe(true);
+    expect(model.state.note).toBe(WATCH.stoppedNote);
+  });
+
+  it("reports a folder that stays saved when only the watch could be stopped", async () => {
+    const { model, api } = await connected({ inbox: FOLDER, watch: ON });
+    api.applyInboxSettings.mockRejectedValueOnce(apiError("write_refused", 409));
+
+    await model.stopWatch();
+
+    expect(model.state.watch).toEqual(OFF);
+    expect(model.state.problem).toContain(WATCH.folderKept);
+    expect(model.state.watchBusy).toBeNull();
+  });
+
+  it("does not start two things at once", async () => {
+    const { model, ports } = await connected({ inbox: FOLDER });
+
+    await Promise.all([model.startWatch(), model.startWatch()]);
+
+    expect(ports.watch.set).toHaveBeenCalledTimes(1);
   });
 });
 

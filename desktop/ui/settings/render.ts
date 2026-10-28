@@ -19,7 +19,7 @@ import {
   uiCard,
 } from "../system/index.ts";
 import type { DraftField, SettingsModel, SettingsState, UndoList, UndoRow } from "./model.ts";
-import { WORDS, modelFacts, whereItRuns } from "./wording.ts";
+import { WATCH, WORDS, modelFacts, whereItRuns } from "./wording.ts";
 
 type Dialog = ReturnType<typeof openDialog>;
 
@@ -79,6 +79,7 @@ function screen(model: SettingsModel, state: SettingsState): HTMLElement[] {
     state.problem ? callout("error", state.problem, { live: "alert" }) : null,
   ].filter((node): node is HTMLElement => node !== null);
   return [header, ...notes, modelCard(model, state),
+    ...watchCard(model, state),
     ...undoCard(model, state, "settled", WORDS.settledTitle, WORDS.undo),
     ...undoCard(model, state, "declined", WORDS.declinedTitle, WORDS.pointOutAgain),
     libraryCard(model, state),
@@ -167,6 +168,74 @@ function modelForm(model: SettingsModel, state: SettingsState): HTMLElement[] {
     ),
   );
   return body;
+}
+
+/**
+ * "Watch a folder": drawn once the engine has said what the folder is. It says
+ * what happens before anything is turned on, and that the watch also runs the
+ * daemon's other jobs (ADR-0078).
+ */
+function watchCard(model: SettingsModel, state: SettingsState): HTMLElement[] {
+  const { inbox, watchBusy: busy, watchConfirm: confirm } = state;
+  if (inbox === null) return [];
+  const body: HTMLElement[] = [
+    el("p", {}, WATCH.intro),
+    el("ul", {}, ...WATCH.what.map((line) => el("li", {}, line))),
+    el("p", {}, WATCH.also),
+    el("p", { class: "ui-field__hint" }, WATCH.stops),
+  ];
+  if (confirm !== null) {
+    body.push(
+      el("p", { class: "ui-field__label" }, WATCH.confirmTitle(confirm.folder)),
+      el(
+        "div",
+        { class: "ui-actions" },
+        uiButton(WATCH.start, () => model.confirmWatch(), { variant: "primary", focusKey: "settings:watch-confirm" }),
+        uiButton(WATCH.cancel, () => model.cancelWatch(), { variant: "quiet", focusKey: "settings:watch-cancel" }),
+      ),
+    );
+    return [uiCard({ title: WATCH.title, headingLevel: 2 }, ...body)];
+  }
+  const wanted = state.watch?.wanted === true;
+  if (inbox.inbox !== null) body.push(facts([[WATCH.folder, inbox.inbox, "code"]]));
+  const actions: HTMLButtonElement[] = [];
+  if (inbox.inbox === null) {
+    actions.push(
+      uiButton(WATCH.choose, () => model.chooseWatchFolder(), {
+        variant: "primary",
+        loading: busy === "choosing",
+        loadingLabel: WATCH.choosing,
+        disabled: busy !== null && busy !== "choosing",
+        focusKey: "settings:watch-choose",
+      }),
+    );
+  } else {
+    actions.push(
+      wanted
+        ? uiButton(WATCH.stop, () => model.stopWatch(), {
+            loading: busy === "stopping",
+            loadingLabel: WATCH.stopping,
+            disabled: busy !== null && busy !== "stopping",
+            focusKey: "settings:watch-stop",
+          })
+        : uiButton(WATCH.start, () => model.startWatch(), {
+            variant: "primary",
+            loading: busy === "starting",
+            loadingLabel: WATCH.starting,
+            disabled: busy !== null && busy !== "starting",
+            focusKey: "settings:watch-start",
+          }),
+      uiButton(WATCH.chooseAnother, () => model.chooseWatchFolder(), {
+        variant: "quiet",
+        loading: busy === "choosing",
+        loadingLabel: WATCH.choosing,
+        disabled: busy !== null && busy !== "choosing",
+        focusKey: "settings:watch-choose",
+      }),
+    );
+  }
+  body.push(el("div", { class: "ui-actions" }, ...actions));
+  return [uiCard({ title: WATCH.title, headingLevel: 2 }, ...body)];
 }
 
 /** An earlier decision list, drawn only while it has something in it. */

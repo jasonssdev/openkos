@@ -1,13 +1,16 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { ApiError, ApiKeyError, EngineUnreachable, type Schemas } from "../../client/index.ts";
+import { ApiError, ApiKeyError, EngineUnreachable, WatchError, type Schemas } from "../../client/index.ts";
 import {
+  WATCH,
   WORDS,
   cloudWarning,
   keyAfterSaveFailure,
   keyFailure,
   saveFailure,
   savedNote,
+  watchCommandFailure,
+  watchFailure,
   whereItRuns,
 } from "./wording.ts";
 
@@ -53,6 +56,36 @@ describe("the settings wording", () => {
       savedNote(LOCAL, false),
     ];
     for (const sentence of sentences) expect(sentence).not.toMatch(ENGINE_WORDS);
+  });
+
+  it("uses no engine word to ask about a folder, and names the daemon's other jobs", () => {
+    const strings = Object.values(WATCH).flatMap((v) => (typeof v === "function" ? [] : Array.isArray(v) ? v : [v]));
+    const sentences = [
+      ...strings,
+      WATCH.confirmTitle("/Users/ana/Inbox"),
+      WATCH.startedNote("/Users/ana/Inbox"),
+      WATCH.notStarted(new WatchError("watch_choice_unkept", "d")),
+      WATCH.notStarted(new WatchError("no_workspace", "d")),
+      WATCH.notStarted(null),
+      watchCommandFailure(new WatchError("watch_choice_unkept", "d")),
+      watchCommandFailure(null),
+      ...["inbox_inside_workspace", "inbox_not_a_directory", "invalid_inbox", "stale"].map((c) => watchFailure(apiError(c))),
+    ];
+    for (const sentence of sentences) expect(sentence).not.toMatch(ENGINE_WORDS);
+    // ADR-0078, "Three" and "Four": what is added, what is never done, and the other jobs.
+    expect(WATCH.what.join(" ")).toMatch(/AI model/);
+    expect(WATCH.what.join(" ")).toMatch(/never changed/);
+    expect(WATCH.what.join(" ")).toMatch(/To review/);
+    expect(WATCH.also).toMatch(/tries again to save/);
+    expect(WATCH.also).toMatch(/AI model too, within the same daily limit/);
+  });
+
+  it("words a refused folder from the engine's code alone", () => {
+    expect(watchFailure(apiError("inbox_inside_workspace"))).toBe(WATCH.insideLibrary);
+    expect(watchFailure(apiError("inbox_not_a_directory"))).toBe(WATCH.notAFolder);
+    expect(watchFailure(apiError("invalid_inbox"))).toBe(WATCH.cannotUse);
+    expect(watchFailure(apiError("workspace_busy"))).toBe(saveFailure(apiError("workspace_busy")));
+    expect(watchFailure(apiError("inbox_inside_workspace"))).not.toContain("engine text");
   });
 
   it("says where the AI model runs, naming the host of a cloud one", () => {
