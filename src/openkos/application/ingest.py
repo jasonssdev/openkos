@@ -756,6 +756,7 @@ def stage_derived_objects(
             on_progress=on_progress,
             concurrent=cfg.concurrent_extraction,
             transcript_decisions=cfg.transcript_decisions,
+            selector_judge=cfg.selector_judge,
         )
     else:
         outcome = extract_concept(

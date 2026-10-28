@@ -1594,7 +1594,8 @@ the backend, whether the host is this machine, the host as it may be shown
 
 The bound MUST be an upper bound on the chat calls adding the file can make
 whatever the model replies and whatever title its Source takes: every retry,
-re-ask, optional pass and judge attempt the extraction may spend. A file that
+re-ask, optional pass and, when `selector_judge` is on, judge attempt the
+extraction may spend. A file that
 is unchanged since it was added, is not text, is blank, or lies below a
 confidential workspace floor without `include_confidential` MUST be quoted at
 0.
@@ -1614,7 +1615,8 @@ on_warning=None)` MUST add the files the token covers through the ingest
 service the CLI uses, each held to its quoted bound: a call past a file's bound
 MUST NOT be made. `None` for `token` MUST return `RunRefused`. When the model,
 the backend, the host's locality, the settings that move the bound
-(`union_judge`, `transcript_decisions`, `default_sensitivity`) or any file's
+(`union_judge`, `selector_judge`, `transcript_decisions`,
+`default_sensitivity`) or any file's
 bytes moved since the quote, it MUST return `IngestQuoteStale` naming them,
 before any call or write. Each file MUST be committed as the CLI commits it; a
 commit that cannot be made MUST be reported through `on_warning` and the file

@@ -378,6 +378,7 @@ def test_a_refresh_that_fails_leaves_the_indexes_stale_not_the_run(
     ("change", "field"),
     [
         (lambda env: env.set_config(union_judge=False), "settings"),
+        (lambda env: env.set_config(selector_judge=True), "settings"),
         (lambda env: env.set_config(default_sensitivity="public"), "settings"),
         (
             lambda env: setattr(env.model, "locality", _Model(is_local=False).locality),

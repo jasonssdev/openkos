@@ -549,6 +549,56 @@ passages file stay outside the repository, like the judgment sheet: the commands
 refuse a path inside it. `--self-test` shows the metric can fail (a span in an
 elided region scores 0, an invented span is refused).
 
+## The #1648 arms (pre-run code)
+
+`run --arm baseline|t1|t2` replaces ONLY the dense list; the fts list, the filters and
+the fusion are the shipped code. `baseline` is the shipped `answer._dense_search`;
+`t1` is the mean of the two smallest chunk distances; `t2` is the minimum plus
+`lambda * log2(chunk_count)`, with `lambda` fitted from the baseline spread of all the
+questions and printed before any metric exists. `run --chunk-target 4000` (T3)
+rebuilds the store with that window and the shipped minimum. The run file records the
+arm, `lambda`, the chunk target and the number of chunk rows. Both flags need the
+embedder, and `--self-test` pins that the brute-force `baseline` equals `vec0`.
+
+```bash
+uv run python evals/retrieval_gold/run_retrieval_gold.py run --arm t1 \
+    --out ~/openkos-eval-runs/retrieval-gold/run-t1.json
+uv run python evals/retrieval_gold/run_retrieval_gold.py run --chunk-target 4000 \
+    --out ~/openkos-eval-runs/retrieval-gold/run-t3.json
+```
+
+## Doc2query (#1650): generating and indexing the questions a Decision answers
+
+`PREREGISTRATION-1650.md` is the contract; this is the command surface. Generation is
+the only GPU step, and it takes the bundle and no questions file.
+
+```bash
+W=~/openkos-eval-runs/retrieval-gold
+# GPU, one chat call per Decision (qwen3:8b, prompt P1); resumable with --resume
+uv run python evals/retrieval_gold/generate_questions.py generate \
+    --bundle $W/bundle-v1/bundle --out $W/generated-questions.json \
+    --stratum-sha256 <hash from gap-stratum> --wait-gpu
+# no model: the cost bars (p90 per Decision, share of the bundle's ingest wall time)
+uv run python evals/retrieval_gold/generate_questions.py cost \
+    --generated $W/generated-questions.json \
+    --manifest $W/bundle-v1/gold-build/manifest.json
+# embedder only (bge-m3): leak audit first, then one run per arm over ONE build
+uv run python evals/retrieval_gold/run_retrieval_gold.py run \
+    --workspace $W/bundle-v1 --doc2query $W/generated-questions.json --out $W/d2q.json
+```
+
+`run --doc2query` runs the leak audit before anything is retrieved and stops when the
+generator copied the gold questions. It refuses a generated file that is incomplete or
+was made from different Decision text. `--out d2q.json` writes `d2q-a0.json` (the shipped
+pipeline), `d2q-a1.json`, `d2q-a2.json`, `d2q-a3.json` and `d2q-c1.json`; each question is
+embedded once and shared. The arms are built on the production stores without changing
+`src/`: A1 adds the question vectors as extra rows of the Decision in the same `vectors`
+table, A2 keeps them in a separate vector store whose top 10 is a third list in
+reciprocal rank fusion, A3 appends them to the Decision's text for the FTS build only, and
+C1 is A2 with the questions moved to another Decision (seeded derangement, seed 1650).
+Score each file with `score`, then compare on the frozen stratum with
+`prereg_tools.py stratum-compare`.
+
 ## What it cannot show
 
 - **Pool bias.** Judging every document for every question is not feasible, so a
@@ -572,7 +622,8 @@ elided region scores 0, an invented span is refused).
   project and Spanish ones over meetings; cross-language retrieval is not measured.
 - **No answer quality, no abstention.** Every question is answerable from the bundle.
 - **Not a pre-registration.** The baseline and every candidate technique need their own
-  pre-registration (arms, metric, bar, `n`) before any run. This directory has none.
+  pre-registration (arms, metric, bar, `n`) before any run. This README registers none;
+  the registrations are the `PREREGISTRATION-<issue>.md` files listed under "Files".
 
 ## Commands
 
@@ -622,6 +673,16 @@ uv run python evals/retrieval_gold/run_retrieval_gold.py compare \
     --channel fused --metric ndcg@10
 ```
 
+`compare` also contrasts two channels of one scored run, optionally on a subset
+(`all`, `vocab-gap`, `plain`, `en`, `es`, or a kind), with the same seeded paired
+bootstrap and no model:
+
+```bash
+uv run python evals/retrieval_gold/run_retrieval_gold.py compare \
+    --base ~/openkos-eval-runs/retrieval-gold/scores-v1.json \
+    --base-channel dense --cand-channel fused --metric recall@5 --subset vocab-gap
+```
+
 For the built gold bundle the same commands take `--workspace`, which also selects
 `questions.v1.json`; the full pool needs a `run` with embeddings (bge-m3 through Ollama,
 zero chat calls):
@@ -652,6 +713,15 @@ be resolved by hand; the command never merges them.
 | `gold_bundle.py` | The 35-document draft bundle, built from committed material. Not to be judged. |
 | `build_bundle.py` | Builds the gold bundle with production `ingest`; `plan`, `build`, `--self-test`. Refuses a pending translation. |
 | `translate_meetings.py` | Translates the 12 development meetings into Spanish; `run`, `sample-sheet`, `pin`, `--self-test`. |
+| `prereg_tools.py`, `gold_prereg.py` | Model-free pieces of the registrations below: chunk counts, the length diagnostic, the vocabulary-gap stratum, the leak audit, three-list fusion, the distance aggregators. Pure, `--self-test`. |
+| `gold_arms.py` | The #1648 Step 2 dense arms (`baseline`, `t1`, `t2`) scored from exact L2 distances to every chunk row; `run --arm` and `run --chunk-target` (T3) use it. Pure apart from reading the built store. |
+| `generate_questions.py`, `gold_doc2query.py`, `doc2query_selftest.py` | The #1650 pre-run code: `generate` (the only GPU step) and `cost`; the registered prompts, output handling, cost bars, question store and the A1/A2/A3/C1 arms; their model-free checks, run by both `--self-test`s. |
+| `PREREGISTRATION-1648.md` | Registered on merge: does the dense channel favour long documents (diagnostic first, then arms). |
+| `PREREGISTRATION-1650.md` | Registered on merge: index the questions a Decision answers (doc2query), measured on the vocabulary-gap stratum. |
+| `PREREGISTRATION-1651.md` | Registered on merge: a chat model as a pointwise reranker over a widened fused pool, the cheapest path before any `llama-server` step. |
+| `gold_rerank.py` | Model-free parts of that registration (prompt parsing, the rerank arms, latency accounting, the decision rule) plus the two commands that call Ollama (`wide-run`, `score-pool`). `--self-test`. |
 | `bundle_sources.json` | The selected sources with their sha256, language, kind and tier, and what was excluded and why. |
 | `questions.draft.json` | The draft question set for the 35-document draft bundle; no judgments. |
 | `questions.v1.json` | The frozen, model-authored question set for `bundle-v1`; no judgments. |
+| `judgments-v1.json` | The relevance judgments for `bundle-v1` (document ids and grades only; sources are AMI CC BY 4.0 and the repo's synthetic notes). |
+| `RESULTS-v1-baseline.md` | The v1 baseline: who judged, agreement, scores and paired contrasts. |

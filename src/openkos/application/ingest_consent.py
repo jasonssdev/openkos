@@ -317,6 +317,7 @@ def _open(root: Path) -> tuple[config.WorkspaceLayout, config.Config]:
 def _settings_digest(cfg: config.Config) -> str:
     parts = (
         f"union_judge={int(cfg.union_judge)}",
+        f"selector_judge={int(cfg.selector_judge)}",
         f"transcript_decisions={int(cfg.transcript_decisions)}",
         f"default_sensitivity={cfg.default_sensitivity}",
     )
@@ -451,6 +452,7 @@ def _price(
         decoded.text,
         union_judge=cfg.union_judge,
         transcript_decisions=cfg.transcript_decisions,
+        selector_judge=cfg.selector_judge,
     )
     return "extracts", None, None, bound
 

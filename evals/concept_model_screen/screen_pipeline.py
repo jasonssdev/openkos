@@ -559,8 +559,15 @@ def run_source(
     outcome = None
     with capture_stages(rec):
         try:
+            # `selector_judge=True`: this harness measures the judge's stage,
+            # and its stored records were made with it. Production's default
+            # moved off in ADR-0080; the harness keeps what it measures.
             outcome = concept_mod.extract_concept_union(
-                text, source_title=title, llm=backend, transcript_decisions=False
+                text,
+                source_title=title,
+                llm=backend,
+                transcript_decisions=False,
+                selector_judge=True,
             )
         except BackendError as exc:
             failure = f"{type(exc).__name__}: {str(exc)[:200]}"

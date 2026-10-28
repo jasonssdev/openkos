@@ -321,7 +321,9 @@ def test_union_judge_prompt_is_bounded_on_an_oversized_source() -> None:
         )
     )
 
-    outcome = concept_mod.extract_concept_union(source, source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        source, source_title="Notes", llm=llm, selector_judge=True
+    )
 
     judge_call = llm.calls[-1]
     assert judge_call[0]["content"] == judge_mod._JUDGE_SYSTEM_PROMPT
@@ -489,7 +491,10 @@ def test_union_report_names_every_bounded_call_in_spend_order() -> None:
     )
 
     outcome = concept_mod.extract_concept_union(
-        source, source_title="weekly sync meeting", llm=llm
+        source,
+        source_title="weekly sync meeting",
+        llm=llm,
+        selector_judge=True,
     )
 
     assert outcome.report.bounded_prompt_calls == (
@@ -563,7 +568,9 @@ def test_a_bounded_judge_that_still_fails_is_reported_as_both() -> None:
         _window_replies(source, _array(_CONCEPT_ITEM, _ENTITY_ITEM), prose, prose)
     )
 
-    outcome = concept_mod.extract_concept_union(source, source_title="Notes", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        source, source_title="Notes", llm=llm, selector_judge=True
+    )
 
     assert outcome.report.judge_status == "failed"
     assert outcome.report.bounded_prompt_calls == (concept_mod.BOUNDED_CALL_JUDGE,)

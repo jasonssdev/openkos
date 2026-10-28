@@ -39,6 +39,7 @@ of a harness's own scoring code.
 - [`concept_model_screen`](concept_model_screen/README.md) — choosing the concept-extraction model by AMI summary coverage, with no hand annotation.
 - [`contradictions`](contradictions/README.md) — the contradiction judge's accuracy, stability and confidence.
 - [`decision_extraction`](decision_extraction/README.md) — extraction of the nine OpenKOS types over the AMI meeting corpus.
+- [`decision_fidelity`](decision_fidelity/README.md) — whether a Decision keeps its concrete value and whether a discarded proposal is stored as one; model-free scorer and blind sheets, draft pre-registration, no model run yet.
 - [`decision_granularity`](decision_granularity/README.md) — whether one-sentence prompt edits split multi-decision sources or keep a twice-named person.
 - [`decision_revisions`](decision_revisions/README.md) — the decision-revision detector's subject pass, direction rule and judge.
 - [`decision_revisions_screen`](decision_revisions_screen/README.md) — a model-screen harness for the decision-revision judge: the 58-pair fixture of `decision_revisions`, model-free baselines, and a blind-adjudication sheet; draft pre-registration, no model run yet.
