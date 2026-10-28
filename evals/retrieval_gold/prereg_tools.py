@@ -83,7 +83,7 @@ def _load_docs(path: pathlib.Path) -> dict[str, pre.DocInfo]:
 
 
 def cmd_chunk_counts(args: argparse.Namespace) -> int:
-    docs = pre.bundle_doc_info(args.bundle, chunk_target=args.chunk_target)
+    docs = pre.bundle_doc_info(args.bundle, target=args.chunk_target)
     payload = {
         "kind": pre.CHUNK_COUNTS_KIND,
         "chunk_target": args.chunk_target or pre.production_chunk_target(),
@@ -533,7 +533,7 @@ def _self_test_bundle(c: _Checks) -> None:
         c.check(docs["decisions/short"].chunks == 1, "a Decision is one chunk")
         c.check(docs["sources/long"].chunks >= 2, "a 32 KB Source is several chunks")
         c.check(docs["sources/long"].type == "Source", "type read from frontmatter")
-        smaller = pre.bundle_doc_info(root, chunk_target=4000)
+        smaller = pre.bundle_doc_info(root, target=4000)
         c.check(
             smaller["sources/long"].chunks > docs["sources/long"].chunks,
             "a smaller chunk target raises the count",

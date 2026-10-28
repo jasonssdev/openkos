@@ -50,20 +50,24 @@ sys.path.insert(0, str(HERE))
 sys.path.append(str(REPO_ROOT / "evals"))
 sys.path.append(str(REPO_ROOT / "evals" / "query_grounding"))
 
+import gold_arms as arms  # noqa: E402
 import gold_bundle as bundle_mod  # noqa: E402
 import gold_core as core  # noqa: E402
 import gold_corpus  # noqa: E402
 import gold_delivery as delivery  # noqa: E402
 import gold_overlap as overlap_mod  # noqa: E402
+import gold_prereg as pre  # noqa: E402
 import harness_stamp  # noqa: E402
+import sqlite_vec  # noqa: E402
 
 from openkos import lifecycle, prompt_budget, sensitivity  # noqa: E402
-from openkos.llm.base import EMBED_DIM, Embedder  # noqa: E402
+from openkos.llm.base import EMBED_DIM, BackendError, Embedder  # noqa: E402
 from openkos.retrieval import answer as answer_mod  # noqa: E402
 from openkos.retrieval import fusion, pool  # noqa: E402
 from openkos.state import fts as fts_mod  # noqa: E402
 from openkos.state import reindex as reindex_module  # noqa: E402
 from openkos.state.vectorstore import (  # noqa: E402
+    VecHit,
     VectorStore,
     open_vector_store,
 )
@@ -103,8 +107,13 @@ def retrieve_channels(
     vector_store: VectorStore | None,
     excluded: frozenset[str],
     ks: Sequence[int] = core.KS,
+    dense_override: Sequence[VecHit] | None = None,
 ) -> dict[str, Any]:
     """One question through the production channel seams.
+
+    `dense_override` replaces ONLY the dense list, with the hits of a #1648 arm
+    (`gold_arms.dense_hits`); everything else, fts, filters and fusion, is the
+    shipped code. `None` is the shipped `answer._dense_search`.
 
     The pool is `pool.pool_limit(max(ks))`, the width `answer()` widens every
     `limit` up to; `core.POOL_DEPTH` pins it to the depth the sheet pools."""
@@ -120,11 +129,14 @@ def retrieve_channels(
     out: dict[str, Any] = {"fts": [h.concept_id for h in fts_hits]}
     if embedder is None or vector_store is None:
         return out
-    vec_hits, degraded = answer_mod._dense_search(
-        question, embedder=embedder, vector_store=vector_store, pool_limit=depth
-    )
-    if degraded:
-        raise RetrievalDegraded(f"the dense channel degraded for {question!r}")
+    if dense_override is not None:
+        vec_hits = list(dense_override)
+    else:
+        vec_hits, degraded = answer_mod._dense_search(
+            question, embedder=embedder, vector_store=vector_store, pool_limit=depth
+        )
+        if degraded:
+            raise RetrievalDegraded(f"the dense channel degraded for {question!r}")
     vec_hits = lifecycle.filter_hits(vec_hits, excluded)
     out["dense"] = [h.concept_id for h in vec_hits]
     fused = fusion.fuse(fts_hits, vec_hits)
@@ -168,18 +180,70 @@ def _must_open(index: fts_mod.FtsIndex | None) -> fts_mod.FtsIndex:
     return index
 
 
+def arm_hits(
+    questions: Sequence[core.Question],
+    embedder: Embedder,
+    store: VectorStore,
+    arm: str,
+) -> tuple[dict[str, list[VecHit]], dict[str, Any]]:
+    """Per-question dense hits of a #1648 arm, and what the run records about it.
+
+    `baseline` returns no override: the shipped `_dense_search` runs. Another arm
+    embeds every question once, measures it against every chunk row of the built
+    store, and (T2 only) fits `lambda` from the BASELINE distances of all the
+    questions before ranking any of them. A failed embed stops the run, like a
+    degraded dense channel."""
+    vectors, chunks = arms.read_chunk_rows(store)
+    info: dict[str, Any] = {
+        "chunk_rows": sum(len(v) for v in vectors.values()),
+        "lambda": None,
+        "lambda_fraction": None,
+    }
+    if arm == "baseline":
+        return {}, info
+    per_q: dict[str, dict[str, list[float]]] = {}
+    for q in questions:
+        try:
+            embedding = embedder.embed([q.question])[0]
+        except BackendError as exc:
+            raise RetrievalDegraded(f"embedding {q.id} failed: {exc}") from exc
+        per_q[q.id] = arms.chunk_distances(embedding, vectors)
+    lam = 0.0
+    if arm == "t2":
+        lam = arms.fit_lambda(list(per_q.values()), chunks, core.POOL_DEPTH)
+        info["lambda"] = lam
+        info["lambda_fraction"] = arms.T2_FRACTION
+    hits = {
+        qid: arms.dense_hits(d, chunks, arm, lam=lam, depth=core.POOL_DEPTH)
+        for qid, d in per_q.items()
+    }
+    return hits, info
+
+
 def run_all(
     questions: Sequence[core.Question],
     *,
     embedder: Embedder | None,
     model_tag: str,
     corpus: gold_corpus.Corpus = gold_corpus.DRAFT,
+    arm: str = "baseline",
+    chunk_target: int | None = None,
 ) -> dict[str, Any]:
+    if arm not in arms.ARMS:
+        raise SystemExit(f"unknown arm {arm!r}; one of {arms.ARMS}")
+    if embedder is None and (arm != "baseline" or chunk_target is not None):
+        raise SystemExit("an arm or a chunk target needs the embedder (not --fts-only)")
+    arm_info: dict[str, Any] = {
+        "chunk_rows": None,
+        "lambda": None,
+        "lambda_fraction": None,
+    }
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
-        bundle, fts_path, vectors_path = build_workspace(
-            root, embedder, model_tag=model_tag, corpus=corpus
-        )
+        with pre.chunk_target(chunk_target):
+            bundle, fts_path, vectors_path = build_workspace(
+                root, embedder, model_tag=model_tag, corpus=corpus
+            )
         excluded = excluded_ids(bundle)
         fts_index = fts_mod.open_fts_index_readonly(fts_path)
         if fts_index is None:
@@ -197,6 +261,7 @@ def run_all(
                     )
             else:
                 with open_vector_store(vectors_path) as db:
+                    overrides, arm_info = arm_hits(questions, embedder, db, arm)
                     for q in questions:
                         rankings[q.id] = retrieve_channels(
                             q.question,
@@ -204,6 +269,7 @@ def run_all(
                             embedder=embedder,
                             vector_store=db,
                             excluded=excluded,
+                            dense_override=overrides.get(q.id),
                         )
         finally:
             fts_index.close()
@@ -217,6 +283,11 @@ def run_all(
         "ks": list(core.KS),
         "pool_depth": core.POOL_DEPTH,
         "questions_sha256": core.questions_sha256(questions),
+        "arm": {
+            "name": arm,
+            "chunk_target": chunk_target or pre.production_chunk_target(),
+            **arm_info,
+        },
         "rankings": rankings,
     }
 
@@ -331,8 +402,17 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         embedder = OllamaClient(model=args.embed_model)
     run = run_all(
-        questions, embedder=embedder, model_tag=args.embed_model, corpus=corpus
+        questions,
+        embedder=embedder,
+        model_tag=args.embed_model,
+        corpus=corpus,
+        arm=args.arm,
+        chunk_target=args.chunk_target,
     )
+    if run["arm"]["lambda"] is not None:
+        print(
+            f"T2 lambda = {run['arm']['lambda']:.6f} (fitted from the baseline spread)"
+        )
     # No chat prompt exists to stamp, so `build_stamp` does not apply; the two
     # identities that do (the checkout and the embedder's weights) are recorded.
     run["identity"] = {
@@ -1582,6 +1662,201 @@ def _self_test_v1_set(c: _Checks) -> None:
     )
 
 
+def _self_test_arms(c: _Checks, questions: list[core.Question]) -> None:
+    """#1648 Step 2 arms and the T3 chunk override, with the stub embedder."""
+    embedder = _StubEmbedder()
+    c.close(arms.l2([0.0, 3.0], [4.0, 0.0]), 5.0, "l2 is the Euclidean distance")
+    c.check(
+        arms.decode_embedding(sqlite_vec.serialize_float32([0.5, -2.0])) == [0.5, -2.0],
+        "an embedding blob decodes to its floats",
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _bundle, fts_path, vectors_path = build_workspace(
+            pathlib.Path(tmp), embedder, model_tag="stub"
+        )
+        with open_vector_store(vectors_path) as db:
+            vectors, chunks = arms.read_chunk_rows(db)
+            c.check(
+                sum(len(v) for v in vectors.values()) > len(vectors),
+                "the draft bundle has a multi-chunk document",
+            )
+            c.check(
+                all(len(vectors[d]) == n for d, n in chunks.items()),
+                "chunk_count in vector_meta matches the stored rows",
+            )
+            for q in questions[:6]:
+                emb = embedder.embed([q.question])[0]
+                dist = arms.chunk_distances(emb, vectors)
+                base = arms.dense_hits(dist, chunks, "baseline", lam=0.0, depth=10)
+                prod, _ = answer_mod._dense_search(
+                    q.question, embedder=embedder, vector_store=db, pool_limit=10
+                )
+                c.check(
+                    [h.concept_id for h in base] == [h.concept_id for h in prod],
+                    f"{q.id}: brute-force baseline order equals vec0's",
+                )
+                c.check(
+                    all(
+                        abs(a.distance - b.distance) < 1e-4
+                        for a, b in zip(base, prod, strict=True)
+                    ),
+                    f"{q.id}: brute-force distances are vec0's metric",
+                )
+                full = arms.dense_hits(
+                    dist, chunks, "baseline", lam=0.0, depth=len(dist)
+                )
+                by_min = {h.concept_id: h.distance for h in full}
+                d_t1 = {
+                    h.concept_id: h.distance
+                    for h in arms.dense_hits(
+                        dist, chunks, "t1", lam=0.0, depth=len(dist)
+                    )
+                }
+                d_t2 = {
+                    h.concept_id: h.distance
+                    for h in arms.dense_hits(
+                        dist, chunks, "t2", lam=0.05, depth=len(dist)
+                    )
+                }
+                for doc, d in by_min.items():
+                    c.check(
+                        d_t1[doc] >= d - 1e-9,
+                        f"{q.id}/{doc}: t1 never beats the minimum",
+                    )
+                    if chunks[doc] > 1:
+                        two_best = sorted(dist[doc])[:2]
+                        c.check(
+                            abs(d_t1[doc] - sum(two_best) / len(two_best)) < 1e-9,
+                            f"{doc}: t1 is the mean of the two smallest",
+                        )
+                    if chunks[doc] == 1:
+                        c.check(
+                            abs(d_t1[doc] - d) < 1e-9,
+                            f"{doc}: one chunk keeps its distance",
+                        )
+                        c.check(
+                            abs(d_t2[doc] - d) < 1e-9, f"{doc}: one chunk, no penalty"
+                        )
+                    else:
+                        want = min(dist[doc]) + 0.05 * math.log2(chunks[doc])
+                        c.check(
+                            abs(d_t2[doc] - want) < 1e-9,
+                            f"{doc}: t2 adds lam*log2(chunks)",
+                        )
+            dist = arms.chunk_distances(
+                embedder.embed([questions[0].question])[0], vectors
+            )
+            c.check(
+                isinstance(
+                    arms.dense_hits(dist, chunks, "t1", lam=0.0, depth=3)[0], VecHit
+                ),
+                "arm hits are VecHit, so the shipped fusion takes them",
+            )
+            fts_idx = _must_open(fts_mod.open_fts_index_readonly(fts_path))
+            q0 = questions[0]
+            shipped = retrieve_channels(
+                q0.question,
+                fts_index=fts_idx,
+                embedder=embedder,
+                vector_store=db,
+                excluded=frozenset(),
+            )
+            flipped = list(reversed(shipped["dense"]))
+            override = [
+                VecHit(concept_id=d, distance=float(i)) for i, d in enumerate(flipped)
+            ]
+            replaced = retrieve_channels(
+                q0.question,
+                fts_index=fts_idx,
+                embedder=embedder,
+                vector_store=db,
+                excluded=frozenset(),
+                dense_override=override,
+            )
+            fts_idx.close()
+            c.check(
+                replaced["dense"] == flipped, "dense_override replaces the dense list"
+            )
+            c.check(
+                replaced["fts"] == shipped["fts"], "dense_override leaves fts alone"
+            )
+            c.check(
+                replaced["fused"]["5"] != shipped["fused"]["5"]
+                or flipped == shipped["dense"],
+                "the fused list is built from the override",
+            )
+            hits_t1, _ = arm_hits(questions[:4], embedder, db, "t1")
+            try:
+                arms.dense_hits(dist, chunks, "bogus", lam=0.0, depth=3)
+                c.check(False, "an unknown arm is refused")
+            except ValueError:
+                c.check(True, "an unknown arm is refused")
+
+    two = questions[:4]
+    base_run = run_all(two, embedder=embedder, model_tag="stub")
+    named = run_all(two, embedder=embedder, model_tag="stub", arm="baseline")
+    c.check(
+        named["rankings"] == base_run["rankings"], "arm baseline is the default path"
+    )
+    c.check(base_run["arm"]["name"] == "baseline", "the run records its arm")
+    c.check(
+        base_run["arm"]["chunk_target"] == pre.production_chunk_target(),
+        "target recorded",
+    )
+    t1 = run_all(two, embedder=embedder, model_tag="stub", arm="t1")
+    c.check(
+        all(
+            t1["rankings"][q.id]["dense"] == [h.concept_id for h in hits_t1[q.id]]
+            for q in two
+        ),
+        "a t1 run ranks dense by the t1 hits",
+    )
+    c.check(
+        t1["arm"]["name"] == "t1" and t1["arm"]["lambda"] is None, "t1 has no lambda"
+    )
+    c.check(t1["channels"] == ["fts", "dense", "fused"], "an arm run is a full run")
+    c.check(
+        t1["rankings"]["q01"]["fts"] == base_run["rankings"]["q01"]["fts"],
+        "fts untouched",
+    )
+    c.check(arms.T1_M == 2, "t1 is registered as the mean of the TWO smallest")
+    whole = run_all(questions, embedder=embedder, model_tag="stub")
+    for arm_name in ("t1", "t2"):
+        moved = run_all(questions, embedder=embedder, model_tag="stub", arm=arm_name)
+        changed = [
+            q.id
+            for q in questions
+            if moved["rankings"][q.id]["dense"] != whole["rankings"][q.id]["dense"]
+        ]
+        c.check(bool(changed), f"{arm_name} moves the dense list of some question")
+        c.check(
+            all(
+                moved["rankings"][q.id]["fts"] == whole["rankings"][q.id]["fts"]
+                for q in questions
+            ),
+            f"{arm_name} leaves fts alone",
+        )
+    t2 = run_all(two, embedder=embedder, model_tag="stub", arm="t2")
+    lam = t2["arm"]["lambda"]
+    c.check(isinstance(lam, float) and lam > 0, f"t2 records a positive lambda: {lam}")
+    c.close(t2["arm"]["lambda_fraction"], 0.10, "t2 records its registered fraction")
+    t3 = run_all(two, embedder=embedder, model_tag="stub", chunk_target=2000)
+    c.check(t3["arm"]["chunk_target"] == 2000, "t3 records the override")
+    c.check(
+        t3["arm"]["chunk_rows"] > base_run["arm"]["chunk_rows"],
+        "a smaller target stores more chunk rows",
+    )
+    c.check(
+        pre.production_chunk_target() == 12_000, "the override is restored afterwards"
+    )
+    try:
+        run_all(two, embedder=None, model_tag="none", arm="t1")
+        c.check(False, "an arm needs the embedder")
+    except SystemExit:
+        c.check(True, "an arm needs the embedder")
+
+
 def _self_test() -> int:
     c = _Checks()
     _self_test_metrics(c)
@@ -1598,6 +1873,7 @@ def _self_test() -> int:
     _self_test_authoring(c)
     _self_test_workspace(c)
     _self_test_v1_set(c)
+    _self_test_arms(c, questions)
     print(f"self-test: {c.total - len(c.failures)}/{c.total} passed")
     return 1 if c.failures else 0
 
@@ -1631,6 +1907,18 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--out", type=pathlib.Path, required=True)
     run.add_argument("--embed-model", default=EMBED_MODEL)
     run.add_argument("--fts-only", action="store_true", help="no embedder is built")
+    run.add_argument(
+        "--arm",
+        choices=arms.ARMS,
+        default="baseline",
+        help="#1648 dense arm: baseline (shipped), t1 (mean of 2 smallest), t2 (penalty)",
+    )
+    run.add_argument(
+        "--chunk-target",
+        type=int,
+        default=None,
+        help="#1648 T3: embed with this chunk window (characters) instead of 12000",
+    )
     run.set_defaults(func=cmd_run)
 
     sheet = sub.add_parser("judge-sheet", help="write a blind judgment sheet")

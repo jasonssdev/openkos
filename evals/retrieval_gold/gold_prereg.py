@@ -19,6 +19,7 @@ before a single treatment is scored.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
@@ -26,7 +27,7 @@ import pathlib
 import random
 import re
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -79,19 +80,28 @@ def production_chunk_target() -> int:
     return int(reindex._EMBED_CHUNK_TARGET)
 
 
+@contextlib.contextmanager
+def chunk_target(target: int | None) -> Iterator[None]:
+    """Swap the embedding chunk window for the duration of the block (T3, and
+    the `chunk-counts` forecast). `None` changes nothing. Restored on any exit,
+    so no later call in the process sees the override."""
+    saved = reindex._EMBED_CHUNK_TARGET
+    if target is not None:
+        vars(reindex)[_TARGET_NAME] = target
+    try:
+        yield
+    finally:
+        vars(reindex)[_TARGET_NAME] = saved
+
+
 def bundle_doc_info(
-    bundle: pathlib.Path, *, chunk_target: int | None = None
+    bundle: pathlib.Path, *, target: int | None = None
 ) -> dict[str, DocInfo]:
     """Chunk count, body characters and `type` of every concept in a bundle,
-    through the PRODUCTION chunker (`reindex._chunk_embed_texts`).
-
-    `chunk_target` swaps the window for the duration of the call, to forecast a
-    smaller one without re-embedding anything; it is restored afterwards."""
-    saved = reindex._EMBED_CHUNK_TARGET
-    if chunk_target is not None:
-        vars(reindex)[_TARGET_NAME] = chunk_target
-    try:
-        out: dict[str, DocInfo] = {}
+    through the PRODUCTION chunker (`reindex._chunk_embed_texts`). `target`
+    forecasts a different chunk window without embedding anything."""
+    out: dict[str, DocInfo] = {}
+    with chunk_target(target):
         for path in okf.iter_bundle_markdown(bundle):
             loaded = okf.try_load_frontmatter(path.read_text("utf-8"))
             if loaded is None:
@@ -103,9 +113,7 @@ def bundle_doc_info(
                 chars=len(body),
                 type=str(metadata.get("type") or ""),
             )
-        return out
-    finally:
-        vars(reindex)[_TARGET_NAME] = saved
+    return out
 
 
 def bundle_doc_texts(bundle: pathlib.Path) -> dict[str, str]:
@@ -564,6 +572,25 @@ def penalty_lambda(top_distances: Sequence[Sequence[float]], fraction: float) ->
     return fraction * median
 
 
+def score_docs(
+    rows: Mapping[str, Sequence[float]],
+    chunks: Mapping[str, int],
+    method: str,
+    *,
+    m: int = 2,
+    lam: float = 0.0,
+) -> dict[str, float]:
+    """Each document's aggregated distance. `rows` maps a document to the
+    distance of EVERY one of its chunks to the question."""
+    if method == "min":
+        return {d: agg_min(v) for d, v in rows.items()}
+    if method == "mean_top_m":
+        return {d: agg_mean_top_m(v, m) for d, v in rows.items()}
+    if method == "penalty":
+        return {d: agg_penalty(v, chunks[d], lam) for d, v in rows.items()}
+    raise ValueError(f"unknown method {method!r}")
+
+
 def rescore(
     rows: Mapping[str, Sequence[float]],
     chunks: Mapping[str, int],
@@ -572,16 +599,8 @@ def rescore(
     m: int = 2,
     lam: float = 0.0,
 ) -> list[str]:
-    """Documents ordered by their aggregated distance, ties by id. `rows` maps a
-    document to the distance of EVERY one of its chunks to the question."""
-    if method == "min":
-        score = {d: agg_min(v) for d, v in rows.items()}
-    elif method == "mean_top_m":
-        score = {d: agg_mean_top_m(v, m) for d, v in rows.items()}
-    elif method == "penalty":
-        score = {d: agg_penalty(v, chunks[d], lam) for d, v in rows.items()}
-    else:
-        raise ValueError(f"unknown method {method!r}")
+    """Documents ordered by their aggregated distance, ties by id."""
+    score = score_docs(rows, chunks, method, m=m, lam=lam)
     return sorted(score, key=lambda d: (score[d], d))
 
 

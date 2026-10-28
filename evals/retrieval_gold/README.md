@@ -542,6 +542,24 @@ passages file stay outside the repository, like the judgment sheet: the commands
 refuse a path inside it. `--self-test` shows the metric can fail (a span in an
 elided region scores 0, an invented span is refused).
 
+## The #1648 arms (pre-run code)
+
+`run --arm baseline|t1|t2` replaces ONLY the dense list; the fts list, the filters and
+the fusion are the shipped code. `baseline` is the shipped `answer._dense_search`;
+`t1` is the mean of the two smallest chunk distances; `t2` is the minimum plus
+`lambda * log2(chunk_count)`, with `lambda` fitted from the baseline spread of all the
+questions and printed before any metric exists. `run --chunk-target 4000` (T3)
+rebuilds the store with that window and the shipped minimum. The run file records the
+arm, `lambda`, the chunk target and the number of chunk rows. Both flags need the
+embedder, and `--self-test` pins that the brute-force `baseline` equals `vec0`.
+
+```bash
+uv run python evals/retrieval_gold/run_retrieval_gold.py run --arm t1 \
+    --out ~/openkos-eval-runs/retrieval-gold/run-t1.json
+uv run python evals/retrieval_gold/run_retrieval_gold.py run --chunk-target 4000 \
+    --out ~/openkos-eval-runs/retrieval-gold/run-t3.json
+```
+
 ## What it cannot show
 
 - **Pool bias.** Judging every document for every question is not feasible, so a
@@ -647,6 +665,7 @@ be resolved by hand; the command never merges them.
 | `build_bundle.py` | Builds the gold bundle with production `ingest`; `plan`, `build`, `--self-test`. Refuses a pending translation. |
 | `translate_meetings.py` | Translates the 12 development meetings into Spanish; `run`, `sample-sheet`, `pin`, `--self-test`. |
 | `prereg_tools.py`, `gold_prereg.py` | Model-free pieces of the registrations below: chunk counts, the length diagnostic, the vocabulary-gap stratum, the leak audit, three-list fusion, the distance aggregators. Pure, `--self-test`. |
+| `gold_arms.py` | The #1648 Step 2 dense arms (`baseline`, `t1`, `t2`) scored from exact L2 distances to every chunk row; `run --arm` and `run --chunk-target` (T3) use it. Pure apart from reading the built store. |
 | `PREREGISTRATION-1648.md` | Registered on merge: does the dense channel favour long documents (diagnostic first, then arms). |
 | `PREREGISTRATION-1650.md` | Registered on merge: index the questions a Decision answers (doc2query), measured on the vocabulary-gap stratum. |
 | `bundle_sources.json` | The selected sources with their sha256, language, kind and tier, and what was excluded and why. |
