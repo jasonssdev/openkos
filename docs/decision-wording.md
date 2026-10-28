@@ -481,6 +481,17 @@ A card after the AI model card, drawn once the library's settings have been read
 
 **Choose a folder…** opens the system's folder window (the shell opens it) and previews the folder; nothing is written yet. The card then asks "Watch '{folder}'?", naming the folder as OpenKOS will keep it, with **Start watching** and **Cancel**. Start watching saves the folder in the library's settings and then starts the watch ("OpenKOS is watching '{folder}'."). A folder that is already the saved one only starts the watch. With a folder saved the card shows it and offers **Stop watching** while it watches, **Start watching** while it does not, and **Choose another folder…**. **Stop watching** stops the watch and takes the folder out of the library's settings ("OpenKOS stopped watching."); when the folder cannot be taken out: "Watching is off, but the folder is still saved in your library's settings." The choice is remembered for each library, so opening another library does not start the watch there.
 
+**The status.** A stopped watch is visible without looking for it: the card starts with one line and a badge, and the foot of the sidebar keeps a quiet entry on every screen, which opens Settings. Four states, each with its own words, and nothing is shown before the watch was ever turned on:
+
+| State | Card | Sidebar |
+| --- | --- | --- |
+| On | **On** "Watching is on." | **Watching: on** |
+| Stopped by you | **Off** "Watching is off." (a folder is saved and not watched, or you stopped it) | **Watching: off** |
+| Stopped on the limit | **Paused** "Watching is paused. The AI model reached the limit set for it, so OpenKOS is waiting before it adds more files. It carries on by itself when the limit allows." | **Watching: paused** |
+| Failed | **Stopped** "Watching stopped because something went wrong.", with **Start again** and, behind **Show details**, what OpenKOS reported | **Watching: stopped** |
+
+"Paused" is read from the library's record of its last unattended job, not from the daemon, which keeps running while it waits. The page asks about it now and then, so a change shows without opening Settings.
+
 | Situation | Code or reason | Message |
 | --- | --- | --- |
 | The folder is part of the library | `inbox_inside_workspace` | "That folder is part of your library. Choose a folder outside it." |

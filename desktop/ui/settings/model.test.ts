@@ -9,7 +9,15 @@ import {
   type WatchStatus,
   type WorkspaceChoice,
 } from "../../client/index.ts";
-import { LOCAL_MODELS, SettingsModel, cloudOn, type SettingsApi, type SettingsPorts } from "./model.ts";
+import {
+  LOCAL_MODELS,
+  SettingsModel,
+  cloudOn,
+  watchKind,
+  type SettingsApi,
+  type SettingsPorts,
+  type SettingsState,
+} from "./model.ts";
 import { WATCH, WORDS, savedNote } from "./wording.ts";
 
 type Settings = Schemas["ModelSettings"];
@@ -76,6 +84,22 @@ const INSIDE: Declined = { first_id: "c/whole", second_id: "b/y", merged_absorbe
 type Inbox = Schemas["InboxSettings"];
 type InboxPreview = Schemas["InboxSettingsPreview"];
 
+type Activity = Schemas["UnattendedActivity"];
+
+const IDLE: Activity = { last_job: null, budget_exhausted: false, jobs_unreadable: false };
+const SPENT: Activity = {
+  last_job: {
+    kind: "watch",
+    started_at: "2026-10-27T10:00:00Z",
+    ended_at: "2026-10-27T10:01:00Z",
+    outcome: "budget_exhausted",
+    detail_code: null,
+    units_deferred: 2,
+    needs_attention: true,
+  },
+  budget_exhausted: true,
+  jobs_unreadable: false,
+};
 const FOLDER = "/Users/ana/Inbox";
 const OFF: WatchStatus = { state: "off", wanted: false };
 const ON: WatchStatus = { state: "on", attempt: 1, pid: 7, wanted: true };
@@ -89,8 +113,10 @@ function setup(
     declined?: Declined[];
     inbox?: string | null;
     watch?: WatchStatus;
+    activity?: Activity;
   } = {},
 ) {
+  const activity: Activity = over.activity ?? IDLE;
   let current = over.settings ?? LOCAL;
   let inbox: Inbox = { inbox: over.inbox ?? null, quiet_seconds: 30, max_calls_per_day: 500 };
   let watch: WatchStatus = over.watch ?? OFF;
@@ -126,6 +152,7 @@ function setup(
       declined = [];
       return {} as Schemas["ContradictionReopenResponse"];
     }),
+    unattendedActivity: vi.fn(async () => activity),
     inboxSettings: vi.fn(async () => inbox),
     previewInboxSettings: vi.fn(async (body: Schemas["InboxSettingsPreviewRequest"]): Promise<InboxPreview> => {
       if (body.inbox === inbox.inbox) throw apiError("inbox_unchanged", 409);
@@ -847,6 +874,91 @@ describe("watching a folder", () => {
     await Promise.all([model.startWatch(), model.startWatch()]);
 
     expect(ports.watch.set).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the watch status", () => {
+  const FAILED: WatchStatus = { state: "failed", reason: "exited", detail: "the daemon exited (1).", wanted: true };
+  const kind = (over: Partial<Pick<SettingsState, "watch" | "activity" | "inbox" | "stoppedByYou">>) =>
+    watchKind({ watch: OFF, activity: IDLE, inbox: null, stoppedByYou: false, ...over });
+
+  it("is on while the daemon runs and the budget holds", () => {
+    expect(kind({ watch: ON, activity: IDLE })).toBe("on");
+    expect(kind({ watch: { state: "restarting", attempt: 2, delay_ms: 5, reason: "exited", detail: "", wanted: true } })).toBe("on");
+    expect(kind({ watch: { state: "starting", attempt: 1, wanted: true } })).toBe("on");
+  });
+
+  it("is stopped on the budget when the daemon runs but the latest job ran out of it", () => {
+    expect(kind({ watch: ON, activity: SPENT })).toBe("budget");
+  });
+
+  it("is failed when the shell gave up on the daemon, whatever the job record says", () => {
+    expect(kind({ watch: FAILED })).toBe("failed");
+    expect(kind({ watch: FAILED, activity: SPENT })).toBe("failed");
+  });
+
+  it("is stopped when the person turned it off, or a folder is saved and not watched", () => {
+    expect(kind({ watch: OFF, stoppedByYou: true })).toBe("stopped");
+    expect(kind({ watch: OFF, inbox: { inbox: FOLDER, quiet_seconds: 30, max_calls_per_day: 5 } })).toBe("stopped");
+  });
+
+  it("says nothing before anyone turned the watch on, or when the shell cannot say", () => {
+    expect(kind({ watch: OFF })).toBeNull();
+    expect(kind({ watch: null })).toBeNull();
+    expect(kind({ watch: { state: "no_workspace", wanted: true } })).toBeNull();
+  });
+
+  it("does not report a spent budget for a watch nobody wants", () => {
+    expect(kind({ watch: OFF, activity: SPENT })).toBeNull();
+  });
+
+  it("reads the job record with the settings", async () => {
+    const { model } = await connected({ watch: ON, activity: SPENT });
+
+    expect(model.state.activity?.budget_exhausted).toBe(true);
+    expect(watchKind(model.state)).toBe("budget");
+  });
+
+  it("is read again on request, without touching anything else", async () => {
+    const { model, api, ports } = await connected({ inbox: FOLDER, watch: ON });
+    ports.watch.state.mockResolvedValue({ state: "failed", reason: "exited", detail: "x", wanted: true });
+    api.unattendedActivity.mockResolvedValue(SPENT);
+    const settingsReads = api.modelSettings.mock.calls.length;
+
+    await model.refreshWatch();
+
+    expect(model.state.watch?.state).toBe("failed");
+    expect(model.state.activity).toEqual(SPENT);
+    expect(api.modelSettings).toHaveBeenCalledTimes(settingsReads);
+  });
+
+  it("asks the engine for the job record only while the watch is wanted", async () => {
+    const { model, api } = await connected({ inbox: FOLDER, watch: OFF });
+    api.unattendedActivity.mockClear();
+
+    await model.refreshWatch();
+
+    expect(api.unattendedActivity).not.toHaveBeenCalled();
+  });
+
+  it("keeps the last job record when it cannot be read, and still reads the shell", async () => {
+    const { model, api, ports } = await connected({ inbox: FOLDER, watch: ON, activity: SPENT });
+    api.unattendedActivity.mockRejectedValue(new Error("engine restarting"));
+    ports.watch.state.mockResolvedValue(ON);
+
+    await model.refreshWatch();
+
+    expect(model.state.activity).toEqual(SPENT);
+    expect(model.state.watch).toEqual(ON);
+  });
+
+  it("starts a failed watch over with Start again", async () => {
+    const { model, ports } = await connected({ inbox: FOLDER, watch: FAILED });
+
+    await model.startWatch();
+
+    expect(ports.watch.set).toHaveBeenCalledWith(true);
+    expect(model.state.watch).toEqual(ON);
   });
 });
 

@@ -113,6 +113,21 @@ export const WATCH = {
   },
 } as const;
 
+/**
+ * The persistent watch status (ADR-0078, "Five"): the card's line, its badge
+ * word, and the short form the sidebar keeps on every screen.
+ */
+export const WATCH_STATUS = {
+  on: "Watching is on.",
+  stopped: "Watching is off.",
+  budget:
+    "Watching is paused. The AI model reached the limit set for it, so OpenKOS is waiting before it adds more files. It carries on by itself when the limit allows.",
+  failed: "Watching stopped because something went wrong.",
+  startAgain: "Start again",
+  badge: { on: "On", stopped: "Off", budget: "Paused", failed: "Stopped" },
+  footer: { on: "Watching: on", stopped: "Watching: off", budget: "Watching: paused", failed: "Watching: stopped" },
+} as const;
+
 /** Why the folder could not be chosen or saved, from the engine's code alone. */
 export function watchFailure(error: unknown): string {
   const code = error instanceof ApiError ? error.code : "";

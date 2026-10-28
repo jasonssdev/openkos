@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Schemas } from "../../client/index.ts";
 import type { SettingsModel, SettingsState } from "./model.ts";
 import { renderSettings } from "./render.ts";
-import { WATCH, WORDS } from "./wording.ts";
+import { WATCH, WATCH_STATUS, WORDS } from "./wording.ts";
 
 type Settings = Schemas["ModelSettings"];
 
@@ -52,6 +52,7 @@ const READY: SettingsState = {
   watchBusy: null,
   watchConfirm: null,
   stoppedByYou: false,
+  activity: null,
 };
 
 const NO_FOLDER = { inbox: null, quiet_seconds: 30, max_calls_per_day: 500 };
@@ -373,6 +374,46 @@ describe("renderSettings", () => {
     button(card, WATCH.start)?.click();
     expect(model.startWatch).toHaveBeenCalledOnce();
     expect(button(card, WATCH.stop)).toBeUndefined();
+  });
+
+  it("says in the card whether watching is on, off, paused or stopped", () => {
+    const failed = { state: "failed", reason: "exited", detail: "the daemon exited (1).\nboom", wanted: true } as const;
+    const spent = { last_job: null, budget_exhausted: true, jobs_unreadable: false };
+    const cases = [
+      [{ inbox: WITH_FOLDER, watch: ON }, WATCH_STATUS.on],
+      [{ inbox: WITH_FOLDER, watch: OFF }, WATCH_STATUS.stopped],
+      [{ inbox: NO_FOLDER, watch: OFF, stoppedByYou: true }, WATCH_STATUS.stopped],
+      [{ inbox: WITH_FOLDER, watch: ON, activity: spent }, WATCH_STATUS.budget],
+      [{ inbox: WITH_FOLDER, watch: failed }, WATCH_STATUS.failed],
+    ] as const;
+    for (const [patch, line] of cases) {
+      const node = root();
+      renderSettings(node, fakeModel(), { ...READY, ...patch });
+      const card = node.querySelectorAll(".ui-card")[1] as HTMLElement;
+      expect(card.querySelector("[data-watch-status]")?.textContent).toContain(line);
+    }
+  });
+
+  it("says nothing of the status before the watch was ever turned on", () => {
+    const node = root();
+    renderSettings(node, fakeModel(), { ...READY, inbox: NO_FOLDER, watch: OFF });
+
+    expect(node.querySelector("[data-watch-status]")).toBeNull();
+  });
+
+  it("offers Start again after a failure, with the details behind a disclosure", () => {
+    const node = root();
+    const model = fakeModel();
+    const failed = { state: "failed", reason: "exited", detail: "the daemon exited (1).\nboom", wanted: true } as const;
+    renderSettings(node, model, { ...READY, inbox: WITH_FOLDER, watch: failed });
+
+    const card = node.querySelectorAll(".ui-card")[1] as HTMLElement;
+    const details = card.querySelector("details") as HTMLDetailsElement;
+    expect(details.querySelector("summary")?.textContent).toBe(WORDS.showDetails);
+    expect(details.textContent).toContain("boom");
+    expect(card.querySelector("[data-watch-status]")?.textContent).not.toContain("boom");
+    button(card, WATCH_STATUS.startAgain)?.click();
+    expect(model.startWatch).toHaveBeenCalledOnce();
   });
 
   it("shows what is being done while it is done", () => {

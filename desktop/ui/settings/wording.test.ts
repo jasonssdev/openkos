@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ApiError, ApiKeyError, EngineUnreachable, WatchError, type Schemas } from "../../client/index.ts";
 import {
   WATCH,
+  WATCH_STATUS,
   WORDS,
   cloudWarning,
   keyAfterSaveFailure,
@@ -71,7 +72,11 @@ describe("the settings wording", () => {
       watchCommandFailure(null),
       ...["inbox_inside_workspace", "inbox_not_a_directory", "invalid_inbox", "stale"].map((c) => watchFailure(apiError(c))),
     ];
-    for (const sentence of sentences) expect(sentence).not.toMatch(ENGINE_WORDS);
+    const status = Object.values(WATCH_STATUS).flatMap((v) => (typeof v === "string" ? [v] : Object.values(v)));
+    for (const sentence of [...sentences, ...status]) expect(sentence).not.toMatch(ENGINE_WORDS);
+    // ADR-0078, "Five": the four states, each with its own words.
+    expect(new Set([WATCH_STATUS.on, WATCH_STATUS.stopped, WATCH_STATUS.budget, WATCH_STATUS.failed]).size).toBe(4);
+    expect(new Set(Object.values(WATCH_STATUS.footer)).size).toBe(4);
     // ADR-0078, "Three" and "Four": what is added, what is never done, and the other jobs.
     expect(WATCH.what.join(" ")).toMatch(/AI model/);
     expect(WATCH.what.join(" ")).toMatch(/never changed/);

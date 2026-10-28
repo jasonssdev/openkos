@@ -31,6 +31,7 @@ type Settings = Schemas["ModelSettings"];
 type Preview = Schemas["ModelSettingsPreview"];
 type Inbox = Schemas["InboxSettings"];
 type InboxPreview = Schemas["InboxSettingsPreview"];
+type Activity = Schemas["UnattendedActivity"];
 
 /**
  * The AI models a library uses on this Mac when it comes back from the cloud:
@@ -44,6 +45,7 @@ export interface SettingsApi {
   modelSettings(): Promise<Settings>;
   previewModelSettings(body: Schemas["ModelSettingsPreviewRequest"]): Promise<Preview>;
   applyModelSettings(body: Schemas["ModelSettingsApplyRequest"]): Promise<Schemas["ModelSettingsResponse"]>;
+  unattendedActivity(): Promise<Activity>;
   inboxSettings(): Promise<Inbox>;
   previewInboxSettings(body: Schemas["InboxSettingsPreviewRequest"]): Promise<InboxPreview>;
   applyInboxSettings(body: Schemas["InboxSettingsApplyRequest"]): Promise<Schemas["InboxSettingsResponse"]>;
@@ -130,6 +132,25 @@ export interface SettingsState {
   watchConfirm: { folder: string } | null;
   /** The person stopped the watch in this session. */
   stoppedByYou: boolean;
+  /** The engine's latest unattended job outcome; `null` until read. */
+  activity: Activity | null;
+}
+
+/**
+ * What the persistent watch status says (ADR-0078, "Five"): `on`, `stopped` (the
+ * person turned it off), `budget` (the daemon runs but its latest job ran out of
+ * the AI model's limit: it idles, it does not exit, so only the engine's job
+ * record can say so) or `failed` (the shell gave up restarting it). `null`:
+ * nothing to say, because the watch was never turned on or cannot be read.
+ */
+export type WatchKind = "on" | "stopped" | "budget" | "failed";
+
+export function watchKind(state: Pick<SettingsState, "watch" | "activity" | "inbox" | "stoppedByYou">): WatchKind | null {
+  const watch = state.watch;
+  if (watch === null || watch.state === "no_workspace") return null;
+  if (watch.state === "failed") return "failed";
+  if (!watch.wanted) return state.stoppedByYou || state.inbox?.inbox ? "stopped" : null;
+  return state.activity?.budget_exhausted ? "budget" : "on";
 }
 
 /** A cloud model is on: the shell shows it while it lasts. */
@@ -165,6 +186,7 @@ export class SettingsModel {
     watchBusy: null,
     watchConfirm: null,
     stoppedByYou: false,
+    activity: null,
   };
 
   readonly #ports: SettingsPorts;
@@ -201,17 +223,19 @@ export class SettingsModel {
     const api = this.#api;
     if (api === null) return;
     if (this.state.settings === null) this.#set({ phase: "loading" });
-    const [settings, key, library, inbox, watch] = await Promise.allSettled([
+    const [settings, key, library, inbox, watch, activity] = await Promise.allSettled([
       api.modelSettings(),
       this.#ports.keys.isSet(),
       this.#ports.workspaces.status(),
       api.inboxSettings(),
       this.#ports.watch.state(),
+      api.unattendedActivity(),
     ]);
     if (api !== this.#api) return;
     this.#set({
       ...(inbox.status === "fulfilled" ? { inbox: inbox.value } : {}),
       ...(watch.status === "fulfilled" ? { watch: watch.value } : {}),
+      ...(activity.status === "fulfilled" ? { activity: activity.value } : {}),
       ...(settings.status === "fulfilled"
         ? { phase: "ready" as const, settings: settings.value }
         : { phase: this.state.settings === null ? ("failed" as const) : this.state.phase }),
@@ -418,6 +442,24 @@ export class SettingsModel {
     } catch (error) {
       this.#set({ removingKey: false, problem: keyFailure(error) });
     }
+  }
+
+  /**
+   * Read the watch again: the shell's state always, and the engine's job record
+   * while the watch is wanted and an engine runs. A read that fails keeps what
+   * was known. The daemon can stop on its own, so the page asks now and then.
+   */
+  async refreshWatch(): Promise<void> {
+    const api = this.#api;
+    const [watch] = await Promise.allSettled([this.#ports.watch.state()]);
+    const state = watch.status === "fulfilled" ? watch.value : this.state.watch;
+    let activity = this.state.activity;
+    if (api !== null && state?.wanted === true) {
+      const [read] = await Promise.allSettled([api.unattendedActivity()]);
+      if (api !== this.#api) return;
+      if (read.status === "fulfilled") activity = read.value;
+    }
+    this.#set({ watch: state, activity });
   }
 
   /** Choose the folder to watch and preview it; nothing is written until `confirmWatch`. */

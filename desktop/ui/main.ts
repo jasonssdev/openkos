@@ -25,9 +25,9 @@ import { LabelModel } from "./label/model.ts";
 import { keepHereAction, labelChoice } from "./label/render.ts";
 import { ReviewModel } from "./review/model.ts";
 import { renderReview } from "./review/render.ts";
-import { SettingsModel, cloudOn } from "./settings/model.ts";
+import { SettingsModel, cloudOn, watchKind } from "./settings/model.ts";
 import { renderSettings } from "./settings/render.ts";
-import { WORDS as SETTINGS_WORDS } from "./settings/wording.ts";
+import { WATCH_STATUS, WORDS as SETTINGS_WORDS } from "./settings/wording.ts";
 import { SetupModel, WelcomeModel } from "./setup/model.ts";
 import { renderSetup, renderWelcome } from "./setup/render.ts";
 import { SearchModel } from "./search/model.ts";
@@ -44,6 +44,7 @@ declare global {
 }
 
 const POLL_MS = 1000;
+const WATCH_POLL_MS = 30_000;
 
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -59,8 +60,9 @@ let view: View = "status";
 const live = { status: element("review-live-status"), alert: element("review-live-alert") };
 const engineFooter = el("div");
 const cloudFooter = el("div");
+const watchFooter = el("div");
 const settingsFooter = el("div");
-const footer = el("div", { class: "ui-sidebar__foot" }, cloudFooter, settingsFooter, engineFooter);
+const footer = el("div", { class: "ui-sidebar__foot" }, cloudFooter, watchFooter, settingsFooter, engineFooter);
 const statusRoot = el("div", { class: "ui-view", attrs: { "data-screen": "status" } });
 const askRoot = el("div", { class: "ui-view", attrs: { "data-screen": "ask" } });
 askRoot.hidden = true;
@@ -264,6 +266,16 @@ function paintSettingsEntry(): void {
       ...(on ? [uiButton(SETTINGS_WORDS.cloudOn, () => show("settings"), { variant: "quiet", size: "sm", focusKey: "nav:cloud" })] : []),
     ),
   );
+  // A stopped daemon is visible without looking for it (ADR-0078): the watch's
+  // status stays in the sidebar, whatever screen is open.
+  const watching = watchKind(settings.state);
+  redraw(watchFooter, `watch:${watching}`, () =>
+    watchFooter.replaceChildren(
+      ...(watching === null
+        ? []
+        : [uiButton(WATCH_STATUS.footer[watching], () => show("settings"), { variant: "quiet", size: "sm", focusKey: "nav:watch" })]),
+    ),
+  );
   redraw(settingsFooter, "settings", () =>
     settingsFooter.replaceChildren(
       navItem({ id: "settings", label: SETTINGS_WORDS.navLabel }, view === "settings", () => show("settings")),
@@ -293,6 +305,7 @@ function show(next: View): void {
   // With no library there is nothing to navigate to yet.
   shell.nav.hidden = next === "welcome";
   settingsFooter.hidden = next === "welcome";
+  watchFooter.hidden = next === "welcome";
   setup?.watch(next === "setup");
   paintNav();
   paintSettingsEntry();
@@ -452,3 +465,6 @@ paintNav();
 paintSettingsEntry();
 void tick();
 setInterval(() => void tick(), POLL_MS);
+// The daemon can stop by itself, on a failure or on the AI model's limit, so
+// the watch is asked about now and then rather than only when Settings opens.
+setInterval(() => void settings.refreshWatch(), WATCH_POLL_MS);
