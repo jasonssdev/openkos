@@ -361,3 +361,105 @@ def test_nested_shares_dropped_group_keeps_outer_share() -> None:
     assert groups[1].dropped is False
     assert groups[1].head == outer[1]
     assert groups[1].inner == ()
+
+
+# --- #1647: opt-in query-aware window choice ---------------------------------
+
+
+def _needle_text() -> tuple[str, list[str]]:
+    """40 filler lines with ONE answer-bearing line near an even-coverage gap."""
+    lines = [f"filler line {n:03d} " + "y" * 40 for n in range(40)]
+    lines[13] = "the zephyr migration deadline is 14 March " + "z" * 20
+    text = "\n".join(lines)
+    return text, prompt_budget.chunk_lines(text, 100)
+
+
+def test_even_coverage_drops_the_needle_window_without_a_query() -> None:
+    """The defect class of #1647, pinned so the next test is not vacuous:
+    with no question, an even-coverage excerpt at this budget loses the line."""
+    text, windows = _needle_text()
+    bounded, was_bounded = prompt_budget.bounded_text(text, budget=700, windows=windows)
+    assert was_bounded is True
+    assert "zephyr" not in bounded
+
+
+def test_query_aware_excerpt_keeps_the_window_holding_the_question_terms() -> None:
+    text, windows = _needle_text()
+    bounded, was_bounded = prompt_budget.bounded_text(
+        text,
+        budget=700,
+        windows=windows,
+        query="When is the zephyr migration deadline?",
+    )
+    assert was_bounded is True
+    assert "zephyr migration deadline is 14 March" in bounded
+    assert len(bounded) <= 700
+
+
+def test_query_aware_excerpt_is_in_document_order_and_marks_gaps() -> None:
+    text, windows = _needle_text()
+    bounded, _ = prompt_budget.bounded_text(
+        text, budget=700, windows=windows, query="zephyr deadline"
+    )
+    assert _MARKER in bounded
+    numbers = [
+        int(p) for p in __import__("re").findall(r"filler line (\d{3})", bounded)
+    ]
+    assert numbers == sorted(numbers)
+
+
+def test_query_aware_fitting_text_is_returned_unchanged_and_unflagged() -> None:
+    text = "alpha\nbravo"
+    bounded, was_bounded = prompt_budget.bounded_text(
+        text, budget=1_000, windows=prompt_budget.chunk_lines(text, 10), query="alpha"
+    )
+    assert bounded == text
+    assert was_bounded is False
+
+
+def test_query_aware_excerpt_is_deterministic() -> None:
+    text, windows = _needle_text()
+    first = prompt_budget.bounded_text(
+        text, budget=700, windows=windows, query="zephyr deadline"
+    )
+    second = prompt_budget.bounded_text(
+        text, budget=700, windows=list(windows), query="zephyr deadline"
+    )
+    assert first == second
+
+
+@pytest.mark.parametrize("query", ["", "   ", "?! ... --", "a"])
+def test_a_query_with_no_usable_terms_falls_back_to_even_coverage(query: str) -> None:
+    text, windows = _needle_text()
+    assert prompt_budget.bounded_text(
+        text, budget=700, windows=windows, query=query
+    ) == prompt_budget.bounded_text(text, budget=700, windows=windows)
+
+
+def test_a_query_matching_no_window_falls_back_to_even_coverage() -> None:
+    text, windows = _needle_text()
+    assert prompt_budget.bounded_text(
+        text, budget=700, windows=windows, query="quokka"
+    ) == prompt_budget.bounded_text(text, budget=700, windows=windows)
+
+
+def test_query_aware_ties_break_in_document_order() -> None:
+    """Equal scores keep the EARLIER window, never an arbitrary one."""
+    lines = [f"common term {n:03d} " + "y" * 30 for n in range(20)]
+    text = "\n".join(lines)
+    windows = prompt_budget.chunk_lines(text, 60)
+    bounded, _ = prompt_budget.bounded_text(
+        text, budget=130, windows=windows, query="common"
+    )
+    assert "term 000" in bounded
+    assert "term 019" not in bounded
+
+
+def test_query_aware_with_nothing_fitting_hard_truncates_the_best_window() -> None:
+    text = "aaa filler\n" + "x" * 200 + " zephyr" + "\n" + "bbb filler"
+    windows = prompt_budget.chunk_lines(text, 20)
+    bounded, was_bounded = prompt_budget.bounded_text(
+        text, budget=50, windows=windows, query="zephyr"
+    )
+    assert was_bounded is True
+    assert len(bounded) <= 50
