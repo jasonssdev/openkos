@@ -580,6 +580,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inbox Settings */
+        get: operations["inbox_settings_v1_settings_inbox_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/inbox/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Inbox Settings Apply */
+        post: operations["inbox_settings_apply_v1_settings_inbox_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/inbox/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Inbox Settings Preview */
+        post: operations["inbox_settings_preview_v1_settings_inbox_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/settings/model": {
         parameters: {
             query?: never;
@@ -1358,6 +1409,91 @@ export interface components {
             tier: string;
             /** Verdict */
             verdict: ("same" | "different" | "uncertain") | null;
+        };
+        /**
+         * InboxSettings
+         * @description The watch folder (`None`: the watch is off, the default) and the two
+         *     limits the watch works within, as `unattended:` sets them: how long a file
+         *     must stay unchanged before it is added, and how many model calls the
+         *     unattended runs may make in a day.
+         */
+        InboxSettings: {
+            /** Inbox */
+            inbox: string | null;
+            /** Max Calls Per Day */
+            max_calls_per_day: number;
+            /** Quiet Seconds */
+            quiet_seconds: number;
+        };
+        /**
+         * InboxSettingsApplyRequest
+         * @description The version the inbox preview issued (echoed unchanged) and how long to
+         *     wait for the workspace lock; a client can shorten the wait only.
+         */
+        InboxSettingsApplyRequest: {
+            version: components["schemas"]["InboxSettingsVersion"];
+            /**
+             * Wait Seconds
+             * @default 5
+             */
+            wait_seconds?: number;
+        };
+        /**
+         * InboxSettingsChange
+         * @description The folder to watch, or `None` to stop watching.
+         */
+        InboxSettingsChange: {
+            /** Inbox */
+            inbox: string | null;
+        };
+        /**
+         * InboxSettingsChanged
+         * @description The folder was written. `commit_sha` is `None` when the commit could not
+         *     be made (the write itself landed).
+         */
+        InboxSettingsChanged: {
+            /** Commit Sha */
+            commit_sha: string | null;
+            settings: components["schemas"]["InboxSettings"];
+        };
+        /**
+         * InboxSettingsPreview
+         * @description What the change would do: the settings now and after, and the version to
+         *     apply.
+         */
+        InboxSettingsPreview: {
+            current: components["schemas"]["InboxSettings"];
+            proposed: components["schemas"]["InboxSettings"];
+            version: components["schemas"]["InboxSettingsVersion"];
+        };
+        /**
+         * InboxSettingsPreviewRequest
+         * @description The folder to watch, or `null` to stop watching. The field is required,
+         *     so a client says which it means.
+         */
+        InboxSettingsPreviewRequest: {
+            /** Inbox */
+            inbox: string | null;
+        };
+        /**
+         * InboxSettingsResponse
+         * @description What was written, and the warnings the apply raised along the way.
+         */
+        InboxSettingsResponse: {
+            changed: components["schemas"]["InboxSettingsChanged"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * InboxSettingsVersion
+         * @description The version a stateless caller applies a change against: echo it
+         *     unchanged. `change` is the normalized request; `content_digest` covers it
+         *     and the bytes of `openkos.yaml`.
+         */
+        InboxSettingsVersion: {
+            change: components["schemas"]["InboxSettingsChange"];
+            /** Content Digest */
+            content_digest: string;
         };
         /**
          * IngestBinding
@@ -5700,6 +5836,229 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    inbox_settings_v1_settings_inbox_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxSettings"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    inbox_settings_apply_v1_settings_inbox_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InboxSettingsApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxSettingsResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    /** @description Seconds to wait before retrying a busy workspace. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    inbox_settings_preview_v1_settings_inbox_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InboxSettingsPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxSettingsPreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

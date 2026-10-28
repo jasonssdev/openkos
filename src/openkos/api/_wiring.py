@@ -42,10 +42,12 @@ from openkos.vcs.autocommit import (
     CommitOutcome,
     ConfigCommitPlan,
     ConfigEditConflict,
+    InboxSettingsConflict,
     ModelSettingsConflict,
     commit_config_edit,
     commit_paths,
     plan_config_edit,
+    plan_inbox_settings_edit,
     plan_model_settings_edit,
 )
 
@@ -300,6 +302,38 @@ def settings_ports(
         ),
         plan_commit=plan_commit,
         commit=commit,
+    )
+
+
+_INBOX_CONFLICT = (
+    "the watch folder cannot be committed on its own: openkos.yaml has an "
+    "uncommitted change to the inbox line (or a shape this operation cannot "
+    "edit in the committed version); commit or discard it, then try again"
+)
+
+
+def inbox_settings_ports(
+    workspace: Workspace,
+    *,
+    wait_seconds: float,
+    on_warning: Callable[[str], None] | None,
+) -> model_settings.SettingsPorts:
+    """`settings_ports` for the watch folder: the same lock and commit, and a
+    conflict only when the person's uncommitted edit touches the inbox line."""
+    ports = settings_ports(workspace, wait_seconds=wait_seconds, on_warning=on_warning)
+
+    def plan_commit(
+        root: Path, edit: Callable[[str], str], baseline: bytes
+    ) -> ConfigCommitPlan | curate_decisions.ConfigCommitRefusal | None:
+        planned = plan_inbox_settings_edit(root, edit, baseline)
+        if isinstance(planned, InboxSettingsConflict):
+            return curate_decisions.ConfigCommitRefusal(_INBOX_CONFLICT)
+        return planned
+
+    return model_settings.SettingsPorts(
+        commit_section=ports.commit_section,
+        plan_commit=plan_commit,
+        commit=ports.commit,
     )
 
 

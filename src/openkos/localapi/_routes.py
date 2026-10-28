@@ -28,6 +28,9 @@ from openkos.localapi._models import (
     FindingPreview,
     FindingPreviewRequest,
     HealthBody,
+    InboxSettingsApplyRequest,
+    InboxSettingsPreviewRequest,
+    InboxSettingsResponse,
     IngestJob,
     IngestQuoteRequest,
     IngestRunRequest,
@@ -635,6 +638,45 @@ def make_router() -> APIRouter:
         )
         if isinstance(result, api.ModelSettingsChanged):
             return ModelSettingsResponse(changed=result, warnings=warnings)
+        raise _errors.outcome_problem(result)
+
+    @router.get("/settings/inbox")
+    def inbox_settings(
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.InboxSettings:
+        # Reads openkos.yaml only: no model, no lock.
+        return invoke(lambda: api.inbox_settings(workspace))
+
+    @router.post("/settings/inbox/preview", responses=_errors_of(409, 413))
+    def inbox_settings_preview(
+        body: InboxSettingsPreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.InboxSettingsPreview:
+        change = api.InboxSettingsChange(inbox=body.inbox)
+        result = invoke(lambda: api.preview_inbox_settings(workspace, change))
+        if isinstance(result, api.InboxSettingsPreview):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post(
+        "/settings/inbox/apply",
+        responses=_errors_of(409, 413, 503, retry_after=True),
+    )
+    def inbox_settings_apply(
+        body: InboxSettingsApplyRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> InboxSettingsResponse:
+        warnings: list[str] = []
+        result = invoke(
+            lambda: api.apply_inbox_settings(
+                workspace,
+                body.version,
+                wait_seconds=_wait(body.wait_seconds),
+                on_warning=warnings.append,
+            )
+        )
+        if isinstance(result, api.InboxSettingsChanged):
+            return InboxSettingsResponse(changed=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
     @router.get("/setup/readiness")

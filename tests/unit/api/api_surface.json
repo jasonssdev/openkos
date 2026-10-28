@@ -734,6 +734,120 @@
       "kind": "dataclass",
       "members": {}
     },
+    "InboxSettings": {
+      "fields": [
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "inbox"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "quiet_seconds"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "max_calls_per_day"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "InboxSettingsChange": {
+      "fields": [
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "inbox"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "InboxSettingsChanged": {
+      "fields": [
+        {
+          "annotation": "InboxSettings",
+          "default": false,
+          "name": "settings"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "commit_sha"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "InboxSettingsPreview": {
+      "fields": [
+        {
+          "annotation": "InboxSettings",
+          "default": false,
+          "name": "current"
+        },
+        {
+          "annotation": "InboxSettings",
+          "default": false,
+          "name": "proposed"
+        },
+        {
+          "annotation": "InboxSettingsVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "InboxSettingsRefused": {
+      "fields": [
+        {
+          "annotation": "Literal['invalid', 'inside_workspace', 'not_a_directory', 'unchanged']",
+          "default": false,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "InboxSettingsStale": {
+      "fields": [
+        {
+          "annotation": "Literal['content_changed']",
+          "default": true,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "InboxSettingsVersion": {
+      "fields": [
+        {
+          "annotation": "InboxSettingsChange",
+          "default": false,
+          "name": "change"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "IngestBinding": {
       "fields": [
         {
@@ -3766,6 +3880,36 @@
       ],
       "returns": "Applied | NotApplied | Stale"
     },
+    "apply_inbox_settings": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "InboxSettingsVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "InboxSettingsChanged | InboxSettingsRefused | InboxSettingsStale"
+    },
     "apply_model_settings": {
       "kind": "function",
       "parameters": [
@@ -4060,6 +4204,18 @@
       ],
       "returns": "tuple[DeclinedContradiction, ...]"
     },
+    "inbox_settings": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "InboxSettings"
+    },
     "kept_distinct": {
       "kind": "function",
       "parameters": [
@@ -4191,6 +4347,24 @@
         }
       ],
       "returns": "FindingPreview | NotApplied | Stale"
+    },
+    "preview_inbox_settings": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "InboxSettingsChange",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "change"
+        }
+      ],
+      "returns": "InboxSettingsPreview | InboxSettingsRefused"
     },
     "preview_model_settings": {
       "kind": "function",

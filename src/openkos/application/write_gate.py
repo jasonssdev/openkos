@@ -77,6 +77,7 @@ class WriteFailed(Refused):
             "reopen",
             "unrelate",
             "model_settings",
+            "inbox_settings",
             "set_sensitivity",
             "unreconcile",
         ],
