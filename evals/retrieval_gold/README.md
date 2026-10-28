@@ -560,6 +560,38 @@ uv run python evals/retrieval_gold/run_retrieval_gold.py run --chunk-target 4000
     --out ~/openkos-eval-runs/retrieval-gold/run-t3.json
 ```
 
+## Doc2query (#1650): generating and indexing the questions a Decision answers
+
+`PREREGISTRATION-1650.md` is the contract; this is the command surface. Generation is
+the only GPU step, and it takes the bundle and no questions file.
+
+```bash
+W=~/openkos-eval-runs/retrieval-gold
+# GPU, one chat call per Decision (qwen3:8b, prompt P1); resumable with --resume
+uv run python evals/retrieval_gold/generate_questions.py generate \
+    --bundle $W/bundle-v1/bundle --out $W/generated-questions.json \
+    --stratum-sha256 <hash from gap-stratum> --wait-gpu
+# no model: the cost bars (p90 per Decision, share of the bundle's ingest wall time)
+uv run python evals/retrieval_gold/generate_questions.py cost \
+    --generated $W/generated-questions.json \
+    --manifest $W/bundle-v1/gold-build/manifest.json
+# embedder only (bge-m3): leak audit first, then one run per arm over ONE build
+uv run python evals/retrieval_gold/run_retrieval_gold.py run \
+    --workspace $W/bundle-v1 --doc2query $W/generated-questions.json --out $W/d2q.json
+```
+
+`run --doc2query` runs the leak audit before anything is retrieved and stops when the
+generator copied the gold questions. It refuses a generated file that is incomplete or
+was made from different Decision text. `--out d2q.json` writes `d2q-a0.json` (the shipped
+pipeline), `d2q-a1.json`, `d2q-a2.json`, `d2q-a3.json` and `d2q-c1.json`; each question is
+embedded once and shared. The arms are built on the production stores without changing
+`src/`: A1 adds the question vectors as extra rows of the Decision in the same `vectors`
+table, A2 keeps them in a separate vector store whose top 10 is a third list in
+reciprocal rank fusion, A3 appends them to the Decision's text for the FTS build only, and
+C1 is A2 with the questions moved to another Decision (seeded derangement, seed 1650).
+Score each file with `score`, then compare on the frozen stratum with
+`prereg_tools.py stratum-compare`.
+
 ## What it cannot show
 
 - **Pool bias.** Judging every document for every question is not feasible, so a
@@ -676,6 +708,7 @@ be resolved by hand; the command never merges them.
 | `translate_meetings.py` | Translates the 12 development meetings into Spanish; `run`, `sample-sheet`, `pin`, `--self-test`. |
 | `prereg_tools.py`, `gold_prereg.py` | Model-free pieces of the registrations below: chunk counts, the length diagnostic, the vocabulary-gap stratum, the leak audit, three-list fusion, the distance aggregators. Pure, `--self-test`. |
 | `gold_arms.py` | The #1648 Step 2 dense arms (`baseline`, `t1`, `t2`) scored from exact L2 distances to every chunk row; `run --arm` and `run --chunk-target` (T3) use it. Pure apart from reading the built store. |
+| `generate_questions.py`, `gold_doc2query.py`, `doc2query_selftest.py` | The #1650 pre-run code: `generate` (the only GPU step) and `cost`; the registered prompts, output handling, cost bars, question store and the A1/A2/A3/C1 arms; their model-free checks, run by both `--self-test`s. |
 | `PREREGISTRATION-1648.md` | Registered on merge: does the dense channel favour long documents (diagnostic first, then arms). |
 | `PREREGISTRATION-1650.md` | Registered on merge: index the questions a Decision answers (doc2query), measured on the vocabulary-gap stratum. |
 | `bundle_sources.json` | The selected sources with their sha256, language, kind and tier, and what was excluded and why. |

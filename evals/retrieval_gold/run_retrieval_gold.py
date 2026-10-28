@@ -55,6 +55,7 @@ import gold_bundle as bundle_mod  # noqa: E402
 import gold_core as core  # noqa: E402
 import gold_corpus  # noqa: E402
 import gold_delivery as delivery  # noqa: E402
+import gold_doc2query as d2q  # noqa: E402
 import gold_overlap as overlap_mod  # noqa: E402
 import gold_prereg as pre  # noqa: E402
 import harness_stamp  # noqa: E402
@@ -393,6 +394,8 @@ def _write_json(path: pathlib.Path, data: object) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    if args.doc2query is not None:
+        return cmd_run_doc2query(args)
     _refuse_inside_repo(args.out)
     corpus = _corpus(args)
     questions = _load_questions(_questions_path(args), corpus)
@@ -423,6 +426,67 @@ def cmd_run(args: argparse.Namespace) -> int:
     }
     _write_json(args.out, run)
     print(f"wrote {args.out} (channels: {', '.join(run['channels'])})")
+    return 0
+
+
+def cmd_run_doc2query(
+    args: argparse.Namespace, *, embedder: Embedder | None = None
+) -> int:
+    """`run --doc2query GENERATED.json` (#1650): one run per arm, over ONE build of
+    the bundle and one embedding of every question.
+
+    The leak audit runs first, against every question of the set, and a generator
+    that copied them voids the run before anything is retrieved. `--out` is a
+    prefix: `d2q.json` writes `d2q-a0.json`, `d2q-a1.json`, and so on."""
+    _refuse_inside_repo(args.out)
+    if args.fts_only:
+        raise SystemExit("--doc2query needs the embedder (not --fts-only)")
+    arms_ = [a.strip() for a in args.d2q_arms.split(",") if a.strip()]
+    if not arms_:
+        raise SystemExit(f"--d2q-arms takes a list from {d2q.ARMS}")
+    corpus = _corpus(args)
+    questions = _load_questions(_questions_path(args), corpus)
+    raw_bytes = args.doc2query.read_bytes()
+    generated = json.loads(raw_bytes)
+    audit = pre.leak_audit(
+        pre.generated_questions(generated), [q.question for q in questions]
+    )
+    print(pre.render_leak_audit(audit))
+    if audit["void"]:
+        print(
+            "RUN VOID: the generator copied the gold questions; nothing was retrieved"
+        )
+        return 1
+    built_here = embedder is None
+    if embedder is None:
+        from openkos.llm.ollama import OllamaClient
+
+        embedder = OllamaClient(model=args.embed_model)
+    runs = d2q.run_arms(
+        questions,
+        generated,
+        embedder=embedder,
+        model_tag=args.embed_model,
+        corpus=corpus,
+        arms=arms_,
+        plumbing=d2q.Plumbing(build_workspace, excluded_ids, retrieve_channels),
+    )
+    identity = {
+        "harness": harness_stamp.git_identity(),
+        "embedder": harness_stamp.model_identity(args.embed_model)
+        if built_here
+        else None,
+    }
+    for arm, run in runs.items():
+        run["identity"] = identity
+        run["doc2query"] = {
+            "generated_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+            "stratum_sha256": generated.get("stratum_sha256"),
+            "leak_audit": {k: audit[k] for k in audit if k != "examples"},
+        }
+        path = args.out.with_name(f"{args.out.stem}-{arm}.json")
+        _write_json(path, run)
+        print(f"wrote {path}")
     return 0
 
 
@@ -1701,6 +1765,234 @@ def _self_test_workspace(c: _Checks) -> None:
         c.check(len(results) == 1, "check_questions reports every overlap")
 
 
+class _CountingEmbedder(_StubEmbedder):
+    """The stub embedder that remembers every text it was asked for."""
+
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.texts.extend(texts)
+        return super().embed(texts)
+
+
+def _title_token(title: str) -> str:
+    """A letters-only word that exists nowhere in the bundle, one per Decision
+    (the lexical query splits on digits): only a generated question carries it,
+    so only an arm that indexes the questions can answer a query made of it."""
+    digest = hashlib.sha256(title.encode()).hexdigest()[:10]
+    return "zz" + "".join(chr(ord("a") + int(ch, 16)) for ch in digest)
+
+
+class _TitleChat:
+    """A scripted chat model: three Spanish questions built from the title."""
+
+    def chat(self, messages: Sequence[dict[str, str]]) -> d2q.Reply:
+        head = messages[1]["content"].split("\n", 1)[0]
+        title = head.removeprefix("Decision title: ")
+        token = _title_token(title)
+        reply = json.dumps(
+            [
+                f"¿Qué se decidió sobre {title} en el equipo?",
+                f"¿Por qué se tomó la decisión de {title} para el proyecto?",
+                f"¿Cuál es el motivo de {title} según {token} en la reunión?",
+            ]
+        )
+        return d2q.Reply(text=reply, eval_count=30)
+
+
+def _self_test_doc2query(c: _Checks) -> None:
+    """#1650: the arms through the production seams, stub embedder and stub chat."""
+    plumbing = d2q.Plumbing(build_workspace, excluded_ids, retrieve_channels)
+    ticks = iter(range(0, 100_000, 2))
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        bundle, _fts, _vec = build_workspace(
+            root / "w", _StubEmbedder(), model_tag="stub"
+        )
+        decisions = d2q.read_decisions(bundle)
+        c.check(
+            len(decisions) >= 2, f"the draft bundle has Decisions: {len(decisions)}"
+        )
+        gen = d2q.generate(
+            decisions,
+            _TitleChat(),
+            system=d2q.P1_SYSTEM,
+            prompt_id="p1",
+            clock=lambda: float(next(ticks)),
+        )
+        c.check(
+            len(gen.questions) == len(decisions), "every draft Decision got questions"
+        )
+        doc = d2q.generated_document(
+            gen,
+            prompt_id="p1",
+            system=d2q.P1_SYSTEM,
+            model="stub",
+            stamp={},
+            options={},
+            bundle="draft",
+            stratum_sha256=None,
+        )
+        ids = sorted(gen.questions)
+        target, other = ids[0], ids[1]
+        titles = {d.id: d.title for d in decisions}
+        qs = [
+            core.Question("t1", "es", "single-hop", gen.questions[target][0]),
+            core.Question("t2", "es", "single-hop", gen.questions[other][1]),
+            core.Question("t3", "es", "single-hop", _title_token(titles[target])),
+        ]
+        counting = _CountingEmbedder()
+        runs = d2q.run_arms(
+            qs,
+            doc,
+            embedder=counting,
+            model_tag="stub",
+            corpus=gold_corpus.DRAFT,
+            arms=d2q.ARMS,
+            plumbing=plumbing,
+        )
+        c.check(set(runs) == set(d2q.ARMS), "one run per arm")
+        c.check(
+            all(core.run_problem(r, qs, core.POOL_FULL) is None for r in runs.values()),
+            "every arm run is a full run the scorer accepts",
+        )
+        shipped = run_all(qs, embedder=_StubEmbedder(), model_tag="stub")
+        c.check(
+            runs["a0"]["rankings"] == shipped["rankings"],
+            "a0 is the shipped pipeline, ranking for ranking",
+        )
+        c.check(
+            counting.texts.count(qs[0].question) == 1,
+            "a question is embedded once however many arms read it",
+        )
+        probe = shipped["rankings"]["t3"]
+        c.check(
+            probe["fts"] == [] and probe["dense"][0] != target,
+            "fixture: the shipped pipeline cannot answer the token query",
+        )
+        a2 = runs["a2"]["rankings"]["t3"]
+        c.check(
+            a2["d2q"][0] == target,
+            "a2: the question's own Decision heads the third list",
+        )
+        c.check(
+            target in a2["fused"]["5"] and target not in probe["fused"]["5"][:1],
+            "a2: the third list lifts it into the fused top 5",
+        )
+        c.check(
+            a2["fts"] == probe["fts"] and a2["dense"] == probe["dense"],
+            "a2 leaves the fts and dense lists alone",
+        )
+        c1 = runs["c1"]["rankings"]["t3"]
+        c.check(
+            c1["d2q"][0] != target, "c1: the same vector points at another Decision"
+        )
+        c.check(runs["c1"]["arm"]["c1_derangement_seed"] == 1650, "c1 records its seed")
+        a1 = runs["a1"]["rankings"]["t3"]
+        c.check(
+            a1["dense"][0] == target, "a1: the question vector is a row of its Decision"
+        )
+        c.check("d2q" not in a1, "a1 adds no list")
+        c.check(
+            runs["a1"]["arm"]["a1_rows_added"]
+            == sum(len(v) for v in gen.questions.values()),
+            "a1 records the rows it added",
+        )
+        a3 = runs["a3"]["rankings"]["t3"]
+        c.check(
+            a3["fts"][:1] == [target], "a3: the appended questions are searchable text"
+        )
+        c.check(a3["dense"] == probe["dense"], "a3 touches the lexical channel only")
+        for arm_name in ("a1", "a2", "c1"):
+            c.check(
+                runs[arm_name]["rankings"]["t3"]["fts"] == [],
+                f"{arm_name} leaves the lexical index alone",
+            )
+
+        # A generated file made for other Decisions, or an unknown arm: nothing runs.
+        partial = d2q.generate(
+            decisions[:-1],
+            _TitleChat(),
+            system=d2q.P1_SYSTEM,
+            prompt_id="p1",
+            clock=lambda: float(next(ticks)),
+        )
+        stale = d2q.generated_document(
+            partial,
+            prompt_id="p1",
+            system=d2q.P1_SYSTEM,
+            model="stub",
+            stamp={},
+            options={},
+            bundle="draft",
+            stratum_sha256=None,
+        )
+        for label, bad, arms_ in (
+            ("a file missing a Decision", stale, d2q.ARMS),
+            ("an unknown arm", doc, ("a9",)),
+        ):
+            try:
+                d2q.run_arms(
+                    qs,
+                    bad,
+                    embedder=_StubEmbedder(),
+                    model_tag="stub",
+                    corpus=gold_corpus.DRAFT,
+                    arms=arms_,
+                    plumbing=plumbing,
+                )
+                c.check(False, f"{label} is refused")
+            except SystemExit:
+                c.check(True, f"{label} is refused")
+
+        # The command: the leak audit runs first and voids a copying generator.
+        gold = _load_questions(QUESTIONS_PATH)
+        file = root / "generated.json"
+        _write_json(file, doc)
+        out = root / "out" / "d2q.json"
+        args = argparse.Namespace(
+            workspace=None,
+            questions=None,
+            doc2query=file,
+            d2q_arms=",".join(d2q.ARMS),
+            out=out,
+            embed_model="stub",
+            fts_only=False,
+        )
+        code = cmd_run_doc2query(args, embedder=_StubEmbedder())
+        written = sorted(p.name for p in out.parent.glob("*.json"))
+        c.check(code == 0, "the command succeeds on a clean generated file")
+        c.check(
+            written == [f"d2q-{a}.json" for a in sorted(d2q.ARMS)],
+            f"one run file per arm: {written}",
+        )
+        run_a2 = json.loads((out.parent / "d2q-a2.json").read_text("utf-8"))
+        c.check(
+            run_a2["doc2query"]["leak_audit"]["void"] is False
+            and run_a2["doc2query"]["generated_sha256"]
+            == hashlib.sha256(file.read_bytes()).hexdigest(),
+            "each run records the audit and the generated file it used",
+        )
+        leaky = {**doc, "questions": {target: [g.question for g in gold[:5]]}}
+        leak_file = root / "leaky.json"
+        _write_json(leak_file, leaky)
+        void_out = root / "void" / "d2q.json"
+        args.doc2query, args.out = leak_file, void_out
+        code = cmd_run_doc2query(args, embedder=_StubEmbedder())
+        c.check(code == 1, "copies of the gold questions void the run")
+        c.check(not void_out.parent.exists(), "and nothing is written before a metric")
+        args.doc2query, args.out = file, root / "bad" / "d2q.json"
+        for label, spec in (("an unknown arm", "a2,a9"), ("no arm", " , ")):
+            args.d2q_arms = spec
+            try:
+                cmd_run_doc2query(args, embedder=_StubEmbedder())
+                c.check(False, f"{label} is refused by the command")
+            except SystemExit:
+                c.check(True, f"{label} is refused by the command")
+        c.check(not (root / "bad").exists(), "and nothing is written")
+
+
 def _self_test_v1_set(c: _Checks) -> None:
     raw = json.loads(QUESTIONS_V1_PATH.read_text("utf-8"))
     questions, problems = core.parse_questions(raw)
@@ -1927,6 +2219,7 @@ def _self_test() -> int:
     _self_test_overlap(c)
     _self_test_authoring(c)
     _self_test_workspace(c)
+    _self_test_doc2query(c)
     _self_test_v1_set(c)
     _self_test_arms(c, questions)
     print(f"self-test: {c.total - len(c.failures)}/{c.total} passed")
@@ -1959,7 +2252,24 @@ def _parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="retrieve every question and store the rankings")
     paths(run)
-    run.add_argument("--out", type=pathlib.Path, required=True)
+    run.add_argument(
+        "--out",
+        type=pathlib.Path,
+        required=True,
+        help="with --doc2query a prefix: d2q.json writes d2q-a0.json, d2q-a1.json, ...",
+    )
+    run.add_argument(
+        "--doc2query",
+        type=pathlib.Path,
+        default=None,
+        help="#1650: a generated-questions file (generate_questions.py); runs the arms "
+        "a0 a1 a2 a3 c1 over one build, after the leak audit",
+    )
+    run.add_argument(
+        "--d2q-arms",
+        default=",".join(d2q.ARMS),
+        help="#1650 arms to run, comma separated (default: all)",
+    )
     run.add_argument("--embed-model", default=EMBED_MODEL)
     run.add_argument("--fts-only", action="store_true", help="no embedder is built")
     run.add_argument(
