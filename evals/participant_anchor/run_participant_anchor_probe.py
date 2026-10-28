@@ -415,7 +415,10 @@ def run_arm(arm: Arm, llm: Any, runs: int, model: str) -> list[RunRecord]:
             started = time.monotonic()
             try:
                 outcome = extract_concept_union(
-                    arm.text, source_title=arm.title, llm=llm
+                    arm.text,
+                    source_title=arm.title,
+                    llm=llm,
+                    selector_judge=True,  # measured with the judge (ADR-0080)
                 )
             except Exception as exc:
                 records.append(

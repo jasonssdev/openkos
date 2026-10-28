@@ -3834,18 +3834,24 @@ def test_an_explicit_null_declines_the_sufficiency_default(tmp_path: Path) -> No
     assert config.resolve_task_model(cfg, "sufficiency") == "qwen3:8b"
 
 
-# --- query_aware_excerpts: opt-in question-aware context excerpts (#1647) ----
+# --- query_aware_excerpts: question-aware context excerpts, default on (ADR-0082)
 
 
 def test_query_aware_excerpts_key_validation(tmp_path: Path) -> None:
-    """Bool-only like every other flag: absent or null is off, `true` reads
-    as on, and a non-bool is refused rather than truthy-coerced."""
+    """Bool-only like every other flag: absent or null reads as the default
+    (on, ADR-0082), `false` opts out, and a non-bool is refused rather than
+    truthy-coerced."""
     (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
-    assert config.read_config(tmp_path).query_aware_excerpts is False
-    assert config.DEFAULT_QUERY_AWARE_EXCERPTS is False
+    assert config.read_config(tmp_path).query_aware_excerpts is True
+    assert config.DEFAULT_QUERY_AWARE_EXCERPTS is True
 
     (tmp_path / "openkos.yaml").write_text(
         "query_aware_excerpts: null\n", encoding="utf-8"
+    )
+    assert config.read_config(tmp_path).query_aware_excerpts is True
+
+    (tmp_path / "openkos.yaml").write_text(
+        "query_aware_excerpts: false\n", encoding="utf-8"
     )
     assert config.read_config(tmp_path).query_aware_excerpts is False
 
@@ -3871,3 +3877,47 @@ def test_the_template_documents_the_query_aware_excerpts_key() -> None:
     assert not any(
         line.startswith("query_aware_excerpts:") for line in template.splitlines()
     )
+
+
+# --- selector_judge: opt-in for the selector judge's cut (ADR-0080, #1579) ---
+
+
+def test_default_selector_judge_is_false() -> None:
+    assert config.DEFAULT_SELECTOR_JUDGE is False
+
+
+def test_read_config_defaults_selector_judge_off(tmp_path: Path) -> None:
+    (tmp_path / "openkos.yaml").write_text("backend: ollama\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.selector_judge is False
+    assert result.union_judge is True
+
+
+def test_read_config_preserves_explicit_selector_judge_true(tmp_path: Path) -> None:
+    (tmp_path / "openkos.yaml").write_text("selector_judge: true\n", encoding="utf-8")
+
+    assert config.read_config(tmp_path).selector_judge is True
+
+
+@pytest.mark.parametrize("yaml_body", ["selector_judge: null\n", "selector_judge:\n"])
+def test_read_config_explicit_null_selector_judge_falls_back(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    assert config.read_config(tmp_path).selector_judge is config.DEFAULT_SELECTOR_JUDGE
+
+
+@pytest.mark.parametrize(
+    "yaml_body",
+    ["selector_judge: maybe\n", "selector_judge: 1\n", "selector_judge:\n  a: b\n"],
+)
+def test_read_config_rejects_a_non_bool_selector_judge(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"selector_judge"):
+        config.read_config(tmp_path)

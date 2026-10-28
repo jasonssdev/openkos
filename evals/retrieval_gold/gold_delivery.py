@@ -305,3 +305,121 @@ def parse_passage_sheet(
                 continue
             out.setdefault(qid, {}).setdefault(doc, []).append(m.group(1).strip())
     return (out, problems) if not problems else ({}, problems)
+
+
+# --------------------------------------------------------------------------- #
+# Paired comparison of two settings                                            #
+# --------------------------------------------------------------------------- #
+
+# One-sided 95% lower bound = the 5th percentile of the bootstrap, i.e. the
+# harness bootstrap at two-sided alpha 0.10 (its `lo`).
+ONE_SIDED_ALPHA: Final = 0.10
+LANGUAGE_DROP_LIMIT: Final = 0.03
+
+
+def _mean_diff(
+    ids: Sequence[str], b: Mapping[str, float], c: Mapping[str, float]
+) -> dict[str, Any]:
+    n = len(ids)
+    return {
+        "n": n,
+        "base": sum(b[i] for i in ids),
+        "cand": sum(c[i] for i in ids),
+        "diff": (sum(c[i] - b[i] for i in ids) / n) if n else 0.0,
+    }
+
+
+def compare_delivered(
+    base: Mapping[str, Any],
+    cand: Mapping[str, Any],
+    questions: Sequence[Any],
+    *,
+    resamples: int = core.RESAMPLES,
+    seed: int = core.BOOTSTRAP_SEED,
+    vocab_gap: Mapping[str, bool] | None = None,
+) -> dict[str, Any]:
+    """Paired delivered@k comparison of two `delivered --out` result maps.
+
+    Per k: the paired bootstrap of the per-question 0/1 `delivered` difference
+    (one-sided 95%: the lower bound is the 5th percentile), the mean
+    difference by language and by kind, and the loss counts of both arms.
+    Refuses arms scored over different question sets."""
+    out: dict[str, Any] = {}
+    by_id = {q.id: q for q in questions}
+    for label in sorted(base):
+        b_rec = base[label]["records"]
+        c_rec = cand[label]["records"]
+        if set(b_rec) != set(c_rec):
+            raise ValueError(f"{label}: arms scored different questions")
+        b = {q: float(r["delivered"]) for q, r in b_rec.items()}
+        c = {q: float(r["delivered"]) for q, r in c_rec.items()}
+        delta = core.paired_bootstrap(
+            b, c, resamples=resamples, seed=seed, alpha=ONE_SIDED_ALPHA
+        )
+
+        def split(
+            attr: str,
+            values: Sequence[str],
+            b: Mapping[str, float] = b,
+            c: Mapping[str, float] = c,
+        ) -> dict[str, Any]:
+            return {
+                v: _mean_diff(
+                    [i for i in sorted(b) if getattr(by_id[i], attr) == v], b, c
+                )
+                for v in values
+            }
+
+        by_language = split("language", core.LANGUAGES)
+        out[label] = {
+            "n": delta.n,
+            "base_delivered": sum(b.values()),
+            "cand_delivered": sum(c.values()),
+            "mean_diff": delta.mean,
+            "lower_95_one_sided": delta.lo,
+            "by_language": by_language,
+            "by_kind": split("kind", core.KINDS),
+            "by_vocab_gap": {
+                name: _mean_diff(
+                    [i for i in sorted(b) if bool((vocab_gap or {}).get(i)) is flag],
+                    b,
+                    c,
+                )
+                for name, flag in (("vocab_gap", True), ("no_vocab_gap", False))
+            },
+            "lost_base": base[label]["summary"]["all"]["lost"],
+            "lost_cand": cand[label]["summary"]["all"]["lost"],
+            "language_drop_ok": all(
+                g["diff"] >= -LANGUAGE_DROP_LIMIT
+                for g in by_language.values()
+                if g["n"]
+            ),
+            "improved": sum(1 for q in b if c[q] > b[q]),
+            "regressed": sum(1 for q in b if c[q] < b[q]),
+        }
+    return out
+
+
+def render_comparison(result: Mapping[str, Mapping[str, Any]]) -> str:
+    lines: list[str] = []
+    for label, r in result.items():
+        lines += [
+            "",
+            f"[{label}] n={r['n']}  delivered base {r['base_delivered']:g} of {r['n']}"
+            f"  cand {r['cand_delivered']:g} of {r['n']}",
+            f"  mean diff {r['mean_diff']:+.4f}   one-sided 95% lower bound "
+            f"{r['lower_95_one_sided']:+.4f}   improved {r['improved']}  "
+            f"regressed {r['regressed']}",
+        ]
+        for name, g in {
+            **r["by_language"],
+            **r["by_kind"],
+            **r["by_vocab_gap"],
+        }.items():
+            lines.append(
+                f"  {name:<12} n={g['n']:<3} base {g['base']:g}  cand {g['cand']:g}"
+                f"  diff {g['diff']:+.4f}"
+            )
+        lines.append(f"  lost base {r['lost_base']}   cand {r['lost_cand']}")
+        lines.append(f"  language drop within limit: {r['language_drop_ok']}")
+    return "\n".join(lines).lstrip("\n")

@@ -4694,7 +4694,7 @@ def _estimate_batch_calls(
             # the spec's "billed at the full estimate, never silently
             # dropped". Without the text there is no window arithmetic to
             # do, so the unchunked estimate is the honest floor.
-            calls += 3 if cfg.union_judge else 1
+            calls += (2 + int(cfg.selector_judge)) if cfg.union_judge else 1
             continue
         if decoded is None:
             continue  # undecodable -> Source-only, no model call
@@ -4713,6 +4713,7 @@ def _estimate_batch_calls(
             source_title=title,
             union_judge=cfg.union_judge,
             transcript_decisions=cfg.transcript_decisions,
+            selector_judge=cfg.selector_judge,
         )
         calls += estimate.calls
         if estimate.windows:

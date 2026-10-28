@@ -1,0 +1,1314 @@
+{
+  "version": 1,
+  "labeller": "claude-opus (blind, single)",
+  "seed": 1649,
+  "items": [
+    {
+      "id": "ES2015a.elana.s.11",
+      "meeting": "ES2015a",
+      "turns": [
+        27
+      ],
+      "kind": "choice",
+      "forms": [
+        "television remote control",
+        "television",
+        "TV"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015a.elana.s.12",
+      "meeting": "ES2015a",
+      "turns": [
+        114
+      ],
+      "kind": "amount",
+      "forms": [
+        "twenty five Euros",
+        "25 Euros",
+        "25",
+        "€25"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015a.elana.s.13",
+      "meeting": "ES2015a",
+      "turns": [
+        117
+      ],
+      "kind": "amount",
+      "forms": [
+        "fifty million Euro",
+        "50 million",
+        "fifty million",
+        "€50 million"
+      ],
+      "distractors": [
+        "twelve Euro and fifty cents",
+        "twelve fifty",
+        "12.50",
+        "hundred percent"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015a.elana.s.14",
+      "meeting": "ES2015a",
+      "turns": [
+        117
+      ],
+      "kind": "choice",
+      "forms": [
+        "international market",
+        "international"
+      ],
+      "distractors": [
+        "fifty million Euro",
+        "twelve Euro and fifty cents"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015a.elana.s.15",
+      "meeting": "ES2015a",
+      "turns": [
+        117
+      ],
+      "kind": "amount",
+      "forms": [
+        "twelve Euro and fifty cents",
+        "12.50",
+        "twelve fifty",
+        "€12.50",
+        "12,50"
+      ],
+      "distractors": [
+        "fifty million Euro",
+        "50 million",
+        "hundred percent"
+      ],
+      "exclude": false,
+      "note": "Cap on production cost."
+    },
+    {
+      "id": "ES2015b.elana.s.11",
+      "meeting": "ES2015b",
+      "turns": [
+        90,
+        95,
+        243
+      ],
+      "kind": "choice",
+      "forms": [
+        "television only",
+        "single function",
+        "specific television function",
+        "TV only"
+      ],
+      "distractors": [
+        "multifunctional",
+        "DVD",
+        "VCR"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015b.elana.s.12",
+      "meeting": "ES2015b",
+      "turns": [
+        243
+      ],
+      "kind": "choice",
+      "forms": [
+        "no teletext",
+        "teletext is outdated",
+        "not navigating the teletext option"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015b.elana.s.13",
+      "meeting": "ES2015b",
+      "turns": [
+        259
+      ],
+      "kind": "choice",
+      "forms": [
+        "logo and colour",
+        "logo",
+        "corporate logo"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015b.elana.s.14",
+      "meeting": "ES2015b",
+      "turns": [
+        281
+      ],
+      "kind": "choice",
+      "forms": [
+        "no LCD",
+        "no voice recognition"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015b.elana.s.15",
+      "meeting": "ES2015b",
+      "turns": [
+        304
+      ],
+      "kind": "choice",
+      "forms": [
+        "alarm locator",
+        "alarm system"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015b.elana.s.16",
+      "meeting": "ES2015b",
+      "turns": [
+        340,
+        426
+      ],
+      "kind": "choice",
+      "forms": [
+        "glow-in-the-dark",
+        "glow in the dark",
+        "fluorescent",
+        "lighting up"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015b.elana.s.17",
+      "meeting": "ES2015b",
+      "turns": [
+        368
+      ],
+      "kind": "choice",
+      "forms": [
+        "number-shaped buttons",
+        "shape of the numbers"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": "'will consider' is tentative."
+    },
+    {
+      "id": "ES2015b.elana.s.18",
+      "meeting": "ES2015b",
+      "turns": [
+        453,
+        458
+      ],
+      "kind": "choice",
+      "forms": [
+        "changeable covers",
+        "interchangeable",
+        "three"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": "'start out with three' covers."
+    },
+    {
+      "id": "ES2015b.elana.s.19",
+      "meeting": "ES2015b",
+      "turns": [
+        31,
+        471
+      ],
+      "kind": "other",
+      "forms": [],
+      "distractors": [],
+      "exclude": true,
+      "note": "Research pending; no decided value ('one hundred percent turnover' is context)."
+    },
+    {
+      "id": "ES2015c.elana.s.14",
+      "meeting": "ES2015c",
+      "turns": [
+        188
+      ],
+      "kind": "choice",
+      "forms": [
+        "command interface"
+      ],
+      "distractors": [
+        "graphical user interface"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015c.elana.s.15",
+      "meeting": "ES2015c",
+      "turns": [
+        236,
+        285
+      ],
+      "kind": "choice",
+      "forms": [
+        "temporary light-up",
+        "light up"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015c.elana.s.16",
+      "meeting": "ES2015c",
+      "turns": [
+        282,
+        397
+      ],
+      "kind": "choice",
+      "forms": [
+        "personal face-plates",
+        "face plates",
+        "interchangeable plates"
+      ],
+      "distractors": [
+        "fruits and vegetable themes"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015c.elana.s.17",
+      "meeting": "ES2015c",
+      "turns": [
+        345
+      ],
+      "kind": "choice",
+      "forms": [
+        "kinetic",
+        "kinetic energy"
+      ],
+      "distractors": [
+        "backup"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015c.elana.s.18",
+      "meeting": "ES2015c",
+      "turns": [
+        373
+      ],
+      "kind": "choice",
+      "forms": [
+        "push buttons",
+        "pushbuttons"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015c.elana.s.19",
+      "meeting": "ES2015c",
+      "turns": [
+        378
+      ],
+      "kind": "choice",
+      "forms": [
+        "regular chip",
+        "regular",
+        "medium"
+      ],
+      "distractors": [
+        "more advanced one",
+        "advanced"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015c.elana.s.20",
+      "meeting": "ES2015c",
+      "turns": [
+        71,
+        391
+      ],
+      "kind": "choice",
+      "forms": [
+        "plastic coated in rubber",
+        "plastic with rubber",
+        "hard plastic",
+        "rubber"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015c.elana.s.21",
+      "meeting": "ES2015c",
+      "turns": [
+        430,
+        456,
+        476
+      ],
+      "kind": "choice",
+      "forms": [
+        "power, channels, volume",
+        "basic button functions",
+        "basic",
+        "power",
+        "channels",
+        "volume"
+      ],
+      "distractors": [
+        "light levels",
+        "tone",
+        "contrast"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015d.elana.s.12",
+      "meeting": "ES2015d",
+      "turns": [
+        97,
+        116
+      ],
+      "kind": "choice",
+      "forms": [
+        "circular design",
+        "circular"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015d.elana.s.13",
+      "meeting": "ES2015d",
+      "turns": [
+        116,
+        119
+      ],
+      "kind": "choice",
+      "forms": [
+        "fruit and vegetable",
+        "fruits and vegetables",
+        "named after different fruit",
+        "interchangeable casing",
+        "banana",
+        "watermelon",
+        "vanilla"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": "Theme decided; fruit examples are illustrative names."
+    },
+    {
+      "id": "ES2015d.elana.s.14",
+      "meeting": "ES2015d",
+      "turns": [
+        572
+      ],
+      "kind": "amount",
+      "forms": [
+        "two colours",
+        "two colors",
+        "2",
+        "one for the case, one for the buttons"
+      ],
+      "distractors": [
+        "one"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015d.elana.s.15",
+      "meeting": "ES2015d",
+      "turns": [
+        564
+      ],
+      "kind": "choice",
+      "forms": [
+        "regular chip"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015d.elana.s.16",
+      "meeting": "ES2015d",
+      "turns": [
+        566
+      ],
+      "kind": "choice",
+      "forms": [
+        "double curved",
+        "double-curved"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "ES2015d.elana.s.17",
+      "meeting": "ES2015d",
+      "turns": [
+        566
+      ],
+      "kind": "choice",
+      "forms": [
+        "plastic and rubber",
+        "rubber"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004a.elana.s.14",
+      "meeting": "IS1004a",
+      "turns": [
+        12
+      ],
+      "kind": "choice",
+      "forms": [
+        "new remote control"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": "Goal statement; weak value."
+    },
+    {
+      "id": "IS1004a.elana.s.15",
+      "meeting": "IS1004a",
+      "turns": [
+        74
+      ],
+      "kind": "amount",
+      "forms": [
+        "25 Euro",
+        "twenty-five Euro",
+        "twenty five Euro",
+        "25",
+        "€25"
+      ],
+      "distractors": [
+        "fifty million Euros",
+        "50 million"
+      ],
+      "exclude": false,
+      "note": "Summary's 'Euro dollars' is a typo."
+    },
+    {
+      "id": "IS1004a.elana.s.16",
+      "meeting": "IS1004a",
+      "turns": [
+        75
+      ],
+      "kind": "choice",
+      "forms": [
+        "international market",
+        "international"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004a.elana.s.17",
+      "meeting": "IS1004a",
+      "turns": [
+        75
+      ],
+      "kind": "amount",
+      "forms": [
+        "fifty million Euros",
+        "50 million",
+        "fifty million"
+      ],
+      "distractors": [
+        "twenty-five Euro",
+        "25"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004b.elana.s.13",
+      "meeting": "IS1004b",
+      "turns": [
+        124
+      ],
+      "kind": "choice",
+      "forms": [
+        "television only",
+        "TV only",
+        "T_V_ only",
+        "restricted to T_V_"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004b.elana.s.14",
+      "meeting": "IS1004b",
+      "turns": [
+        257
+      ],
+      "kind": "other",
+      "forms": [
+        "fancy",
+        "good shape",
+        "not too small, not too big"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004b.elana.s.15",
+      "meeting": "IS1004b",
+      "turns": [
+        257
+      ],
+      "kind": "choice",
+      "forms": [
+        "new technologies",
+        "young people"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004b.elana.s.17",
+      "meeting": "IS1004b",
+      "turns": [
+        260,
+        315
+      ],
+      "kind": "choice",
+      "forms": [
+        "no speech recognition",
+        "we don't go for speech recognition technology",
+        "no automatic speech recognition"
+      ],
+      "distractors": [
+        "LCD"
+      ],
+      "exclude": false,
+      "note": "LCD was left open, not decided."
+    },
+    {
+      "id": "IS1004b.elana.s.18",
+      "meeting": "IS1004b",
+      "turns": [
+        130
+      ],
+      "kind": "choice",
+      "forms": [
+        "corporate logo",
+        "colours and logos",
+        "corporate image"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004c.elana.s.28",
+      "meeting": "IS1004c",
+      "turns": [
+        184,
+        196,
+        227,
+        233,
+        245,
+        402
+      ],
+      "kind": "choice",
+      "forms": [
+        "LCD ruled out",
+        "ASR ruled out",
+        "no LCD",
+        "no speech recognition",
+        "no ASR"
+      ],
+      "distractors": [
+        "coffee machine dialogue interface"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004c.elana.s.29",
+      "meeting": "IS1004c",
+      "turns": [
+        451,
+        455,
+        464,
+        466,
+        471,
+        479
+      ],
+      "kind": "other",
+      "forms": [
+        "base station",
+        "button on the base station",
+        "two wheels",
+        "2 scroll wheels",
+        "volume and channels",
+        "turbo button",
+        "underneath",
+        "on off switch",
+        "power on/off"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": "List value."
+    },
+    {
+      "id": "IS1004d.elana.s.11",
+      "meeting": "IS1004d",
+      "turns": [
+        19
+      ],
+      "kind": "choice",
+      "forms": [
+        "banana",
+        "banana leaf",
+        "base station"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004d.elana.s.12",
+      "meeting": "IS1004d",
+      "turns": [
+        22
+      ],
+      "kind": "choice",
+      "forms": [
+        "volume on the left",
+        "channel on the right",
+        "left",
+        "right"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": "Risk is a left/right swap."
+    },
+    {
+      "id": "IS1004d.elana.s.13",
+      "meeting": "IS1004d",
+      "turns": [
+        36,
+        51
+      ],
+      "kind": "choice",
+      "forms": [
+        "teletext button",
+        "teletext"
+      ],
+      "distractors": [
+        "seven hundred"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004d.elana.s.14",
+      "meeting": "IS1004d",
+      "turns": [
+        56,
+        58
+      ],
+      "kind": "choice",
+      "forms": [
+        "infrared port",
+        "top of the banana",
+        "front of the base station"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004d.elana.s.16",
+      "meeting": "IS1004d",
+      "turns": [
+        79,
+        83
+      ],
+      "kind": "other",
+      "forms": [
+        "weight of a banana",
+        "different colours",
+        "special shade of yellow"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004d.elana.s.18",
+      "meeting": "IS1004d",
+      "turns": [
+        487
+      ],
+      "kind": "amount",
+      "forms": [
+        "three",
+        "3",
+        "three push buttons"
+      ],
+      "distractors": [
+        "two"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004d.elana.s.19",
+      "meeting": "IS1004d",
+      "turns": [
+        96,
+        123,
+        416,
+        422
+      ],
+      "kind": "choice",
+      "forms": [
+        "rechargeable batteries",
+        "no solar cells",
+        "eight or ten hours",
+        "8-10 hours",
+        "battery, one"
+      ],
+      "distractors": [
+        "solar cells",
+        "hand dynamo",
+        "weeks"
+      ],
+      "exclude": false,
+      "note": "Multi-part value."
+    },
+    {
+      "id": "IS1004d.elana.s.20",
+      "meeting": "IS1004d",
+      "turns": [
+        131,
+        433
+      ],
+      "kind": "choice",
+      "forms": [
+        "regular chip"
+      ],
+      "distractors": [
+        "advanced chip"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "IS1004d.elana.s.21",
+      "meeting": "IS1004d",
+      "turns": [
+        455,
+        456
+      ],
+      "kind": "choice",
+      "forms": [
+        "single curved",
+        "single curve",
+        "single-curved"
+      ],
+      "distractors": [
+        "double curved",
+        "double curve"
+      ],
+      "exclude": false,
+      "note": "Speaker at [457] disputes it; summary records single."
+    },
+    {
+      "id": "TS3009a.s9553330.s.10",
+      "meeting": "TS3009a",
+      "turns": [
+        379
+      ],
+      "kind": "other",
+      "forms": [],
+      "distractors": [],
+      "exclude": true,
+      "note": "Deferral to next meeting; no concrete value."
+    },
+    {
+      "id": "TS3009a.s9553330.s.11",
+      "meeting": "TS3009a",
+      "turns": [
+        422,
+        423
+      ],
+      "kind": "other",
+      "forms": [],
+      "distractors": [],
+      "exclude": true,
+      "note": "Deferral ('look into that'); no concrete value. 'next thirty minutes' is not a decided value."
+    },
+    {
+      "id": "TS3009b.vkaraisk.s.11",
+      "meeting": "TS3009b",
+      "turns": [
+        139
+      ],
+      "kind": "choice",
+      "forms": [
+        "intuitive design",
+        "design",
+        "pick up and use it"
+      ],
+      "distractors": [
+        "manual"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009b.vkaraisk.s.12",
+      "meeting": "TS3009b",
+      "turns": [
+        325,
+        327
+      ],
+      "kind": "choice",
+      "forms": [
+        "removable front",
+        "interchangeable fronts",
+        "recognition from our company"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": "Conditional decision."
+    },
+    {
+      "id": "TS3009b.vkaraisk.s.13",
+      "meeting": "TS3009b",
+      "turns": [
+        222,
+        308
+      ],
+      "kind": "choice",
+      "forms": [
+        "user-centred",
+        "user-centered",
+        "minimise the number of buttons"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009b.vkaraisk.s.14",
+      "meeting": "TS3009b",
+      "turns": [
+        384,
+        400,
+        415,
+        416
+      ],
+      "kind": "choice",
+      "forms": [
+        "LCD screen",
+        "L_C_D_",
+        "not clickable",
+        "not interactive"
+      ],
+      "distractors": [
+        "clickable"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009b.vkaraisk.s.15",
+      "meeting": "TS3009b",
+      "turns": [
+        519,
+        522,
+        525,
+        530,
+        699,
+        703
+      ],
+      "kind": "other",
+      "forms": [
+        "OK",
+        "menu",
+        "screen sizing",
+        "AV",
+        "settings",
+        "mute",
+        "digits 1-9",
+        "number buttons",
+        "ten numbers",
+        "power",
+        "volume control",
+        "channel up/down",
+        "channel"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": "List value; brightness/contrast are the settings functions."
+    },
+    {
+      "id": "TS3009b.vkaraisk.s.16",
+      "meeting": "TS3009b",
+      "turns": [
+        611,
+        624
+      ],
+      "kind": "choice",
+      "forms": [
+        "no button",
+        "no special button"
+      ],
+      "distractors": [
+        "one button",
+        "two number digital"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009b.vkaraisk.s.18",
+      "meeting": "TS3009b",
+      "turns": [
+        645,
+        649,
+        656
+      ],
+      "kind": "choice",
+      "forms": [
+        "no flip",
+        "not under a flip",
+        "clearly separated",
+        "separate section",
+        "a little row of four buttons"
+      ],
+      "distractors": [
+        "under a clip",
+        "under a flip",
+        "hidden"
+      ],
+      "exclude": false,
+      "note": "Flip/clip proposal was rejected."
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.14",
+      "meeting": "TS3009c",
+      "turns": [
+        80
+      ],
+      "kind": "choice",
+      "forms": [
+        "rubber"
+      ],
+      "distractors": [
+        "copper",
+        "silicon",
+        "wood"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.15",
+      "meeting": "TS3009c",
+      "turns": [
+        147
+      ],
+      "kind": "choice",
+      "forms": [
+        "advanced chip",
+        "more advanced chip"
+      ],
+      "distractors": [
+        "speaker",
+        "sensor",
+        "speech controlled"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.16",
+      "meeting": "TS3009c",
+      "turns": [
+        57,
+        58
+      ],
+      "kind": "choice",
+      "forms": [
+        "changeable fronts",
+        "fronts",
+        "follow these trends every year"
+      ],
+      "distractors": [
+        "titanium"
+      ],
+      "exclude": false,
+      "note": "Rationale statement; weak decision value."
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.17",
+      "meeting": "TS3009c",
+      "turns": [
+        186,
+        218,
+        221,
+        274,
+        276
+      ],
+      "kind": "choice",
+      "forms": [
+        "bottom",
+        "lower end",
+        "below the buttons"
+      ],
+      "distractors": [
+        "top"
+      ],
+      "exclude": false,
+      "note": "'top' not spoken here; a likely wrong value."
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.18",
+      "meeting": "TS3009c",
+      "turns": [
+        186
+      ],
+      "kind": "choice",
+      "forms": [
+        "menus",
+        "menu in the LCD",
+        "shown in the LCD screen"
+      ],
+      "distractors": [
+        "separate buttons",
+        "extra buttons"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.19",
+      "meeting": "TS3009c",
+      "turns": [
+        507,
+        512
+      ],
+      "kind": "choice",
+      "forms": [
+        "speech recognition",
+        "voice recording",
+        "cheap voice recording"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.20",
+      "meeting": "TS3009c",
+      "turns": [
+        365,
+        374,
+        408,
+        542,
+        543
+      ],
+      "kind": "choice",
+      "forms": [
+        "titanium back",
+        "titanium",
+        "plastic front",
+        "hard plastic",
+        "round buttons",
+        "round"
+      ],
+      "distractors": [
+        "square"
+      ],
+      "exclude": false,
+      "note": "Multi-part value."
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.21",
+      "meeting": "TS3009c",
+      "turns": [
+        675
+      ],
+      "kind": "choice",
+      "forms": [
+        "titanium",
+        "corner of titanium"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.22",
+      "meeting": "TS3009c",
+      "turns": [
+        447
+      ],
+      "kind": "choice",
+      "forms": [
+        "standard",
+        "normal silicon",
+        "normal"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.23",
+      "meeting": "TS3009c",
+      "turns": [
+        462,
+        479,
+        492
+      ],
+      "kind": "choice",
+      "forms": [
+        "basic colours",
+        "fruit and vegetable",
+        "different lines",
+        "packages",
+        "red, blue and green",
+        "special patterns"
+      ],
+      "distractors": [],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009c.vkaraisk.s.24",
+      "meeting": "TS3009c",
+      "turns": [
+        587,
+        589,
+        594,
+        628,
+        630
+      ],
+      "kind": "choice",
+      "forms": [
+        "logo on the front and the back",
+        "right top corner",
+        "right corner",
+        "on the back",
+        "slogan engraved at the back"
+      ],
+      "distractors": [
+        "middle"
+      ],
+      "exclude": false,
+      "note": "Middle position deferred."
+    },
+    {
+      "id": "TS3009d.vkaraisk.s.13",
+      "meeting": "TS3009d",
+      "turns": [
+        64,
+        134,
+        135,
+        153
+      ],
+      "kind": "choice",
+      "forms": [
+        "bottom",
+        "low part",
+        "lower"
+      ],
+      "distractors": [
+        "upper side",
+        "top"
+      ],
+      "exclude": false,
+      "note": ""
+    },
+    {
+      "id": "TS3009d.vkaraisk.s.14",
+      "meeting": "TS3009d",
+      "turns": [
+        313,
+        315
+      ],
+      "kind": "amount",
+      "forms": [
+        "12.50",
+        "twelve and a half",
+        "12.5",
+        "twelve fifty",
+        "12.50 euros"
+      ],
+      "distractors": [
+        "four",
+        "4"
+      ],
+      "exclude": false,
+      "note": "4 is the speaker's cost."
+    },
+    {
+      "id": "TS3009d.vkaraisk.s.15",
+      "meeting": "TS3009d",
+      "turns": [
+        472
+      ],
+      "kind": "choice",
+      "forms": [
+        "plastic",
+        "similar-looking plastic",
+        "ditch the titanium"
+      ],
+      "distractors": [
+        "titanium"
+      ],
+      "exclude": false,
+      "note": "Titanium is the rejected material."
+    }
+  ]
+}

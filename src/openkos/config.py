@@ -390,6 +390,16 @@ The measured speedup, memory and quality numbers live in
 here so that one correction reaches every reader."""
 
 
+DEFAULT_SELECTOR_JUDGE = False
+"""Packaged default for `selector_judge` (ADR-0080, #1579): whether the union
+extractor asks the selector judge to cut the merged candidates.
+
+`False`: the extractor keeps the pre-judge ceiling of 24 and the positional
+backstop of 20 and makes no judge call. The pre-registered backstop-only
+comparison cleared every gate while the cut showed no measured benefit, so
+the cut is opt-in. `True` restores the judge exactly as it was."""
+
+
 DEFAULT_UNION_JUDGE = True
 """Packaged default for `union_judge` (design D9, #456): the union-of-runs +
 selector-judge extraction pipeline (`extraction.concept.extract_concept_union`)
@@ -436,15 +446,18 @@ as many hand-annotated decisions as the general pass, at high precision, but
 short of the bar set for making it the default. So it stays opt-in, and off
 restores the pre-pass path byte-for-byte."""
 
-DEFAULT_QUERY_AWARE_EXCERPTS = False
+DEFAULT_QUERY_AWARE_EXCERPTS = True
 """Packaged default for `query_aware_excerpts` (#1647): whether `query`, when a
 retrieved document exceeds its share of the prompt window, keeps the 800-char
 windows that best match the question (BM25 over that document's windows,
 model-free, no extra call) instead of evenly spaced ones.
 
-`False`, and deliberately so: the choice is unmeasured until it is scored on
-`evals/retrieval_gold` against a pre-registered decision rule (umbrella
-#1652). Off, every prompt is byte-identical to a run with the key absent."""
+`True` (ADR-0082): the pre-registered comparison on `evals/retrieval_gold`
+(`RESULTS-1647.md`, umbrella #1652) raised the share of questions whose gold
+passage reaches the prompt from 13 to 25 of 54 at k=5 and from 6 to 18 at k=8.
+A document that fits its share is sent unchanged either way, so the key only
+moves prompts that were already being trimmed. `false` restores the even
+coverage exactly."""
 
 DEFAULT_REVISION_HISTORY = False
 """Packaged default for `revision_history` (#1014 piece b): whether `query`
@@ -1558,7 +1571,7 @@ class Config:
     query_aware_excerpts: bool = DEFAULT_QUERY_AWARE_EXCERPTS
     """Whether `query` chooses the windows of an over-budget context block by
     BM25 similarity to the question (#1647), defaulting to
-    `DEFAULT_QUERY_AWARE_EXCERPTS` (`False`) when the key is absent or
+    `DEFAULT_QUERY_AWARE_EXCERPTS` (`True`) when the key is absent or
     explicitly null. The application layer passes this value explicitly to
     `answer`'s `query_aware_excerpts` kwarg, so the default lives in ONE
     place. Added LAST and DEFAULTED, like `transcript_decisions`."""
@@ -1569,6 +1582,12 @@ class Config:
     extractor only (`union_judge`, the default). Added LAST and DEFAULTED,
     like `attach_at_ingest`, so a positional or partial `Config(...)`
     construction elsewhere is unchanged."""
+    selector_judge: bool = DEFAULT_SELECTOR_JUDGE
+    """Whether the union extractor runs the selector judge (ADR-0080),
+    defaulting to `DEFAULT_SELECTOR_JUDGE` (`False`) when the key is absent or
+    explicitly null. Honoured under `union_judge` only: with that off the
+    single-run path has no judge. Added LAST and DEFAULTED, like
+    `transcript_decisions`."""
 
 
 def read_config(root: Path) -> Config:
@@ -1641,6 +1660,7 @@ def parse_config(root: Path, text: str) -> Config:
     type_tiers = raw.get("type_tiers")
     models = raw.get("models")
     union_judge = raw.get("union_judge")
+    selector_judge = raw.get("selector_judge")
     sufficiency_check = raw.get("sufficiency_check")
     concurrent_extraction = raw.get("concurrent_extraction")
     type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
@@ -1844,6 +1864,12 @@ def parse_config(root: Path, text: str) -> Config:
         raise ValueError(
             f"{layout.config_path.name}: 'union_judge' must be a boolean, got "
             f"{type(union_judge).__name__}"
+        )
+    if selector_judge is not None and not isinstance(selector_judge, bool):
+        # Same narrow `isinstance(x, bool)` guard as `union_judge` above.
+        raise ValueError(
+            f"{layout.config_path.name}: 'selector_judge' must be a boolean, got "
+            f"{type(selector_judge).__name__}"
         )
     if sufficiency_check is not None and not isinstance(sufficiency_check, bool):
         # Same narrow `isinstance(x, bool)` guard as `union_judge` above: YAML
@@ -2103,6 +2129,9 @@ def parse_config(root: Path, text: str) -> Config:
         type_tiers=(type_tiers if type_tiers is not None else {}),
         models=(models if models is not None else {}),
         union_judge=(union_judge if union_judge is not None else DEFAULT_UNION_JUDGE),
+        selector_judge=(
+            selector_judge if selector_judge is not None else DEFAULT_SELECTOR_JUDGE
+        ),
         sufficiency_check=(
             sufficiency_check
             if sufficiency_check is not None
