@@ -3832,3 +3832,42 @@ def test_an_explicit_null_declines_the_sufficiency_default(tmp_path: Path) -> No
     cfg = config.read_config(tmp_path)
 
     assert config.resolve_task_model(cfg, "sufficiency") == "qwen3:8b"
+
+
+# --- query_aware_excerpts: opt-in question-aware context excerpts (#1647) ----
+
+
+def test_query_aware_excerpts_key_validation(tmp_path: Path) -> None:
+    """Bool-only like every other flag: absent or null is off, `true` reads
+    as on, and a non-bool is refused rather than truthy-coerced."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+    assert config.read_config(tmp_path).query_aware_excerpts is False
+    assert config.DEFAULT_QUERY_AWARE_EXCERPTS is False
+
+    (tmp_path / "openkos.yaml").write_text(
+        "query_aware_excerpts: null\n", encoding="utf-8"
+    )
+    assert config.read_config(tmp_path).query_aware_excerpts is False
+
+    (tmp_path / "openkos.yaml").write_text(
+        "query_aware_excerpts: true\n", encoding="utf-8"
+    )
+    assert config.read_config(tmp_path).query_aware_excerpts is True
+
+    (tmp_path / "openkos.yaml").write_text(
+        "query_aware_excerpts: 1\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="'query_aware_excerpts' must be a boolean"):
+        config.read_config(tmp_path)
+
+
+def test_the_template_documents_the_query_aware_excerpts_key() -> None:
+    template = (
+        Path(config.__file__).parent / "templates" / "openkos.yaml.template"
+    ).read_text(encoding="utf-8")
+    lines = [line for line in template.splitlines() if "query_aware_excerpts" in line]
+    assert lines
+    assert lines[0].startswith("# query_aware_excerpts: false")
+    assert not any(
+        line.startswith("query_aware_excerpts:") for line in template.splitlines()
+    )

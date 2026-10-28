@@ -13,8 +13,17 @@ from collections.abc import Callable
 
 from openkos.api import _wiring
 from openkos.api._workspace import Workspace, WorkspaceUnreadable
+from openkos.application import inbox_settings, setup
 from openkos.application import model_settings as service
-from openkos.application import setup
+from openkos.application.inbox_settings import (
+    InboxSettings,
+    InboxSettingsChange,
+    InboxSettingsChanged,
+    InboxSettingsPreview,
+    InboxSettingsRefused,
+    InboxSettingsStale,
+    InboxSettingsVersion,
+)
 from openkos.application.model_settings import (
     ModelSettings,
     ModelSettingsChange,
@@ -76,6 +85,60 @@ def apply_model_settings(
             workspace.root,
             version,
             ports=_wiring.settings_ports(
+                workspace, wait_seconds=wait, on_warning=on_warning
+            ),
+        )
+    except setup.SetupConfigUnreadable as exc:
+        raise WorkspaceUnreadable(workspace.root, exc.reason) from exc
+
+
+def inbox_settings_read(workspace: Workspace) -> InboxSettings:
+    """The folder the workspace watches (`None`: the watch is off) and the
+    limits it works within. Reads `openkos.yaml` only: no model, no lock, no
+    write. Raises `WorkspaceUnreadable` when it cannot be read."""
+    try:
+        return inbox_settings.read_inbox_settings(workspace.root)
+    except setup.SetupConfigUnreadable as exc:
+        raise WorkspaceUnreadable(workspace.root, exc.reason) from exc
+
+
+def preview_inbox_settings(
+    workspace: Workspace, change: InboxSettingsChange
+) -> InboxSettingsPreview | InboxSettingsRefused:
+    """What `change` would do to the watch folder: the settings now and after,
+    and the version to apply.
+
+    A folder `openkos.yaml` would refuse, or a change to what is already set,
+    is the returned `InboxSettingsRefused`; a shape of `openkos.yaml` the
+    change cannot edit raises `WriteFailed`; an unreadable one
+    `WorkspaceUnreadable`. Writes nothing and takes no lock."""
+    try:
+        return inbox_settings.preview_inbox_settings(workspace.root, change)
+    except setup.SetupConfigUnreadable as exc:
+        raise WorkspaceUnreadable(workspace.root, exc.reason) from exc
+
+
+def apply_inbox_settings(
+    workspace: Workspace,
+    version: InboxSettingsVersion,
+    *,
+    wait_seconds: float = 0.0,
+    on_warning: Callable[[str], None] | None = None,
+) -> InboxSettingsChanged | InboxSettingsRefused | InboxSettingsStale:
+    """Write the change `version` was previewed for and commit only it.
+
+    The lock is taken once. A changed `openkos.yaml` or version is the returned
+    `InboxSettingsStale`; settings that already hold, `InboxSettingsRefused`;
+    neither writes anything. An uncommitted edit to the inbox line raises
+    `Refused`. A commit that cannot be made is reported once through
+    `on_warning`. Starting or stopping the daemon that watches the folder is
+    not done here."""
+    wait = _wiring.validated_wait(wait_seconds)
+    try:
+        return inbox_settings.apply_inbox_settings(
+            workspace.root,
+            version,
+            ports=_wiring.inbox_settings_ports(
                 workspace, wait_seconds=wait, on_warning=on_warning
             ),
         )

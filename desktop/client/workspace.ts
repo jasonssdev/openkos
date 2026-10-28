@@ -21,6 +21,8 @@ export const WORKSPACE_ERROR_REASONS = [
   "init_failed",
   "init_timed_out",
   "store_failed",
+  "no_workspace",
+  "watch_choice_unkept",
 ] as const;
 
 export type WorkspaceErrorReason = (typeof WORKSPACE_ERROR_REASONS)[number] | "unknown";

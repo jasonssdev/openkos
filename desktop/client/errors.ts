@@ -77,6 +77,11 @@ export const ERROR_CODES = [
   "invalid_model",
   "invalid_embedding_model",
   "base_url_required",
+  // The watch folder.
+  "inbox_unchanged",
+  "invalid_inbox",
+  "inbox_inside_workspace",
+  "inbox_not_a_directory",
   // Who can see a page.
   "page_not_found",
   "sensitivity_unchanged",

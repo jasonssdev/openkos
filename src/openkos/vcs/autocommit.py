@@ -174,6 +174,43 @@ class ModelSettingsConflict:
     `openkos.yaml`. Neutral on purpose: the adapter words the refusal."""
 
 
+@dataclass(frozen=True)
+class InboxSettingsConflict:
+    """The watch-folder change cannot be applied cleanly to the committed
+    `openkos.yaml`. Neutral on purpose: the adapter words the refusal."""
+
+
+def _plan_scoped_edit(
+    root: Path,
+    edit: Callable[[str], str],
+    baseline: bytes,
+    scope: Callable[[str], object],
+) -> tuple[bool, ConfigCommitPlan | None]:
+    """The shared body of the settings planners, `(conflict, plan)`: no plan
+    when `openkos.yaml` is clean (or has no committed version, or there is no
+    git); a conflict when the user's uncommitted edit touches what `scope` reads or `edit` cannot apply
+    to the committed file; otherwise a plan committing `edit` over the
+    committed version."""
+    try:
+        if not git.paths_dirty(root, [_CONFIG_REL_PATH]):
+            return False, None
+        head = git.head_file_bytes(root, _CONFIG_REL_PATH)
+    except git.GitError:
+        return False, None
+    if head is None:
+        return False, None
+
+    def apply(content: bytes) -> bytes:
+        return edit(content.decode("utf-8")).encode("utf-8")
+
+    try:
+        same = scope(head.decode("utf-8")) == scope(baseline.decode("utf-8"))
+        apply(head)
+    except ValueError:
+        same = False
+    return (False, ConfigCommitPlan(apply=apply)) if same else (True, None)
+
+
 def plan_model_settings_edit(
     root: Path, edit: Callable[[str], str], baseline: bytes
 ) -> ConfigCommitPlan | ModelSettingsConflict | None:
@@ -186,28 +223,21 @@ def plan_model_settings_edit(
     touches one of the five model-settings lines (`config.MODEL_SETTINGS_KEYS`),
     or `edit` cannot apply to the committed file. It reads git and nothing
     else."""
-    try:
-        if not git.paths_dirty(root, [_CONFIG_REL_PATH]):
-            return None
-        head = git.head_file_bytes(root, _CONFIG_REL_PATH)
-    except git.GitError:
-        return None
-    if head is None:
-        return None
+    conflict, plan = _plan_scoped_edit(
+        root, edit, baseline, config.model_settings_lines
+    )
+    return ModelSettingsConflict() if conflict else plan
 
-    def apply(content: bytes) -> bytes:
-        return edit(content.decode("utf-8")).encode("utf-8")
 
-    try:
-        same_lines = config.model_settings_lines(
-            head.decode("utf-8")
-        ) == config.model_settings_lines(baseline.decode("utf-8"))
-        apply(head)
-    except ValueError:
-        same_lines = False
-    if not same_lines:
-        return ModelSettingsConflict()
-    return ConfigCommitPlan(apply=apply)
+def plan_inbox_settings_edit(
+    root: Path, edit: Callable[[str], str], baseline: bytes
+) -> ConfigCommitPlan | InboxSettingsConflict | None:
+    """`plan_model_settings_edit` for the watch folder: the conflict is the
+    user's uncommitted edit to the `unattended.inbox` line."""
+    conflict, plan = _plan_scoped_edit(
+        root, edit, baseline, config.unattended_inbox_line
+    )
+    return InboxSettingsConflict() if conflict else plan
 
 
 def config_edit_pending(root: Path) -> bool:

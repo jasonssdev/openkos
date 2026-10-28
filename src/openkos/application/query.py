@@ -200,6 +200,8 @@ def run_query(
             # defaults `False`, so every library and eval caller stays
             # unchanged.
             revision_history=cfg.revision_history,
+            # #1647: same single-place threading; `answer` defaults `False`.
+            query_aware_excerpts=cfg.query_aware_excerpts,
             progress=progress,
         )
     return QueryOutcome(

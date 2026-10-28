@@ -421,6 +421,90 @@ pub fn start_with_env(
     }
 }
 
+/// A started `openkos daemon` (ADR-0078). It has no handshake: it is running
+/// once it is spawned, and it reports nothing on stdout the shell reads. Its
+/// stdin is the lifeline, as for the engine: the daemon stops gracefully when
+/// the pipe closes, which is what a shell that dies by any route does.
+pub struct RunningDaemon {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    stderr: Arc<Mutex<StderrTail>>,
+}
+
+impl RunningDaemon {
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// The last lines the daemon wrote to stderr.
+    pub fn stderr_tail(&self) -> String {
+        wait_for_stderr(&self.stderr);
+        self.stderr.lock().expect("stderr lock").text()
+    }
+
+    /// `Some` once the daemon has exited, without blocking.
+    pub fn try_exited(&mut self) -> Option<ExitStatus> {
+        self.child.try_wait().ok().flatten()
+    }
+
+    /// Close stdin (the lifeline), wait up to `grace` for the work in progress
+    /// to finish, then kill the daemon's whole process group and reap it.
+    pub fn stop(mut self, grace: Duration) -> StopOutcome {
+        if self.try_exited().is_some() {
+            kill_group(&mut self.child);
+            return StopOutcome::AlreadyExited;
+        }
+        drop(self.stdin.take());
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            if self.try_exited().is_some() {
+                kill_group(&mut self.child);
+                return StopOutcome::Graceful;
+            }
+            thread::sleep(POLL);
+        }
+        kill_group(&mut self.child);
+        StopOutcome::Killed
+    }
+}
+
+/// Spawn the daemon with `env` added to its environment, in its own process
+/// group. Its output is not read except for the tail of stderr, kept for the
+/// failure report; its stdin stays open for its whole life.
+pub fn start_daemon(
+    command: &EngineCommand,
+    env: &EngineEnv,
+) -> Result<RunningDaemon, std::io::Error> {
+    let mut process = Command::new(&command.program);
+    process
+        .args(&command.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    if let Some(cwd) = &command.cwd {
+        process.current_dir(cwd);
+    }
+    process.envs(env.0.iter().map(|(name, value)| (name, value)));
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut process, 0);
+    let mut child = process.spawn()?;
+    let stderr = Arc::new(Mutex::new(StderrTail::default()));
+    if let Some(pipe) = child.stderr.take() {
+        let sink = Arc::clone(&stderr);
+        thread::spawn(move || {
+            for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                sink.lock().expect("stderr lock").push(line);
+            }
+        });
+    }
+    let stdin = child.stdin.take();
+    Ok(RunningDaemon {
+        child,
+        stdin,
+        stderr,
+    })
+}
+
 /// Why a one-shot engine command did not succeed.
 #[derive(Debug)]
 pub enum RunError {
