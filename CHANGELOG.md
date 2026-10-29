@@ -18,6 +18,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- A pair of pages the AI model judged "couldn't tell" or "different" can now be combined from To review. The judge is advisory and the person decides: **Same thing** is offered for such a pair, with the model's doubt on the line above the question and a note that the combine can be split again. A pair not yet checked, a group of more than two pages and pages of different kinds keep their guards (#1699).
 - `ingest` now says which filter emptied a source. When extraction ends with no concept and a candidate was removed as a framing object (a meeting-shaped title) or as a twin of the source title, the notice names those titles and the filter, where before it printed only "no concept extracted". The language gate keeps every candidate rather than empty a source, so a Spanish meeting that came out empty was losing its survivor to a later filter, not to the gate. Diagnostic only: which objects are kept is unchanged (#1642).
 
 ## [0.7.0] - 2026-10-28
