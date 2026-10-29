@@ -325,7 +325,53 @@ def compose_one(
     }
 
 
-ADJUDICATION: Final[dict[str, tuple[str, str]]] = {}
+ADJUDICATION: Final[dict[str, tuple[str, str]]] = {
+    "ES2015a-es/r1": (
+        "contested",
+        "not verifiable from the body alone (delegated reader, no source)",
+    ),
+    "ES2015a-es/r2": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "ES2015a-es/r5": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "ES2015a-es/r8": (
+        "contested",
+        "not verifiable from the body alone (delegated reader, no source)",
+    ),
+    "ES2015a-es/r11": (
+        "contested",
+        "not verifiable from the body alone (delegated reader, no source)",
+    ),
+    "ES2015a-es/r12": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "ES2015d-es/r1": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "ES2015d-es/r2": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "ES2015d-es/r3": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "ES2015d-es/r4": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "ES2015d-es/r5": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "ES2015d-es/r6": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "IS1004b-es/r1": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "IS1004b-es/r2": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "IS1004b-es/r3": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "IS1004b-es/r4": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "IS1004b-es/r5": (
+        "contested",
+        "not verifiable from the body alone (delegated reader, no source)",
+    ),
+    "IS1004b-es/r6": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "IS1004d-es/r1": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "IS1004d-es/r2": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "IS1004d-es/r3": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "IS1004d-es/r4": (
+        "contested",
+        "not verifiable from the body alone (delegated reader, no source)",
+    ),
+    "IS1004d-es/r5": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "IS1004d-es/r6": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "TS3009c-es/r1": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "TS3009c-es/r2": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "TS3009c-es/r3": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "TS3009c-es/r4": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "TS3009c-es/r5": ("faithful", "consistent, nothing invented (delegated reader)"),
+    "TS3009c-es/r6": ("faithful", "consistent, nothing invented (delegated reader)"),
+}
 """`"source/rN"` -> (label, reason) for every scored body of the roster phase.
 Filled by the adjudicator after `score` listed the bodies and BEFORE `decide`
 is first run; the replay never writes here (it reads the last arm's registry)."""
