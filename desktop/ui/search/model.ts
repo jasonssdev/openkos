@@ -113,6 +113,11 @@ export class SearchModel {
     return { kind: "problem", text: problemFor(new ApiError({ status: 0, ...error, retryAfterSeconds: null })) };
   }
 
+  /** Close how the last rebuild ended. */
+  dismiss(): void {
+    if (this.#state.result !== null) this.#set({ result: null });
+  }
+
   /** Ask the rebuild to stop after the page in flight. */
   async stop(): Promise<void> {
     const client = this.#client;

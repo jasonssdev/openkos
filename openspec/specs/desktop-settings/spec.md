@@ -121,14 +121,15 @@ for search, Rebuild search MUST ask first, with the cloud warning's send rule,
 in a dialog that starts on **Not now**, and only then start the job with
 `allow_remote`. While it runs the section MUST show its progress in words and
 as a bar, with **Stop**; after, how it ended, including the pages withheld,
-failed or skipped. A stopped or failed rebuild MUST say search wasn't changed.
+failed or skipped. A stopped or failed rebuild MUST say search wasn't changed. How a rebuild ended MUST be
+closable with **Dismiss**, and MUST show only where a rebuild is started (Settings and Status), never on Ask.
 
 #### Scenario: Rebuilding after a change of the AI model for search
 
 - GIVEN Settings saved a new AI model for search on this Mac
 - WHEN the person presses Rebuild search
 - THEN the job starts without a dialog, its progress shows, and the section
-  ends with "Search is up to date."
+  ends with "Search is up to date." beside **Dismiss**
 
 #### Scenario: A cloud AI model for search asks first
 

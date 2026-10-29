@@ -9,6 +9,7 @@ export const SEARCH_WORDS = {
   rebuild: "Rebuild search",
   starting: "Starting…",
   stop: "Stop",
+  dismiss: "Dismiss",
   stopping: "Stopping…",
   gettingReady: "Getting ready…",
   finishing: "Finishing…",

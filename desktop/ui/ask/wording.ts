@@ -71,9 +71,17 @@ export function phaseLine(phase: AskPhase | null): string {
 const pages = (n: number) => (n === 1 ? "1 page" : `${n} pages`);
 const PRIVATE_LABEL = "marked Only on this Mac";
 
-function searchNote(answer: Answer): string | null {
+/**
+ * What search did for this answer. `searchCurrent`: search has been rebuilt
+ * since, so the stale-search warning is told as past, and never says search is
+ * behind while the notice beside it says it is up to date.
+ */
+function searchNote(answer: Answer, searchCurrent: boolean): string | null {
   if (answer.lexical_unavailable || answer.dense_unavailable) {
     return "The search was limited this time, so this answer could miss some pages.";
+  }
+  if (answer.stale_indexes.length > 0 && searchCurrent) {
+    return "Search has been rebuilt since this answer. Ask again to include your latest changes.";
   }
   if (answer.stale_indexes.length > 0) {
     return "Some recent changes to your library may not be searched yet, so this answer could miss them.";
@@ -98,7 +106,7 @@ const NO_MATCH_BY_CAUSE: Partial<Record<Answer["no_match_cause"], { title: strin
 };
 
 /** The finished ask, in the brief's words. */
-export function describeAnswer(answer: Answer): AnswerWording {
+export function describeAnswer(answer: Answer, searchCurrent = false): AnswerWording {
   switch (answer.outcome) {
     case "answered":
       return {
@@ -108,7 +116,7 @@ export function describeAnswer(answer: Answer): AnswerWording {
         notes: notes(
           answer.citations.length === 0 ? "This answer doesn't point to a particular page." : null,
           answer.sufficiency_degraded ? "This answer wasn't checked against your pages before it was written." : null,
-          searchNote(answer),
+          searchNote(answer, searchCurrent),
           leftOutNote(answer),
         ),
       };
@@ -116,7 +124,7 @@ export function describeAnswer(answer: Answer): AnswerWording {
       const drewOn = answer.withheld > 0 ? `${pages(answer.withheld)} ${PRIVATE_LABEL}` : `pages ${PRIVATE_LABEL}`;
       return {
         kind: "empty",
-        title: "This answer stays private",
+        title: "This answer stays on this Mac",
         text: `It drew on ${drewOn}, so it isn't shown here, and neither are their names. You can show it while your AI model runs on this Mac.`,
         notes: [],
       };
@@ -126,10 +134,10 @@ export function describeAnswer(answer: Answer): AnswerWording {
         kind: "empty",
         title: "No answer in your pages",
         text: "Your library has pages about this, but none of them answers the question.",
-        notes: notes(searchNote(answer), leftOutNote(answer)),
+        notes: notes(searchNote(answer, searchCurrent), leftOutNote(answer)),
       };
     default:
-      return { kind: "empty", ...(NO_MATCH_BY_CAUSE[answer.no_match_cause] ?? NO_MATCH), notes: notes(searchNote(answer), leftOutNote(answer)) };
+      return { kind: "empty", ...(NO_MATCH_BY_CAUSE[answer.no_match_cause] ?? NO_MATCH), notes: notes(searchNote(answer, searchCurrent), leftOutNote(answer)) };
   }
 }
 
@@ -177,7 +185,7 @@ export function turnMeta(result: TurnResult): string {
       return "Didn't finish";
     case "answer":
       if (result.answer.outcome === "answered") return "Answered";
-      if (result.answer.outcome === "withheld") return "Kept private";
+      if (result.answer.outcome === "withheld") return "Stays on this Mac";
       return "No answer";
   }
 }

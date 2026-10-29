@@ -173,3 +173,14 @@ describe("the label model", () => {
     expect(seen).toEqual([GARDEN.conceptId, null]);
   });
 });
+
+describe("dismissing a notice", () => {
+  it("clears the confirmation, and a problem, without touching the levels", async () => {
+    const { model } = setup({ alsoRaised: ["sources/a"] });
+    await model.set(GARDEN, "confidential");
+    expect(model.state.notice).not.toBeNull();
+    model.dismiss();
+    expect(model.state.notice).toBeNull();
+    expect(model.levelOf(GARDEN)).toBe("confidential");
+  });
+});
