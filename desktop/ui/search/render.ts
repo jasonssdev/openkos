@@ -8,6 +8,16 @@ import { SEARCH_WORDS, costLine, needLine, progressLine } from "./wording.ts";
 export interface SearchActions {
   rebuild: () => unknown;
   stop: () => unknown;
+  /** Close how a rebuild ended. */
+  dismiss?: () => unknown;
+}
+
+export interface SectionOptions {
+  /**
+   * Show how a rebuild ended. Only the screens that start a rebuild do; Ask
+   * shows why search is behind, never an earlier "Done".
+   */
+  showResult?: boolean;
 }
 
 const TONE = { done: "success", stopped: "info", problem: "error" } as const;
@@ -21,7 +31,7 @@ function rebuildButton(state: SearchState, actions: SearchActions): HTMLElement 
 }
 
 /** The section, or `null` while search is current and nothing ran this session. */
-export function rebuildSection(state: SearchState, actions: SearchActions): HTMLElement | null {
+export function rebuildSection(state: SearchState, actions: SearchActions, options: SectionOptions = {}): HTMLElement | null {
   const job = state.job;
   if (job !== null) {
     const stopping = job.state === "stopping";
@@ -41,8 +51,10 @@ export function rebuildSection(state: SearchState, actions: SearchActions): HTML
   const index = state.index;
   const need = index === null ? null : needLine(index);
   const again = need !== null ? [rebuildButton(state, actions)] : [];
-  if (state.result !== null) {
-    return el("div", {}, callout(TONE[state.result.kind], state.result.text, { live: "status", actions: again }));
+  if (state.result !== null && options.showResult !== false) {
+    const dismiss = actions.dismiss;
+    const close = dismiss ? [uiButton(SEARCH_WORDS.dismiss, dismiss, { variant: "quiet", focusKey: "search-dismiss" })] : [];
+    return el("div", {}, callout(TONE[state.result.kind], state.result.text, { live: "status", actions: [...again, ...close] }));
   }
   if (index === null || need === null) return null;
   return el("div", {}, callout("info", `${need} ${costLine(index.sends_to)}`, { actions: again }));

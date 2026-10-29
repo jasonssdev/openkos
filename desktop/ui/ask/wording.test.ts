@@ -69,6 +69,18 @@ describe("describeAnswer", () => {
     ]);
   });
 
+  it("swaps the stale-search note for a rebuilt one once search is current, so it never contradicts the notice", () => {
+    const told = describeAnswer(answer({ stale_indexes: ["fts"] }), true);
+    expect(told.notes).toEqual(["Search has been rebuilt since this answer. Ask again to include your latest changes."]);
+    expect(told.notes.join(" ")).not.toContain("may not be searched yet");
+  });
+
+  it("keeps the limited-search note whatever search is now", () => {
+    expect(describeAnswer(answer({ dense_unavailable: true }), true).notes).toEqual([
+      "The search was limited this time, so this answer could miss some pages.",
+    ]);
+  });
+
   it.each([{ lexical_unavailable: true }, { dense_unavailable: true }])("notes a limited search (%o), once", (patch) => {
     expect(describeAnswer(answer({ ...patch, stale_indexes: ["fts"] })).notes).toEqual([
       "The search was limited this time, so this answer could miss some pages.",
@@ -84,7 +96,7 @@ describe("describeAnswer", () => {
     const told = describeAnswer(answer({ outcome: "withheld", answer: null, citations: [], withheld: 2 }));
     expect(told).toEqual({
       kind: "empty",
-      title: "This answer stays private",
+      title: "This answer stays on this Mac",
       text: "It drew on 2 pages marked Only on this Mac, so it isn't shown here, and neither are their names. You can show it while your AI model runs on this Mac.",
       notes: [],
     });
@@ -92,7 +104,7 @@ describe("describeAnswer", () => {
 
   it("withholds without a count when there is none to give", () => {
     const told = describeAnswer(answer({ outcome: "withheld", answer: null, citations: [], withheld: 0 }));
-    expect(told).toMatchObject({ kind: "empty", title: "This answer stays private" });
+    expect(told).toMatchObject({ kind: "empty", title: "This answer stays on this Mac" });
     expect(told.kind === "empty" && told.text).toBe(
       "It drew on pages marked Only on this Mac, so it isn't shown here, and neither are their names. You can show it while your AI model runs on this Mac.",
     );
@@ -163,7 +175,7 @@ describe("problemFor", () => {
 describe("turnMeta", () => {
   it("says in a word how an earlier question went", () => {
     expect(turnMeta({ kind: "answer", answer: answer() })).toBe("Answered");
-    expect(turnMeta({ kind: "answer", answer: answer({ outcome: "withheld" }) })).toBe("Kept private");
+    expect(turnMeta({ kind: "answer", answer: answer({ outcome: "withheld" }) })).toBe("Stays on this Mac");
     expect(turnMeta({ kind: "answer", answer: answer({ outcome: "no_match" }) })).toBe("No answer");
     expect(turnMeta({ kind: "answer", answer: answer({ outcome: "no_answer_in_context" }) })).toBe("No answer");
     expect(turnMeta({ kind: "problem", problem: { text: "x", retry: true } })).toBe("Didn't finish");

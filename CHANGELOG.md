@@ -16,8 +16,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- The Add files screen shows progress inside a file and keeps taking files during a run. While the AI model reads a file the card shows a bar and "n of m parts read" (indeterminate until the model has counted), how long it has been on this file, and "This can take several minutes per file on this Mac." before and during the run, worded as "can", never a promise. The drop zone and **Choose files…** stay available during a run; files put in are asked about as usual, then wait in a list with **Remove**, and start one after another by themselves (the engine runs one ingest at a time, so the queue lives in the app). Stop leaves the files still waiting. `IngestProgress` and the ingest job gain `parts_done` and `parts_total`, null until the extraction reports a count (#1696, #1697).
+- The app has an Activity screen that shows what OpenKOS is doing in the background: the task running now, the files and unsaved changes that wait, how much of today's AI model limit is used, and the latest finished tasks with how each ended. It only reads; an unreadable job record is said plainly rather than shown as an idle engine. `openkos.api.engine_activity(workspace)` returns it (`EngineActivity`, `EngineJob`, `DailyBudget`), `GET /v1/activity` serves it, and the desktop client has `engineActivity()`. The change is additive; `API_VERSION` is unchanged (#1698).
+
 ### Fixed
 
+- A pair of pages the AI model judged "couldn't tell" or "different" can now be combined from To review. The judge is advisory and the person decides: **Same thing** is offered for such a pair, with the model's doubt on the line above the question and a note that the combine can be split again. A pair not yet checked, a group of more than two pages and pages of different kinds keep their guards (#1699).
+- **desktop:** a finished notice can be closed with Dismiss (a page's label change and a search rebuild), and how a rebuild ended no longer follows you onto Ask. On Ask, the question leaves the field once answered, the note about search never contradicts the "up to date" notice, a page's "Only on this Mac" state is drawn apart from its button, and a withheld answer is titled "This answer stays on this Mac".
 - The desktop Status screen's "Your library" counts are read again each time Status is opened, and the card now says when they were read ("Read at 14:05.") instead of claiming "Read from the engine just now." Before, they were read once per engine launch, so adding files or rebuilding search left them stale (#1694).
 - `ingest` now says which filter emptied a source. When extraction ends with no concept and a candidate was removed as a framing object (a meeting-shaped title) or as a twin of the source title, the notice names those titles and the filter, where before it printed only "no concept extracted". The language gate keeps every candidate rather than empty a source, so a Spanish meeting that came out empty was losing its survivor to a later filter, not to the gate. Diagnostic only: which objects are kept is unchanged (#1642).
 

@@ -83,7 +83,7 @@ class Stub:
             return self.result
         stop: api.StopToken = kwargs["stop"]
         stop.is_set()  # admission
-        kwargs["progress"](api.IngestProgress(1, 1, "/x/a.md", "extracting", 1))
+        kwargs["progress"](api.IngestProgress(1, 1, "/x/a.md", "extracting", 1, 2, 5))
         kwargs["on_warning"]("the ingest was applied but not committed: x")
         self.entered.set()
         assert self.release.wait(WAIT)
@@ -168,6 +168,7 @@ def test_start_returns_at_once_and_the_poll_reaches_the_outcome(
         "extracting",
         1,
     )
+    assert (running["parts_done"], running["parts_total"]) == (2, 5)
 
     stub.release.set()
     done = settle(client, job["run_id"])

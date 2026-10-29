@@ -33,7 +33,7 @@ export function quote(files: FileQuote[], patch: Partial<Quote> = {}): Quote {
 }
 
 export function job(patch: Partial<Job> = {}): Job {
-  return { calls: 0, error: null, index: null, outcome: null, phase: null, run_id: "r1", state: "running", total: null, warnings: [], ...patch };
+  return { calls: 0, error: null, index: null, outcome: null, parts_done: null, parts_total: null, phase: null, run_id: "r1", state: "running", total: null, warnings: [], ...patch };
 }
 
 export function result(name: string, patch: Partial<FileResult> = {}): FileResult {

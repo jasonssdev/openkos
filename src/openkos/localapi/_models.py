@@ -642,6 +642,10 @@ class IngestJob(BaseModel):
     phase: Literal["reading", "extracting", "writing", "refreshing"] | None
     calls: int
     """Chat calls spent so far."""
+    parts_done: int | None = None
+    parts_total: int | None = None
+    """While a file is being read by the AI model, how many of its parts have
+    been read of how many there are; `None` when the model has not said."""
     outcome: api.IngestRunOutcome | None
     warnings: list[str]
     """Commits that could not be made, in the API's words."""

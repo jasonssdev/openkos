@@ -21,6 +21,7 @@ EXPECTED_ROUTES = {
     ("GET", "/v1/status"),
     ("GET", "/v1/pending"),
     ("GET", "/v1/unattended"),
+    ("GET", "/v1/activity"),
     ("GET", "/v1/decisions"),
     ("POST", "/v1/decisions/{decision_key}/preview"),
     ("POST", "/v1/decisions/{decision_key}/preview-finding"),
