@@ -234,7 +234,13 @@ verdict is committed. The verdict updates #1689 and nothing else.
 
 ## The owner confirms
 
-Left for the owner; none is decided here.
+The owner confirmed all seven items below on 2026-10-29, before this file
+merged and before any result existed, each as recommended: the bars unchanged;
+the selection rule as written; `Event` as the only candidate type; placement
+appended after the subjects (the cap exemption is reached only through B4);
+one meeting `Event` per source; the generation arm decided after this verdict,
+not funded now; and adjudication by a delegated reader, disclosed in RESULTS.
+The items are kept as they were proposed.
 
 1. **The bars**: B0 (0.10 opportunity per population), B1/B2 (exact, zero
    violations), B3 (0.90 container share, contested against), B4 (0.25 cap
