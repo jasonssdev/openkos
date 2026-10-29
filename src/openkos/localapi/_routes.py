@@ -198,6 +198,13 @@ def make_router() -> APIRouter:
         # Reads the job record read-only: no lock, no model, nothing created.
         return invoke(lambda: api.unattended_activity(workspace))
 
+    @router.get("/activity")
+    def activity(
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.EngineActivity:
+        # Reads the job record read-only: no lock, no model, nothing created.
+        return invoke(lambda: api.engine_activity(workspace))
+
     @router.get("/decisions")
     def decisions(workspace: api.Workspace = Depends(_workspace)) -> DecisionList:  # noqa: B008
         return DecisionList(

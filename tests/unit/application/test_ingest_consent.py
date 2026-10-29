@@ -488,7 +488,12 @@ def test_progress_reports_each_file_and_phase_in_order(env: _Env) -> None:
 
     env.run(quote.token, progress=events)
 
-    seen = [(e.index, e.phase) for e in events]
+    # Extraction reports its parts as further `extracting` events.
+    seen = [
+        pair
+        for n, pair in enumerate((e.index, e.phase) for e in events)
+        if n == 0 or pair != (events[n - 1].index, events[n - 1].phase)
+    ]
     assert seen[:3] == [(1, "reading"), (1, "extracting"), (1, "writing")]
     assert (2, "reading") in seen
     assert seen[-1] == (2, "refreshing")
@@ -655,3 +660,37 @@ def test_a_refusal_without_an_inbox_is_quoted_as_not_found(env: _Env) -> None:
 def test_a_decision_that_is_not_a_refused_file_is_a_usage_error(env: _Env) -> None:
     with pytest.raises(ValueError, match="refused file"):
         consent.quote_refused_file(env.root, "identity:abc", ports=env.ports())
+
+
+def test_progress_inside_a_file_counts_the_parts_of_its_extraction(env: _Env) -> None:
+    quote = env.quote(env.write("a.md"))
+    events: list[consent.IngestProgress] = []
+
+    env.run(quote.token, progress=events)
+
+    parts = [(e.parts_done, e.parts_total) for e in events if e.parts_total is not None]
+    assert parts[0] == (0, 2)
+    assert parts[-1] == (1, 2)
+    assert all(e.phase == "extracting" for e in events if e.parts_total is not None)
+    # A file's counts never leak into the next phase.
+    writing = [e for e in events if e.phase == "writing"]
+    assert writing
+    assert all(e.parts_total is None for e in writing)
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        ("extracting chunk 3/12", (2, 12)),
+        ("extracted chunk 3/12", (3, 12)),
+        ("extracting pass 1/2", (0, 2)),
+        ("extracting pass 2/2", (1, 2)),
+        ("judging 5 candidates", None),
+        ("retrying an empty extraction", None),
+        ("extracting 12 chunks, 2 at a time", None),
+    ],
+)
+def test_a_phase_label_is_read_as_parts_done_of_total(
+    label: str, expected: tuple[int, int] | None
+) -> None:
+    assert consent._parts_from_label(label) == expected

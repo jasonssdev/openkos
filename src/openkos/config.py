@@ -324,6 +324,56 @@ def minimum_context_window(max_generation_tokens: int) -> int:
     return PROMPT_CONTEXT_ALLOWANCE + max_generation_tokens
 
 
+_GIB = 1024**3
+
+_LARGE_WINDOW_MEMORY: Final = 32 * _GIB
+LARGE_CONTEXT_WINDOW: Final = 24576
+"""The window `init` writes on a machine with at least 32 GiB of total memory
+(#1703, ADR-0084); below that, or when memory is unknown, `init` keeps
+`DEFAULT_CONTEXT_WINDOW`.
+
+There is exactly one step up and it is the measured value, not an
+interpolated tier:
+
+- 32 GiB is ADR-0047's measured floor for the default model set, and the KV
+  cache is linear in the window (`qwen3:8b`: 7.2 GB at 12288 against 10 GB at
+  32768, see `DEFAULT_CONTEXT_WINDOW`), so the 16 GB machines this product
+  targets are untouched.
+- 24576 is the window #1702 measured on its synthetic evolution bundle
+  (`qwen3:8b`, n=3): evolution judged-correct 0.361 -> 0.750, gold delivered
+  at 8 documents 18/54 -> 33/54, none regressed, at a mean latency of 14.9 s
+  -> 40.4 s (2.7x). That failed the registered latency bar (30 s, 2.0x); the
+  owner adopted the window against it (ADR-0084). Quality gain is shown on a
+  synthetic bundle with one model, latency on one Apple Silicon Mac.
+- The user can always set the value; existing workspaces keep what they have."""
+
+
+def sized_context_window(
+    total_memory_bytes: int | None,
+    *,
+    max_generation_tokens: int = DEFAULT_MAX_GENERATION_TOKENS,
+    model_limit: int | None = None,
+) -> int:
+    """The `context_window` to write at setup time for a machine with
+    `total_memory_bytes` of physical memory (#1703).
+
+    A pure function of its arguments: it reads nothing from the machine, and
+    `init` is the only caller, once, so the result lands in `openkos.yaml`
+    where the config stays the single source and later queries stay
+    reproducible. An unknown memory (`None`) yields `DEFAULT_CONTEXT_WINDOW`.
+    The result is never below `minimum_context_window(max_generation_tokens)`
+    and never above `model_limit` when the model's own limit is known (the
+    floor wins if the two conflict: a window under the floor would be refused
+    when the config is read).
+    """
+    window = DEFAULT_CONTEXT_WINDOW
+    if total_memory_bytes is not None and total_memory_bytes >= _LARGE_WINDOW_MEMORY:
+        window = LARGE_CONTEXT_WINDOW
+    if model_limit is not None:
+        window = min(window, model_limit)
+    return max(window, minimum_context_window(max_generation_tokens))
+
+
 DEFAULT_TEMPERATURE: Final[float | None] = None
 """Packaged default for `temperature` (issue #1013): pin nothing, so every
 `llm.chat` request keeps sampling at whatever the model's own Modelfile
@@ -1006,7 +1056,13 @@ def write_agents(root: Path) -> None:
 _MODEL_PLACEHOLDER = "__OPENKOS_MODEL__"
 _EMBEDDING_MODEL_PLACEHOLDER = "__OPENKOS_EMBEDDING_MODEL__"
 
-_PLACEHOLDERS = (_MODEL_PLACEHOLDER, _EMBEDDING_MODEL_PLACEHOLDER)
+_CONTEXT_WINDOW_PLACEHOLDER = "__OPENKOS_CONTEXT_WINDOW__"
+
+_PLACEHOLDERS = (
+    _MODEL_PLACEHOLDER,
+    _EMBEDDING_MODEL_PLACEHOLDER,
+    _CONTEXT_WINDOW_PLACEHOLDER,
+)
 """The declared placeholder set -- the ONE place a new one is added (#210).
 
 Both the substitution regex below and `write_config`'s per-placeholder count
@@ -1058,14 +1114,19 @@ def write_config(
     root: Path,
     model: str = DEFAULT_MODEL,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
 ) -> None:
-    """Write the packaged `openkos.yaml` template at `root`, with `model`
-    and `embedding_model` substituted for the template's two independent
-    placeholders (`__OPENKOS_MODEL__`, `__OPENKOS_EMBEDDING_MODEL__`).
+    """Write the packaged `openkos.yaml` template at `root`, with `model`,
+    `embedding_model` and `context_window` substituted for the template's
+    independent placeholders (`__OPENKOS_MODEL__`,
+    `__OPENKOS_EMBEDDING_MODEL__`, `__OPENKOS_CONTEXT_WINDOW__`).
 
-    `model` and `embedding_model` are the ONLY user-selectable fields: every
-    other line is byte-identical to the packaged template regardless of the
-    chosen model(s). The directory itself remains the single source of
+    `model`, `embedding_model` and `context_window` are the ONLY
+    setup-selected fields: every other line is byte-identical to the packaged
+    template regardless of them. `context_window` is sized once, from the
+    machine, by the caller (`sized_context_window`, #1703) and must clear the
+    floor for the packaged generation ceiling; a smaller value raises
+    `ValueError` before any file is written. The directory itself remains the single source of
     truth for the workspace's identity, so nothing in `openkos.yaml` is
     derived from `root`. Substitution is ONE constrained pass over the two
     known placeholder tokens (`_PLACEHOLDER_RE`) -- never a YAML dumper or
@@ -1094,6 +1155,12 @@ def write_config(
     """
     validated_model = validate_model(model)
     validated_embedding_model = validate_embedding_model(embedding_model)
+    window_floor = minimum_context_window(DEFAULT_MAX_GENERATION_TOKENS)
+    if context_window < window_floor:
+        raise ValueError(
+            f"context_window must be an integer of at least {window_floor} "
+            f"tokens, got {context_window!r}"
+        )
     template = _read_template("openkos.yaml.template")
     undeclared = sorted(
         set(_TEMPLATE_PLACEHOLDER_RE.findall(template)) - set(_PLACEHOLDERS)
@@ -1129,6 +1196,7 @@ def write_config(
     substitutions = {
         _MODEL_PLACEHOLDER: validated_model,
         _EMBEDDING_MODEL_PLACEHOLDER: validated_embedding_model,
+        _CONTEXT_WINDOW_PLACEHOLDER: str(context_window),
     }
     content = _PLACEHOLDER_RE.sub(lambda m: substitutions[m.group(0)], template)
     layout = WorkspaceLayout(root)

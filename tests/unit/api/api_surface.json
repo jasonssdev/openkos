@@ -405,6 +405,28 @@
       "kind": "dataclass",
       "members": {}
     },
+    "DailyBudget": {
+      "fields": [
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls_used"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "calls_limit"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "exhausted"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "Decision": {
       "fields": [
         {
@@ -586,6 +608,90 @@
       ],
       "fields": {},
       "kind": "exception",
+      "members": {}
+    },
+    "EngineActivity": {
+      "fields": [
+        {
+          "annotation": "EngineJob | None",
+          "default": false,
+          "name": "current"
+        },
+        {
+          "annotation": "tuple[EngineJob, ...]",
+          "default": false,
+          "name": "recent"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "waiting_files"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "uncommitted_paths"
+        },
+        {
+          "annotation": "DailyBudget",
+          "default": false,
+          "name": "budget"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "jobs_unreadable"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "EngineJob": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "kind"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "started_at"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "ended_at"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "outcome"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "chat_calls"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "units_done"
+        },
+        {
+          "annotation": "int",
+          "default": false,
+          "name": "units_deferred"
+        },
+        {
+          "annotation": "bool",
+          "default": false,
+          "name": "needs_attention"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
       "members": {}
     },
     "Evaluation": {
@@ -1000,6 +1106,16 @@
           "annotation": "int",
           "default": false,
           "name": "calls"
+        },
+        {
+          "annotation": "int | None",
+          "default": true,
+          "name": "parts_done"
+        },
+        {
+          "annotation": "int | None",
+          "default": true,
+          "name": "parts_total"
         }
       ],
       "frozen": true,
@@ -4225,6 +4341,18 @@
         }
       ],
       "returns": "tuple[DeclinedContradiction, ...]"
+    },
+    "engine_activity": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        }
+      ],
+      "returns": "EngineActivity"
     },
     "inbox_settings": {
       "kind": "function",

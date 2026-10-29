@@ -16,6 +16,18 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Changed
+
+- To review asks one question per subject instead of one per pair of near-duplicate pages. Pages of one type whose titles are close (the pairs the review already offered) are now grouped by connected component: a subject that recurs across a meeting series is one question where it was five or six, answered through the existing choose-which-are-the-same step. A group of two stays a pair, a group of more than eight, one that holds an exact-title pair, pages of different kinds, and meetings (Events, whose near-identical titles name different occurrences of a series) stay as they were, and no pair is added or dropped. A near-match group the model doubted can still be combined, as the pairs it replaces could (#1699). A group that would contain two pages you already kept apart is not formed; those pages stay as pairs, and the pair you ruled stays suppressed. Attaching a later meeting to an existing page at ingest is unchanged and stays open (#1701).
+### Added
+
+- The Add files screen shows progress inside a file and keeps taking files during a run. While the AI model reads a file the card shows a bar and "n of m parts read" (indeterminate until the model has counted), how long it has been on this file, and "This can take several minutes per file on this Mac." before and during the run, worded as "can", never a promise. The drop zone and **Choose files…** stay available during a run; files put in are asked about as usual, then wait in a list with **Remove**, and start one after another by themselves (the engine runs one ingest at a time, so the queue lives in the app). Stop leaves the files still waiting. `IngestProgress` and the ingest job gain `parts_done` and `parts_total`, null until the extraction reports a count (#1696, #1697).
+- The app has an Activity screen that shows what OpenKOS is doing in the background: the task running now, the files and unsaved changes that wait, how much of today's AI model limit is used, and the latest finished tasks with how each ended. It only reads; an unreadable job record is said plainly rather than shown as an idle engine. `openkos.api.engine_activity(workspace)` returns it (`EngineActivity`, `EngineJob`, `DailyBudget`), `GET /v1/activity` serves it, and the desktop client has `engineActivity()`. The change is additive; `API_VERSION` is unchanged (#1698).
+
+### Changed
+
+- `openkos init` now sizes `context_window` once from the machine's total memory and writes it into `openkos.yaml`: `24576` from 32 GiB, `12288` below that or when memory cannot be read. The larger window is the one measured on a synthetic evolution bundle with `qwen3:8b` (evolution questions judged correct 0.36 to 0.75), at a mean of 14.9 s per answer against 40.4 s on one Apple Silicon Mac (about 2.7x); it was adopted against the registered latency bar (ADR-0084). Existing workspaces keep what they have, and nothing is computed at run time. Partly addresses #1703; sending derived pages instead of whole Source bodies is still open there.
+
 ### Fixed
 
 - A pair of pages the AI model judged "couldn't tell" or "different" can now be combined from To review. The judge is advisory and the person decides: **Same thing** is offered for such a pair, with the model's doubt on the line above the question and a note that the combine can be split again. A pair not yet checked, a group of more than two pages and pages of different kinds keep their guards (#1699).
