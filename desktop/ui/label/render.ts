@@ -11,6 +11,7 @@ import { LABEL_WORDS, labelOptions, type Level } from "./wording.ts";
 function notice(page: PageRef, model: LabelModel, state: LabelState): HTMLElement | null {
   if (state.notice?.conceptId === page.conceptId) {
     const undo = state.notice.undo;
+    const undoAll = state.notice.undoAll;
     const dismiss = uiButton(LABEL_WORDS.dismiss, () => model.dismiss(), {
       variant: "quiet",
       size: "sm",
@@ -20,7 +21,15 @@ function notice(page: PageRef, model: LabelModel, state: LabelState): HTMLElemen
     return callout("success", state.notice.text, {
       live: "status",
       actions:
-        undo === null
+        undoAll !== null
+          ? [
+              uiButton(LABEL_WORDS.undoAll, () => model.undoAll(), {
+                size: "sm",
+                focusKey: `label-undo-all:${page.conceptId}`,
+              }),
+              dismiss,
+            ]
+          : undo === null
           ? [dismiss]
           : [
               uiButton(LABEL_WORDS.undo, () => model.undo(), {

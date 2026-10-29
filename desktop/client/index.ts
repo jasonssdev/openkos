@@ -198,6 +198,10 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
       call("post", "/v1/pages/sensitivity/preview", { body }),
     applySensitivity: (body: Schemas["SensitivityApplyRequest"]) =>
       call("post", "/v1/pages/sensitivity/apply", { body }),
+    previewUndoSensitivity: (body: Schemas["SensitivityUndoPreviewRequest"]) =>
+      call("post", "/v1/pages/sensitivity/undo/preview", { body }),
+    applyUndoSensitivity: (body: Schemas["SensitivityUndoApplyRequest"]) =>
+      call("post", "/v1/pages/sensitivity/undo/apply", { body }),
     previewUnmerge: (body: Schemas["UnmergePreviewRequest"]) => call("post", "/v1/unmerge/preview", { body }),
     applyUnmerge: (body: Schemas["UnmergeApplyRequest"]) => call("post", "/v1/unmerge/apply", { body }),
     keptDistinct: () => call("get", "/v1/kept-distinct"),
