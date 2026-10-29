@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Changed
+
+- To review asks one question per subject instead of one per pair of near-duplicate pages. Pages of one type whose titles are close (the pairs the review already offered) are now grouped by connected component: a subject that recurs across a meeting series is one question where it was five or six, answered through the existing choose-which-are-the-same step. A group of two stays a pair, a group of more than eight, one that holds an exact-title pair, and pages of different kinds stay as they were, and no pair is added or dropped. A near-match group the model doubted can still be combined, as the pairs it replaces could (#1699). A pair you already kept apart is asked again once as part of a newly formed group. Attaching a later meeting to an existing page at ingest is unchanged and stays open (#1701).
+
 ### Fixed
 
 - A pair of pages the AI model judged "couldn't tell" or "different" can now be combined from To review. The judge is advisory and the person decides: **Same thing** is offered for such a pair, with the model's doubt on the line above the question and a note that the combine can be split again. A pair not yet checked, a group of more than two pages and pages of different kinds keep their guards (#1699).
