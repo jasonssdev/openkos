@@ -31,10 +31,12 @@ characters that does not open with `# - * + > | `` ` ``, a colon and a space
 emphasis is stripped (`_turn_match`). A label is then rejected structurally:
 more than 3 words, any digit, or 3 or more characters in capitals. A label counts
 as a speaker when it recurs at least 3 times, at least 2 do, and recurring turns
-are at least 10 and half the non-blank lines. The roster rule proposed here
-borrows that shape and is **not** coupled to the private function; in
-production it would run only on sources already judged meeting-shaped. A title-only
-match (a summarised note) has no turns and so gets no roster, correctly.
+are at least 10 and half the non-blank lines. The roster rule proposed
+here **is** that detector's definition of a speaker, mirrored in the harness (the
+rule code does not import the private function; only the self-test does, to pin them). In
+production it would run only on sources already judged meeting-shaped. A
+title-only match (a summarised note) has no turns and so gets no roster,
+correctly.
 
 ## The proposed rule (`roster_of_named`, frozen here)
 
@@ -42,37 +44,32 @@ match (a summarised note) has no turns and so gets no roster, correctly.
 new function returns, in order of first appearance, the union of:
 
 1. **AMI-form labels**: exactly what `roster_of` returns (2 to 4 capitals or
-   digits, at least 2 lines).
-2. **Name-form labels**: a line opening, after an optional timestamp prefix and
-   optional bold markers, with a label then `:` and a space and a non-space
-   character, where the label is:
-   - one to four capitalised words (proposed), each word starting with a
-     capital (accents allowed), containing at least one lowercase letter and
-     ending in one (so an all-capitals label is only ever the AMI form), with
-     `.` allowed after a word (`Dr.`) or a single initial (`J.`), and
-     apostrophes and hyphens inside it (`O'Neil`, `Jean-Luc`);
-   - lowercase particles `de del la las los van von der da di le el` allowed
-     between words (`Ana de la Cruz`);
-   - **no digits**, so `Reunión 10:30:` and a timestamp-looking label fail;
-   - **not a heading**: neither the whole label nor its first word is in the
-     closed list `NOT_A_SPEAKER` (`Nota`, `Acción`, `Agenda`, `Asistentes`,
-     `Fecha`, `Hora`, `Resumen`, `Pregunta`, `Respuesta`, `Acuerdos` and their
-     English forms, about 50 words, in the harness). This is a lexicon, which
-     production's detector avoids; it is disclosed as the one place this rule is
-     not structural, and recurrence alone cannot separate `Acción:` repeated
-     from a speaker.
-   - It counts only on **at least 2 lines** (`ROSTER_MIN_TURNS`, as registered),
-     and name-form labels are admitted only when the AMI-form and name-form
-     labels together number **at least 2** speakers (a single repeated label is a
-     monologue or a heading, not a conversation).
-3. A URL (`https://...`: no space after the colon), a bullet or quote line
-   (`- Ana:`, `> Ana:`), a lowercase or sentence-length prefix, and a label
-   with a trailing colon only fail the line regex.
+   digits, at least 2 lines). The union is what keeps a label such as `PM`
+   readable even where production's grammar would reject a longer capitals label.
+2. **Production speakers**: the labels production's detector counts as recurring
+   speakers, with its criteria and constants unchanged: the line shape of
+   `_TRANSCRIPT_TURN_RE` and `_turn_match` (optional timestamp, label not opening
+   with a markdown structure character, colon then whitespace then text, bold
+   `**Ana:**` / `**Ana**:` retried once with paired emphasis stripped); a label of
+   **at most 3 words, no digit, and not 3 or more capitals**; **recurrence of at
+   least 3 lines** (`_TRANSCRIPT_MIN_TURNS_PER_SPEAKER`); and **at least 2** such
+   speakers (`_TRANSCRIPT_MIN_SPEAKERS`), otherwise this part is empty. Production's
+   further shape gate (10 recurring turns, half the non-blank lines) decides whether
+   a source is a transcript at all and is not repeated here.
 
-Known limit, not fixed here: because (1) is the registered rule unchanged, an
-all-capitals log severity (`INFO:`, `ERROR:`) that recurs is still read as a
-speaker, as it is today. Production's detector rejects those; matching it would
-change the AMI rule, which this registration forbids.
+**One definition, no lexicon.** An earlier draft of this proposal used its own
+label grammar plus a closed list of about 50 heading words (`Nota`, `Acción`, ...)
+and recurrence 2. It was considered and dropped: a second detector would let the
+Event roster and the meeting gate disagree on who the speakers are. The roster and
+the gate now share one definition of a speaker; a heading that recurs 3 times
+beside another counts as a speaker in both, by design.
+
+Known limits, inherited from production's grammar and not fixed here: a name of
+four or more words (`Ana de la Cruz`) and a recurring heading label are not
+distinguished from, respectively, a prose prefix and a speaker; an all-capitals
+label of 3 or more characters is never a production speaker (AMI `PM`, `ID`, `UI`,
+`ME` are 2 letters and are read by both rules); an AMI-form label of 3 or 4
+capitals that recurs twice is still read via `roster_of`, as it is today.
 
 ## Data (stated plainly)
 
@@ -87,7 +84,7 @@ four speakers, 92 turn lines). So the check is built from:
 
 | Set | Content | Role |
 |---|---|---|
-| **Synthetic fixtures** | 14 positive and 7 negative sources written in the harness (`NAMED_FIXTURES`, `NAMED_NEGATIVES`), fictional names: plain, titles, compound names, timestamps, bold, particles, initials, apostrophes and hyphens, accents, a header block and repeated `Nota:`/`Acción:` lines inside a transcript, a stray single label, URLs and time lines, AMI form, mixed AMI and named; negatives: header block only, repeated headings, Q and A, a monologue, prose with colons, bullets and quotes, no labels | precision, recall, false labels |
+| **Synthetic fixtures** | 14 positive and 8 negative sources written in the harness (`NAMED_FIXTURES`, `NAMED_NEGATIVES`), fictional names: plain, titles, compound names, timestamps, bold, particles, initials, apostrophes and hyphens, accents, a header block and `Nota:`/`Acción:` lines inside a transcript (twice each, below recurrence), a stray single label, URLs and time lines, AMI form, mixed AMI and named; negatives: header block only, repeated headings (twice), Q and A (twice), a monologue, two turns each, prose with colons, bullets and quotes, no labels | precision, recall, false labels |
 | **medium-10** | the committed fictional meeting; gold `Elena Vidal, Marcos Iturra, Paula Cifuentes, Tomás Reyes` | one real-form named check |
 | **AMI sources** | the 5 Spanish sources of the roster run (`mmb.SOURCES`), read from the translations directory | no-regression control |
 
@@ -108,6 +105,8 @@ captions, dictation) is **not measured**; see Limits.
 - **N6 AMI unchanged**: for every one of the 5 AMI sources,
   `roster_of_named(text) == roster_of(text)` (same labels, same order). Any
   difference rejects.
+
+N1 to N6 are the same bars as the first draft; only the rule under test changed.
 
 Verdict (`named_verdict`): **LICENSED** only when N1 to N6 all hold, otherwise
 **REJECTED**. No INCONCLUSIVE: the check is deterministic and complete over its
@@ -130,16 +129,17 @@ registration** (it is not part of this one).
 
 ## Cost forecast
 
-Model-free: zero GPU, a few seconds. The self-test adds 7 tests.
+Model-free: zero GPU, a few seconds. The self-test adds 8 tests.
 
 ## Disclosed before this registration (forking paths)
 
-- The rule and the fixtures were written **together, by the same author, in the
+- The fixtures were written **together with the rule, by the same author, in the
   same sitting**; the self-test passes on all of them. The fixtures are therefore
-  not blind: the rule was shaped by the classes the fixtures name (and by the
-  failures the author thought of: headings, URLs, times, bullets). One rule
-  change was made after a fixture failed (the speaker floor counts AMI-form and
-  name-form labels together, found on `mixed_ami_and_named`). Pass on the
+  not blind: they were shaped by the classes the author thought of (headings,
+  URLs, times, bullets). The rule was revised once on review, from an own grammar
+  with a lexicon to production's definition (above); fixtures were then adjusted
+  to it (three turns per speaker, a three-word name instead of a four-word one),
+  which is a fixture change made after seeing the rule fail on them. Pass on the
   fixtures is thus weak evidence; the harder, less-tuned evidence is medium-10
   and the 5 AMI sources, and even those were looked at.
 - The author read the first 25 lines of medium-10 and the speaker-label counts of
@@ -147,10 +147,10 @@ Model-free: zero GPU, a few seconds. The self-test adds 7 tests.
   head of one `ask-screen` meeting, to design the guards. `named` was **not**
   run, so no N5 or N6 number has been seen. N6 may fail for a reason the author
   has not seen (a capitalised word followed by a colon inside AMI utterances).
-- The `NOT_A_SPEAKER` list was chosen by the author from common Spanish and
-  English meeting headings, not from any corpus.
-- The thresholds (four words, recurrence 2, two speakers) are the author's, not
-  tuned on data; recurrence 2 is `ROSTER_MIN_TURNS`, as registered.
+- No threshold is the author's: recurrence 3, two speakers and the label grammar
+  are production's, mirrored; the self-test pins the two constants to
+  `concept.py` and the speaker sets to `_turn_match` on every fixture, medium-10
+  and the registered AMI-form fixture.
 
 ## Exact commands
 
@@ -183,8 +183,8 @@ after a number is seen.
   named-speaker corpus was available. The rule is untested on exports with
   `Name (role):`, `Name - text`, `<Name>` (IRC), all-caps names (`ANA:`),
   one-word lowercase handles, non-Latin scripts, or speakers called `Nota`.
-- A speaker who really speaks as `Acción:` or `Nota:` is lost by the list.
-- All-caps log severities still read as speakers (above).
+- A speaker who recurs as a heading word, a name of four or more words, and the
+  AMI-vs-production grammar differences (above) are inherited, not measured away.
 - Roster extraction only; whether the model then uses the list well on named
   speakers is the unmeasured expectation above.
 
@@ -192,11 +192,13 @@ after a number is seen.
 
 Nothing below is confirmed yet.
 
-1. **The rule**: the name-form label grammar (one to four capitalised words,
-   titles, initials, particles, no digits), recurrence 2, the speaker floor of 2
-   counting AMI-form labels, and the union with `roster_of` unchanged.
-2. **The `NOT_A_SPEAKER` list** as the one disclosed lexicon (accepting a
-   lexicon where production's detector uses none).
+1. **The rule**: the name-form roster is exactly production's recurring
+   speakers (same line shape, same label grammar, recurrence 3, speaker floor 2),
+   mirrored not imported and pinned by a self-test, unioned with `roster_of`
+   unchanged.
+2. **No lexicon**: the earlier own-grammar-and-heading-list variant was
+   considered and dropped so the Event roster and the meeting gate share one
+   definition of a speaker.
 3. **The data**: synthetic fixtures plus medium-10 plus the 5 AMI sources, no
    `ask-screen` meetings, and the plain statement that no real named-speaker
    corpus exists locally.
@@ -204,8 +206,8 @@ Nothing below is confirmed yet.
    otherwise, with the N2, N3, N5 nuance).
 5. **No model arm** in this registration, with the optional minimal arm
    (about 0.1 GPU-hours, cap 1 GPU hour) left to its own registration if wanted.
-6. **The known limit** (all-caps log severities remain readable as speakers
-   because the AMI rule is frozen) is accepted.
-7. **Disclosure**: fixtures and rule were written together; medium-10 and the AMI
-   label counts were looked at; `named` was not run.
+6. **The inherited limits** (four-word names, recurring headings, 3-or-more-capital
+   labels outside the AMI union) are accepted.
+7. **Disclosure**: fixtures and rule were written together and adjusted after the
+   revision; medium-10 and the AMI label counts were looked at; `named` was not run.
 8. **The closing rule** as written.

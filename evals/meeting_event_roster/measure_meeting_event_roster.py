@@ -84,89 +84,70 @@ def roster_of(source: str) -> tuple[str, ...]:
 
 # --- the named-speaker roster rule (PREREGISTRATION_NAMED.md, pure) -----------
 
-_NAME_WORD: Final = (
-    r"(?:[A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ'\u2019\-]*[a-záéíóúüñ]\.?|[A-ZÁÉÍÓÚÜÑ]\.)"
-)
-_NAME_PARTICLE: Final = r"(?:de|del|la|las|los|van|von|der|da|di|le|el)"
-_NAME_LABEL: Final = (
-    rf"{_NAME_WORD}(?:[ \t]+(?:{_NAME_PARTICLE}[ \t]+)*{_NAME_WORD}){{0,3}}"
-)
-_NAMED_TURN_RE: Final = re.compile(
+_TURN_RE: Final = re.compile(
     r"^\s{0,4}"
-    r"(?:[\[(]\d{1,2}:\d{2}(?::\d{2})?[\])][ \t]+|\d{1,2}:\d{2}(?::\d{2})?[ \t]+)?"
-    r"(?:\*\*|__)?"
-    rf"(?P<label>{_NAME_LABEL})"
-    r"(?:\*\*|__)?:(?:\*\*|__)?[ \t]+\S"
+    r"(?:[\[(]\d{1,2}:\d{2}(?::\d{2})?[\])]\s+|\d{1,2}:\d{2}(?::\d{2})?\s+)?"
+    r"(?P<label>[^\s:#\->*+|`][^:\n]{0,39}):\s+\S"
 )
+_EMPHASIS_RE: Final = re.compile(r"\*\*|__")
 NAMED_MIN_SPEAKERS: Final = 2
-"""A source with fewer recurring labels than this has no roster (a single
-repeated label is a narration or a heading, not a conversation); production's
-transcript detector uses the same floor (`_TRANSCRIPT_MIN_SPEAKERS`)."""
-NOT_A_SPEAKER: Final = frozenset(
-    {
-        "nota", "notas", "agenda", "acción", "accion", "acciones", "acuerdo",
-        "acuerdos", "asistentes", "participantes", "fecha", "hora", "lugar",
-        "tema", "temas", "resumen", "conclusión", "conclusion", "conclusiones",
-        "decisión", "decision", "decisiones", "pendientes", "pregunta",
-        "respuesta", "ejemplo", "importante", "ojo", "aviso", "tarea", "tareas",
-        "nb", "note", "notes", "action", "actions", "attendees", "attending",
-        "date", "time", "location", "topic", "topics", "summary", "decisions",
-        "todo", "question", "answer", "example", "important", "warning", "task",
-        "tasks", "agreement", "agreements", "title", "título", "titulo",
-    }
-)  # fmt: skip
-"""A closed list of headings that open a line as `Word:` and are not people
-(disclosed lexicon; production's detector rejects labels structurally and has
-no such list). Matched case-insensitively against the whole label and against
-its first word, so `Nota importante:` is out and `Dr. Nota:` is not."""
+NAMED_MIN_TURNS: Final = 3
+"""Mirrors production's `_TRANSCRIPT_MIN_SPEAKERS` and
+`_TRANSCRIPT_MIN_TURNS_PER_SPEAKER` (`extraction/concept.py`); the self-test pins
+the equality. Not `ROSTER_MIN_TURNS` (2), which belongs to the AMI rule."""
 
 
-def _named_label(line: str) -> str | None:
-    """The speaker label a line opens with, in the named-speaker form, or None.
-    A bold label (`**Ana:** ...`, `**Ana**: ...`) and a timestamp prefix are
-    accepted; a URL (no whitespace after the colon), a digit-bearing prefix such
-    as `Reunión 10:30:` and a heading in `NOT_A_SPEAKER` are not."""
-    match = _NAMED_TURN_RE.match(line)
+def _turn_label(line: str) -> str | None:
+    """The speaker label a line opens with, by the criteria of production's
+    speaker-turn detector (`_turn_match` and the label rules of
+    `_transcript_shaped_text`), or None: an optional timestamp, a label that
+    does not open with a markdown structure character, a colon and whitespace
+    then text (so no URL); the line retried once with paired bold markers
+    stripped; and a label of at most three words, with no digit and not three
+    or more capitals. Mirrored, not imported: the private function is pinned
+    by the self-test."""
+    match = _TURN_RE.match(line)
     if match is None:
-        return None
+        markers = _EMPHASIS_RE.findall(line)
+        if not any(markers.count(m) >= 2 for m in set(markers)):
+            return None
+        match = _TURN_RE.match(_EMPHASIS_RE.sub("", line))
+        if match is None:
+            return None
     label = match.group("label").strip()
     if (
-        label.casefold() in NOT_A_SPEAKER
-        or label.split()[0].casefold() in NOT_A_SPEAKER
+        len(label.split()) > 3
+        or any(ch.isdigit() for ch in label)
+        or (len(label) >= 3 and label.isupper())
     ):
         return None
     return label
 
 
 def roster_of_named(source: str) -> tuple[str, ...]:
-    """The speaker labels a source declares, AMI form or named form.
-
-    Union, in order of first appearance, of (a) the labels `roster_of` accepts,
-    unchanged, and (b) name-form labels: one to four capitalised words (titles
-    such as `Dr.`, initials, particles such as `de la` and apostrophes or
-    hyphens inside a word allowed; at least one lowercase letter, so an
-    all-caps label is only ever the AMI form), opening a line, optionally after
-    a timestamp or inside bold markers, followed by a colon and a space. A
-    name-form label counts only on at least `ROSTER_MIN_TURNS` lines, and the
-    name-form labels count only when, with the AMI-form ones, at least
-    `NAMED_MIN_SPEAKERS` labels recur. `roster_of` is untouched; this is a separate function."""
-    ami = set(roster_of(source))
-    named: Counter[str] = Counter()
+    """The speaker labels a source declares: the union, in order of first
+    appearance, of (a) `roster_of`, unchanged (AMI form), and (b) the labels
+    production's detector counts as recurring speakers: `_turn_label` on at
+    least `NAMED_MIN_TURNS` lines, provided at least `NAMED_MIN_SPEAKERS` such
+    labels exist. Production's further shape gate (10 recurring turns, half the
+    non-blank lines) decides whether a source is a transcript at all and is not
+    repeated here. `roster_of` is untouched; this is a separate function."""
+    counts: Counter[str] = Counter()
     first: dict[str, int] = {}
     for i, line in enumerate(source.split("\n")):
-        label = _named_label(line)
+        label = _turn_label(line)
         if label is not None:
-            named[label] += 1
+            counts[label] += 1
             first.setdefault(label, i)
-    recurring = {label for label, n in named.items() if n >= ROSTER_MIN_TURNS}
-    if len(ami | recurring) < NAMED_MIN_SPEAKERS:
+    recurring = {label for label, n in counts.items() if n >= NAMED_MIN_TURNS}
+    if len(recurring) < NAMED_MIN_SPEAKERS:
         recurring = set()
+    ami = set(roster_of(source))
     order: dict[str, int] = {}
     for m in _SPEAKER_RE.finditer(source):
         order.setdefault(m.group(1), source.count("\n", 0, m.start()))
-    entries = [(order[label], label) for label in ami] + [
-        (first[label], label) for label in recurring
-    ]
+    entries = [(order[label], label) for label in ami]
+    entries += [(first[label], label) for label in recurring - ami]
     return tuple(label for _line, label in sorted(entries))
 
 
@@ -210,7 +191,7 @@ NAMED_NEGATIVE_FALSE_MAX: Final = 0
 NAMED_AMI_SOURCES_IDENTICAL: Final = True
 
 
-def _talk(speakers: Sequence[str], rounds: int = 2, *, fmt: str = "{}: ") -> str:
+def _talk(speakers: Sequence[str], rounds: int = 3, *, fmt: str = "{}: ") -> str:
     """Turns for each speaker, `rounds` times round, in the label format `fmt`."""
     text = "Reunión de seguimiento.\n\n"
     for r in range(rounds):
@@ -235,18 +216,19 @@ NAMED_FIXTURES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
     (
         "timestamps",
         "[00:01:10] Ana: Empecemos.\n10:31 Luis: Vale.\n[00:02:00] Ana: Sigo.\n"
-        "10:32:05 Luis: Listo.\n",
+        "10:32:05 Luis: Listo.\n[00:03:00] Ana: Fin.\n10:33 Luis: Chao.\n",
         ("Ana", "Luis"),
     ),
     (
         "bold",
-        "**Ana:** Empecemos.\n\n**Luis**: Vale.\n\n**Ana:** Sigo.\n\n**Luis**: Listo.\n",
+        "**Ana:** Empecemos.\n\n**Luis**: Vale.\n\n**Ana:** Sigo.\n\n**Luis**: Listo.\n\n"
+        "**Ana:** Fin.\n\n**Luis**: Chao.\n",
         ("Ana", "Luis"),
     ),
     (
         "particles",
-        _talk(["Ana de la Cruz", "Pedro van Dyke", "Marta del Río"]),
-        ("Ana de la Cruz", "Pedro van Dyke", "Marta del Río"),
+        _talk(["Ana de Cruz", "Pedro van Dyke", "Marta del Río"]),
+        ("Ana de Cruz", "Pedro van Dyke", "Marta del Río"),
     ),
     ("initials", _talk(["J. Smith", "M. Lee"]), ("J. Smith", "M. Lee")),
     (
@@ -260,7 +242,7 @@ NAMED_FIXTURES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
         _HEADER
         + _talk(["Ana", "Luis"])
         + "Acción: enviar el acta.\n\nNota: revisar el presupuesto.\n\n"
-        "Acción: agendar la próxima.\n\nNota: sin más.\n",
+        "Acción: agendar la próxima.\n\nNota: sin más.\n",  # twice each: below recurrence 3
         ("Ana", "Luis"),
     ),
     (
@@ -303,6 +285,7 @@ NAMED_NEGATIVES: Final[tuple[tuple[str, str], ...]] = (
         "Pregunta: ¿Y el plazo?\n\nRespuesta: Mayo.\n",
     ),
     ("monologue", _talk(["Ana"], 4)),
+    ("below_recurrence", _talk(["Ana", "Luis"], 2)),
     (
         "prose_with_colons",
         "Resumen de la reunión de hoy con todo el equipo: se acordó seguir.\n\n"
@@ -1299,37 +1282,84 @@ def _t_named_rule_keeps_ami_form_rosters() -> None:
 
 def _t_named_label_guards() -> None:
     for line in (
-        "Nota: revisar esto",
-        "Acción: enviar",
-        "Nota importante: revisar",
         "https://example.org/a: x",
-        "Hora: 10:30",
         "Reunión 10:30: abierta",
         "- Ana: viñeta",
         "> Ana: cita",
         "Ana:sin espacio",
         "Resumen de la reunión de hoy con el equipo: algo",
-        "ana: minúscula",
         "INFO: servicio arriba",
         "Ana:",
+        "Uno dos tres cuatro: algo",
     ):
-        _check(_named_label(line) is None, line)
+        _check(_turn_label(line) is None, line)
     for line, label in (
         ("Ana: hola", "Ana"),
         ("Dr. Smith: hola", "Dr. Smith"),
         ("María José: hola", "María José"),
         ("[00:01] Ana: hola", "Ana"),
         ("**Ana:** hola", "Ana"),
+        ("**Ana**: hola", "Ana"),
+        ("PM: hola", "PM"),
+        ("Nota: revisar", "Nota"),
     ):
-        _check(_named_label(line) == label, line)
+        _check(_turn_label(line) == label, line)
 
 
-def _t_named_roster_needs_two_recurring_speakers() -> None:
+def _t_named_roster_needs_recurrence_and_two_speakers() -> None:
     _check(roster_of_named(_talk(["Ana"], 4)) == (), "one speaker is no roster")
-    _check(roster_of_named("Ana: uno\n\nLuis: dos\n") == (), "each once is a stray")
+    _check(roster_of_named(_talk(["Ana", "Luis"], 2)) == (), "two turns each: below 3")
     _check(
-        roster_of_named("Ana: uno\n\nAna: dos\n\nLuis: tres\n") == (),
-        "one recurring speaker is no roster",
+        roster_of_named(_talk(["Ana", "Luis"], 2) + "Ana: otra.\n\n") == (),
+        "one speaker at 3 and one at 2: below the floor",
+    )
+    _check(
+        roster_of_named(_talk(["Ana", "Luis"], 3)) == ("Ana", "Luis"), "3 turns each"
+    )
+    _check(
+        roster_of_named(_talk(["Pregunta", "Respuesta"], 3))
+        == ("Pregunta", "Respuesta"),
+        "no lexicon: a heading that recurs is counted, as production counts it",
+    )
+
+
+def _t_named_rule_matches_the_production_detector() -> None:
+    """The one definition: this rule and the meeting gate agree on speakers."""
+    _check(NAMED_MIN_SPEAKERS == concept_mod._TRANSCRIPT_MIN_SPEAKERS, "speaker floor")
+    _check(NAMED_MIN_TURNS == concept_mod._TRANSCRIPT_MIN_TURNS_PER_SPEAKER, "turns")
+
+    def production_speakers(text: str) -> set[str]:
+        counts: Counter[str] = Counter()
+        for line in text.split("\n"):
+            m = concept_mod._turn_match(line)
+            if m is None:
+                continue
+            label = m.group("label").strip()
+            if (
+                len(label.split()) > 3
+                or any(ch.isdigit() for ch in label)
+                or (len(label) >= 3 and label.isupper())
+            ):
+                continue
+            counts[label] += 1
+        recurring = {k for k, n in counts.items() if n >= 3}
+        return recurring if len(recurring) >= 2 else set()
+
+    sources = [text for _fid, text, _gold in NAMED_FIXTURES]
+    sources += [text for _fid, text in NAMED_NEGATIVES]
+    sources += [SRC, (REPO_ROOT / REAL_NAMED[0]).read_text(encoding="utf-8")]
+    for text in sources:
+        for line in text.split("\n"):
+            match = concept_mod._turn_match(line)
+            ours = _turn_label(line)
+            if match is None:
+                _check(ours is None, f"we read a turn production does not: {line!r}")
+        extra = set(roster_of_named(text)) - set(roster_of(text))
+        _check(extra == production_speakers(text) - set(roster_of(text)), text[:60])
+    _check(
+        concept_mod._transcript_shaped_text(_talk(["Ana", "Luis"], 6))
+        and roster_of_named(_talk(["Ana", "Luis"], 6)) == ("Ana", "Luis"),
+        "a source production reads as a transcript gets its speakers",
     )
 
 
@@ -1352,7 +1382,7 @@ def _t_named_scoring_and_verdict() -> None:
         named_verdict(fixture, False, {"precision": 1.0, "recall": 1.0}) == "REJECTED",
         "a changed AMI roster rejects",
     )
-    over = score_named([("x", "Ana: a\nAna: b\nLuis: c\nLuis: d\n", ("Ana",))], [])
+    over = score_named([("x", _talk(["Ana", "Luis"]), ("Ana",))], [])
     _check(over["precision"] < 1.0, "an extra label lowers precision")
 
 
@@ -1389,7 +1419,8 @@ def self_test() -> int:
         _t_named_rule_leaves_roster_of_alone,
         _t_named_rule_keeps_ami_form_rosters,
         _t_named_label_guards,
-        _t_named_roster_needs_two_recurring_speakers,
+        _t_named_roster_needs_recurrence_and_two_speakers,
+        _t_named_rule_matches_the_production_detector,
         _t_named_scoring_and_verdict,
         _t_real_named_transcript_roster,
     ]
