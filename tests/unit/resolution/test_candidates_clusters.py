@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from openkos.bundle import decisions as bundle_decisions
 from openkos.resolution import candidates as candidates_mod
 from openkos.resolution.candidates import CandidateGroup, Tier, find_candidates_report
 from tests.unit.resolution.test_candidates import _write_doc
@@ -164,3 +165,57 @@ def test_clustering_is_deterministic(tmp_path: Path) -> None:
     bundle_dir = _recurring_bundle(tmp_path)
 
     assert find_candidates_report(bundle_dir) == find_candidates_report(bundle_dir)
+
+
+def _rule_distinct(bundle_dir: Path, *members: str, state: str = "declined") -> None:
+    ordered = tuple(sorted(members))
+    bundle_decisions.write_identity_decisions(
+        ordered[0],
+        bundle_dir,
+        records=[
+            bundle_decisions.IdentityDecisionRecord(
+                decision_key=bundle_decisions.identity_decision_key_for(ordered),
+                member_ids=ordered,
+                state=state,  # type: ignore[arg-type]
+                decided_at="2026-01-01T00:00:00+00:00",
+            )
+        ],
+    )
+
+
+def test_a_pair_ruled_distinct_is_not_asked_again_inside_a_cluster(
+    tmp_path: Path,
+) -> None:
+    """remote1 (Usability) and remote2 (New Television) are each near remote3;
+    ruling remote1/remote3 distinct must keep them out of one 3-group."""
+    bundle_dir = tmp_path / "bundle"
+    _seed(bundle_dir, _REMOTE, "remote")
+    _rule_distinct(bundle_dir, "concepts/remote1", "concepts/remote3")
+
+    groups = find_candidates_report(bundle_dir).groups
+
+    ruled = {"concepts/remote1", "concepts/remote3"}
+    for group in groups:
+        if len(group.member_ids) > 2:
+            assert not ruled <= set(group.member_ids)
+    # the ruled pair is still reported as a pair so the existing suppression
+    # (and its count) sees it exactly as before
+    assert any(set(g.member_ids) == ruled for g in groups)
+
+
+def test_a_reopened_ruling_does_not_block_clustering(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _seed(bundle_dir, _BUDGET, "budget")
+    _rule_distinct(bundle_dir, "concepts/budget0", "concepts/budget1", state="open")
+
+    [group] = find_candidates_report(bundle_dir).groups
+
+    assert len(group.member_ids) == 3
+
+
+def test_a_ruling_on_an_unrelated_pair_changes_nothing(tmp_path: Path) -> None:
+    bundle_dir = _recurring_bundle(tmp_path)
+    before = find_candidates_report(bundle_dir)
+    _rule_distinct(bundle_dir, "concepts/stoic0", "concepts/stoic1")
+
+    assert find_candidates_report(bundle_dir) == before

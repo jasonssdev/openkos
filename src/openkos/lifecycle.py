@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf
 
@@ -223,3 +224,24 @@ def filter_hits[H: _HasConceptId](hits: list[H], deprecated: frozenset[str]) -> 
     `GraphHit`) so every retrieval seam reuses this one filter (design:
     "one generic filter_hits ... applied at every seam")."""
     return [hit for hit in hits if hit.concept_id not in deprecated]
+
+
+def ruled_distinct_pairs(bundle_dir: Path, members: list[str]) -> set[frozenset[str]]:
+    """The pairs among `members` a person has ruled distinct and not reopened:
+    the same sidecar record `application.pending.is_group_kept_distinct` reads
+    to suppress a pair, keyed by the same sorted-member digest."""
+    ruled: set[frozenset[str]] = set()
+    for owner in members:
+        declined = {
+            record.decision_key
+            for record in bundle_decisions.read_identity_decisions(owner, bundle_dir)
+            if record.state == "declined"
+        }
+        if not declined:
+            continue
+        for other in members:
+            if other <= owner:
+                continue
+            if bundle_decisions.identity_decision_key_for((owner, other)) in declined:
+                ruled.add(frozenset((owner, other)))
+    return ruled

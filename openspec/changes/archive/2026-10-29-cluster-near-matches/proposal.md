@@ -18,8 +18,11 @@ that was asked before is still decidable.
 
 1. `find_candidates_report` folds each type's LOW pairs into connected components
    and returns one LOW group per component of 3 to 8 members.
-2. A component of two stays a pair. A component of more than 8, or one holding a
-   pair already asked as a HIGH or ACRONYM candidate, stays as its pairs.
+2. A component of two stays a pair. A component of more than 8, one holding a
+   pair already asked as a HIGH or ACRONYM candidate, or one holding a pair a
+   person ruled distinct, stays as its pairs (the ruled pair is still returned
+   as a pair and suppressed as today). A skipped pair is only a pending row, and
+   a merged pair leaves the candidate set, both as today.
 3. A LOW cluster judged UNCERTAIN or DIFFERENT lists `merge_group` (the pair it
    replaces listed `merge` on any verdict, #1699); an exact-title group stays
    SAME-only; a cluster not yet judged withholds it.
@@ -30,9 +33,6 @@ that was asked before is still decidable.
 - No new similarity threshold, no change to which pairs are candidates, no
   change to merge semantics or guards. Cross-type pairs never cluster.
 - Fuzzy attach-at-ingest (needs a pre-registered measurement; #1701 stays open).
-- Honouring a keep-distinct ruling recorded for a former pair inside a newly
-  formed cluster: rulings are keyed on the exact member set, so such a cluster is
-  asked once as a whole.
 
 ## Approach
 

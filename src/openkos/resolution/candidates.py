@@ -509,7 +509,9 @@ five or six near-duplicates) with room to spare."""
 
 
 def _cluster_low_pairs(
-    low_pairs: list[CandidateGroup], other_pairs: set[frozenset[str]]
+    low_pairs: list[CandidateGroup],
+    other_pairs: set[frozenset[str]],
+    bundle_dir: Path,
 ) -> list[CandidateGroup]:
     """PURE: fold one type's LOW pairs into one group per connected component
     (#1701), so a subject that recurs is asked about once, not pair by pair.
@@ -520,7 +522,8 @@ def _cluster_low_pairs(
     is left as its pairs, unchanged, when it has more than
     `_MAX_CLUSTER_MEMBERS` members, or when two of its members are already
     asked about as a HIGH or ACRONYM candidate (`other_pairs`), which a cluster
-    would ask a second time. A cluster's `trigger` is its WEAKEST pair score,
+    would ask a second time, or when a person has ruled any two of its members
+    distinct (a cluster would ask that pair again). A cluster's `trigger` is its WEAKEST pair score,
     so the displayed ratio never overstates how alike all members are; the
     members need not all resemble each other (A~B and B~C chain), which is why
     the group walk lets the person mark a subset.
@@ -547,6 +550,12 @@ def _cluster_low_pairs(
         clusterable = 3 <= len(members) <= _MAX_CLUSTER_MEMBERS and not any(
             frozenset(pair) in other_pairs for pair in combinations(members, 2)
         )
+        if clusterable and lifecycle.ruled_distinct_pairs(bundle_dir, members):
+            # A person already ruled two of these apart. A cluster holding
+            # them would ask that pair again and undo the curation, so the
+            # component stays as its pairs and the existing suppression of the
+            # ruled pair applies unchanged.
+            clusterable = False
         if not clusterable:
             out.extend(edges)
             continue
@@ -618,7 +627,7 @@ def find_candidates_report(
             else:
                 asked_elsewhere.add(pair)
                 groups.append(group)
-        groups.extend(_cluster_low_pairs(low_pairs, asked_elsewhere))
+        groups.extend(_cluster_low_pairs(low_pairs, asked_elsewhere, bundle_dir))
     for left, right in _bridged_cross_type_pairs(eligible):
         pair = frozenset((left[0], right[0]))
         if pair in seen:
