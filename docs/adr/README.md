@@ -123,3 +123,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0082](0082-query-aware-excerpts-become-the-default.md) | Query-aware excerpts become the default | Accepted | 2026-10-28 |
 | [0083](0083-a-reranker-may-be-served-by-an-opt-in-llama-server-as-a-second-local-runtime.md) | A reranker may be served by an opt-in llama-server as a second local runtime | Proposed | 2026-10-28 |
 | [0084](0084-a-larger-context-window-is-sized-at-setup-on-machines-with-32-gib-or-more.md) | A larger context window is sized at setup on machines with 32 GiB or more | Proposed | 2026-10-29 |
+| [0085](0085-a-meeting-is-kept-as-an-event-beside-its-subjects-composed-from-the-sources-speaker-roster.md) | A meeting is kept as an Event beside its subjects, composed from the source's speaker roster | Proposed | 2026-10-29 |
