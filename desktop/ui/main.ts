@@ -17,6 +17,9 @@ import {
   type Invoke,
 } from "../client/index.ts";
 import { listenForDrops } from "./add/drop.ts";
+import { ActivityModel } from "./activity/model.ts";
+import { renderActivity } from "./activity/render.ts";
+import { ACTIVITY_WORDS } from "./activity/wording.ts";
 import { AddModel } from "./add/model.ts";
 import { renderAdd } from "./add/render.ts";
 import { addCue, nextUnseen } from "./add/wording.ts";
@@ -55,7 +58,7 @@ function element<T extends HTMLElement>(id: string): T {
 
 const invoke: Invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 
-type View = "ask" | "add" | "status" | "review" | "setup" | "welcome" | "settings";
+type View = "ask" | "add" | "status" | "activity" | "review" | "setup" | "welcome" | "settings";
 let view: View = "status";
 
 const live = { status: element("review-live-status"), alert: element("review-live-alert") };
@@ -70,6 +73,8 @@ const askRoot = el("div", { class: "ui-view", attrs: { "data-screen": "ask" } })
 askRoot.hidden = true;
 const addRoot = el("div", { class: "ui-view", attrs: { "data-screen": "add" } });
 addRoot.hidden = true;
+const activityRoot = el("div", { class: "ui-view", attrs: { "data-screen": "activity" } });
+activityRoot.hidden = true;
 // To review fills the main region with its list and detail panes.
 const reviewWaiting = el("div", { class: "ui-view" }, spinner("Waiting for OpenKOS to start…"));
 const reviewRoot = el("div", { class: "ui-fill", attrs: { id: "review" } });
@@ -86,7 +91,7 @@ const settingsRoot = el("div", { attrs: { "data-screen": "settings" } }, setting
 settingsRoot.hidden = true;
 
 const shell = appShell({ nav: [], current: view, onNavigate: (id) => navigate(id), footer });
-shell.main.append(askRoot, addRoot, statusRoot, reviewView, setupRoot, welcomeRoot, settingsRoot);
+shell.main.append(askRoot, addRoot, statusRoot, activityRoot, reviewView, setupRoot, welcomeRoot, settingsRoot);
 element("app").replaceChildren(shell.root);
 
 // One launch: its client's model, and whether its status was read.
@@ -189,6 +194,13 @@ function paintAsk(): void {
 }
 ask.subscribe(() => paintAsk());
 
+// Activity: read-only, read again while it is open.
+const activity = new ActivityModel();
+function paintActivity(): void {
+  renderActivity(activityRoot, activity.state, Date.now());
+}
+activity.subscribe(() => paintActivity());
+
 // Add files: one model for the session, so a run goes on while another screen is open.
 // The shell opens the system's file chooser; the page has no dialog permission.
 const workspaces = createWorkspaces(invoke);
@@ -257,7 +269,7 @@ search.subscribe(() => {
 function paintNav(): void {
   const count = reviewCount(review?.state ?? null, statusOpen);
   redraw(shell.nav, "nav", () =>
-    shell.nav.replaceChildren(...navEntries(count, addCue(add.state, addUnseen)).map((entry) => navItem(entry, entry.id === view, navigate))),
+    shell.nav.replaceChildren(...[...navEntries(count, addCue(add.state, addUnseen)), { id: "activity", label: ACTIVITY_WORDS.navLabel }].map((entry) => navItem(entry, entry.id === view, navigate))),
   );
 }
 
@@ -301,13 +313,15 @@ function paintEngine(state: EngineState | null): void {
 }
 
 function navigate(id: string): void {
-  if (id === "ask" || id === "add" || id === "status" || id === "review") show(id);
+  if (id === "ask" || id === "add" || id === "status" || id === "activity" || id === "review") show(id);
 }
 
 function show(next: View): void {
   view = next;
   if (next === "add") addUnseen = false;
   statusRoot.hidden = next !== "status";
+  activityRoot.hidden = next !== "activity";
+  activity.watch(next === "activity");
   askRoot.hidden = next !== "ask";
   addRoot.hidden = next !== "add";
   reviewView.hidden = next !== "review";
@@ -328,7 +342,7 @@ function show(next: View): void {
   } else {
     if (next === "settings") void settings.load();
     if (next === "settings" || next === "status") void search.load();
-    const root = { ask: askRoot, add: addRoot, status: statusRoot, setup: setupRoot, welcome: welcomeRoot, settings: settingsRoot }[next];
+    const root = { ask: askRoot, add: addRoot, status: statusRoot, activity: activityRoot, setup: setupRoot, welcome: welcomeRoot, settings: settingsRoot }[next];
     root.querySelector<HTMLElement>('[data-view="heading"]')?.focus();
   }
 }
@@ -389,6 +403,7 @@ function startReview(state: Extract<EngineState, { state: "ready" }>): void {
   labels.setClient(createClient(state));
   add.setClient(createClient(state));
   void search.setClient(createClient(state));
+  void activity.setClient(createClient(state));
   review = new ReviewModel(createClient(state), {
     // The check named an AI model that isn't installed; setup reads again and offers it.
     openSetup: () => {
@@ -416,6 +431,7 @@ function stopReview(): void {
   labels.setClient(null);
   add.setClient(null);
   void search.setClient(null);
+  void activity.setClient(null);
   reviewWaiting.hidden = false;
   reviewRoot.replaceChildren();
   paintNav();
@@ -474,6 +490,7 @@ paintEngine({ state: "starting", attempt: 1 });
 paintStatus(true);
 paintAsk();
 paintAdd();
+paintActivity();
 paintNav();
 paintSettingsEntry();
 void tick();

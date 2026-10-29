@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- The app has an Activity screen that shows what OpenKOS is doing in the background: the task running now, the files and unsaved changes that wait, how much of today's AI model limit is used, and the latest finished tasks with how each ended. It only reads; an unreadable job record is said plainly rather than shown as an idle engine. `openkos.api.engine_activity(workspace)` returns it (`EngineActivity`, `EngineJob`, `DailyBudget`), `GET /v1/activity` serves it, and the desktop client has `engineActivity()`. The change is additive; `API_VERSION` is unchanged (#1698).
+
 ### Fixed
 
 - `ingest` now says which filter emptied a source. When extraction ends with no concept and a candidate was removed as a framing object (a meeting-shaped title) or as a twin of the source title, the notice names those titles and the filter, where before it printed only "no concept extracted". The language gate keeps every candidate rather than empty a source, so a Spanish meeting that came out empty was losing its survivor to a later filter, not to the gate. Diagnostic only: which objects are kept is unchanged (#1642).

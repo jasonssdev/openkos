@@ -2,6 +2,23 @@
 // Do not edit: regenerate it whenever the snapshot changes.
 
 export interface paths {
+    "/v1/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Activity */
+        get: operations["activity_v1_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/ask": {
         parameters: {
             query?: never;
@@ -1200,6 +1217,20 @@ export interface components {
             second_id: string;
         };
         /**
+         * DailyBudget
+         * @description Today's model-call budget for unattended work, in calls, on the local
+         *     calendar day. `exhausted`: the newest watch or maintenance job ended
+         *     because the budget ran out.
+         */
+        DailyBudget: {
+            /** Calls Limit */
+            calls_limit: number;
+            /** Calls Used */
+            calls_used: number;
+            /** Exhausted */
+            exhausted: boolean;
+        };
+        /**
          * Decision
          * @description One open decision, as data a client can render.
          */
@@ -1311,6 +1342,50 @@ export interface components {
         DeclinedContradictionList: {
             /** Contradictions */
             contradictions: components["schemas"]["DeclinedContradiction"][];
+        };
+        /**
+         * EngineActivity
+         * @description What the engine is doing: the task running now (`None` when idle), the
+         *     latest finished ones (newest first), how many files wait in the watched
+         *     folder, how many written paths wait for a commit retry, and today's budget.
+         *     `jobs_unreadable` is a record that exists but cannot be read, which is not
+         *     the same as an engine with nothing to show.
+         */
+        EngineActivity: {
+            budget: components["schemas"]["DailyBudget"];
+            current: components["schemas"]["EngineJob"] | null;
+            /** Jobs Unreadable */
+            jobs_unreadable: boolean;
+            /** Recent */
+            recent: components["schemas"]["EngineJob"][];
+            /** Uncommitted Paths */
+            uncommitted_paths: number;
+            /** Waiting Files */
+            waiting_files: number;
+        };
+        /**
+         * EngineJob
+         * @description One unattended task as the Activity view shows it. `ended_at` and
+         *     `outcome` are `None` while it runs. `needs_attention`: it ended in a way a
+         *     person should look at (a failure, a timeout or a spent budget).
+         */
+        EngineJob: {
+            /** Chat Calls */
+            chat_calls: number;
+            /** Ended At */
+            ended_at: string | null;
+            /** Kind */
+            kind: string;
+            /** Needs Attention */
+            needs_attention: boolean;
+            /** Outcome */
+            outcome: string | null;
+            /** Started At */
+            started_at: string;
+            /** Units Deferred */
+            units_deferred: number;
+            /** Units Done */
+            units_done: number;
         };
         /**
          * ErrorBody
@@ -3410,6 +3485,62 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    activity_v1_activity_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineActivity"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     start_ask_v1_ask_post: {
         parameters: {
             query?: never;

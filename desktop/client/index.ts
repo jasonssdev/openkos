@@ -218,6 +218,7 @@ export function createClient(engine: ReadyEngine, options: ClientOptions = {}) {
     applyInboxSettings: (body: Schemas["InboxSettingsApplyRequest"]) =>
       call("post", "/v1/settings/inbox/apply", { body }),
     unattendedActivity: () => call("get", "/v1/unattended"),
+    engineActivity: () => call("get", "/v1/activity"),
     declinedContradictions: () => call("get", "/v1/declined-contradictions"),
     previewReopenContradiction: (body: Schemas["ContradictionReopenPreviewRequest"]) =>
       call("post", "/v1/contradictions/reopen/preview", { body }),

@@ -3,8 +3,11 @@ recent ones, what waits, and today's model-call budget. Read-only over
 `jobs.db`, which is disposable, so a missing or damaged record degrades to an
 honest empty or unavailable answer rather than an error."""
 
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from openkos import config
 from openkos.application import unattended_activity as ua
@@ -171,3 +174,27 @@ def test_waiting_files_and_uncommitted_paths_are_counted(tmp_path: Path) -> None
 
     assert activity.waiting_files == 4
     assert activity.uncommitted_paths == 2
+
+
+def test_an_unreadable_start_time_is_not_a_running_task(tmp_path: Path) -> None:
+    layout = _layout(tmp_path)
+    _job(layout, "watch", None, at="yesterday-ish")
+
+    assert _read(layout).current is None
+
+
+def test_a_fault_while_reading_is_reported_as_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = _layout(tmp_path)
+    _job(layout, "watch", "completed")
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise sqlite3.DatabaseError("malformed")
+
+    monkeypatch.setattr(jobs_store, "recent_jobs", boom)
+
+    activity = _read(layout)
+
+    assert activity.jobs_unreadable is True
+    assert activity.recent == ()
