@@ -248,6 +248,14 @@ case, `first_reply`.
 
 ## The owner confirms
 
+On 2026-10-29, before this file merged and before any result of this run
+existed, the owner gave a standing instruction to take the recommended option
+on open choices; under it every item below is confirmed unchanged, as
+proposed, with adjudication by a delegated reader disclosed in RESULTS. The
+owner did not review the items one by one; this is recorded so the
+confirmation is not read as more than it is. The run waits for this file to
+merge to `main`.
+
 Nothing below is confirmed yet.
 
 1. **The futility rule**: scored-body denominators for E1, E2, E3, E4; failed
