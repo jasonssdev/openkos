@@ -285,8 +285,11 @@ function questionNoun(decision: Decision): Noun {
 function evaluationLead(decision: Decision, noun: Noun): string | null {
   // The judge is advisory and the person decides (#1699): when the engine still
   // offers the combine against a doubt, the doubt is said beside the choice.
-  const overridable = decision.actions.includes("merge") && decision.fresh !== false;
-  const override = " If you know they are the same, you can still combine them, and split them again later.";
+  const group = !decision.actions.includes("merge") && decision.actions.includes("merge_group");
+  const overridable = (decision.actions.includes("merge") || group) && decision.fresh !== false;
+  const override = group
+    ? " If you know some of them are the same, you can still combine them, and split them again later."
+    : " If you know they are the same, you can still combine them, and split them again later.";
   switch (decision.evaluation) {
     case "judged_same":
       return `The AI model thinks these are the same ${noun.one}.`;

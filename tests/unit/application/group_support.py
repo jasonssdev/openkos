@@ -87,6 +87,7 @@ def identity_row(
     *,
     verdict: str | None = "same",
     member_types: list[str] | None = None,
+    tier: str = "high",
 ) -> pq.Proposal:
     """An identity proposal over `members`, as a producer would enqueue it."""
     adjudication = (
@@ -103,7 +104,7 @@ def identity_row(
                 "member_ids": list(members),
                 "member_types": member_types or ["Concept"] * len(members),
                 "okf_type": "Concept",
-                "tier": "high",
+                "tier": tier,
                 "trigger": "stub",
                 "adjudication": adjudication,
             }

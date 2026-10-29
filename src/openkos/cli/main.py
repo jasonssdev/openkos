@@ -71,6 +71,7 @@ from openkos.application import query_report as application_query_report
 from openkos.application import repair as application_repair
 from openkos.application import revisions as revisions_service
 from openkos.application import sensitivity_service as application_sensitivity
+from openkos.application import setup as application_setup
 from openkos.application import status as application_status
 from openkos.application import suggest_relations_service as relations_service
 from openkos.application import suggest_volatility_service as volatility_service
@@ -1704,7 +1705,12 @@ def init(
         bundle.create(layout.bundle_dir, datetime.now().astimezone().date())
         config.write_agents(root)
         config.write_config(
-            root, model=resolved_model, embedding_model=resolved_embedding_model
+            root,
+            model=resolved_model,
+            embedding_model=resolved_embedding_model,
+            context_window=config.sized_context_window(
+                application_setup.physical_memory_bytes()
+            ),
         )
     except (OSError, ValueError) as exc:
         typer.echo(
