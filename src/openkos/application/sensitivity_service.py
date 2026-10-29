@@ -60,7 +60,7 @@ def log_line(
     )
     if raised:
         pages = ", ".join(f"[{page}](/{page}.md) (was {was!r})" for page, was in raised)
-        line += f" Also raised: {pages}."
+        line += f" Also raised ({len(raised)}): {pages}."
     return line
 
 
@@ -70,7 +70,7 @@ _ENTRY_RE = re.compile(
     r"'(?P<level>[^']*)' \(was (?P<was>'[^']*'|None|[^)]*)\)\.(?P<rest>.*)$"
 )
 _RAISED_RE = re.compile(r"\[(?P<id>[^\]]+)\]\(/(?P=id)\.md\) \(was '(?P<was>[^']*)'\)")
-_ALSO_RAISED = " Also raised: "
+_ALSO_RAISED = re.compile(r" Also raised \((?P<count>\d+)\): ")
 
 
 def undo_log_line(concept_id: str, level: str, previous: str) -> str:
@@ -99,16 +99,18 @@ def recorded_change(log_text: str, concept_id: str) -> RecordedChange | None:
 
     `None` when the page has no entry, when the newest is an undo, or when it is
     a change that did not record what it raised (a change from before the record
-    existed, one that raised nothing, or a line edited by hand). Entries are
+    existed, one that raised nothing, or a line rewritten or edited, which a
+    count of the raised pages in the line itself detects). Entries are
     newest first, so the first one found is the newest."""
     for line in log_text.splitlines():
         match = _ENTRY_RE.match(line)
         if match is None or match["id"] != concept_id:
             continue
         rest = match["rest"]
-        if match["kind"] != "Set" or not rest.startswith(_ALSO_RAISED):
+        also = _ALSO_RAISED.match(rest)
+        if match["kind"] != "Set" or also is None:
             return None
-        body = rest[len(_ALSO_RAISED) :]
+        body = rest[also.end() :]
         if not body.endswith("."):
             return None
         items = body[:-1].split(", [")
@@ -118,6 +120,8 @@ def recorded_change(log_text: str, concept_id: str) -> RecordedChange | None:
             if item_match is None or item_match["was"] not in okf.SENSITIVITY_ORDER:
                 return None
             raised.append((item_match["id"], item_match["was"]))
+        if len(raised) != int(also["count"]):
+            return None  # an item was removed from the record: do not trust the rest
         was = match["was"]
         previous = was[1:-1] if was.startswith("'") else None
         if was != "None" and previous is None:

@@ -97,7 +97,9 @@ def test_the_change_records_what_it_raised_in_the_log(root: Path) -> None:
     _change(root, SOURCE, "confidential")
     log = (root / "bundle" / "log.md").read_text(encoding="utf-8")
     line = next(x for x in log.splitlines() if "**Set-sensitivity**" in x)
-    assert f"Also raised: [{GRANDCHILD}](/{GRANDCHILD}.md) (was 'private'), " in line
+    assert (
+        f"Also raised (2): [{GRANDCHILD}](/{GRANDCHILD}.md) (was 'private'), " in line
+    )
     assert f"[{CHILD}](/{CHILD}.md) (was 'private')." in line
 
 
@@ -251,7 +253,7 @@ def test_a_change_from_before_the_record_existed_is_not_offered_an_undo(
     _change(root, SOURCE, "confidential")
     log = root / "bundle" / "log.md"
     text = log.read_text(encoding="utf-8")
-    start = text.index(" Also raised:")
+    start = text.index(" Also raised (")
     end = text.index("\n", start)
     log.write_text(text[:start] + text[end:], encoding="utf-8")
     assert preview_undo_sensitivity(Workspace.open(root), SOURCE) == (
@@ -370,3 +372,36 @@ def test_an_undo_never_raises_a_page_above_where_it_stands(root: Path) -> None:
     )
     assert isinstance(undone, SensitivityUndone)
     assert _level(root, CHILD) == "private"
+
+
+@pytest.mark.parametrize(
+    "rewrite",
+    [
+        # What a scrub of a purged id leaves: the id, the link or the item gone.
+        lambda line: line.replace(f"/{CHILD}.md", "/[purged].md"),
+        lambda line: line.replace(f"[{CHILD}]", "[purged]"),
+        lambda line: line.replace(
+            f"[{CHILD}](/{CHILD}.md) (was 'private')", "[purged]"
+        ),
+        lambda line: line.replace(f", [{CHILD}](/{CHILD}.md) (was 'private')", ""),
+        lambda line: line[: line.index(" Also raised (")] + " Also raised (1): .",
+        lambda line: line.replace(" (was 'private').", " (was [purged])."),
+        lambda line: line.replace("sources/notes", "[purged]"),
+        lambda line: line + " Extra.",
+    ],
+)
+def test_a_line_that_was_rewritten_is_not_read_and_is_not_undoable(
+    root: Path, rewrite: object
+) -> None:
+    """A purge or any other rewrite of the log line leaves something that no
+    longer parses as the record: the undo fails closed with `no_record`."""
+    _change(root, SOURCE, "confidential")
+    log = root / "bundle" / "log.md"
+    lines = log.read_text(encoding="utf-8").splitlines()
+    index = next(i for i, x in enumerate(lines) if "**Set-sensitivity**" in x)
+    rewritten = rewrite(lines[index])  # type: ignore[operator]
+    assert rewritten != lines[index]
+    lines[index] = rewritten
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    result = preview_undo_sensitivity(Workspace.open(root), SOURCE)
+    assert result == SensitivityNotUndoable("no_record"), rewritten

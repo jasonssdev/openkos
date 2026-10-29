@@ -17,7 +17,7 @@ leaves the device.
 ### In Scope
 
 1. Recording, additively, what a change raised: the `log.md` line a sensitivity
-   change writes ends with ` Also raised: [id](/id.md) (was 'level'), ...` when
+   change writes ends with ` Also raised (n): [id](/id.md) (was 'level'), ...` when
    it raised pages. A change that raised nothing writes the line it always did.
 2. `application/sensitivity_undo_service.py`: preview and apply of an undo, in
    the same two phases as the change (digest of every byte the plan rests on,
@@ -49,7 +49,7 @@ holds sensitivity transitions, is already swept by `forget`, and never leaves th
 device in an export, so it adds no new store to the privacy sweep.
 
 **Reading it back.** The newest `log.md` entry about the page must be a change
-with an `Also raised` clause, strictly parsed; anything else (older line, no
+with an `Also raised (n)` clause, strictly parsed and holding exactly n pages (so a removed item is detected); anything else (older line, no
 raise, an undo, a hand-edited line) is `no_record`.
 
 **The high-water mark.** The pages are first set to their recorded levels in
