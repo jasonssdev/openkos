@@ -11,7 +11,7 @@ from the machine's memory.
 ## Scope
 
 1. `config.sized_context_window` is a pure function of total memory
-   (`< 32 GiB` or unknown: 12288; `>= 32 GiB`: 16384; `>= 64 GiB`: 24576),
+   (`< 32 GiB` or unknown: 12288; `>= 32 GiB`: 24576, ADR-0084),
    floored at `minimum_context_window` and capped by a known model limit.
 2. `init` reads memory through `application.setup.physical_memory_bytes` (the
    probe the setup screen already uses) and writes the result with

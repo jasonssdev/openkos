@@ -31,15 +31,16 @@ def _written_window(root: Path) -> int | None:
         (16, 12288),
         (24, 12288),
         (31, 12288),
-        (32, 16384),
-        (48, 16384),
-        (63, 16384),
+        (31.99, 12288),
+        (32, 24576),
+        (48, 24576),
+        (63, 24576),
         (64, 24576),
         (128, 24576),
     ],
 )
-def test_sized_window_tiers_by_total_memory(memory_gib: int, expected: int) -> None:
-    assert config.sized_context_window(memory_gib * GIB) == expected
+def test_sized_window_tiers_by_total_memory(memory_gib: float, expected: int) -> None:
+    assert config.sized_context_window(int(memory_gib * GIB)) == expected
 
 
 def test_sized_window_falls_back_to_the_default_when_memory_is_unknown() -> None:

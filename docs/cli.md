@@ -1005,11 +1005,11 @@ freshness_window: 7d      # age after which a stamp is flagged for re-observatio
 chat_timeout: 600         # seconds an LLM chat call may take before giving up
 max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call may generate
 context_window: 12288     # tokens the model holds at once (prompt + reply); sized once at
-                          # `openkos init` from this machine's memory (12288 below 32 GiB).
-                          # Larger is slower: observed once, roughly 10-20 s per answer at
-                          # 12k vs about 100 s at 32k. Unpinned it reserves its own 32K
-                          # default and ~10 GB. Refused below the derived floor; blank the
-                          # value to leave it unpinned.
+                          # `openkos init` from this machine's memory (12288 below 32 GiB,
+                          # 24576 from 32 GiB). Larger is slower: measured on one Mac, a mean
+                          # of 14.9 s per answer at 12288 vs 40.4 s at 24576. Unpinned it
+                          # reserves its own 32K default and ~10 GB. Refused below the
+                          # derived floor; blank the value to leave it unpinned.
 # backend: openai-compatible  # LLM backend family: "ollama" (default) or
                           # "openai-compatible"; see below
 # base_url: http://127.0.0.1:8080  # chat endpoint for the selected backend
@@ -1116,9 +1116,9 @@ When the ceiling is reached before the model finishes, the client raises `Ollama
 
 How many tokens the model holds at once — prompt **and** reply together — forwarded to Ollama as `options.num_ctx`. Default `12288`.
 
-**`openkos init` sizes it once from the machine.** The value `init` writes depends on the machine's total memory, read once at setup and written into `openkos.yaml`; nothing reads the memory again, so a workspace keeps the value it was written with and an answer stays reproducible. Below 32 GiB (and wherever the memory cannot be read) it is the default `12288`; from 32 GiB, `16384`; from 64 GiB, `24576`. The steps start at ADR-0047's 32 GiB floor, stay under the 32k window whose cost was observed (below), and are starting points, not a tuned curve. The value is never below the floor for the packaged `max_generation_tokens`. Existing workspaces are not touched: an absent key still resolves to `12288`, and you can edit the value at any time.
+**`openkos init` sizes it once from the machine.** The value `init` writes depends on the machine's total memory, read once at setup and written into `openkos.yaml`; nothing reads the memory again, so a workspace keeps the value it was written with and an answer stays reproducible. Below 32 GiB (and wherever the memory cannot be read) it is the default `12288`; from 32 GiB, `24576`, the window measured on a synthetic evolution bundle with one model (ADR-0084). 32 GiB is ADR-0047's measured floor, and the larger window was adopted knowing the latency cost (below). The value is never below the floor for the packaged `max_generation_tokens`. Existing workspaces are not touched: an absent key still resolves to `12288`, and you can edit the value at any time.
 
-**A larger window costs latency, and memory.** Observed once, on one Apple Silicon Mac with `qwen3:8b` (a small sample, not a promise): roughly **10 to 20 s per answer at 12k against about 100 s at 32k**. The memory cost is the KV cache below. A larger window lets `query` show the model more of each retrieved document (the "read only part of N document(s)" notice is about excerpts being clipped to fit); it does not by itself improve answer quality.
+**A larger window costs latency, and memory.** Measured on one Apple Silicon Mac with `qwen3:8b`, on a synthetic bundle (a small sample, not a promise): a mean of **14.9 s per answer at 12288 against 40.4 s at 24576** (about 2.7x; p90 18.9 s against 55.9 s), and roughly 100 s at 32k when observed earlier. The memory cost is the KV cache below. A larger window lets `query` show the model more of each retrieved document (the "read only part of N document(s)" notice is about excerpts being clipped to fit); on that synthetic bundle it raised the share of evolution questions judged correct from 0.36 to 0.75, a gain shown with one model and not yet on real workspaces.
 
 It governs the same CHAT seams `chat_timeout` and `max_generation_tokens` do, and nothing else.
 

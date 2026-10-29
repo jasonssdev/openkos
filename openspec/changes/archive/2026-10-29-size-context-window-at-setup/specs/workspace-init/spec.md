@@ -16,7 +16,8 @@ The packaged template pins `review: true`, `default_sensitivity: private`,
 byte-identical to the template regardless of the chosen model(s).
 `init` MUST write `context_window` once, sized from the machine's total
 memory at setup time: `12288` below 32 GiB or when the memory cannot be
-read, `16384` from 32 GiB, `24576` from 64 GiB, never below the floor for the
+read, `24576` from 32 GiB (the window measured in #1702, adopted against its
+registered latency bar, ADR-0084), never below the floor for the
 packaged `max_generation_tokens` and never above the model's limit when that
 is known. The value MUST be written through a third plain-text placeholder,
 and nothing MUST compute it again at run time: a workspace keeps the value it
@@ -148,7 +149,7 @@ the default.
 
 #### Scenario: init sizes context_window from this machine's memory
 
-- GIVEN a machine reporting 64 GiB of total memory
+- GIVEN a machine reporting 32 GiB or more of total memory
 - WHEN `openkos init` succeeds
 - THEN `openkos.yaml` carries `context_window: 24576`
-- AND with 16 GiB, or memory that cannot be read, it carries `12288`
+- AND with less than 32 GiB, or memory that cannot be read, it carries `12288`

@@ -8,8 +8,9 @@ chat_timeout: 600         # seconds an LLM chat call may take before giving up
 max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call may generate
 context_window: 12288  # tokens the model holds at once (prompt + reply);
                           # sized once at `openkos init` from this machine's memory (12288
-                          # below 32 GiB). Larger is slower: observed once, roughly 10-20 s
-                          # per answer at 12k vs about 100 s at 32k. Unpinned it
+                          # below 32 GiB, 24576 from 32 GiB). Larger is slower: measured on
+                          # one Mac, a mean of 14.9 s per answer at 12288 vs 40.4 s at
+                          # 24576. Unpinned it
                           # reserves its own 32K default and ~10 GB. Refused below the
                           # derived floor; blank the value to leave it unpinned.
 # backend: openai-compatible  # LLM backend family: "ollama" (default) or

@@ -23,7 +23,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
-- `openkos init` now sizes `context_window` once from the machine's total memory and writes it into `openkos.yaml`: `12288` below 32 GiB or when memory cannot be read, `16384` from 32 GiB, `24576` from 64 GiB. Existing workspaces keep what they have, and nothing is computed at run time. `docs/cli.md` and the `openkos.yaml` comment now state the latency cost as observed once on one machine (about 10 to 20 s per answer at 12k against about 100 s at 32k). Partly addresses #1703; sending derived pages instead of whole Source bodies is still open there.
+- `openkos init` now sizes `context_window` once from the machine's total memory and writes it into `openkos.yaml`: `24576` from 32 GiB, `12288` below that or when memory cannot be read. The larger window is the one measured on a synthetic evolution bundle with `qwen3:8b` (evolution questions judged correct 0.36 to 0.75), at a mean of 14.9 s per answer against 40.4 s on one Apple Silicon Mac (about 2.7x); it was adopted against the registered latency bar (ADR-0084). Existing workspaces keep what they have, and nothing is computed at run time. Partly addresses #1703; sending derived pages instead of whole Source bodies is still open there.
 
 ### Fixed
 

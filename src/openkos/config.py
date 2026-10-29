@@ -326,25 +326,26 @@ def minimum_context_window(max_generation_tokens: int) -> int:
 
 _GIB = 1024**3
 
-_WINDOW_TIERS: Final = ((64 * _GIB, 24576), (32 * _GIB, 16384))
-"""`(minimum total memory in bytes, context_window)` from the largest tier
-down; anything below the last row keeps `DEFAULT_CONTEXT_WINDOW` (#1703).
+_LARGE_WINDOW_MEMORY: Final = 32 * _GIB
+LARGE_CONTEXT_WINDOW: Final = 24576
+"""The window `init` writes on a machine with at least 32 GiB of total memory
+(#1703, ADR-0084); below that, or when memory is unknown, `init` keeps
+`DEFAULT_CONTEXT_WINDOW`.
 
-Conservative on purpose, from what the repository has measured:
+There is exactly one step up and it is the measured value, not an
+interpolated tier:
 
-- KV cache grows linearly with the window and `qwen3:8b` held **7.2 GB at
-  12288** against **10 GB at 32768** (see `DEFAULT_CONTEXT_WINDOW`), so a
-  larger window is paid for in memory the 16 GB machine this product targets
-  does not have; below 32 GiB nothing changes.
-- 32 GiB is ADR-0047's measured floor for the default model set (the larger
-  judge model shares the machine), so the first step up starts there and is
-  one modest 4096.
-- Latency is the other cost and it is steep: observed once, on one Apple
-  Silicon Mac with `qwen3:8b`, roughly 10-20 s per answer at 12k against
-  about 100 s at 32k. The top tier stops at 24576, short of 32k, and 64 GiB
-  is where the weights and the cache stop competing with the rest of the
-  machine. These are starting points from a single small observation, not a
-  tuned curve; the user can always set the value."""
+- 32 GiB is ADR-0047's measured floor for the default model set, and the KV
+  cache is linear in the window (`qwen3:8b`: 7.2 GB at 12288 against 10 GB at
+  32768, see `DEFAULT_CONTEXT_WINDOW`), so the 16 GB machines this product
+  targets are untouched.
+- 24576 is the window #1702 measured on its synthetic evolution bundle
+  (`qwen3:8b`, n=3): evolution judged-correct 0.361 -> 0.750, gold delivered
+  at 8 documents 18/54 -> 33/54, none regressed, at a mean latency of 14.9 s
+  -> 40.4 s (2.7x). That failed the registered latency bar (30 s, 2.0x); the
+  owner adopted the window against it (ADR-0084). Quality gain is shown on a
+  synthetic bundle with one model, latency on one Apple Silicon Mac.
+- The user can always set the value; existing workspaces keep what they have."""
 
 
 def sized_context_window(
@@ -366,11 +367,8 @@ def sized_context_window(
     when the config is read).
     """
     window = DEFAULT_CONTEXT_WINDOW
-    if total_memory_bytes is not None:
-        for threshold, tier_window in _WINDOW_TIERS:
-            if total_memory_bytes >= threshold:
-                window = tier_window
-                break
+    if total_memory_bytes is not None and total_memory_bytes >= _LARGE_WINDOW_MEMORY:
+        window = LARGE_CONTEXT_WINDOW
     if model_limit is not None:
         window = min(window, model_limit)
     return max(window, minimum_context_window(max_generation_tokens))
