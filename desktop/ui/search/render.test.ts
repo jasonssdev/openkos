@@ -7,7 +7,7 @@ import { rebuildSection } from "./render.ts";
 const NEEDS: Schemas["SearchIndex"] = { model_changed: true, stale_indexes: [], needs_rebuild: true, sends_to: null };
 const state = (over: Partial<SearchState> = {}): SearchState => ({ index: NEEDS, job: null, starting: false, result: null, ...over });
 const text = (node: HTMLElement | null) => node?.textContent ?? "";
-const actions = () => ({ rebuild: vi.fn(), stop: vi.fn() });
+const actions = () => ({ rebuild: vi.fn(), stop: vi.fn(), dismiss: vi.fn() });
 
 describe("the rebuild section", () => {
   it("is absent while search is current and nothing ran", () => {
@@ -45,9 +45,28 @@ describe("the rebuild section", () => {
       actions(),
     )!;
     expect(text(done)).toContain("Search is up to date.");
-    expect(done.querySelector("button")).toBeNull();
+    expect(Array.from(done.querySelectorAll("button")).map(text)).toEqual(["Dismiss"]);
     const failed = rebuildSection(state({ result: { kind: "problem", text: "The AI model isn't running." } }), actions())!;
     expect(text(failed)).toContain("The AI model isn't running.");
-    expect(Array.from(failed.querySelectorAll("button")).map(text)).toEqual(["Rebuild search"]);
+    expect(Array.from(failed.querySelectorAll("button")).map(text)).toEqual(["Rebuild search", "Dismiss"]);
+  });
+
+  it("closes a finished notice with Dismiss", () => {
+    const a = { ...actions(), dismiss: vi.fn() };
+    const done = rebuildSection(
+      state({ index: { ...NEEDS, model_changed: false, needs_rebuild: false }, result: { kind: "done", text: "Search is up to date." } }),
+      a,
+    )!;
+    expect(Array.from(done.querySelectorAll("button")).map(text)).toEqual(["Dismiss"]);
+    done.querySelector("button")!.click();
+    expect(a.dismiss).toHaveBeenCalled();
+  });
+
+  it("leaves how a rebuild ended to the screens that started it", () => {
+    const done = state({ index: { ...NEEDS, model_changed: false, needs_rebuild: false }, result: { kind: "done", text: "Search is up to date." } });
+    expect(rebuildSection(done, actions(), { showResult: false })).toBeNull();
+    const behind = rebuildSection(state({ result: { kind: "done", text: "Search was rebuilt." } }), actions(), { showResult: false })!;
+    expect(text(behind)).toContain("Search needs to be rebuilt");
+    expect(text(behind)).not.toContain("Search was rebuilt.");
   });
 });

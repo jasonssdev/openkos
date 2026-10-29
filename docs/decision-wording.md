@@ -344,8 +344,8 @@ The middle line is load-bearing: the engine sends everything except `confidentia
 **Changing it** (`preview_sensitivity`, `apply_sensitivity`) is one action, previewed and applied in one step, as an undo is:
 
 - **Where a page is shown in full** (its card in To review): "Who can see it" over the three labels as one choice, the page's own selected, and its one-line meaning under it. Choosing another changes it at once.
-- **Where a page is only named** (the pages an answer came from, in Ask): **Keep only on this Mac** beside each one. Once it is, a quiet "Only on this Mac" takes the button's place.
-- **After:** "“{title}” is now {label}." with **Undo**, which puts back the label the page had ("“{title}” is {label} again."). For a file's page, the pages made from it are raised with it, never lowered: "“{title}” is now Only on this Mac, and so is 1 page made from it. To change that page back, change it on its own." ("…so are {n} pages made from it. To change those pages back, change each one on its own."). Then there is no Undo, because putting the one page back would leave the others.
+- **Where a page is only named** (the pages an answer came from, in Ask): **Keep only on this Mac** beside each one. Once it is, a quiet "Only on this Mac" takes the button's place, drawn apart from the button as the page's state.
+- **After:** "“{title}” is now {label}." with **Undo**, which puts back the label the page had ("“{title}” is {label} again."). For a file's page, the pages made from it are raised with it, never lowered: "“{title}” is now Only on this Mac, and so is 1 page made from it. To change that page back, change it on its own." ("…so are {n} pages made from it. To change those pages back, change each one on its own."). Then there is no Undo, because putting the one page back would leave the others. Every confirmation and failure here can be closed with **Dismiss**.
 - **Letting a page out while a cloud AI model is on.** Changing a page marked Only on this Mac to Private or Shareable asks first, in a dialog that starts on its safe answer: "Let “{title}” be sent to {host}?" — "While a cloud AI model is on, pages marked {label} are sent to {host} whenever the AI model needs them. “{title}” will be too." — **Mark it {label}** · **Keep it only on this Mac**. Making a page more private never asks.
 
 | Situation | Code | Message |
@@ -542,7 +542,7 @@ The words around the decisions, outside the decision screens.
 
 - **The screen.** Title "Ask"; under it "Ask about anything in your library. The answer comes from your pages and says which ones." The field is labelled "Your question", with "What would you like to know?" inside it. One button, **Ask**; while the engine starts it is unavailable, with "Waiting for OpenKOS to start…" beside it. A blank question gets "Type a question first." on the field.
 - **While it runs.** The button reads "Asking…", and the question shows with one line for the step the engine is on: "Looking through your pages…", "Gathering what's relevant…", "Checking your pages hold an answer…", "Writing the answer…". No counts and no time estimate.
-- **The answer** is shown as written, as text, with "From:" followed by the titles of the pages it drew on, each with **Keep only on this Mac** beside it (under "Who can see a page"). When it points to no page: "This answer doesn't point to a particular page."
+- **The answer** is shown as written, as text, with "From:" followed by the titles of the pages it drew on, each with **Keep only on this Mac** beside it (under "Who can see a page"; the page's state, "Only on this Mac", sits beside its title and the button apart from it). When it points to no page: "This answer doesn't point to a particular page."
 
 What the screen says instead of an answer, by `outcome`:
 
@@ -551,13 +551,13 @@ What the screen says instead of an answer, by `outcome`:
 | `no_match` (`zero_hits`) | "Nothing matched" | "Nothing in your library matches this question. Try asking with other words." |
 | `no_match` (`all_unreadable`) | "Nothing could be read" | "The pages that match this question couldn't be read." |
 | `no_answer_in_context` | "No answer in your pages" | "Your library has pages about this, but none of them answers the question." |
-| `withheld` | "This answer stays private" | "It drew on {n} pages marked Only on this Mac, so it isn't shown here, and neither are their names. You can show it while your AI model runs on this Mac." |
+| `withheld` | "This answer stays on this Mac" | "It drew on {n} pages marked Only on this Mac, so it isn't shown here, and neither are their names. You can show it while your AI model runs on this Mac." |
 
 A withheld answer is a count, never a title: the API names no such page. Under it, **Show this answer** asks the same question again with `include_confidential` (ADR-0075), in place of the withheld answer. It first reads the AI model settings; if the AI model is not on this Mac, or they cannot be read, nothing is sent and the card says "Your AI model isn't on this Mac, so these pages stay private." The consent is never standing and is never offered with a cloud AI model.
 
 **Notes,** small and under the answer, only when they apply:
 
-- A search that may miss something (`stale_indexes`): "Some recent changes to your library may not be searched yet, so this answer could miss them." When part of the search could not run (`lexical_unavailable`, `dense_unavailable`) this one takes its place: "The search was limited this time, so this answer could miss some pages." Under either, the answer is followed by **Rebuild search** when search is behind (below).
+- A search that may miss something (`stale_indexes`): "Some recent changes to your library may not be searched yet, so this answer could miss them." When part of the search could not run (`lexical_unavailable`, `dense_unavailable`) this one takes its place: "The search was limited this time, so this answer could miss some pages." Once search has been rebuilt since the answer, the first reads instead "Search has been rebuilt since this answer. Ask again to include your latest changes.", so it never says search is behind while search is up to date. After an answer, the question leaves the field. Under either, the answer is followed by **Rebuild search** when search is behind (below).
 - Pages left out (`withheld` above zero on any other outcome): "{n} pages marked Only on this Mac were left out." ("1 page … was left out.")
 - An answer the engine could not check first (`sufficiency_degraded`): "This answer wasn't checked against your pages before it was written."
 
@@ -578,7 +578,7 @@ A withheld answer is a count, never a title: the API names no such page. Under i
 | The engine does not answer | — | "OpenKOS isn't responding." | **Try again** |
 | Anything else | — | "Something went wrong." | **Try again** |
 
-**Earlier questions.** The session's last few questions wait behind "Earlier questions", each with one word for how it went: "Answered", "No answer", "Kept private", "Didn't finish". They are kept in memory only and are gone when the app closes.
+**Earlier questions.** The session's last few questions wait behind "Earlier questions", each with one word for how it went: "Answered", "No answer", "Stays on this Mac", "Didn't finish". They are kept in memory only and are gone when the app closes.
 
 ## Rebuilding search
 
@@ -588,7 +588,7 @@ A withheld answer is a count, never a title: the API names no such page. Under i
 - **Why, before.** "Search needs to be rebuilt for the new AI model. Until it is, answers may miss some pages." or, when only pages changed, "Search is behind your latest changes, so answers may miss them. Rebuilding brings it up to date." Then what it costs: "The AI model on this Mac reads your pages again. Nothing leaves this Mac.", or, with a cloud AI model for search, "You'll see what is sent to {host} before it starts." One button, **Rebuild search** ("Starting…").
 - **With a cloud AI model for search,** it asks first, in a dialog that starts on its safe answer, with the cloud warning's send rule: "Rebuild search with {host}?" — "OpenKOS will send the text of your pages to {host} so search can find them by what they mean." — "Pages marked Shareable or Private are sent." "Pages marked Only on this Mac are never sent." "{host} may charge you for this." — **Rebuild search** · **Not now**.
 - **While it runs:** "Getting ready…", then "Reading {done} of {n} pages…" with a progress bar, then "Finishing…", with **Stop** ("Stopping…"). Nothing is written until the end, so **Stop** loses no page: "Stopped. Search wasn't changed."
-- **After:** "Search is up to date." When it could not cover every page: "Search was rebuilt." followed by what was left: "{n} pages marked Only on this Mac weren't sent, so search finds them only by their words." (a cloud AI model for search), "The AI model couldn't read {n} pages. Rebuilding again tries them again.", "{n} pages couldn't be opened." After a rebuild that left only pages marked Only on this Mac, search no longer reads as behind: nothing more can be sent. Those pages are searched by their words until an AI model on this Mac rebuilds search. After a rebuild that left pages the AI model couldn't read or that couldn't be opened, search still reads as behind.
+- **After:** the result shows on Settings and Status, where a rebuild is started, with **Dismiss**; Ask shows why search is behind but never an earlier result. "Search is up to date." When it could not cover every page: "Search was rebuilt." followed by what was left: "{n} pages marked Only on this Mac weren't sent, so search finds them only by their words." (a cloud AI model for search), "The AI model couldn't read {n} pages. Rebuilding again tries them again.", "{n} pages couldn't be opened." After a rebuild that left only pages marked Only on this Mac, search no longer reads as behind: nothing more can be sent. Those pages are searched by their words until an AI model on this Mac rebuilds search. After a rebuild that left pages the AI model couldn't read or that couldn't be opened, search still reads as behind.
 
 | Situation | Code | Message |
 | --- | --- | --- |

@@ -2,7 +2,7 @@
 // The label controls drawn from a real model over a fake client.
 import { describe, expect, it, vi } from "vitest";
 import { LabelModel, type LabelClient, type PageRef } from "./model.ts";
-import { keepHereAction, labelChoice } from "./render.ts";
+import { keepHereAction, keepHereState, labelChoice } from "./render.ts";
 
 const GARDEN: PageRef = { conceptId: "concepts/garden", title: "Garden", level: "private" };
 
@@ -58,6 +58,20 @@ describe("the label choice", () => {
   });
 });
 
+describe("dismissing a confirmation", () => {
+  it("offers Dismiss on a confirmation that has no Undo, and closing it removes it", async () => {
+    const { model: m } = model();
+    m.set(GARDEN, "confidential");
+    await vi.waitFor(() => expect(m.state.notice).not.toBeNull());
+    const node = labelChoice(GARDEN, m, m.state);
+    const dismiss = Array.from(node.querySelectorAll("button")).find((b) => text(b) === "Dismiss");
+    expect(dismiss).toBeDefined();
+    dismiss!.click();
+    expect(m.state.notice).toBeNull();
+    expect(text(labelChoice(GARDEN, m, m.state))).not.toContain("is now");
+  });
+});
+
 describe("the one action from a citation", () => {
   it("is a button that keeps the page only on this Mac, then a quiet line saying so", async () => {
     const { model: m } = model();
@@ -67,14 +81,17 @@ describe("the one action from a citation", () => {
     button.click();
     await vi.waitFor(() => expect(m.levelOf(GARDEN)).toBe("confidential"));
     const after = keepHereAction(GARDEN, m, m.state);
-    expect(text(after)).toContain("Only on this Mac");
-    expect(Array.from(after.querySelectorAll("button")).map(text)).toEqual(["Undo"]);
+    expect(text(after)).toContain("is now Only on this Mac");
+    expect(Array.from(after.querySelectorAll("button")).map(text)).toEqual(["Undo", "Dismiss"]);
+    expect(text(keepHereState(GARDEN, m)!)).toContain("Only on this Mac");
   });
 
-  it("names a page already kept here and offers no button", () => {
+  it("keeps the state apart from the action: the badge is never beside a button's label", () => {
     const { model: m } = model();
-    const node = keepHereAction({ ...GARDEN, level: "confidential" }, m, m.state);
-    expect(node.querySelector("button")).toBeNull();
-    expect(text(node)).toContain("Only on this Mac");
+    expect(keepHereState(GARDEN, m)).toBeNull();
+    const kept = { ...GARDEN, level: "confidential" as const };
+    expect(text(keepHereState(kept, m)!)).toContain("Only on this Mac");
+    expect(keepHereAction(kept, m, m.state).querySelector("button")).toBeNull();
+    expect(text(keepHereAction(kept, m, m.state))).toBe("");
   });
 });

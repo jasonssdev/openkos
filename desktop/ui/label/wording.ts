@@ -13,6 +13,7 @@ export const LABEL_WORDS = {
   keepHere: "Keep only on this Mac",
   keptHere: "Only on this Mac",
   undo: "Undo",
+  dismiss: "Dismiss",
   undoing: "Undoing…",
   saving: "Saving…",
 };

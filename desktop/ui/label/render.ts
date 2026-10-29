@@ -1,7 +1,8 @@
 // Draws who can see a page with the design system's components (ADR-0066,
 // ADR-0069). It decides nothing: every word comes from wording.ts. Two forms:
 // the three labels as a choice, where a page is shown in full, and the one
-// action "Keep only on this Mac", where a page is only named.
+// action "Keep only on this Mac", where a page is only named; its state, "Only
+// on this Mac", is drawn apart from it.
 import { badge, callout, el, segmented, uiButton } from "../system/index.ts";
 import type { LabelModel, LabelState, PageRef } from "./model.ts";
 import { LABEL_WORDS, labelOptions, type Level } from "./wording.ts";
@@ -10,11 +11,17 @@ import { LABEL_WORDS, labelOptions, type Level } from "./wording.ts";
 function notice(page: PageRef, model: LabelModel, state: LabelState): HTMLElement | null {
   if (state.notice?.conceptId === page.conceptId) {
     const undo = state.notice.undo;
+    const dismiss = uiButton(LABEL_WORDS.dismiss, () => model.dismiss(), {
+      variant: "quiet",
+      size: "sm",
+      disabled: state.busy === page.conceptId,
+      focusKey: `label-dismiss:${page.conceptId}`,
+    });
     return callout("success", state.notice.text, {
       live: "status",
       actions:
         undo === null
-          ? []
+          ? [dismiss]
           : [
               uiButton(LABEL_WORDS.undo, () => model.undo(), {
                 size: "sm",
@@ -22,10 +29,14 @@ function notice(page: PageRef, model: LabelModel, state: LabelState): HTMLElemen
                 loadingLabel: LABEL_WORDS.undoing,
                 focusKey: `label-undo:${page.conceptId}`,
               }),
+              dismiss,
             ],
     });
   }
-  if (state.problem?.conceptId === page.conceptId) return callout("error", state.problem.text, { live: "alert" });
+  if (state.problem?.conceptId === page.conceptId) {
+    const dismiss = uiButton(LABEL_WORDS.dismiss, () => model.dismiss(), { variant: "quiet", size: "sm", focusKey: `label-dismiss:${page.conceptId}` });
+    return callout("error", state.problem.text, { live: "alert", actions: [dismiss] });
+  }
   return null;
 }
 
@@ -54,11 +65,16 @@ export function labelChoice(page: PageRef, model: LabelModel, state: LabelState)
   );
 }
 
-/** The one action: keep a named page only on this Mac. */
+/** The state: the quiet "Only on this Mac" once a named page is kept here, otherwise nothing. */
+export function keepHereState(page: PageRef, model: LabelModel): HTMLElement | null {
+  return model.levelOf(page) === "confidential" ? badge("neutral", LABEL_WORDS.keptHere) : null;
+}
+
+/** The one action: keep a named page only on this Mac, with the last change to it. Once kept, only that note. */
 export function keepHereAction(page: PageRef, model: LabelModel, state: LabelState): HTMLElement {
   const kept = model.levelOf(page) === "confidential";
   const action = kept
-    ? badge("neutral", LABEL_WORDS.keptHere)
+    ? null
     : uiButton(LABEL_WORDS.keepHere, () => model.set(page, "confidential"), {
         variant: "quiet",
         size: "sm",

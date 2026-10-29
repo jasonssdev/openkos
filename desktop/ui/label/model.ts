@@ -88,6 +88,11 @@ export class LabelModel {
     });
   }
 
+  /** Close the confirmation or the problem on screen; the levels stay as they are. */
+  dismiss(): void {
+    if (this.#state.notice !== null || this.#state.problem !== null) this.#set({ notice: null, problem: null });
+  }
+
   /** Put back the level the last change replaced. */
   async undo(): Promise<void> {
     const notice = this.#state.notice;
