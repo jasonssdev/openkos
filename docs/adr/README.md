@@ -125,3 +125,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0084](0084-a-larger-context-window-is-sized-at-setup-on-machines-with-32-gib-or-more.md) | A larger context window is sized at setup on machines with 32 GiB or more | Proposed | 2026-10-29 |
 | [0085](0085-a-question-that-names-a-meeting-series-boosts-that-series-and-does-not-filter-to-it.md) | A question that names a meeting series boosts that series and does not filter to it | Superseded by ADR-0086 | 2026-10-29 |
 | [0086](0086-the-series-boost-stays-off-because-it-removed-too-few-foreign-blocks.md) | The series boost stays off because it removed too few foreign blocks | Proposed | 2026-10-29 |
+| [0087](0087-a-meeting-is-kept-as-an-event-beside-its-subjects-composed-from-the-sources-speaker-roster.md) | A meeting is kept as an Event beside its subjects, composed from the source's speaker roster | Proposed | 2026-10-29 |

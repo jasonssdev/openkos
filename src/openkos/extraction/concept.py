@@ -283,6 +283,81 @@ def _turn_match(line: str) -> re.Match[str] | None:
     return _TRANSCRIPT_TURN_RE.match(_PAIRED_EMPHASIS_RE.sub("", line))
 
 
+def _speaker_turn_label(line: str) -> str | None:
+    """The speaker label `line` opens with, or `None` (#673, shared in #1689).
+
+    THE one reading of "a line that names a speaker": `_turn_match`'s shape,
+    then the structural label rules -- more than three word tokens (prose
+    sentences containing a colon), any digit (date-time log prefixes), or
+    three-plus characters in all caps (`INFO:`/`ERROR:` severity labels;
+    one- and two-letter labels stay valid because AMI's anonymized speakers
+    are `A:`/`B:`) reject it. The meeting detector
+    (`_transcript_shaped_text`) and the Event roster (`speaker_roster`) both
+    read lines through this, so they cannot disagree on who a speaker is."""
+    match = _turn_match(line)
+    if match is None:
+        return None
+    label = match.group("label").strip()
+    if (
+        len(label.split()) > 3
+        or any(ch.isdigit() for ch in label)
+        or (len(label) >= 3 and label.isupper())
+    ):
+        return None
+    return label
+
+
+_AMI_SPEAKER_RE: Final = re.compile(r"^([A-Z][A-Z0-9]{1,3}):[ \t]", re.MULTILINE)
+_AMI_MIN_TURNS: Final = 2
+
+
+def speaker_roster(source_text: str) -> tuple[str, ...]:
+    """The speaker labels a source declares, in order of first appearance
+    (#1689): the union of (a) AMI-form labels -- two to four capitals or
+    digits opening a line, on at least `_AMI_MIN_TURNS` lines -- and (b) the
+    labels the meeting detector counts as recurring speakers
+    (`_speaker_turn_label` on at least `_TRANSCRIPT_MIN_TURNS_PER_SPEAKER`
+    lines, provided at least `_TRANSCRIPT_MIN_SPEAKERS` such labels exist).
+
+    Measured in `evals/meeting_event_roster/` (`roster_of_named`); the AMI
+    half is what keeps a label such as `PM` readable where the detector's
+    own grammar would reject a longer all-capitals label. Part (b) is the
+    detector's definition by construction -- it calls the same function --
+    and the detector's wider shape gate (10 recurring turns, half the
+    non-blank lines) decides whether a source is a transcript at all and is
+    not repeated here."""
+    counts: dict[str, int] = {}
+    first: dict[str, int] = {}
+    for index, line in enumerate(source_text.split("\n")):
+        label = _speaker_turn_label(line)
+        if label is not None:
+            counts[label] = counts.get(label, 0) + 1
+            first.setdefault(label, index)
+    recurring = {
+        label for label, n in counts.items() if n >= _TRANSCRIPT_MIN_TURNS_PER_SPEAKER
+    }
+    if len(recurring) < _TRANSCRIPT_MIN_SPEAKERS:
+        recurring = set()
+    ami_counts: dict[str, int] = {}
+    ami_first: dict[str, int] = {}
+    for match in _AMI_SPEAKER_RE.finditer(source_text):
+        label = match.group(1)
+        ami_counts[label] = ami_counts.get(label, 0) + 1
+        ami_first.setdefault(label, source_text.count("\n", 0, match.start()))
+    # The AMI half applies only to a source the meeting gate itself calls a
+    # transcript: `TODO:` / `NOTE:` lines recurring in a summarized note are
+    # not speakers, and the participant check cannot reject them (they occur
+    # in the source). Measured AMI sources are transcripts, so unchanged.
+    ami = (
+        {label for label, n in ami_counts.items() if n >= _AMI_MIN_TURNS}
+        if _transcript_shaped_text(source_text)
+        else set()
+    )
+    entries = [(ami_first[label], label) for label in ami]
+    entries += [(first[label], label) for label in recurring - ami]
+    return tuple(label for _line, label in sorted(entries))
+
+
 def _transcript_shaped_text(source_text: str) -> bool:
     """Deterministic content-shape transcript detection (#673): does this
     text READ as speaker-labelled turns, whatever its title says?
@@ -321,15 +396,8 @@ def _transcript_shaped_text(source_text: str) -> bool:
         if not line.strip():
             continue
         non_blank += 1
-        match = _turn_match(line)
-        if match is None:
-            continue
-        label = match.group("label").strip()
-        if (
-            len(label.split()) > 3
-            or any(ch.isdigit() for ch in label)
-            or (len(label) >= 3 and label.isupper())
-        ):
+        label = _speaker_turn_label(line)
+        if label is None:
             continue
         label_counts[label] = label_counts.get(label, 0) + 1
     recurring_turns = sum(
@@ -2075,8 +2143,13 @@ def _max_calls_for(
     # path retries an empty reply once (#524). Either way, two per unit.
     passes = 2 * windows if chunked else 2
     reask = 1
+    # #1689: the meeting Event's compose call and its one re-ask of an
+    # unparseable reply, on either path. Counted whatever the shape: the
+    # framing drop's wider verdict (`_framing_shaped`) gates the call, not
+    # `meeting_shaped`, and a bound may only err high.
+    meeting_event = 2
     if not union_judge:
-        return passes + reask
+        return passes + reask + meeting_event
     participant = 1 if meeting_shaped else 0
     # The decision pass asks each window once more after an unusable reply.
     decisions = (
@@ -2085,7 +2158,7 @@ def _max_calls_for(
         else 0
     )
     judge = judge_mod.JUDGE_ATTEMPTS if selector_judge else 0
-    return passes + reask + participant + decisions + judge
+    return passes + reask + meeting_event + participant + decisions + judge
 
 
 def max_extraction_calls(
@@ -2559,6 +2632,7 @@ def _dedup_merged(results: list[ExtractionResult]) -> list[ExtractionResult]:
 OPTIONAL_CALL_REASK: Final = "reask"
 OPTIONAL_CALL_PARTICIPANT_CAPTURE: Final = "participant_capture"
 OPTIONAL_CALL_DECISION_PASS: Final = "decision_pass"  # noqa: S105 -- a call name, not a credential
+OPTIONAL_CALL_MEETING_EVENT: Final = "meeting_event"
 """Stable identifiers for the OPTIONAL extraction calls, named after the
 pass each one is (#828), and the prefix of every entry those calls
 contribute to `ExtractionReport.optional_call_failures`.
@@ -3206,6 +3280,13 @@ class ExtractionReport:
     twin_dropped_titles: tuple[str, ...] = ()
     """Titles `_drop_source_title_twins` removed (#1642); same purpose and
     same diagnostic-only status as `framing_dropped_titles`."""
+    meeting_event_added_titles: tuple[str, ...] = ()
+    """The title of the meeting `Event` kept beside the subjects (#1689), or
+    `()` when none was: the source is not one the framing drop applies to, no
+    subject survived, no `Event` was removed, or the compose call failed or
+    its body was rejected. The Event is COUNTED in `produced` and `retained`
+    (it is an object of the result) but sits outside the cap, so it never
+    appears in `discarded_titles`."""
     participant_judge_selected_titles: tuple[str, ...] = ()
     """`Person`/`Organization` titles (#668 design D5) the judge ITSELF
     selected -- present in the judge's own echoed selection, not restored
@@ -3384,6 +3465,70 @@ class ExtractionOutcome:
     report: ExtractionReport
 
 
+def _meeting_event_candidates(
+    before_framing: list[ExtractionResult],
+    after_twins: list[ExtractionResult],
+    *,
+    source_title: str,
+) -> list[ExtractionResult]:
+    """The `Event`s `_drop_framing_objects` removed that the twin rule would
+    have kept (#1689), in reply order: what the shipped pipeline removed and
+    nothing else would have. The twin rule is read over the list as it stood
+    BEFORE the framing drop (its single-object floor depends on the list it
+    sees), and what the pipeline kept is subtracted by `(type, title)`, so a
+    duplicate that survived is not mistaken for a removal."""
+    held: dict[tuple[str, str], int] = {}
+    for kept in after_twins:
+        key = (kept.type, _normalize_title(kept.title))
+        held[key] = held.get(key, 0) + 1
+    candidates: list[ExtractionResult] = []
+    for result in _drop_source_title_twins(before_framing, source_title=source_title):
+        key = (result.type, _normalize_title(result.title))
+        if held.get(key, 0) > 0:
+            held[key] -= 1
+        elif result.type == "Event":
+            candidates.append(result)
+    return candidates
+
+
+def _add_meeting_event(
+    retained: list[ExtractionResult],
+    candidates: list[ExtractionResult],
+    *,
+    source_text: str,
+    llm: LLMBackend,
+    on_progress: ProgressHook | None,
+) -> tuple[list[ExtractionResult], tuple[str, ...], str | None, bool]:
+    """Keep ONE meeting `Event` beside the retained subjects (#1689).
+
+    Returns `(objects, added_titles, failure, prompt_bounded)`. With no
+    retained subject or no candidate nothing is asked and `retained` is handed
+    straight back: the meeting is never kept alone (that is the collapse
+    #522 measured). The Event is appended AFTER the subjects and counts
+    against no cap, so the subjects and their order are exactly what they
+    were. Imported lazily: `meeting_event` imports this module."""
+    from openkos.extraction import meeting_event
+
+    candidate = meeting_event.pick_candidate(candidates, source_text)
+    if not retained or candidate is None:
+        return retained, (), None, False
+    _report(on_progress, "composing the meeting event")
+    outcome = meeting_event.compose(
+        source_text,
+        candidate=candidate,
+        subject_titles=[result.title for result in retained],
+        llm=llm,
+    )
+    if outcome.result is None:
+        return retained, (), outcome.failure, outcome.prompt_bounded
+    return (
+        [*retained, outcome.result],
+        (outcome.result.title,),
+        outcome.failure,
+        outcome.prompt_bounded,
+    )
+
+
 def extract_concept(
     source_text: str,
     *,
@@ -3518,13 +3663,20 @@ def extract_concept(
             _drop_wrong_language_titles(results, source_text=source_text)
         )
     before_filters = results
-    results = _drop_framing_objects(
-        results, framing_shaped=_framing_shaped(source_title, source_text)
-    )
+    framing_shaped = _framing_shaped(source_title, source_text)
+    results = _drop_framing_objects(results, framing_shaped=framing_shaped)
     framing_dropped = _removed_titles(before_filters, results)
+    pre_framing = before_filters
     before_filters = results
     results = _drop_source_title_twins(results, source_title=source_title)
     twin_dropped = _removed_titles(before_filters, results)
+    # #1689: the meeting Events the framing drop removed, kept as candidates
+    # for the one Event this source may carry beside its subjects.
+    event_candidates = (
+        _meeting_event_candidates(pre_framing, results, source_title=source_title)
+        if framing_shaped
+        else []
+    )
     # #584: the list is final and filtered here, which is the only place the
     # trigger's "the source returned exactly one object" is a true statement
     # about the source. Additions then take the same cap as everything else.
@@ -3538,11 +3690,20 @@ def extract_concept(
         )
     )
     retained = results[:_MAX_OBJECTS_PER_SOURCE]
+    # #1689: appended AFTER the cap, so it takes no subject's place.
+    objects, event_titles, event_failure, event_bounded = _add_meeting_event(
+        retained,
+        event_candidates,
+        source_text=source_text,
+        llm=llm,
+        on_progress=on_progress,
+    )
     return ExtractionOutcome(
-        objects=retained,
+        objects=objects,
         report=ExtractionReport(
-            produced=len(results),
-            retained=len(retained),
+            produced=len(results) + len(event_titles),
+            retained=len(objects),
+            meeting_event_added_titles=event_titles,
             discarded_titles=tuple(
                 result.title for result in results[_MAX_OBJECTS_PER_SOURCE:]
             ),
@@ -3575,13 +3736,21 @@ def extract_concept(
             # it costs exactly what it costs on the union path. The
             # participant capture never runs here, so it can contribute no
             # entry -- the tuple is single-sourced rather than padded.
-            optional_call_failures=(
-                (reask_failure,) if reask_failure is not None else ()
+            optional_call_failures=tuple(
+                failure
+                for failure in (reask_failure, event_failure)
+                if failure is not None
             ),
             # #866, single-sourced for the same reason: the re-ask is the
-            # one whole-source call this path can bound.
-            bounded_prompt_calls=(
-                (OPTIONAL_CALL_REASK,) if reask_prompt_bounded else ()
+            # one whole-source call this path can bound -- and, since #1689,
+            # the meeting Event's compose call, spent after it.
+            bounded_prompt_calls=tuple(
+                name
+                for name, bounded in (
+                    (OPTIONAL_CALL_REASK, reask_prompt_bounded),
+                    (OPTIONAL_CALL_MEETING_EVENT, event_bounded),
+                )
+                if bounded
             ),
         ),
     )
@@ -3946,6 +4115,14 @@ def extract_concept_union(
         union_merged = _merge_union(run1 + run2)
         merged = _drop_source_title_twins(union_merged, source_title=source_title)
         twin_dropped = _removed_titles(union_merged, merged)
+        # #1689: what the framing drop took from the merged runs.
+        event_candidates = (
+            _meeting_event_candidates(
+                _merge_union(raw1 + raw2), merged, source_title=source_title
+            )
+            if framing_shaped
+            else []
+        )
         chunk_count = 1
         skipped_chunks: tuple[int, ...] = ()
         run_count = 2
@@ -4004,6 +4181,11 @@ def extract_concept_union(
         framing_dropped = _removed_titles(deduped, framed)
         merged = _drop_source_title_twins(framed, source_title=source_title)
         twin_dropped = _removed_titles(framed, merged)
+        event_candidates = (
+            _meeting_event_candidates(deduped, merged, source_title=source_title)
+            if framing_shaped
+            else []
+        )
         run_count = 1
 
     # #584, symmetrically with `extract_concept`: the merged list is final
@@ -4109,11 +4291,23 @@ def extract_concept_union(
         # `judge_status = "ok"`, contradicting that status's "admitted at
         # least one" meaning. Skip the call; the report defaults already
         # say it all (`judge_status="skipped"` means "judge not run").
+        # #1689: a pass Decision is a subject, so the meeting Event can
+        # still follow it.
+        empty_objects, empty_event_titles, empty_event_failure, empty_bounded = (
+            _add_meeting_event(
+                pass_decisions,
+                event_candidates,
+                source_text=source_text,
+                llm=llm,
+                on_progress=on_progress,
+            )
+        )
         return ExtractionOutcome(
-            objects=pass_decisions,
+            objects=empty_objects,
             report=ExtractionReport(
-                produced=len(pass_decisions),
-                retained=len(pass_decisions),
+                produced=len(empty_objects),
+                retained=len(empty_objects),
+                meeting_event_added_titles=empty_event_titles,
                 chunks=chunk_count,
                 skipped_chunks=skipped_chunks,
                 runs=run_count,
@@ -4126,10 +4320,16 @@ def extract_concept_union(
                 decision_pass_added_titles=tuple(r.title for r in pass_decisions),
                 participant_capture_runs=participant_capture_runs,
                 participant_capture_added_titles=participant_capture_added_titles,
-                optional_call_failures=optional_call_failures,
+                optional_call_failures=(
+                    *optional_call_failures,
+                    *((empty_event_failure,) if empty_event_failure else ()),
+                ),
                 # #866: the judge never ran on an empty union, but the two
                 # optional calls above may still have read an excerpt.
-                bounded_prompt_calls=bounded_prompt_calls,
+                bounded_prompt_calls=(
+                    *bounded_prompt_calls,
+                    *((OPTIONAL_CALL_MEETING_EVENT,) if empty_bounded else ()),
+                ),
             ),
         )
 
@@ -4302,11 +4502,21 @@ def extract_concept_union(
     # cut never silently drops a verified Decision; they are bounded by their
     # own cap and named in `decision_pass_added_titles`.
     retained = (kept[:_UNION_BACKSTOP] if cap_applies else kept) + pass_decisions
+    # #1689: appended AFTER the backstop and the pass Decisions, so the cut
+    # never reaches it and it takes no subject's place.
+    objects, event_titles, event_failure, event_bounded = _add_meeting_event(
+        retained,
+        event_candidates,
+        source_text=source_text,
+        llm=llm,
+        on_progress=on_progress,
+    )
     return ExtractionOutcome(
-        objects=retained,
+        objects=objects,
         report=ExtractionReport(
-            produced=len(kept) + len(pass_decisions),
-            retained=len(retained),
+            produced=len(kept) + len(pass_decisions) + len(event_titles),
+            retained=len(objects),
+            meeting_event_added_titles=event_titles,
             discarded_titles=(
                 tuple(result.title for result in kept[_UNION_BACKSTOP:])
                 if cap_applies
@@ -4339,7 +4549,13 @@ def extract_concept_union(
             participant_capture_added_titles=participant_capture_added_titles,
             unevidenced_titles=_unevidenced_titles(retained, source_text=source_text),
             judge_failure_causes=judge_failure_causes,
-            optional_call_failures=optional_call_failures,
-            bounded_prompt_calls=bounded_prompt_calls,
+            optional_call_failures=(
+                *optional_call_failures,
+                *((event_failure,) if event_failure else ()),
+            ),
+            bounded_prompt_calls=(
+                *bounded_prompt_calls,
+                *((OPTIONAL_CALL_MEETING_EVENT,) if event_bounded else ()),
+            ),
         ),
     )
