@@ -58,7 +58,7 @@ meeting title, the line `SPEAKERS IN THE SOURCE (complete list): <roster>`
 source text bounded to the context window like the other whole-source calls. The
 roster MUST be `speaker_roster(source_text)`: the labels, in order of first
 appearance, of the union of two or more capitals-or-digits labels opening at
-least two lines (the AMI form) and the labels the meeting detector
+least two lines (the AMI form, only when `_transcript_shaped_text` holds for the source) and the labels the meeting detector
 (`_transcript_shaped_text`) counts as recurring speakers, which MUST be computed
 by the same line and label rules, not by a second definition. The Event's title
 MUST be the candidate's; its description and body MUST be the reply's.

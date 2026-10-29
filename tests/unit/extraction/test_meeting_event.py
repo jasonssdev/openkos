@@ -38,8 +38,21 @@ def test_roster_reads_named_speakers_in_order_of_first_appearance() -> None:
 
 
 def test_roster_reads_ami_labels() -> None:
-    text = "PM: Hello all.\nID: Hi.\nPM: Next item.\nID: Agreed.\n"
-    assert concept_mod.speaker_roster(text) == ("PM", "ID")
+    text = "".join(
+        f"{who}: Remark {i}.\n" for i in range(1, 7) for who in ("PM", "ID", "UI")
+    )
+    assert concept_mod._transcript_shaped_text(text)
+    assert concept_mod.speaker_roster(text) == ("PM", "ID", "UI")
+
+
+def test_a_note_with_recurring_todo_and_note_lines_has_no_roster() -> None:
+    text = (
+        "Meeting summary.\n\nTODO: send the report\nNOTE: budget is tight\n"
+        "TODO: book the room\nNOTE: Ana is away\nTODO: call Luis\n"
+        "Some prose line one.\nSome prose line two.\nSome prose line three.\n"
+    )
+    assert not concept_mod._transcript_shaped_text(text)
+    assert concept_mod.speaker_roster(text) == ()
 
 
 def test_roster_is_empty_for_prose_and_for_one_speaker() -> None:
@@ -239,3 +252,24 @@ def test_compose_reports_a_bounded_prompt() -> None:
 
 def test_call_name_is_the_report_constant() -> None:
     assert me.CALL_NAME == concept_mod.OPTIONAL_CALL_MEETING_EVENT == "meeting_event"
+
+
+@pytest.mark.parametrize("value", ["null", "[1]", '{"a": 1}', "5"])
+def test_a_non_string_description_falls_back_to_the_candidates(value: str) -> None:
+    reply = '{"description": ' + value + ', "body": "' + "x" * 100 + '"}'
+    out = _compose(_Script(reply))
+    assert out.result is not None
+    assert out.result.description == "d"
+
+
+def test_a_blank_description_falls_back_to_the_candidates() -> None:
+    reply = '{"description": "  ", "body": "' + "x" * 100 + '"}'
+    out = _compose(_Script(reply))
+    assert out.result is not None
+    assert out.result.description == "d"
+
+
+@pytest.mark.parametrize("value", ["null", "[1]", '{"a": 1}', "5"])
+def test_a_non_string_body_is_unusable(value: str) -> None:
+    out = _compose(_Script('{"description": "x", "body": ' + value + "}"))
+    assert out.result is None

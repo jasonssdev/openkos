@@ -344,7 +344,15 @@ def speaker_roster(source_text: str) -> tuple[str, ...]:
         label = match.group(1)
         ami_counts[label] = ami_counts.get(label, 0) + 1
         ami_first.setdefault(label, source_text.count("\n", 0, match.start()))
-    ami = {label for label, n in ami_counts.items() if n >= _AMI_MIN_TURNS}
+    # The AMI half applies only to a source the meeting gate itself calls a
+    # transcript: `TODO:` / `NOTE:` lines recurring in a summarized note are
+    # not speakers, and the participant check cannot reject them (they occur
+    # in the source). Measured AMI sources are transcripts, so unchanged.
+    ami = (
+        {label for label, n in ami_counts.items() if n >= _AMI_MIN_TURNS}
+        if _transcript_shaped_text(source_text)
+        else set()
+    )
     entries = [(ami_first[label], label) for label in ami]
     entries += [(first[label], label) for label in recurring - ami]
     return tuple(label for _line, label in sorted(entries))

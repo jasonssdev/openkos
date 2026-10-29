@@ -159,7 +159,9 @@ def _parse_reply(reply: str) -> tuple[str, str] | None:
     obj = parsing.extract_json_object(reply)
     if not obj or not isinstance(obj.get("body"), str) or not obj["body"].strip():
         return None
-    return str(obj.get("description", "")).strip(), obj["body"].strip()
+    raw = obj.get("description")
+    description = raw.strip() if isinstance(raw, str) else ""
+    return description, obj["body"].strip()
 
 
 def compose(
