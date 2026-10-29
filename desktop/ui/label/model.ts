@@ -4,10 +4,21 @@
 // because the person has just made the choice. Letting a page marked Only on
 // this Mac out while a cloud AI model is on asks first. The levels it set are
 // kept, so every screen shows them without reading the page again.
-import { ApiError, type Client, retryWhileBusy } from "../../client/index.ts";
-import { type Level, changedLine, lowerWarning, problemFor, undoneLine } from "./wording.ts";
+import { ApiError, type Client, type Schemas, retryWhileBusy } from "../../client/index.ts";
+import { type Level, changedLine, lowerWarning, problemFor, undoneAllLine, undoneLine } from "./wording.ts";
 
-export type LabelClient = Pick<Client, "previewSensitivity" | "applySensitivity">;
+export type LabelClient = Pick<
+  Client,
+  "previewSensitivity" | "applySensitivity" | "previewUndoSensitivity" | "applyUndoSensitivity"
+>;
+
+/** What the engine will do to put a whole change back: echoed to it unchanged to do so. */
+export interface WholeUndo {
+  version: Schemas["SensitivityUndoVersion"];
+  title: string;
+  restores: Level;
+  pages: readonly { conceptId: string; now: Level; after: Level }[];
+}
 
 /** A page as a screen shows it: its id, its title and the level it read. */
 export interface PageRef {
@@ -29,8 +40,11 @@ export interface LabelState {
   levels: ReadonlyMap<string, Level>;
   /** The page whose label is being changed. */
   busy: string | null;
-  /** The last change, and the level Undo puts back when it can. */
-  notice: { conceptId: string; text: string; undo: Level | null } | null;
+  /**
+   * The last change, the level Undo puts back when it can, and the whole-change
+   * undo when the engine offers one (pages were raised with the page).
+   */
+  notice: { conceptId: string; text: string; undo: Level | null; undoAll: WholeUndo | null } | null;
   problem: { conceptId: string; text: string } | null;
 }
 
@@ -81,10 +95,70 @@ export class LabelModel {
     // Undo puts back the level the engine read before the change, not the one the screen showed.
     this.#last = { ...page, level: done.before };
     const raised = done.raised;
+    const undoAll = raised > 0 ? await this.#offerWholeUndo(page) : null;
     this.#set({
       busy: null,
       levels: done.levels,
-      notice: { conceptId: page.conceptId, text: changedLine(page.title, level, raised), undo: raised === 0 ? done.before : null },
+      notice: {
+        conceptId: page.conceptId,
+        text: changedLine(page.title, level, raised, undoAll !== null),
+        undo: raised === 0 ? done.before : null,
+        undoAll,
+      },
+    });
+  }
+
+  /** Ask the engine whether it can put the change back as a whole; `null` when it cannot. */
+  async #offerWholeUndo(page: PageRef): Promise<WholeUndo | null> {
+    const client = this.#client;
+    if (client === null) return null;
+    try {
+      const preview = await client.previewUndoSensitivity({ concept_id: page.conceptId });
+      return {
+        version: preview.version,
+        title: page.title,
+        restores: preview.restores,
+        pages: preview.pages.map((p) => ({ conceptId: p.concept_id, now: p.now, after: p.after })),
+      };
+    } catch {
+      // Not offered is the honest default: the old words say what to do by hand.
+      return null;
+    }
+  }
+
+  /** Put the whole last change back: the page and the pages raised with it. */
+  async undoAll(): Promise<void> {
+    const notice = this.#state.notice;
+    const client = this.#client;
+    const whole = notice?.undoAll ?? null;
+    if (notice === null || whole === null || client === null || this.#state.busy !== null) return;
+    this.#set({ busy: notice.conceptId, problem: null, notice: null });
+    try {
+      await retryWhileBusy(() => client.applyUndoSensitivity({ version: whole.version }), {
+        ...(this.#ports.sleep ? { sleep: this.#ports.sleep } : {}),
+      });
+    } catch (error) {
+      this.#set({ busy: null, problem: { conceptId: notice.conceptId, text: problemFor(error, true) } });
+      return;
+    }
+    const levels = new Map(this.#state.levels);
+    levels.set(notice.conceptId, whole.restores);
+    let restored = 0;
+    let kept = 0;
+    for (const p of whole.pages) {
+      levels.set(p.conceptId, p.after);
+      if (p.after === p.now) kept += 1;
+      else restored += 1;
+    }
+    this.#set({
+      busy: null,
+      levels,
+      notice: {
+        conceptId: notice.conceptId,
+        text: undoneAllLine(whole.title, whole.restores, restored, kept),
+        undo: null,
+        undoAll: null,
+      },
     });
   }
 
@@ -103,7 +177,7 @@ export class LabelModel {
     this.#set({
       busy: null,
       levels: done.levels,
-      notice: { conceptId: page.conceptId, text: undoneLine(page.title, notice.undo), undo: null },
+      notice: { conceptId: page.conceptId, text: undoneLine(page.title, notice.undo), undo: null, undoAll: null },
     });
   }
 

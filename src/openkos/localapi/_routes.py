@@ -58,6 +58,9 @@ from openkos.localapi._models import (
     SensitivityApplyRequest,
     SensitivityPreviewRequest,
     SensitivityResponse,
+    SensitivityUndoApplyRequest,
+    SensitivityUndoPreviewRequest,
+    SensitivityUndoResponse,
     TierChangeApplyRequest,
     TierChangePreviewRequest,
     TierChangeResponse,
@@ -571,6 +574,39 @@ def make_router() -> APIRouter:
         )
         if isinstance(result, api.SensitivityChanged):
             return SensitivityResponse(changed=result, warnings=warnings)
+        raise _errors.outcome_problem(result)
+
+    @router.post("/pages/sensitivity/undo/preview", responses=_errors_of(404, 409, 413))
+    def sensitivity_undo_preview(
+        body: SensitivityUndoPreviewRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> api.SensitivityUndoPreview:
+        result = invoke(
+            lambda: api.preview_undo_sensitivity(workspace, body.concept_id)
+        )
+        if isinstance(result, api.SensitivityUndoPreview):
+            return result
+        raise _errors.outcome_problem(result)
+
+    @router.post(
+        "/pages/sensitivity/undo/apply",
+        responses=_errors_of(404, 409, 413, 503, retry_after=True),
+    )
+    def sensitivity_undo_apply(
+        body: SensitivityUndoApplyRequest,
+        workspace: api.Workspace = Depends(_workspace),  # noqa: B008
+    ) -> SensitivityUndoResponse:
+        warnings: list[str] = []
+        result = invoke(
+            lambda: api.apply_undo_sensitivity(
+                workspace,
+                body.version,
+                wait_seconds=_wait(body.wait_seconds),
+                on_warning=warnings.append,
+            )
+        )
+        if isinstance(result, api.SensitivityUndone):
+            return SensitivityUndoResponse(undone=result, warnings=warnings)
         raise _errors.outcome_problem(result)
 
     @router.get("/search")

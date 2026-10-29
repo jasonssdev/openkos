@@ -3,6 +3,7 @@ exit codes. The boundary, transforms and self-checks are covered by the
 service and model tests; these prove the CLI wires them and stays read-only
 toward the workspace."""
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -225,3 +226,58 @@ def test_outside_a_workspace_refuses(
     result = runner.invoke(app, ["export", str(tmp_path / "out"), "--auto"])
     assert result.exit_code == 1
     assert not (tmp_path / "out").exists()
+
+
+def _raised_log_line(workspace: Path) -> None:
+    """The line a Source raise writes, naming the pages raised with it, as the
+    real writer renders it (#1706)."""
+    from datetime import date
+
+    from openkos.application import sensitivity_service
+    from openkos.bundle import log as bundle_log
+
+    log = workspace / "bundle" / "log.md"
+    entry = sensitivity_service.log_line(
+        "sources/s",
+        "confidential",
+        "private",
+        [("concepts/secret", "private"), ("concepts/mine", "public")],
+    )
+    log.write_text(
+        bundle_log.insert_log_entry(
+            log.read_text(encoding="utf-8"), date(2026, 7, 1), entry
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    ("flags", "withheld"),
+    [
+        ([], ["concepts/secret", "concepts/mine", "sources/s"]),
+        (["--include-private"], ["concepts/secret", "sources/s"]),
+    ],
+)
+def test_the_exported_log_names_no_withheld_page_raised_in_a_change(
+    workspace: Path, flags: list[str], withheld: list[str]
+) -> None:
+    """#1706: the workspace log line that records which pages a change raised
+    never leaves. The export writes a fresh log, so a withheld page's id is gone
+    because it was removed, not because the export refused."""
+    _raised_log_line(workspace)
+    out = workspace.parent / "out"
+
+    result = runner.invoke(app, ["export", str(out), *flags, "--auto"])
+
+    assert result.exit_code == 0, result.output
+    exported = (out / "log.md").read_text(encoding="utf-8")
+    assert "Also raised" not in exported
+    for concept_id in withheld:
+        assert concept_id not in exported
+        slug = re.escape(concept_id.rsplit("/", 1)[1])
+        assert re.search(rf"(?<![\w-]){slug}(?![\w-])", exported) is None
+    for path in out.rglob("*"):
+        if path.is_file():
+            data = path.read_bytes()
+            for concept_id in withheld:
+                assert f"[{concept_id}]".encode() not in data

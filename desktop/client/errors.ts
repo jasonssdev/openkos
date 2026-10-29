@@ -85,6 +85,8 @@ export const ERROR_CODES = [
   // Who can see a page.
   "page_not_found",
   "sensitivity_unchanged",
+  "sensitivity_no_record",
+  "sensitivity_changed_since",
   // Rebuilding search.
   "rebuild_active",
   "remote_not_allowed",

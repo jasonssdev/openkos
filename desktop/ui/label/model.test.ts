@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, type Schemas } from "../../client/index.ts";
 import { LabelModel, type LabelClient, type PageRef } from "./model.ts";
-import { changedLine, lowerWarning, undoneLine, type Level } from "./wording.ts";
+import { changedLine, lowerWarning, problemFor, undoneAllLine, undoneLine, type Level } from "./wording.ts";
 
 type Preview = Schemas["SensitivityPreview"];
+type UndoPreview = Schemas["SensitivityUndoPreview"];
 
 const GARDEN: PageRef = { conceptId: "concepts/garden", title: "Garden", level: "private" };
 
@@ -23,8 +24,32 @@ function previewOf(page: PageRef, level: Level, alsoRaised: string[] = []): Prev
   };
 }
 
-function setup(over: { cloud?: string | null; answer?: boolean; alsoRaised?: string[] } = {}) {
+function undoPreviewOf(
+  conceptId: string,
+  pages: { id: string; now: Level; after: Level }[],
+): UndoPreview {
+  return {
+    concept_id: conceptId,
+    title: "Garden",
+    now: "confidential",
+    restores: "private",
+    pages: pages.map((p) => ({ concept_id: p.id, title: p.id, now: p.now, after: p.after })),
+    version: { concept_id: conceptId, content_digest: "u" },
+  };
+}
+
+function setup(
+  over: { cloud?: string | null; answer?: boolean; alsoRaised?: string[]; undoPages?: { id: string; now: Level; after: Level }[] | null } = {},
+) {
   const client = {
+    previewUndoSensitivity: vi.fn(async (body: { concept_id: string }) => {
+      if (over.undoPages === undefined || over.undoPages === null) throw apiError("sensitivity_no_record");
+      return undoPreviewOf(body.concept_id, over.undoPages);
+    }),
+    applyUndoSensitivity: vi.fn(async (body: { version: UndoPreview["version"] }) => ({
+      undone: { concept_id: body.version.concept_id, level: "private", restored: [], kept: [], commit_sha: "def", committed_confidential: false },
+      warnings: [],
+    })),
     previewSensitivity: vi.fn(async (body: { concept_id: string; level: Level }) =>
       previewOf({ ...GARDEN, conceptId: body.concept_id }, body.level, over.alsoRaised ?? []),
     ),
@@ -60,6 +85,7 @@ describe("the label model", () => {
       conceptId: GARDEN.conceptId,
       text: changedLine("Garden", "confidential", 0),
       undo: "private",
+      undoAll: null,
     });
     expect(model.state.busy).toBeNull();
   });
@@ -72,7 +98,7 @@ describe("the label model", () => {
       version: { concept_id: GARDEN.conceptId, level: "private", content_digest: "d" },
     });
     expect(model.levelOf(GARDEN)).toBe("private");
-    expect(model.state.notice).toEqual({ conceptId: GARDEN.conceptId, text: undoneLine("Garden", "private"), undo: null });
+    expect(model.state.notice).toEqual({ conceptId: GARDEN.conceptId, text: undoneLine("Garden", "private"), undo: null, undoAll: null });
   });
 
   it("undoes to the level the engine read, not the one the screen guessed", async () => {
@@ -171,6 +197,72 @@ describe("the label model", () => {
     model.subscribe((state) => seen.push(state.busy));
     await model.set(GARDEN, "confidential");
     expect(seen).toEqual([GARDEN.conceptId, null]);
+  });
+});
+
+describe("undoing a whole change", () => {
+  const PAGES: { id: string; now: Level; after: Level }[] = [
+    { id: "concepts/a", now: "confidential", after: "private" },
+    { id: "concepts/b", now: "confidential", after: "confidential" },
+  ];
+
+  it("offers it when pages were raised and the engine can put them back, in words with no manual chore", async () => {
+    const { model, client } = setup({ alsoRaised: ["concepts/a", "concepts/b"], undoPages: PAGES });
+    await model.set(GARDEN, "confidential");
+    expect(client.previewUndoSensitivity).toHaveBeenCalledWith({ concept_id: GARDEN.conceptId });
+    expect(model.state.notice?.text).toBe(changedLine("Garden", "confidential", 2, true));
+    expect(model.state.notice?.text).not.toContain("on its own");
+    expect(model.state.notice?.undo).toBeNull();
+    expect(model.state.notice?.undoAll).not.toBeNull();
+  });
+
+  it("applies the previewed version and puts each page at the level the engine said", async () => {
+    const { model, client } = setup({ alsoRaised: ["concepts/a", "concepts/b"], undoPages: PAGES });
+    await model.set(GARDEN, "confidential");
+    await model.undoAll();
+    expect(client.applyUndoSensitivity).toHaveBeenCalledWith({ version: { concept_id: GARDEN.conceptId, content_digest: "u" } });
+    expect(model.levelOf(GARDEN)).toBe("private");
+    expect(model.levelOf({ conceptId: "concepts/a", title: "a", level: "confidential" })).toBe("private");
+    expect(model.levelOf({ conceptId: "concepts/b", title: "b", level: "confidential" })).toBe("confidential");
+    expect(model.state.notice).toEqual({
+      conceptId: GARDEN.conceptId,
+      text: undoneAllLine("Garden", "private", 1, 1),
+      undo: null,
+      undoAll: null,
+    });
+  });
+
+  it("keeps the old words, and no button, when the engine has no record to undo from", async () => {
+    const { model } = setup({ alsoRaised: ["concepts/a"] });
+    await model.set(GARDEN, "confidential");
+    expect(model.state.notice?.text).toBe(changedLine("Garden", "confidential", 1));
+    expect(model.state.notice?.undoAll).toBeNull();
+  });
+
+  it("offers no whole-change undo when nothing was raised", async () => {
+    const { model, client } = setup({ undoPages: PAGES });
+    await model.set(GARDEN, "confidential");
+    expect(client.previewUndoSensitivity).not.toHaveBeenCalled();
+    expect(model.state.notice?.undoAll).toBeNull();
+  });
+
+  it("says honestly when the pages changed since, and changes nothing", async () => {
+    const { model, client } = setup({ alsoRaised: ["concepts/a", "concepts/b"], undoPages: PAGES });
+    await model.set(GARDEN, "confidential");
+    client.applyUndoSensitivity.mockRejectedValueOnce(apiError("sensitivity_changed_since"));
+    await model.undoAll();
+    expect(model.state.problem).toEqual({ conceptId: GARDEN.conceptId, text: problemFor(apiError("sensitivity_changed_since"), true) });
+    expect(model.levelOf(GARDEN)).toBe("confidential");
+    expect(model.levelOf({ conceptId: "concepts/a", title: "a", level: "private" })).toBe("confidential");
+  });
+
+  it("retries a busy apply", async () => {
+    const { model, client } = setup({ alsoRaised: ["concepts/a"], undoPages: [PAGES[0]!] });
+    await model.set(GARDEN, "confidential");
+    client.applyUndoSensitivity.mockRejectedValueOnce(apiError("workspace_busy", 503, 1));
+    await model.undoAll();
+    expect(client.applyUndoSensitivity).toHaveBeenCalledTimes(2);
+    expect(model.levelOf(GARDEN)).toBe("private");
   });
 });
 

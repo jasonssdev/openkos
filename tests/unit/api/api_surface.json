@@ -2887,6 +2887,33 @@
       "kind": "dataclass",
       "members": {}
     },
+    "RestoredPage": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "title"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "now"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "after"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "RevisionDetail": {
       "fields": [
         {
@@ -3064,6 +3091,18 @@
       "kind": "dataclass",
       "members": {}
     },
+    "SensitivityNotUndoable": {
+      "fields": [
+        {
+          "annotation": "Literal['not_found', 'no_record', 'changed_since']",
+          "default": false,
+          "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
     "SensitivityPreview": {
       "fields": [
         {
@@ -3124,6 +3163,97 @@
           "annotation": "Literal['content_changed']",
           "default": true,
           "name": "reason"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "SensitivityUndoPreview": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "title"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "now"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "restores"
+        },
+        {
+          "annotation": "tuple[RestoredPage, ...]",
+          "default": false,
+          "name": "pages"
+        },
+        {
+          "annotation": "SensitivityUndoVersion",
+          "default": false,
+          "name": "version"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "SensitivityUndoVersion": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "content_digest"
+        }
+      ],
+      "frozen": true,
+      "kind": "dataclass",
+      "members": {}
+    },
+    "SensitivityUndone": {
+      "fields": [
+        {
+          "annotation": "str",
+          "default": false,
+          "name": "concept_id"
+        },
+        {
+          "annotation": "Literal['public', 'private', 'confidential']",
+          "default": false,
+          "name": "level"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "restored"
+        },
+        {
+          "annotation": "tuple[str, ...]",
+          "default": false,
+          "name": "kept"
+        },
+        {
+          "annotation": "str | None",
+          "default": false,
+          "name": "commit_sha"
+        },
+        {
+          "annotation": "bool",
+          "default": true,
+          "name": "committed_confidential"
         }
       ],
       "frozen": true,
@@ -4198,6 +4328,36 @@
       ],
       "returns": "TierChanged | NotUndoable | UndoStale"
     },
+    "apply_undo_sensitivity": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "SensitivityUndoVersion",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "version"
+        },
+        {
+          "annotation": "float",
+          "default": "0.0",
+          "kind": "KEYWORD_ONLY",
+          "name": "wait_seconds"
+        },
+        {
+          "annotation": "Callable[[str], None] | None",
+          "default": "None",
+          "kind": "KEYWORD_ONLY",
+          "name": "on_warning"
+        }
+      ],
+      "returns": "SensitivityUndone | SensitivityNotUndoable | SensitivityStale"
+    },
     "apply_unmerge": {
       "kind": "function",
       "parameters": [
@@ -4629,6 +4789,24 @@
         }
       ],
       "returns": "TierChangePreview | NotUndoable"
+    },
+    "preview_undo_sensitivity": {
+      "kind": "function",
+      "parameters": [
+        {
+          "annotation": "Workspace",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "workspace"
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "kind": "POSITIONAL_OR_KEYWORD",
+          "name": "concept_id"
+        }
+      ],
+      "returns": "SensitivityUndoPreview | SensitivityNotUndoable"
     },
     "preview_unmerge": {
       "kind": "function",

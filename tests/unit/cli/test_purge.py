@@ -2961,3 +2961,71 @@ def test_purge_warns_when_a_survivor_is_left_without_provenance(
     )
     assert "provenance" not in metadata
     assert "sources" not in metadata
+
+
+# --- #1706: the log line of a change that raised pages ------------------------
+
+_RAISED = "concepts/bee-keeping-guild"
+_RAISED_TITLE = "Bee Keeping Guild"
+_CHANGED = "sources/bee-notes"
+
+
+def _raised_change_repo(root: Path) -> None:
+    from openkos.application import sensitivity_service
+
+    _write_plain_concept(root, _RAISED, title=_RAISED_TITLE)
+    _write_plain_concept(root, _OTHER, title="Cat")
+    _write_plain_concept(root, _CHANGED, title="Bee notes")
+    _log_line(
+        root,
+        sensitivity_service.log_line(
+            _CHANGED,
+            "confidential",
+            "private",
+            [(_OTHER, "private"), (_RAISED, "private")],
+        ),
+    )
+    _commit_all(root, f"openkos: set-sensitivity {_CHANGED} -> confidential")
+
+
+def _no_trace(root: Path, *needles: str) -> None:
+    history = _full_history(root)
+    live = (root / "bundle" / "log.md").read_text(encoding="utf-8")
+    for needle in needles:
+        assert needle not in history, needle
+        assert needle not in live, needle
+
+
+@pytest.mark.parametrize("purged", [_RAISED, _CHANGED])
+def test_purging_a_page_named_in_a_raise_line_leaves_no_trace(
+    tmp_git_repo: TmpGitRepo, purged: str
+) -> None:
+    """#1706: the line recording which pages a change raised names them by id.
+    Purging one (a raised page, or the page that was changed) leaves neither its
+    id, its slug nor its title in the live log or any historical log."""
+    _raised_change_repo(tmp_git_repo.root)
+    assert purged in _full_history(tmp_git_repo.root)  # precondition
+
+    result = runner.invoke(
+        app, ["purge", purged, "--confirm-phrase", f"purge {purged}"]
+    )
+
+    assert result.exit_code == 0, result.output
+    slug = purged.rsplit("/", 1)[1]
+    _no_trace(tmp_git_repo.root, purged, slug)
+    if purged == _RAISED:
+        _no_trace(tmp_git_repo.root, _RAISED_TITLE)
+
+
+def test_the_undo_does_not_read_a_line_purge_rewrote(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    from openkos.application import sensitivity_service
+
+    _raised_change_repo(tmp_git_repo.root)
+    result = runner.invoke(
+        app, ["purge", _RAISED, "--confirm-phrase", f"purge {_RAISED}"]
+    )
+    assert result.exit_code == 0, result.output
+    log = (tmp_git_repo.root / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert sensitivity_service.recorded_change(log, _CHANGED) is None
