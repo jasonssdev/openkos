@@ -670,6 +670,30 @@
         "title": "ContradictionReopened",
         "type": "object"
       },
+      "DailyBudget": {
+        "description": "Today's model-call budget for unattended work, in calls, on the local\ncalendar day. `exhausted`: the newest watch or maintenance job ended\nbecause the budget ran out.",
+        "properties": {
+          "calls_limit": {
+            "title": "Calls Limit",
+            "type": "integer"
+          },
+          "calls_used": {
+            "title": "Calls Used",
+            "type": "integer"
+          },
+          "exhausted": {
+            "title": "Exhausted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "calls_used",
+          "calls_limit",
+          "exhausted"
+        ],
+        "title": "DailyBudget",
+        "type": "object"
+      },
       "Decision": {
         "additionalProperties": false,
         "description": "One open decision, as data a client can render.",
@@ -962,6 +986,116 @@
           "contradictions"
         ],
         "title": "DeclinedContradictionList",
+        "type": "object"
+      },
+      "EngineActivity": {
+        "description": "What the engine is doing: the task running now (`None` when idle), the\nlatest finished ones (newest first), how many files wait in the watched\nfolder, how many written paths wait for a commit retry, and today's budget.\n`jobs_unreadable` is a record that exists but cannot be read, which is not\nthe same as an engine with nothing to show.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/DailyBudget"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EngineJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jobs_unreadable": {
+            "title": "Jobs Unreadable",
+            "type": "boolean"
+          },
+          "recent": {
+            "items": {
+              "$ref": "#/components/schemas/EngineJob"
+            },
+            "title": "Recent",
+            "type": "array"
+          },
+          "uncommitted_paths": {
+            "title": "Uncommitted Paths",
+            "type": "integer"
+          },
+          "waiting_files": {
+            "title": "Waiting Files",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "current",
+          "recent",
+          "waiting_files",
+          "uncommitted_paths",
+          "budget",
+          "jobs_unreadable"
+        ],
+        "title": "EngineActivity",
+        "type": "object"
+      },
+      "EngineJob": {
+        "description": "One unattended task as the Activity view shows it. `ended_at` and\n`outcome` are `None` while it runs. `needs_attention`: it ended in a way a\nperson should look at (a failure, a timeout or a spent budget).",
+        "properties": {
+          "chat_calls": {
+            "title": "Chat Calls",
+            "type": "integer"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "needs_attention": {
+            "title": "Needs Attention",
+            "type": "boolean"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "units_deferred": {
+            "title": "Units Deferred",
+            "type": "integer"
+          },
+          "units_done": {
+            "title": "Units Done",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "started_at",
+          "ended_at",
+          "outcome",
+          "chat_calls",
+          "units_done",
+          "units_deferred",
+          "needs_attention"
+        ],
+        "title": "EngineJob",
         "type": "object"
       },
       "ErrorBody": {
@@ -1642,6 +1776,28 @@
                 "type": "null"
               }
             ]
+          },
+          "parts_done": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts Done"
+          },
+          "parts_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts Total"
           },
           "phase": {
             "anyOf": [
@@ -5834,6 +5990,69 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/activity": {
+      "get": {
+        "operationId": "activity_v1_activity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineActivity"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Activity"
+      }
+    },
     "/v1/ask": {
       "post": {
         "operationId": "start_ask_v1_ask_post",

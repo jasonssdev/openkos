@@ -52,7 +52,12 @@ from openkos.extraction.concept import (
 )
 from openkos.llm.base import LLMBackend
 from openkos.model import okf
-from openkos.model.types import TYPE_TO_LINK_DIR, TYPE_TO_SECTION
+from openkos.model.types import (
+    HOMONYM_TYPES,
+    RECURRING_OCCURRENCE_TYPES,
+    TYPE_TO_LINK_DIR,
+    TYPE_TO_SECTION,
+)
 from openkos.resolution import candidates as resolution_candidates
 from openkos.resolution.normalize import canonical_family_member, normalize_key
 from openkos.resolution.run_duplicates import collapse_run_duplicates
@@ -119,7 +124,7 @@ class DerivedPlan:
     above the floor-plus-offset)."""
 
 
-ATTACH_EXCLUDED_TYPES: frozenset[str] = frozenset({"Event", "Person"})
+ATTACH_EXCLUDED_TYPES: frozenset[str] = RECURRING_OCCURRENCE_TYPES | HOMONYM_TYPES
 """OKF types whose identical title routinely names different things (recurring
 Events, Person homonyms; #776, #796), so a candidate of one of them is never
 attached and keeps the slug-collision path. A constant, not configuration:

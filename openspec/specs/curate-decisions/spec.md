@@ -159,15 +159,19 @@ empty action set MUST name where it resolves: a `watch_refusal` through
 - WHEN a client applies skip
 - THEN nothing is written and the row is still `pending`
 
-### Requirement: Only Judged-SAME Identity Items Are Mergeable
+### Requirement: Identity Items Are Mergeable Unless They Await A Judgment Or Break A Guard
 
-An identity item MUST carry the merge action only when it holds a persisted SAME judgment over exactly two members that pass the cross-type check. A judged-DIFFERENT item, a judged-SAME item with more than two members and a cross-type pair carry no merge action and name the reason; every identity item keeps keep-distinct and skip. An identity item whose adjudication is null MUST be listed as
-pending evaluation and MUST carry no merge action. An identity item whose persisted judgment is UNCERTAIN, including one produced by a malformed model reply, MUST be listed as `judged_uncertain`, MUST carry keep-distinct and skip, MUST carry no merge action naming the reason `judged_uncertain`, and MUST NOT be listed as pending evaluation. The surface MUST NOT merge
+The judge is advisory and the person is the authority. An identity item MUST carry the merge action when it holds a persisted judgment (SAME, DIFFERENT or UNCERTAIN) over exactly two members that pass the cross-type check. A judged item with more than two members and a cross-type pair carry no merge action and name the reason; every identity item keeps keep-distinct and skip. An identity item whose adjudication is null MUST be listed as
+pending evaluation and MUST carry no merge action. An identity item whose persisted judgment is UNCERTAIN, including one produced by a malformed model reply, MUST be listed as `judged_uncertain`, MUST carry the merge action over a passing pair, and MUST NOT be listed as pending evaluation; an item judged DIFFERENT MUST likewise be listed as `judged_different` and carry the merge action over a passing pair. A merge against a DIFFERENT or UNCERTAIN verdict is applied and undone exactly as one against SAME. The surface MUST NOT merge
 an unjudged item on a caller's decision alone, and MUST NOT call a model to
 judge it.
 
 The merge-group action MUST be carried exactly by a judged-SAME identity item whose merge is withheld for `more_than_two_members` or `cross_type`; merge stays withheld there, with the same reason. An identity item whose group has more than two members, or whose members' OKF types differ, and whose judgment is not SAME MUST list merge-group as withheld with the same reason as merge (`pending_evaluation`, `judged_different` or `judged_uncertain`). An identity item of two members of one OKF type MUST NOT carry or withhold merge-group. A merge-group request against an item that does not carry it MUST be the typed not-applied result `not_mergeable` when the item withholds it and `not_offered` otherwise, and MUST write nothing.
 (Previously: a judged-SAME group of more than two members and a cross-type pair carried no merging action at all, and resolved only through the CLI.)
+(Previously: only a judged-SAME pair carried the merge action; a pair judged DIFFERENT or UNCERTAIN withheld it, leaving the person no way to combine two pages they knew were the same.)
+
+The merge-group action MUST also be carried by an identity item of the LOW tier with more than two members (a near-match cluster) whose persisted judgment is DIFFERENT or UNCERTAIN, with merge withheld for `more_than_two_members`; a cluster not yet judged MUST withhold merge-group as `pending_evaluation`. An identity item of the HIGH or ACRONYM tier with more than two members MUST keep merge-group withheld against a DIFFERENT or UNCERTAIN verdict.
+(Previously: merge-group was carried only by a judged-SAME item. A near-match cluster replaces the pairs that carried merge on any verdict, so withholding it would have taken that ability away.)
 
 #### Scenario: A judged SAME item is mergeable
 
@@ -192,18 +196,33 @@ The merge-group action MUST be carried exactly by a judged-SAME identity item wh
 
 #### Scenario: An uncertain item is judged uncertain, not pending
 
-- GIVEN an open identity item whose persisted judgment is UNCERTAIN
+- GIVEN an open identity item whose persisted judgment is UNCERTAIN over two
+  members of one OKF type
 - WHEN a client lists it
-- THEN its evaluation is `judged_uncertain`, its actions are keep-distinct and
-  skip, its withheld merge names the reason `judged_uncertain`, and it is not
-  marked pending evaluation
+- THEN its evaluation is `judged_uncertain`, its actions are merge, keep-distinct
+  and skip, nothing is withheld, and it is not marked pending evaluation
 
-#### Scenario: A merge against an uncertain item is not applied
+#### Scenario: A different item still offers the merge
 
-- GIVEN an open identity item judged UNCERTAIN
-- WHEN a client requests a merge for its `decision_key`
-- THEN the typed not-applied result with reason `not_mergeable` is returned and
-  nothing is written
+- GIVEN an open identity item whose persisted judgment is DIFFERENT over two
+  members of one OKF type
+- WHEN a client lists it
+- THEN its evaluation is `judged_different` and its actions are merge,
+  keep-distinct and skip
+
+#### Scenario: A merge against an uncertain or different item is applied
+
+- GIVEN an open identity item judged UNCERTAIN or DIFFERENT over two members of
+  one OKF type
+- WHEN a client previews and applies merge with the version it was issued
+- THEN the merge is applied as it is for a SAME item, and can be undone
+
+#### Scenario: An uncertain group still withholds the merge
+
+- GIVEN an open identity item judged UNCERTAIN over three members
+- WHEN a client lists it
+- THEN its actions are keep-distinct and skip, and merge and merge-group are
+  withheld with the reason `judged_uncertain`
 
 #### Scenario: A judged SAME cross-type pair carries merge-group
 
@@ -226,6 +245,24 @@ The merge-group action MUST be carried exactly by a judged-SAME identity item wh
 - WHEN a client previews or applies merge-group for its `decision_key`
 - THEN the typed not-applied result with reason `not_mergeable` is returned and
   nothing is written
+
+#### Scenario: A near-match cluster judged uncertain offers the group walk
+
+- GIVEN an open LOW-tier identity item over three members judged UNCERTAIN or DIFFERENT
+- WHEN a client lists it
+- THEN its actions are merge-group, keep-distinct and skip, and merge is withheld as `more_than_two_members`
+
+#### Scenario: An unjudged near-match cluster withholds the group walk
+
+- GIVEN an open LOW-tier identity item over three members with no judgment
+- WHEN a client lists it
+- THEN merge and merge-group are withheld as `pending_evaluation`
+
+#### Scenario: An exact-title group judged uncertain still withholds the group walk
+
+- GIVEN an open HIGH-tier identity item over three members judged UNCERTAIN
+- WHEN a client lists it
+- THEN merge and merge-group are withheld as `judged_uncertain`
 
 ### Requirement: Staleness Is Marked, Never Hidden
 

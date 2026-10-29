@@ -2879,8 +2879,8 @@ def test_an_identity_judged_uncertain_is_listed_as_judged_uncertain(
         layout, _identity_row(layout, verdict="uncertain", confidence=confidence)
     )
 
-    assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
-    assert item.withheld == (WithheldAction(Action.MERGE, "judged_uncertain"),)
+    assert item.actions == (Action.MERGE, Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.withheld == ()
     assert item.evaluation == "judged_uncertain"
 
 
@@ -2895,10 +2895,10 @@ def test_an_identity_with_an_unknown_verdict_stays_pending_evaluation(
     assert item.evaluation == "pending_evaluation"
 
 
-def test_a_merge_on_an_uncertain_item_is_not_mergeable_and_writes_nothing(
+def test_a_merge_on_a_pending_item_is_not_mergeable_and_writes_nothing(
     tmp_path: Path,
 ) -> None:
-    root, layout, proposal = _identity_seeded(tmp_path, verdict="uncertain")
+    root, layout, proposal = _identity_seeded(tmp_path, verdict=None)
     version = DecisionVersion(
         proposal.decision_key, pq.payload_digest_for(proposal), "x"
     )
@@ -2912,13 +2912,29 @@ def test_a_merge_on_an_uncertain_item_is_not_mergeable_and_writes_nothing(
     assert snapshot(root) == before
 
 
-def test_an_identity_judged_different_withholds_the_merge(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verdict", ["uncertain", "different"])
+def test_a_merge_against_a_not_same_verdict_previews_and_applies(
+    tmp_path: Path, verdict: str
+) -> None:
+    root, layout, proposal = _identity_seeded(tmp_path, verdict=verdict)
+
+    result = _must_decision_preview(root, layout, proposal.decision_key, Action.MERGE)
+    assert isinstance(result.preview, MergeDecisionPreview)
+    recorder = _Recorder()
+
+    outcome = _apply(root, layout, result.version, Action.MERGE, recorder)
+
+    assert isinstance(outcome, Applied)
+
+
+def test_an_identity_judged_different_still_offers_the_merge(tmp_path: Path) -> None:
+    """The judge is advisory and the person is the authority (#1699)."""
     _root, layout = _merge_workspace(tmp_path)
 
     item = _listed(layout, _identity_row(layout, verdict="different"))
 
-    assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
-    assert item.withheld == (WithheldAction(Action.MERGE, "judged_different"),)
+    assert item.actions == (Action.MERGE, Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.withheld == ()
     assert item.evaluation == "judged_different"
 
 
@@ -3438,12 +3454,12 @@ def test_a_merge_on_an_unjudged_item_is_not_mergeable_and_writes_nothing(
     assert snapshot(root) == before
 
 
-@pytest.mark.parametrize("withheld", ["different", "cross_type", "three_members"])
+@pytest.mark.parametrize("withheld", ["pending", "cross_type", "three_members"])
 def test_every_withheld_merge_is_not_mergeable(tmp_path: Path, withheld: str) -> None:
     root, layout = _merge_workspace(tmp_path)
     _typed_concept(layout, "concepts/e", "Other")
     row = {
-        "different": _identity_row(layout, verdict="different"),
+        "pending": _identity_row(layout, verdict=None),
         "cross_type": _identity_row(layout, ("concepts/a", "concepts/e")),
         "three_members": _identity_row(layout, (*_PAIR, "concepts/c")),
     }[withheld]
