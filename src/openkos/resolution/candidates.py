@@ -118,7 +118,8 @@ class CandidateGroup:
     member_ids: tuple[str, ...]
     """The involved concept_ids -- sorted ascending, at least 2, unique.
     A HIGH group may have more than 2 members (all sharing one exact
-    normalized key); a LOW group is always exactly a pair."""
+    normalized key); a LOW group is a pair, or a near-match cluster of up to
+    `_MAX_CLUSTER_MEMBERS` same-type members (#1701)."""
     tier: Tier
     """`Tier.HIGH`, `Tier.ACRONYM`, or `Tier.LOW`."""
     trigger: str
@@ -498,6 +499,69 @@ def _bridge_order(
     return tuple(doc[0] for doc in item[1])
 
 
+_MAX_CLUSTER_MEMBERS: Final[int] = 8
+"""Largest near-match component asked as ONE group-shaped question (#1701).
+A component of more than this many members is not clustered: it stays as the
+pairs it was before, so no single question can grow past what a person can
+read and mark in one sitting, and one chain of loosely similar titles cannot
+swallow a whole type. Eight holds the observed recurring subject (one page with
+five or six near-duplicates) with room to spare."""
+
+
+def _cluster_low_pairs(
+    low_pairs: list[CandidateGroup], other_pairs: set[frozenset[str]]
+) -> list[CandidateGroup]:
+    """PURE: fold one type's LOW pairs into one group per connected component
+    (#1701), so a subject that recurs is asked about once, not pair by pair.
+
+    The edges are exactly the LOW pairs the pairwise pass already produced --
+    no new threshold and no new candidate pair. A component of two stays the
+    pair it was, so a person who could merge that pair still can. A component
+    is left as its pairs, unchanged, when it has more than
+    `_MAX_CLUSTER_MEMBERS` members, or when two of its members are already
+    asked about as a HIGH or ACRONYM candidate (`other_pairs`), which a cluster
+    would ask a second time. A cluster's `trigger` is its WEAKEST pair score,
+    so the displayed ratio never overstates how alike all members are; the
+    members need not all resemble each other (A~B and B~C chain), which is why
+    the group walk lets the person mark a subset.
+    """
+    parent: dict[str, str] = {}
+
+    def find(node: str) -> str:
+        parent.setdefault(node, node)
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    for pair in low_pairs:
+        left, right = pair.member_ids
+        parent[find(left)] = find(right)
+    components: dict[str, list[CandidateGroup]] = defaultdict(list)
+    for pair in low_pairs:
+        components[find(pair.member_ids[0])].append(pair)
+
+    out: list[CandidateGroup] = []
+    for edges in components.values():
+        members = sorted({m for edge in edges for m in edge.member_ids})
+        clusterable = 3 <= len(members) <= _MAX_CLUSTER_MEMBERS and not any(
+            frozenset(pair) in other_pairs for pair in combinations(members, 2)
+        )
+        if not clusterable:
+            out.extend(edges)
+            continue
+        okf_type = edges[0].okf_type
+        out.append(
+            CandidateGroup(
+                okf_type=okf_type,
+                member_ids=tuple(members),
+                tier=Tier.LOW,
+                trigger=f"{min(float(edge.trigger) for edge in edges):.3f}",
+            )
+        )
+    return out
+
+
 def find_candidates_report(
     bundle_dir: Path, *, include_deprecated: bool = False
 ) -> CandidateGroupReport:
@@ -539,6 +603,8 @@ def find_candidates_report(
     groups: list[CandidateGroup] = list(high_groups)
     seen: set[frozenset[str]] = set(high_pairs)
     for okf_type, keyed in _keyed_docs_by_type(eligible):
+        low_pairs: list[CandidateGroup] = []
+        asked_elsewhere = set(high_pairs)
         for (id_a, key_a), (id_b, key_b) in combinations(keyed, 2):
             pair = frozenset((id_a, id_b))
             if pair in seen:
@@ -547,7 +613,12 @@ def find_candidates_report(
             if group is None:
                 continue
             seen.add(pair)
-            groups.append(group)
+            if group.tier is Tier.LOW:
+                low_pairs.append(group)
+            else:
+                asked_elsewhere.add(pair)
+                groups.append(group)
+        groups.extend(_cluster_low_pairs(low_pairs, asked_elsewhere))
     for left, right in _bridged_cross_type_pairs(eligible):
         pair = frozenset((left[0], right[0]))
         if pair in seen:
