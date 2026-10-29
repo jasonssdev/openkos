@@ -96,6 +96,8 @@ INBOX_NOT_A_DIRECTORY: Final = "inbox_not_a_directory"
 # Sensitivity rows.
 PAGE_NOT_FOUND: Final = "page_not_found"
 SENSITIVITY_UNCHANGED: Final = "sensitivity_unchanged"
+SENSITIVITY_NO_RECORD: Final = "sensitivity_no_record"
+SENSITIVITY_CHANGED_SINCE: Final = "sensitivity_changed_since"
 
 # Search rows.
 REBUILD_ACTIVE: Final = "rebuild_active"
@@ -546,6 +548,24 @@ _SENSITIVITY_REFUSED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
     ),
 }
 
+_SENSITIVITY_NOT_UNDOABLE: Final[Mapping[str, tuple[int, str, bool, str]]] = {
+    "not_found": (404, PAGE_NOT_FOUND, False, "no such concept"),
+    "no_record": (
+        409,
+        SENSITIVITY_NO_RECORD,
+        False,
+        "this change did not record the pages raised with it, so it cannot be "
+        "undone as a whole",
+    ),
+    "changed_since": (
+        409,
+        SENSITIVITY_CHANGED_SINCE,
+        False,
+        "the page, or a page raised with it, has changed since; undoing now "
+        "would overwrite that",
+    ),
+}
+
 _REBUILD_REFUSED: Final[Mapping[str, tuple[int, str, bool, str]]] = {
     "remote_not_allowed": (
         422,
@@ -634,6 +654,7 @@ def outcome_problem(
         | api.InboxSettingsRefused
         | api.InboxSettingsStale
         | api.SensitivityRefused
+        | api.SensitivityNotUndoable
         | api.SensitivityStale
         | api.RebuildRefused
     ),
@@ -680,6 +701,8 @@ def outcome_problem(
         row = _INBOX_REFUSED.get(outcome.reason)
     elif isinstance(outcome, api.SensitivityRefused):
         row = _SENSITIVITY_REFUSED.get(outcome.reason)
+    elif isinstance(outcome, api.SensitivityNotUndoable):
+        row = _SENSITIVITY_NOT_UNDOABLE.get(outcome.reason)
     elif isinstance(outcome, api.RebuildRefused):
         row = _REBUILD_REFUSED.get(outcome.reason)
     else:

@@ -14,6 +14,7 @@ export const LABEL_WORDS = {
   keptHere: "Only on this Mac",
   undo: "Undo",
   dismiss: "Dismiss",
+  undoAll: "Undo this change",
   undoing: "Undoing…",
   saving: "Saving…",
 };
@@ -25,18 +26,33 @@ export function labelOptions(): { value: Level; label: string; meaning: string }
 
 const quoted = (title: string) => `“${title}”`;
 
-/** The confirmation after a change. `raised` pages made from it were raised with it. */
-export function changedLine(title: string, level: Level, raised: number): string {
+/**
+ * The confirmation after a change. `raised` pages made from it were raised with
+ * it. Where the engine can undo the whole change (`undoable`), the line says no
+ * more than what happened: Undo this change is beside it.
+ */
+export function changedLine(title: string, level: Level, raised: number, undoable = false): string {
   const now = `${quoted(title)} is now ${whoCanSee(level).label}`;
   if (raised <= 0) return `${now}.`;
   const those = raised === 1 ? "that page" : "those pages";
   const others = raised === 1 ? "so is 1 page made from it" : `so are ${raised} pages made from it`;
+  if (undoable) return `${now}, and ${others}.`;
   return `${now}, and ${others}. To change ${those} back, change ${raised === 1 ? "it" : "each one"} on its own.`;
 }
 
 /** The confirmation after an undo. */
 export function undoneLine(title: string, level: Level): string {
   return `${quoted(title)} is ${whoCanSee(level).label} again.`;
+}
+
+/** The confirmation after the whole change was undone: `restored` pages went back, `kept` stayed as they were. */
+export function undoneAllLine(title: string, level: Level, restored: number, kept: number): string {
+  let line = `${undoneLine(title, level).slice(0, -1)}`;
+  if (restored > 0) line += restored === 1 ? ", and so is 1 page made from it" : `, and so are ${restored} pages made from it`;
+  line += ".";
+  if (kept === 1) line += " 1 page stays as it was, to keep it at least as private as the pages it is made from.";
+  else if (kept > 1) line += ` ${kept} pages stay as they were, to keep them at least as private as the pages they are made from.`;
+  return line;
 }
 
 /** The question before a page marked Only on this Mac is let out while a cloud AI model is on. */
@@ -59,6 +75,8 @@ const BEFORE: Record<string, string> = {
   stale: "This page changed while you were looking. Nothing was changed. Try again.",
   write_drift: "This page changed while you were looking. Nothing was changed. Try again.",
   page_not_found: "This page no longer exists, so nothing was changed.",
+  sensitivity_changed_since: "Some of these pages changed after this change, so it can't be undone in one step. Nothing was changed.",
+  sensitivity_no_record: "This change can't be undone in one step. Nothing was changed.",
 };
 
 /** Why a change did not happen. `sent`: the change itself was sent, so an unknown failure may have changed it. */

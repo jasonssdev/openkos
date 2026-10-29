@@ -58,6 +58,34 @@ describe("the label choice", () => {
   });
 });
 
+describe("undoing a whole change", () => {
+  it("offers Undo this change beside the confirmation, and it puts the pages back", async () => {
+    const { model: m, client } = model();
+    client.applySensitivity.mockImplementationOnce(async (body: { version: { concept_id: string; level: string } }) => ({
+      changed: { concept_id: body.version.concept_id, level: body.version.level, previous: "private", also_raised: ["concepts/a"], commit_sha: null, committed_confidential: false },
+      warnings: [],
+    }));
+    (client as Record<string, unknown>)["previewUndoSensitivity"] = vi.fn(async () => ({
+      concept_id: GARDEN.conceptId,
+      title: "Garden",
+      now: "confidential",
+      restores: "private",
+      pages: [{ concept_id: "concepts/a", title: "a", now: "confidential", after: "private" }],
+      version: { concept_id: GARDEN.conceptId, content_digest: "u" },
+    }));
+    (client as Record<string, unknown>)["applyUndoSensitivity"] = vi.fn(async () => ({ undone: {}, warnings: [] }));
+    m.set(GARDEN, "confidential");
+    await vi.waitFor(() => expect(m.state.notice).not.toBeNull());
+    const node = labelChoice(GARDEN, m, m.state);
+    expect(text(node)).toContain("and so is 1 page made from it.");
+    expect(text(node)).not.toContain("on its own");
+    const buttons = Array.from(node.querySelectorAll("button")).filter((b) => b.getAttribute("role") !== "radio");
+    expect(buttons.map(text)).toEqual(["Undo this change", "Dismiss"]);
+    buttons[0]!.click();
+    await vi.waitFor(() => expect(m.state.notice?.text).toBe("“Garden” is Private again, and so is 1 page made from it."));
+  });
+});
+
 describe("dismissing a confirmation", () => {
   it("offers Dismiss on a confirmation that has no Undo, and closing it removes it", async () => {
     const { model: m } = model();

@@ -156,3 +156,100 @@ def test_a_busy_workspace_answers_503_with_retry_after(
     assert response.json()["code"] == _errors.WORKSPACE_BUSY
     assert response.headers["Retry-After"]
     assert metadata_of(root, PAGE)["sensitivity"] == "private"
+
+
+def _change_source(client: TestClient) -> None:
+    preview = _preview(client, SOURCE, "confidential")
+    applied = _post(
+        client, "/v1/pages/sensitivity/apply", {"version": preview["version"]}
+    )
+    assert applied.status_code == 200, applied.text
+
+
+def test_a_whole_change_is_undone_through_a_preview_then_an_apply(
+    client: TestClient, root: Path
+) -> None:
+    _change_source(client)
+    before = support.snapshot(root)
+    preview = _post(
+        client, "/v1/pages/sensitivity/undo/preview", {"concept_id": SOURCE}
+    )
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert (body["now"], body["restores"]) == ("confidential", "private")
+    assert body["pages"] == [
+        {
+            "concept_id": CHILD,
+            "title": "From the notes",
+            "now": "confidential",
+            "after": "private",
+        }
+    ]
+    assert support.snapshot(root) == before
+
+    applied = _post(
+        client, "/v1/pages/sensitivity/undo/apply", {"version": body["version"]}
+    )
+    assert applied.status_code == 200, applied.text
+    undone = applied.json()
+    assert undone["undone"]["restored"] == [CHILD]
+    assert undone["undone"]["kept"] == []
+    assert undone["warnings"] == []
+    assert metadata_of(root, SOURCE)["sensitivity"] == "private"
+    assert metadata_of(root, CHILD)["sensitivity"] == "private"
+
+
+@pytest.mark.parametrize(
+    ("concept_id", "status", "code"),
+    [
+        ("concepts/missing", 404, "page_not_found"),
+        (PAGE, 409, "sensitivity_no_record"),
+    ],
+)
+def test_a_refused_undo_preview_answers_its_row(
+    client: TestClient, root: Path, concept_id: str, status: int, code: str
+) -> None:
+    response = _post(
+        client, "/v1/pages/sensitivity/undo/preview", {"concept_id": concept_id}
+    )
+    assert response.status_code == status, response.text
+    assert response.json()["code"] == code
+
+
+def test_a_page_changed_since_is_answered_in_plain_words(
+    client: TestClient, root: Path
+) -> None:
+    _change_source(client)
+    write_doc(
+        root,
+        CHILD,
+        {
+            "type": "Concept",
+            "title": "From the notes",
+            "sensitivity": "public",
+            "provenance": [SOURCE],
+        },
+    )
+    response = _post(
+        client, "/v1/pages/sensitivity/undo/preview", {"concept_id": SOURCE}
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "sensitivity_changed_since"
+    assert "changed" in response.json()["message"]
+
+
+def test_an_edited_page_makes_the_undo_apply_stale(
+    client: TestClient, root: Path
+) -> None:
+    _change_source(client)
+    preview = _post(
+        client, "/v1/pages/sensitivity/undo/preview", {"concept_id": SOURCE}
+    ).json()
+    page = root / "bundle" / f"{CHILD}.md"
+    page.write_text(page.read_text(encoding="utf-8") + "More.\n", encoding="utf-8")
+    response = _post(
+        client, "/v1/pages/sensitivity/undo/apply", {"version": preview["version"]}
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == _errors.STALE
+    assert metadata_of(root, SOURCE)["sensitivity"] == "confidential"

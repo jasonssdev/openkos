@@ -444,6 +444,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/pages/sensitivity/undo/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sensitivity Undo Apply */
+        post: operations["sensitivity_undo_apply_v1_pages_sensitivity_undo_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/pages/sensitivity/undo/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sensitivity Undo Preview */
+        post: operations["sensitivity_undo_preview_v1_pages_sensitivity_undo_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/pending": {
         parameters: {
             query?: never;
@@ -2739,6 +2773,28 @@ export interface components {
             member_ids: string[];
         };
         /**
+         * RestoredPage
+         * @description A derived page raised with the change. `now` is its level and `after` the
+         *     level it ends at: its own before the change, or higher when another page it
+         *     cites requires it (`after == now`: it stays).
+         */
+        RestoredPage: {
+            /**
+             * After
+             * @enum {string}
+             */
+            after: "public" | "private" | "confidential";
+            /** Concept Id */
+            concept_id: string;
+            /**
+             * Now
+             * @enum {string}
+             */
+            now: "public" | "private" | "confidential";
+            /** Title */
+            title: string;
+        };
+        /**
          * RevisionDetail
          * @description A revision: a later Decision that reverses or refines an earlier one.
          *     `later_id` is `None` when the dates do not order the pair; it never comes
@@ -2942,6 +2998,101 @@ export interface components {
             changed: components["schemas"]["SensitivityChanged"];
             /** Warnings */
             warnings: string[];
+        };
+        /**
+         * SensitivityUndoApplyRequest
+         * @description The version the undo preview issued (echoed unchanged) and how long to
+         *     wait for the workspace lock; a client can shorten the wait only.
+         */
+        SensitivityUndoApplyRequest: {
+            version: components["schemas"]["SensitivityUndoVersion"];
+            /**
+             * Wait Seconds
+             * @default 5
+             */
+            wait_seconds?: number;
+        };
+        /**
+         * SensitivityUndoPreview
+         * @description Taking back the newest sensitivity change to `concept_id`: the page goes
+         *     from `now` to `restores`, and `pages` are the derived pages raised with it,
+         *     each with the level it ends at, never below what its remaining sources
+         *     require.
+         */
+        SensitivityUndoPreview: {
+            /** Concept Id */
+            concept_id: string;
+            /**
+             * Now
+             * @enum {string}
+             */
+            now: "public" | "private" | "confidential";
+            /** Pages */
+            pages: components["schemas"]["RestoredPage"][];
+            /**
+             * Restores
+             * @enum {string}
+             */
+            restores: "public" | "private" | "confidential";
+            /** Title */
+            title: string;
+            version: components["schemas"]["SensitivityUndoVersion"];
+        };
+        /**
+         * SensitivityUndoPreviewRequest
+         * @description The page whose newest sensitivity change is to be taken back.
+         */
+        SensitivityUndoPreviewRequest: {
+            /** Concept Id */
+            concept_id: string;
+        };
+        /**
+         * SensitivityUndoResponse
+         * @description What was put back, and the warnings the apply raised along the way.
+         */
+        SensitivityUndoResponse: {
+            undone: components["schemas"]["SensitivityUndone"];
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * SensitivityUndoVersion
+         * @description The version a stateless caller undoes against: echo it unchanged.
+         *     `content_digest` covers the log and every page of the bundle.
+         */
+        SensitivityUndoVersion: {
+            /** Concept Id */
+            concept_id: string;
+            /** Content Digest */
+            content_digest: string;
+        };
+        /**
+         * SensitivityUndone
+         * @description The change was taken back, in one commit. `restored` went back and `kept`
+         *     stayed where they were because another page they cite requires it.
+         *     `commit_sha` is `None` when the commit could not be made (the writes
+         *     landed). `committed_confidential`: the commit holds a page explicitly marked
+         *     confidential.
+         */
+        SensitivityUndone: {
+            /** Commit Sha */
+            commit_sha: string | null;
+            /**
+             * Committed Confidential
+             * @default false
+             */
+            committed_confidential?: boolean;
+            /** Concept Id */
+            concept_id: string;
+            /** Kept */
+            kept: string[];
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "public" | "private" | "confidential";
+            /** Restored */
+            restored: string[];
         };
         /**
          * SensitivityVersion
@@ -5327,6 +5478,191 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SensitivityPreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    sensitivity_undo_apply_v1_pages_sensitivity_undo_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SensitivityUndoApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SensitivityUndoResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    /** @description Seconds to wait before retrying a busy workspace. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    sensitivity_undo_preview_v1_pages_sensitivity_undo_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SensitivityUndoPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SensitivityUndoPreview"];
                 };
             };
             /** @description Unauthorized */

@@ -304,6 +304,20 @@ describe("the requests", () => {
       "/v1/pages/sensitivity/apply",
       { version: { concept_id: "concepts/a", level: "confidential", content_digest: "d" } },
     ],
+    [
+      "previewUndoSensitivity",
+      (c) => c.previewUndoSensitivity({ concept_id: "concepts/a" }),
+      "POST",
+      "/v1/pages/sensitivity/undo/preview",
+      { concept_id: "concepts/a" },
+    ],
+    [
+      "applyUndoSensitivity",
+      (c) => c.applyUndoSensitivity({ version: { concept_id: "concepts/a", content_digest: "d" } }),
+      "POST",
+      "/v1/pages/sensitivity/undo/apply",
+      { version: { concept_id: "concepts/a", content_digest: "d" } },
+    ],
     ["searchIndex", (c) => c.searchIndex(), "GET", "/v1/search", null],
     [
       "startSearchRebuild",
