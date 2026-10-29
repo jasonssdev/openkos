@@ -285,6 +285,16 @@ else.
 
 ## The owner confirms
 
+On 2026-10-29, before this file merged and before any result existed, the
+owner gave a standing instruction to take the recommended option on open
+choices; under it every item below is confirmed unchanged, as proposed, with
+adjudication by a delegated reader disclosed in RESULTS. The owner did not
+review the items one by one; this is recorded so the confirmation is not read
+as more than it is. An orchestrator note made before the run: the roster rule
+reads 2-4 capital speaker labels (the AMI form) and does not generalize as
+written to transcripts whose speakers are named; any production use needs its
+own roster rule.
+
 1. **The participant check**: the roster rule (`LABEL:` opening a line on at
    least two lines), the participation verbs (never the noun), the
    enumeration split, and "absent" meaning not a whole-word case-insensitive
