@@ -60,6 +60,7 @@ from typing import Final
 
 from openkos import lifecycle
 from openkos.model import okf
+from openkos.model.types import RECURRING_OCCURRENCE_TYPES
 
 from .normalize import normalize_key
 from .similarity import acronym_expansion_match, near_match_score
@@ -519,7 +520,9 @@ def _cluster_low_pairs(
     The edges are exactly the LOW pairs the pairwise pass already produced --
     no new threshold and no new candidate pair. A component of two stays the
     pair it was, so a person who could merge that pair still can. A component
-    is left as its pairs, unchanged, when it has more than
+    is left as its pairs, unchanged, when its type is a recurring-occurrence type
+    (`Event`: the meetings of a series are different things with one title),
+    when it has more than
     `_MAX_CLUSTER_MEMBERS` members, or when two of its members are already
     asked about as a HIGH or ACRONYM candidate (`other_pairs`), which a cluster
     would ask a second time, or when a person has ruled any two of its members
@@ -547,8 +550,12 @@ def _cluster_low_pairs(
     out: list[CandidateGroup] = []
     for edges in components.values():
         members = sorted({m for edge in edges for m in edge.member_ids})
-        clusterable = 3 <= len(members) <= _MAX_CLUSTER_MEMBERS and not any(
-            frozenset(pair) in other_pairs for pair in combinations(members, 2)
+        clusterable = (
+            edges[0].okf_type not in RECURRING_OCCURRENCE_TYPES
+            and 3 <= len(members) <= _MAX_CLUSTER_MEMBERS
+            and not any(
+                frozenset(pair) in other_pairs for pair in combinations(members, 2)
+            )
         )
         if clusterable and lifecycle.ruled_distinct_pairs(bundle_dir, members):
             # A person already ruled two of these apart. A cluster holding

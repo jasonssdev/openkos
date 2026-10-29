@@ -18,7 +18,7 @@ that was asked before is still decidable.
 
 1. `find_candidates_report` folds each type's LOW pairs into connected components
    and returns one LOW group per component of 3 to 8 members.
-2. A component of two stays a pair. A component of more than 8, one holding a
+2. A component of two stays a pair. A component of more than 8, one of type Event (recurring-series meetings), one holding a
    pair already asked as a HIGH or ACRONYM candidate, or one holding a pair a
    person ruled distinct, stays as its pairs (the ruled pair is still returned
    as a pair and suppressed as today). A skipped pair is only a pending row, and

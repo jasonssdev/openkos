@@ -219,3 +219,31 @@ def test_a_ruling_on_an_unrelated_pair_changes_nothing(tmp_path: Path) -> None:
     _rule_distinct(bundle_dir, "concepts/stoic0", "concepts/stoic1")
 
     assert find_candidates_report(bundle_dir) == before
+
+
+def test_events_of_a_recurring_series_stay_pairs(tmp_path: Path) -> None:
+    """Distinct meetings of one series share near-identical titles; asking one
+    group question over them, with the group walk open on any verdict, invites
+    merging different meetings (the hazard ATTACH_EXCLUDED_TYPES guards)."""
+    bundle_dir = tmp_path / "bundle"
+    for index, title in enumerate(_BUDGET):
+        _write_doc(
+            bundle_dir / "events" / f"m{index}.md", doc_type="Event", title=title
+        )
+
+    groups = find_candidates_report(bundle_dir).groups
+
+    assert len(groups) == 3
+    assert all(len(g.member_ids) == 2 for g in groups)
+
+
+def test_persons_still_cluster(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    for index, title in enumerate(_BUDGET):
+        _write_doc(
+            bundle_dir / "people" / f"p{index}.md", doc_type="Person", title=title
+        )
+
+    [group] = find_candidates_report(bundle_dir).groups
+
+    assert len(group.member_ids) == 3
