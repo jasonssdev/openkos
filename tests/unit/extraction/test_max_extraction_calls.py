@@ -191,21 +191,21 @@ def test_the_bound_is_never_below_the_ordinary_estimate() -> None:
 
 
 def test_the_bound_on_a_short_source_is_the_sum_of_every_mechanism() -> None:
-    """Two passes, the re-ask, the participant pass and the decision pass with
-    its retry (a short source is one window), and, with the selector judge on,
-    both judge attempts: the meeting-shaped reading is the costlier one, and the
-    bound takes it whatever the title. The judge's attempts are absent by
-    default (ADR-0080)."""
+    """Two passes, the re-ask, the meeting Event's call with its re-ask (#1689),
+    the participant pass and the decision pass with its retry (a short source is
+    one window), and, with the selector judge on, both judge attempts: the
+    meeting-shaped reading is the costlier one, and the bound takes it whatever
+    the title. The judge's attempts are absent by default (ADR-0080)."""
     text = _source_of(_SHORT)
     assert concept.max_extraction_calls(
         text, union_judge=True, transcript_decisions=True, selector_judge=True
-    ) == (2 + 1 + 1 + 2 + judge.JUDGE_ATTEMPTS)
+    ) == (2 + 1 + 2 + 1 + 2 + judge.JUDGE_ATTEMPTS)
     assert concept.max_extraction_calls(
         text, union_judge=True, transcript_decisions=True
-    ) == (2 + 1 + 1 + 2)
+    ) == (2 + 1 + 2 + 1 + 2)
     assert concept.max_extraction_calls(
         text, union_judge=False, transcript_decisions=False
-    ) == (2 + 1)
+    ) == (2 + 1 + 2)
 
 
 def test_blank_text_needs_no_call() -> None:

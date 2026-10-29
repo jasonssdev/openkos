@@ -26,6 +26,7 @@ PINNED: dict[str, str] = {
     "extraction/decision_pass": "6d3962b0dd75650c",
     "extraction/judge": "6bb30c750944f78e",
     "extraction/language_anchor": "165db5afd66cf667",
+    "extraction/meeting_event": "4f93593ea5bea022",
     "extraction/participant_capture": "be7e5009a40ede2d",
     "extraction/reask": "abd2691d6f73732b",
     "extraction/system": "68ea44d4370b2135",

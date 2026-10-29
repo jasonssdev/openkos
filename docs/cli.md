@@ -189,6 +189,7 @@ One source costs, in calls:
 - **plus one** judge call, **only with `selector_judge: true`** (off by default), and skipped even then when a single candidate survives the merge;
 - **plus one more** judge call when that first one comes back unusable — a raised error, a reply carrying no JSON object, or a JSON object of the wrong shape. The judge is asked exactly twice before it is declared unavailable; a judge that answers the first time costs nothing extra;
 - **plus one** re-ask, only when the source returned a *sole* object.
+- **plus one** meeting-event call (two when its first reply cannot be read), only on a meeting-shaped source where a meeting `Event` was dropped and at least one subject survives; the Event is kept beside the subjects, outside the cap, and its body is refused rather than repaired when it names a participant the source does not.
 
 Those calls run one after another by default. On a **chunked** source they can overlap two at a time — worth about 20% of a run, and only if your Ollama server was started with `OLLAMA_NUM_PARALLEL` raised. See `concurrent_extraction` under config below; it is off by default for exactly that reason.
 
