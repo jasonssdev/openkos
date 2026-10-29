@@ -720,6 +720,8 @@ be resolved by hand; the command never merges them.
 | `PREREGISTRATION-1650.md` | Registered on merge: index the questions a Decision answers (doc2query), measured on the vocabulary-gap stratum. |
 | `PREREGISTRATION-1651.md` | Registered on merge: a chat model as a pointwise reranker over a widened fused pool, the cheapest path before any `llama-server` step. |
 | `gold_rerank.py` | Model-free parts of that registration (prompt parsing, the rerank arms, latency accounting, the decision rule) plus the two commands that call Ollama (`wide-run`, `score-pool`). `--self-test`. |
+| `PREREGISTRATION-1651-cross-encoder.md` | Registered on merge: `bge-reranker-v2-m3` served by an opt-in `llama-server` over the same widened pool, with a latency bar, a Spanish guard and truncation reporting. |
+| `gold_crossenc.py` | The `/v1/rerank` scorer for that registration (stdlib HTTP), the truncation report and the extra latency and Spanish conditions; the arms and the bar are `gold_rerank.py`'s. `--self-test` runs against a loopback stub, no model. |
 | `bundle_sources.json` | The selected sources with their sha256, language, kind and tier, and what was excluded and why. |
 | `questions.draft.json` | The draft question set for the 35-document draft bundle; no judgments. |
 | `questions.v1.json` | The frozen, model-authored question set for `bundle-v1`; no judgments. |
