@@ -551,23 +551,28 @@ def run_source(
     title: str,
     backend: ScreenBackend,
     cache: ChatCache,
+    selector_judge: bool = True,
 ) -> dict[str, Any]:
-    """One production `extract_concept_union` call, every stage recorded."""
+    """One production `extract_concept_union` call, every stage recorded.
+
+    `selector_judge` defaults to the value this screen has always measured;
+    a harness measuring production's own default (ADR-0080) passes `False`."""
     rec = StageRecorder()
     started = time.monotonic()
     failure: str | None = None
     outcome = None
     with capture_stages(rec):
         try:
-            # `selector_judge=True`: this harness measures the judge's stage,
-            # and its stored records were made with it. Production's default
-            # moved off in ADR-0080; the harness keeps what it measures.
+            # `selector_judge=True` by default: this screen measures the
+            # judge's stage, and its stored records were made with it.
+            # Production's default moved off in ADR-0080; a caller measuring
+            # that default passes `selector_judge=False`.
             outcome = concept_mod.extract_concept_union(
                 text,
                 source_title=title,
                 llm=backend,
                 transcript_decisions=False,
-                selector_judge=True,
+                selector_judge=selector_judge,
             )
         except BackendError as exc:
             failure = f"{type(exc).__name__}: {str(exc)[:200]}"
