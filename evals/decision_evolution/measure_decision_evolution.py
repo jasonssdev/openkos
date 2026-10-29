@@ -313,6 +313,12 @@ def window_exposure(recs: Sequence[Mapping[str, Any]]) -> int:
     )
 
 
+NO_HISTORY_INVARIANT: Final = (
+    "the on arm never attached history: the mechanism was not exercised"
+)
+"""The history axis' own invariant. The window axis has no `on` arm."""
+
+
 def invariant_problems(recs: Sequence[Mapping[str, Any]]) -> list[str]:
     problems: list[str] = []
     for rec in recs:
@@ -321,9 +327,7 @@ def invariant_problems(recs: Sequence[Mapping[str, Any]]) -> list[str]:
         ):
             problems.append(f"{rec['q']}: the {rec['arm']} arm attached history")
     if not any(rec["history_ids"] for rec in recs if rec["arm"] == "on"):
-        problems.append(
-            "the on arm never attached history: the mechanism was not exercised"
-        )
+        problems.append(NO_HISTORY_INVARIANT)
     return problems
 
 
@@ -544,8 +548,9 @@ def decide_window(summary: Mapping[str, Any], exposure: int) -> dict[str, Any]:
     a latency inside W4. A gain bought at a latency over W4 is REJECTED on W4,
     which keeps #1714 held."""
     reasons: list[str] = []
-    if summary["invariants"]:
-        reasons.append("invariant violated: " + "; ".join(summary["invariants"]))
+    invariants = [p for p in summary["invariants"] if p != NO_HISTORY_INVARIANT]
+    if invariants:
+        reasons.append("invariant violated: " + "; ".join(invariants))
     if summary["failed_share"] > BARS["FAILED_MAX"]:
         reasons.append(
             f"failed calls {summary['failed_share']:.2f} > {BARS['FAILED_MAX']}"
@@ -1193,6 +1198,16 @@ def _window_summary(mut: Any = None, **kw: Any) -> dict[str, Any]:
 
 def _t_window(c: _Checks) -> None:
     good = _window_summary()
+    never = good | {"invariants": [NO_HISTORY_INVARIANT]}
+    c.check(
+        decide_window(never, exposure=12)["verdict"] == SUPPORTED,
+        "the history arm's never-attached invariant does not bind the window axis",
+    )
+    leaked = good | {"invariants": ["e1-es: the w24576 arm attached history"]}
+    c.check(
+        decide_window(leaked, exposure=12)["verdict"] == INCONCLUSIVE,
+        "a history block in a window-axis prompt is still inconclusive",
+    )
     d = decide_window(good, exposure=12)
     c.check(
         d["verdict"] == SUPPORTED, f"a gain at 2x latency and 20 s is supported: {d}"

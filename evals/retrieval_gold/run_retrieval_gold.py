@@ -38,7 +38,7 @@ import math
 import pathlib
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
@@ -697,6 +697,19 @@ def cmd_delivered(args: argparse.Namespace) -> int:
     return 0
 
 
+def delivered_pair_problem(
+    base: Mapping[str, Any], cand: Mapping[str, Any]
+) -> str | None:
+    """Why two `delivered --out` files are not a comparison, or None. They must
+    differ in the excerpt setting or in the context window; two query-aware runs
+    at different windows compare the window alone."""
+    if bool(base.get("query_aware")) == bool(cand.get("query_aware")) and base.get(
+        "context_window"
+    ) == cand.get("context_window"):
+        return "base and cand must differ in query_aware or context_window"
+    return None
+
+
 def cmd_delivered_compare(args: argparse.Namespace) -> int:
     corpus = _corpus(args)
     questions = _load_questions(_questions_path(args), corpus)
@@ -709,8 +722,9 @@ def cmd_delivered_compare(args: argparse.Namespace) -> int:
             or doc.get("questions_sha256") != sha
         ):
             raise SystemExit(f"{name} is not a delivered file for this question set")
-    if bool(base.get("query_aware")) == bool(cand.get("query_aware")):
-        raise SystemExit("base and cand must differ in query_aware")
+    problem = delivered_pair_problem(base, cand)
+    if problem:
+        raise SystemExit(problem)
     out = delivery.compare_delivered(
         base["results"],
         cand["results"],
@@ -1623,6 +1637,32 @@ def _self_test_delivery(c: _Checks, questions: list[core.Question]) -> None:
     c.check(
         gapped["vocab_gap"]["n"] == 2 and gapped["vocab_gap"]["diff"] == 1.0,
         f"vocab-gap stratum: {gapped}",
+    )
+
+    def run_of(**kw: Any) -> dict[str, Any]:
+        return {"kind": "retrieval-gold-delivered", "query_aware": True, **kw}
+
+    c.check(
+        delivered_pair_problem(
+            run_of(context_window=12288), run_of(context_window=24576)
+        )
+        is None,
+        "two query-aware runs at different windows compare (window size only)",
+    )
+    c.check(
+        delivered_pair_problem(
+            run_of(context_window=12288),
+            run_of(query_aware=False, context_window=12288),
+        )
+        is None,
+        "the query-aware pair at one window still compares",
+    )
+    c.check(
+        delivered_pair_problem(
+            run_of(context_window=12288), run_of(context_window=12288)
+        )
+        is not None,
+        "two runs differing in neither setting are refused",
     )
     same = delivery.compare_delivered(off, off, qs[:4], resamples=200, seed=1)
     c.check(
