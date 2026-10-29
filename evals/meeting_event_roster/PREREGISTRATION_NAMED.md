@@ -190,7 +190,12 @@ after a number is seen.
 
 ## The owner confirms
 
-Nothing below is confirmed yet.
+On 2026-10-29, before this file merged and before any result of this check
+existed, the owner gave a standing instruction to take the recommended option
+on open choices; under it every item below is confirmed unchanged, as
+proposed. The owner did not review the items one by one; this is recorded so
+the confirmation is not read as more than it is. The `named` command waits for
+this file to merge to `main`.
 
 1. **The rule**: the name-form roster is exactly production's recurring
    speakers (same line shape, same label grammar, recurrence 3, speaker floor 2),
