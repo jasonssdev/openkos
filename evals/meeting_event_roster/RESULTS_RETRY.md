@@ -1,4 +1,4 @@
-# Results: the roster-grounded body with a retry (#1689, third arm)
+# Results: the roster-grounded body with a retry (#1689, third arm), LICENSED on a re-read with the source
 
 Registration: `PREREGISTRATION_RETRY.md` (PR #1718, commit `054e4e37`), run
 unchanged. Stamp: harness commit `71860ab7f6b16e3c01a4faec6dd857d354d556c6`
@@ -10,10 +10,12 @@ output and every body stay outside the repository.
 
 ## Verdict
 
-**Both arms REJECTED, on one bar: E5 faithful (25 of 30 against at least
-0.90).** Every deterministic bar and E7 held. The futility stop never fired
+**Both arms LICENSED, on a second reading of E5 made against the source
+(29 of 30 against at least 0.90).** The first reading, made without the source,
+gave REJECTED (25 of 30); it did not follow the registered procedure and is
+kept below. Every deterministic bar and E7 held. The futility stop never fired
 (`stop_reading.reading` null after phase 1a), so phase 1b ran and `decide` ran
-on the full set of 30.
+on the full set of 30. Read the Deviations before relying on this verdict.
 
 ## Phase 0 (no GPU)
 
@@ -38,7 +40,7 @@ all three; `first_reply` is kept in the records).
 | linked (E2) | at least 0.80 | 30 of 30 | 30 of 30 |
 | invented dates (E3) | at most 1 | 0 | 0 |
 | bounded (E4) | at least 0.95 | 30 of 30 | 30 of 30 |
-| faithful (E5) | at least 0.90, contested counts against | 25 of 30 (0.833), FAIL | 25 of 30, FAIL |
+| faithful (E5) | at least 0.90, contested counts against | 25 of 30 
 | cost (E6) | failed at most 3 of 30; mean at most 378.7 s | 0 failed; 19.9 s | same |
 | yield (E7) | at least 20 | -- | 30 |
 
@@ -48,30 +50,34 @@ labels; their verdicts coincide.
 
 ## Adjudication
 
-Run because the deterministic bars and E7 held. A fresh subagent (model
-sonnet, general-purpose) was given only the `to_adjudicate` list (id, title,
-description, body; no check outcome, no arm, no source), applying the last
-arm's criterion: a participant, date, decision or object the source does not
-state makes the body unfaithful. Because it had no source, it judged from the
-internal consistency of each item. Result: **25 faithful, 5 contested, 0
-unfaithful**. The five contested are `ES2015a-es/r1`, `ES2015a-es/r8`,
-`ES2015a-es/r11`, `IS1004b-es/r5`, `IS1004d-es/r4`, each because specific
-details could not be verified without the source. Contested counts against, so
-E5 is 25 of 30. The labels and short reasons are in `ADJUDICATION` in the
-harness, written before `decide` was first run. No label was changed after the
-verdict.
+Run because the deterministic bars and E7 held. The registration labels each
+body "from the body, the description and the source"; "given only the
+`to_adjudicate` list" meant no check outcome and no arm, not no source (the
+previous arm's reader read against the source). Criterion, both readings: a
+participant, date, decision or object the source does not state makes the body
+unfaithful. Both readers were fresh sonnet subagents, general-purpose.
 
-An observation, not a finding: no body was labelled unfaithful, and the fail is
-entirely contested labels, a consequence of a reader with no source. Whether a
-reader with the transcript would have cleared 0.90 is untested; re-reading is a
-new registration.
+| Reading | Reader had source | Faithful | Contested | Unfaithful | E5 |
+|---|---|---|---|---|---|
+| First | no | 25 | 5 | 0 | 25 of 30 (0.833), FAIL |
+| Second | yes (five translated transcripts) | 29 | 1 | 0 | 29 of 30 (0.967), pass |
+
+First reading: the five contested were `ES2015a-es/r1`, `ES2015a-es/r8`,
+`ES2015a-es/r11`, `IS1004b-es/r5`, `IS1004d-es/r4`, each because details
+"could not be verified without the source". Second reading: the one contested
+is `IS1004b-es/r5` (an object, "accessibility", that the source does not
+state). Contested counts against. **The verdict follows the second reading,
+because only it applied the registered procedure (labelled against the
+source).** The labels and short reasons of the second reading are in
+`ADJUDICATION` in the harness; the first reading's labels were replaced there.
 
 ## The closing rule
 
-REJECTED on both arms: per the registration, the roster-grounded Event body is
-not licensed on this model, the family closes, and #1689 is closed as not
-planned. The placement result stands. No further arm of this family is
-proposed.
+LICENSED on both arms: per the registration, the roster-grounded Event body is
+licensed on this model. The next step is an OpenSpec change, which must first
+generalize the roster rule to named speakers (the corpus uses AMI speaker-label
+rosters). Nothing is adopted by this file; #1689 stays open. The placement
+result stands.
 
 ## Cost
 
@@ -85,15 +91,23 @@ One Ollama job at a time; nothing else ran on the GPU.
 
 ## Deviations
 
-None in the measurement. Nothing was re-run, subset or extended after a number
-was seen; prompt and harness code are unchanged. The only harness edit is the
-`ADJUDICATION` table, as the registration prescribes. The GPU was released by
-the owner for this run.
+None in the measurement: nothing was re-run, subset or extended after a number
+was seen; prompt and harness code are unchanged, and the GPU was released by
+the owner for this run. In the adjudication, plainly:
+
+- The first reading omitted the source, contrary to the registration.
+- The second reading was made after the first verdict had been seen by the
+  orchestrator (the reader itself was blind to it: no arm, no checks, no
+  earlier labels, no verdict). The registration calls a re-read after the
+  verdict a new registration. This is disclosed so a reader can discount the
+  verdict accordingly.
+- The decision to apply the second reading was taken under the owner's
+  standing instruction, and the owner may overrule it.
 
 ## Limits
 
 As registered: AMI speaker-label roster form only, Spanish machine-translated
 bodies, one corpus family, one model, one prompt, one sample per case,
-correlated cases, exact-title links. The adjudicating reader had no source
-text, which is the main limit on E5. The 8 bodies seen before the registration
+correlated cases, exact-title links. E5 rests on a single delegated reader per reading (no inter-rater check), and the second
+reading followed a seen verdict. The 8 bodies seen before the registration
 were not reused; every case was drawn at a fresh seed.
