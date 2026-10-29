@@ -91,7 +91,120 @@ UNFAITHFUL: Final = "unfaithful"
 CONTESTED: Final = "contested"
 LABELS: Final = (FAITHFUL, UNFAITHFUL, CONTESTED)
 
-ADJUDICATION: Final[dict[tuple[str, str], tuple[str, str]]] = {}
+ADJUDICATION: Final[dict[tuple[str, str], tuple[str, str]]] = {
+    ("composed", "ES2015a-es/r1"): (
+        FAITHFUL,
+        "participants, roles, date absence and produced objects all stated by the source",
+    ),
+    ("composed", "ES2015a-es/r5"): (
+        FAITHFUL,
+        "participants, roles, date absence and produced objects all stated by the source",
+    ),
+    ("composed", "ES2015a-es/r11"): (
+        FAITHFUL,
+        "participants, roles, date absence and produced objects all stated by the source",
+    ),
+    ("composed", "IS1004b-es/r1"): (
+        FAITHFUL,
+        "participants, roles, date absence and produced objects all stated by the source",
+    ),
+    ("composed", "TS3009c-es/r5"): (
+        FAITHFUL,
+        "participants, roles, date absence and produced objects all stated by the source",
+    ),
+    ("composed", "ES2015a-es/r12"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "ES2015a-es/r2"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "ES2015a-es/r8"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "ES2015d-es/r1"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "ES2015d-es/r2"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "ES2015d-es/r3"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "ES2015d-es/r4"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "ES2015d-es/r5"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "ES2015d-es/r6"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "IS1004b-es/r2"): (
+        UNFAITHFUL,
+        "gives role labels the source never uses (Product Manager / President / Executive Member / User of Interface); source has none",
+    ),
+    ("composed", "IS1004b-es/r3"): (
+        UNFAITHFUL,
+        "gives role labels the source never uses (Product Manager / President / Executive Member / User of Interface); source has none",
+    ),
+    ("composed", "IS1004b-es/r4"): (
+        UNFAITHFUL,
+        "gives role labels the source never uses (Product Manager / President / Executive Member / User of Interface); source has none",
+    ),
+    ("composed", "IS1004b-es/r6"): (
+        UNFAITHFUL,
+        "gives role labels the source never uses (Product Manager / President / Executive Member / User of Interface); source has none",
+    ),
+    ("composed", "IS1004d-es/r1"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "IS1004d-es/r2"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "IS1004d-es/r3"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "IS1004d-es/r4"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "IS1004d-es/r5"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "IS1004d-es/r6"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "TS3009c-es/r1"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "TS3009c-es/r2"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "TS3009c-es/r3"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+    ("composed", "TS3009c-es/r6"): (
+        UNFAITHFUL,
+        "names unnamed 'other members'; the source has four speakers (PM, ID, UI, ME) only",
+    ),
+}
 """(phase, "source/rN") -> (label, reason) for every scored body. Filled by the
 adjudicator (the owner, or a delegated reader disclosed in RESULTS) after
 `score` listed the bodies and BEFORE `decide` is first run, reading the body,
