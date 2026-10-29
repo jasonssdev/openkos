@@ -157,6 +157,64 @@ def test_a_pending_same_type_pair_withholds_only_merge(tmp_path: Path) -> None:
     assert item.withheld == (WithheldAction(Action.MERGE, "pending_evaluation"),)
 
 
+# -- near-match clusters (#1701) --------------------------------------------- #
+
+
+def _seed_cluster(
+    tmp_path: Path, *, verdict: str | None
+) -> tuple[Path, config.WorkspaceLayout, pq.Proposal]:
+    root, layout = make_workspace(tmp_path, _THREE)
+    proposal = identity_row(layout, tuple(_THREE), verdict=verdict, tier="low")
+    enqueue(layout, proposal)
+    return root, layout, proposal
+
+
+@pytest.mark.parametrize("verdict", ["uncertain", "different"])
+def test_a_near_match_cluster_offers_merge_group_against_a_doubt(
+    tmp_path: Path, verdict: str
+) -> None:
+    """The cluster replaces pairs a person could merge on any verdict (#1699),
+    so the group walk stays open on a doubt too: the person is the authority."""
+    _root, layout, _proposal = _seed_cluster(tmp_path, verdict=verdict)
+
+    item = _item(layout)
+
+    assert item.evaluation == f"judged_{verdict}"
+    assert item.actions == _OFFERED
+    assert item.withheld == (WithheldAction(Action.MERGE, "more_than_two_members"),)
+
+
+def test_a_near_match_cluster_awaiting_a_judgment_still_withholds_merge_group(
+    tmp_path: Path,
+) -> None:
+    _root, layout, _proposal = _seed_cluster(tmp_path, verdict=None)
+
+    item = _item(layout)
+
+    assert item.actions == (Action.KEEP_DISTINCT, Action.SKIP)
+    assert item.withheld == (
+        WithheldAction(Action.MERGE, "pending_evaluation"),
+        WithheldAction(Action.MERGE_GROUP, "pending_evaluation"),
+    )
+
+
+def test_a_near_match_cluster_judged_uncertain_previews_merge_group(
+    tmp_path: Path,
+) -> None:
+    root, layout, proposal = _seed_cluster(tmp_path, verdict="uncertain")
+
+    result = _preview(
+        root,
+        layout,
+        proposal.decision_key,
+        Action.MERGE_GROUP,
+        selection=selection_of(A, A, B),
+    )
+
+    assert isinstance(result, DecisionPreview)
+    assert isinstance(result.preview, MergeGroupDecisionPreview)
+
+
 # -- 4.1.3 dispatch ---------------------------------------------------------- #
 
 
