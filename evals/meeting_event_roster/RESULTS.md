@@ -88,6 +88,15 @@ and the futility stop ended the run first. `ADJUDICATION` is unchanged.
 
 ## Deviations and oddities
 
+- **Run before the registration merged.** The registration says it becomes
+  REGISTERED once the owner has confirmed it and the file has merged to
+  `main`, before the first model call. This run used the confirmed
+  registration at its pushed commit `031b89aa` (PR #1713) before that PR merged.
+  The commit was pushed and fixed before the first model call and was not
+  edited afterwards, so the bars were not set after any result; the stated
+  merge condition was still not met. The orchestrating session made this
+  call, not the operator.
+
 - The reader printed the whole `score --per-source 2` output rather than only
   `futility_stop`, so the 8 scored bodies, their descriptions and the check
   outcomes were seen after phase 1a, not just the stop field. No decision used
