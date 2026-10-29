@@ -97,11 +97,13 @@ class ScoredCall:
     the wall-clock seconds the call took."""
 
     doc: str
-    score: int | None
+    score: float | None
     seconds: float
 
 
 Scorer = Callable[[str, str], ScoredCall]
+# One request per query scoring every candidate (the cross-encoder arm, #1651).
+BatchScorer = Callable[[str, Sequence[str]], list[ScoredCall]]
 
 
 def parse_score(reply: object) -> int | None:
@@ -181,7 +183,7 @@ def make_llm_scorer(
 def score_pool(
     wide_run: Mapping[str, Any],
     questions: Sequence[core.Question],
-    scorer: Scorer,
+    scorer: Scorer | None,
     *,
     pool: int,
     identity: Mapping[str, Any],
@@ -190,13 +192,17 @@ def score_pool(
     clock: Callable[[], float] = time.monotonic,
     deadline_s: float | None = None,
     stamp: Mapping[str, Any] | None = None,
+    batch_scorer: BatchScorer | None = None,
 ) -> dict[str, Any]:
-    """Score `wide[:pool]` of every question, one call per candidate.
+    """Score `wide[:pool]` of every question, one call per candidate (or, with
+    `batch_scorer`, one request per question).
 
     `checkpoint` receives the file after every question, marked incomplete, so
     a crash or the budget stop loses at most one question; `existing` resumes
     from one (its identity must match). Reaching `deadline_s` returns an
     incomplete file, which `evaluate` refuses."""
+    if scorer is None and batch_scorer is None:
+        raise ValueError("a scorer or a batch scorer is required")
     if existing is not None and dict(existing.get("identity", {})) != dict(identity):
         raise ValueError("the checkpoint was written under another identity")
     calls: dict[str, list[dict[str, Any]]] = (
@@ -224,7 +230,11 @@ def score_pool(
                 checkpoint(result)
             return result
         candidates = wide_run["rankings"][q.id]["wide"][:pool]
-        scored = [scorer(q.question, doc) for doc in candidates]
+        scored = (
+            batch_scorer(q.question, candidates)
+            if batch_scorer is not None
+            else [scorer(q.question, doc) for doc in candidates]  # type: ignore[misc]
+        )
         calls[q.id] = [
             {"doc": x.doc, "score": x.score, "seconds": x.seconds} for x in scored
         ]
@@ -434,7 +444,7 @@ def retrieve_wide(
 # Evaluation                                                                   #
 # --------------------------------------------------------------------------- #
 
-_SUBSETS: Final = ("all", "vocab-gap")
+_SUBSETS: Final = ("all", "vocab-gap", "es")
 _REPORTED: Final = ("ndcg@5", "recall@5", "recall@8")
 
 
@@ -786,7 +796,13 @@ def _wide_run(
 
 def _fixture() -> tuple[list[core.Question], dict[str, list[str]], dict[str, Any]]:
     questions = [
-        core.Question(f"q{i:02d}", "en", "single-hop", f"question {i}", vocab_gap=i < 2)
+        core.Question(
+            f"q{i:02d}",
+            "es" if i >= 2 else "en",
+            "single-hop",
+            f"question {i}",
+            vocab_gap=i < 2,
+        )
         for i in range(4)
     ]
     wide: dict[str, list[str]] = {}
