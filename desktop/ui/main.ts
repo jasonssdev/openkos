@@ -201,6 +201,9 @@ function paintAdd(): void {
     stop: () => add.stop(),
     close: () => add.close(),
     resolveProblem: () => add.resolveProblem(),
+    agreeIncoming: () => add.agreeIncoming(),
+    dismissIncoming: () => add.dismissIncoming(),
+    remove: (path) => add.removeQueued(path),
   });
 }
 // A run goes on off the screen: the sidebar says so, and how it ended until the person looks.

@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- The Add files screen shows progress inside a file and keeps taking files during a run. While the AI model reads a file the card shows a bar and "n of m parts read" (indeterminate until the model has counted), how long it has been on this file, and "This can take several minutes per file on this Mac." before and during the run, worded as "can", never a promise. The drop zone and **Choose files…** stay available during a run; files put in are asked about as usual, then wait in a list with **Remove**, and start one after another by themselves (the engine runs one ingest at a time, so the queue lives in the app). Stop leaves the files still waiting. `IngestProgress` and the ingest job gain `parts_done` and `parts_total`, null until the extraction reports a count (#1696, #1697).
+
 ### Fixed
 
 - `ingest` now says which filter emptied a source. When extraction ends with no concept and a candidate was removed as a framing object (a meeting-shaped title) or as a twin of the source title, the notice names those titles and the filter, where before it printed only "no concept extracted". The language gate keeps every candidate rather than empty a source, so a Spanish meeting that came out empty was losing its survivor to a later filter, not to the gate. Diagnostic only: which objects are kept is unchanged (#1642).
