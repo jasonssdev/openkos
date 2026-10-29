@@ -328,6 +328,7 @@ function show(next: View): void {
   } else {
     if (next === "settings") void settings.load();
     if (next === "settings" || next === "status") void search.load();
+    if (next === "status" && readyState !== null && statusRead) void readStatus(readyState);
     const root = { ask: askRoot, add: addRoot, status: statusRoot, setup: setupRoot, welcome: welcomeRoot, settings: settingsRoot }[next];
     root.querySelector<HTMLElement>('[data-view="heading"]')?.focus();
   }
@@ -446,6 +447,7 @@ async function tick(): Promise<void> {
     }
     launch = null;
     statusRead = false;
+    readyState = null;
     return;
   }
   const current = `${state.pid}:${state.base_url}`;
@@ -456,15 +458,30 @@ async function tick(): Promise<void> {
     startSetup(state);
     void settings.connect(createClient(state));
   }
+  readyState = state;
   if (statusRead) return;
+  await readStatus(state);
+}
+
+// The counts follow the library: read once the engine is up, and again each
+// time Status is opened, so they are never older than the last visit.
+type ReadyState = Extract<EngineState, { state: "ready" }>;
+let readyState: ReadyState | null = null;
+let statusReading = false;
+
+async function readStatus(state: ReadyState): Promise<void> {
+  if (statusReading) return;
+  statusReading = true;
   statusRead = true;
   try {
     const status = await createClient(state).status();
     statusOpen = openDecisions(status);
-    screen = { ...screen, workspace: { kind: "read", status } };
+    screen = { ...screen, workspace: { kind: "read", status, readAt: new Date() } };
   } catch (error) {
     statusRead = false;
     screen = { ...screen, workspace: { kind: "failed", message: statusFailure(error) } };
+  } finally {
+    statusReading = false;
   }
   paintStatus();
   paintNav();

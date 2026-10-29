@@ -67,7 +67,16 @@ describe("the status screen", () => {
     expect(terms(shown as Element)).toEqual(["To review", "Pages", "Files you added"]);
     expect(more?.closest("details")?.querySelector("summary")?.textContent).toBe("Show the folder");
     expect(more?.querySelector("dd code")?.textContent).toBe("/Users/me/knowledge");
-    expect(root.querySelector(".ui-card__meta")?.textContent).toBe("Read from the engine just now.");
+    expect(root.querySelector(".ui-card__meta")?.textContent).not.toContain("just now");
+  });
+
+  it("states when the counts were read, never that they are current", () => {
+    const readAt = new Date(2026, 9, 29, 14, 5);
+    const root = draw({ engine: { text: "The engine is running." }, workspace: { kind: "read", status: STATUS, readAt } });
+    const meta = root.querySelector(".ui-card__meta")?.textContent ?? "";
+    expect(meta).toMatch(/^Read at /);
+    expect(meta).toContain(readAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    expect(meta).not.toContain("just now");
   });
 
   it("says why the status could not be read, in an error notice", () => {
