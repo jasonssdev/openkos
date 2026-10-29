@@ -6,8 +6,8 @@ registration, not an edit to this one. It generates no number itself: it fixes
 what will be generated, how it will be read, and what each outcome means.
 Production code and defaults are unchanged by this file and by the run. A
 verdict that licenses an arm opens a separate production change with its own
-spec, tests and PR. Bars marked **(proposed)** are the owner's to confirm or
-change before the merge.
+spec, tests and PR. The owner confirmed every bar marked **(proposed)**
+unchanged on 2026-10-28, before this file merged and before any result existed.
 
 ## Question
 
