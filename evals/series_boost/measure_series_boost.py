@@ -44,6 +44,7 @@ sys.path.insert(0, str(REPO_ROOT / "evals" / "decision_evolution"))
 import evolution_bundle as eb  # noqa: E402
 import evolution_questions as eq  # noqa: E402
 import measure_decision_evolution as mde  # noqa: E402
+from harness_stamp import build_stamp  # noqa: E402
 
 from openkos.config import (  # noqa: E402
     DEFAULT_MAX_GENERATION_TOKENS,
@@ -459,6 +460,24 @@ def decide(summary: Mapping[str, Any]) -> dict[str, Any]:
 DEFAULT_OUT: Final = pathlib.Path.home() / "Dev/Projects/openkos-eval-runs/series-boost"
 
 
+def _stamp(model: str) -> dict[str, Any]:
+    """The identity every stored result carries: harness commit, model digest,
+    hash of the prompts sent."""
+    from openkos.retrieval.answer import _SUFFICIENCY_PROMPT, _SYSTEM_PROMPT
+
+    return build_stamp(
+        model=model,
+        prompts={
+            "answer/system": _SYSTEM_PROMPT,
+            "answer/sufficiency": _SUFFICIENCY_PROMPT,
+        },
+    )
+
+
+def new_store() -> dict[str, Any]:
+    return {"stamp": _stamp(MODEL), "cells": []}
+
+
 def _runs_path(out: pathlib.Path) -> pathlib.Path:
     return out / f"runs-{MODEL.replace(':', '-')}.json"
 
@@ -475,7 +494,7 @@ def cmd_contexts(args: argparse.Namespace) -> int:
         args.out / "contexts.json",
         {
             "questions_sha256": eq.question_set_sha256(),
-            "stamp": mde._stamp(EMBED_MODEL),
+            "stamp": _stamp(EMBED_MODEL),
             "summary": summary,
             "phase1_verdict": verdict,
             "records": recs,
@@ -498,9 +517,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     treated = set(ctx["summary"]["treated_ids"])
     qs = eq.questions()
     path = _runs_path(args.out)
-    store: dict[str, Any] = (
-        mde._read(path) if path.exists() else {"stamp": mde._stamp(MODEL), "cells": []}
-    )
+    store: dict[str, Any] = mde._read(path) if path.exists() else new_store()
     done = {(c["arm"], c["q"], c["run"]) for c in store["cells"]}
     embedder = OllamaClient(model=EMBED_MODEL, timeout=args.timeout)
     with tempfile.TemporaryDirectory() as tmp:
@@ -989,6 +1006,23 @@ def _t_cells(c: _Checks) -> None:
     c.check(len(key) == 3, "one code per cell")
 
 
+def _t_stamp(c: _Checks) -> None:
+    store = new_store()
+    stamp = store["stamp"]
+    c.check(
+        isinstance(stamp, dict) and stamp.get("model", {}).get("name") == MODEL,
+        "a stored runs file carries the identity stamp",
+    )
+    c.check(
+        any(x["id"] == "answer/system" for x in stamp["prompts"]),
+        "the stamp pins the prompts sent",
+    )
+    c.check(
+        "stamp" in json.dumps({"stamp": _stamp(EMBED_MODEL)}),
+        "the contexts file is stamped with the embedder",
+    )
+
+
 def _t_prereg(c: _Checks) -> None:
     text = (HERE / "PREREGISTRATION.md").read_text(encoding="utf-8")
     c.check("(proposed)" in text, "the registration marks the proposed bars")
@@ -1015,6 +1049,7 @@ def self_test() -> int:
         _t_phase1,
         _t_decide,
         _t_cells,
+        _t_stamp,
         _t_prereg,
         _t_mutation_guard,
     ):
