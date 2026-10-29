@@ -121,3 +121,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0080](0080-concept-extraction-stops-applying-the-selector-judges-cut-and-keeps-only-the-positional-backstop.md) | Concept extraction stops applying the selector judge's cut and keeps only the positional backstop | Accepted | 2026-10-27 |
 | [0081](0081-the-update-archive-is-made-and-signed-by-the-build-script-after-the-ad-hoc-re-sign.md) | The update archive is made and signed by the build script after the ad-hoc re-sign | Accepted | 2026-10-28 |
 | [0082](0082-query-aware-excerpts-become-the-default.md) | Query-aware excerpts become the default | Accepted | 2026-10-28 |
+| [0083](0083-a-reranker-may-be-served-by-an-opt-in-llama-server-as-a-second-local-runtime.md) | A reranker may be served by an opt-in llama-server as a second local runtime | Proposed | 2026-10-28 |
