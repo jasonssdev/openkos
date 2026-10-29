@@ -70,6 +70,19 @@ confidence number is shown.
 - AND the options are Same thing, Different things and Decide later, each with
   its "what it does" line, and Same thing previews the combine
 
+#### Scenario: A pair the model doubted can still be combined
+
+- GIVEN an identity decision over a pair with `evaluation` `judged_uncertain`
+  or `judged_different` whose actions include merge
+- WHEN it is opened
+- THEN the line above the question carries the model's doubt ("The AI model
+  couldn't tell." or "The AI model thinks these are different {people}.")
+  followed by "If you know they are the same, you can still combine them, and
+  split them again later."
+- AND the model's reason stays under "Why the AI model thinks so"
+- AND the options are Same thing, Different things and Decide later, and Same
+  thing previews the combine
+
 #### Scenario: An unjudged pair offers the check, not a combine
 
 - GIVEN an identity decision with `evaluation` `pending_evaluation`

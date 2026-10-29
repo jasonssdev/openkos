@@ -9,10 +9,12 @@ an `API_VERSION` bump.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, Protocol
 
+from openkos import config
 from openkos.api._workspace import Workspace
 from openkos.application import pending_queue_report
 from openkos.application import status as application_status
@@ -132,6 +134,49 @@ class UnattendedActivity:
     jobs_unreadable: bool
 
 
+@dataclass(frozen=True)
+class EngineJob:
+    """One unattended task as the Activity view shows it. `ended_at` and
+    `outcome` are `None` while it runs. `needs_attention`: it ended in a way a
+    person should look at (a failure, a timeout or a spent budget)."""
+
+    kind: str
+    started_at: str
+    ended_at: str | None
+    outcome: str | None
+    chat_calls: int
+    units_done: int
+    units_deferred: int
+    needs_attention: bool
+
+
+@dataclass(frozen=True)
+class DailyBudget:
+    """Today's model-call budget for unattended work, in calls, on the local
+    calendar day. `exhausted`: the newest watch or maintenance job ended
+    because the budget ran out."""
+
+    calls_used: int
+    calls_limit: int
+    exhausted: bool
+
+
+@dataclass(frozen=True)
+class EngineActivity:
+    """What the engine is doing: the task running now (`None` when idle), the
+    latest finished ones (newest first), how many files wait in the watched
+    folder, how many written paths wait for a commit retry, and today's budget.
+    `jobs_unreadable` is a record that exists but cannot be read, which is not
+    the same as an engine with nothing to show."""
+
+    current: EngineJob | None
+    recent: tuple[EngineJob, ...]
+    waiting_files: int
+    uncommitted_paths: int
+    budget: DailyBudget
+    jobs_unreadable: bool
+
+
 class _JobFields(Protocol):
     """The fields of an engine job record the summary reads. Structural, so the
     facade names no `state` type."""
@@ -148,6 +193,13 @@ class _JobFields(Protocol):
     def detail_code(self) -> str | None: ...
     @property
     def units_deferred(self) -> int: ...
+
+
+class _EngineJobFields(_JobFields, Protocol):
+    @property
+    def chat_calls(self) -> int: ...
+    @property
+    def units_done(self) -> int: ...
 
 
 def _job_summary(job: _JobFields) -> JobSummary:
@@ -255,4 +307,39 @@ def unattended_activity(workspace: Workspace) -> UnattendedActivity:
         last_job=None if last is None else _job_summary(last),
         budget_exhausted=activity.budget_exhausted,
         jobs_unreadable=activity.jobs_unreadable,
+    )
+
+
+def _engine_job(job: _EngineJobFields) -> EngineJob:
+    return EngineJob(
+        kind=job.kind,
+        started_at=job.started_at,
+        ended_at=job.ended_at,
+        outcome=job.outcome,
+        chat_calls=job.chat_calls,
+        units_done=job.units_done,
+        units_deferred=job.units_deferred,
+        needs_attention=job.outcome in pending_queue_report.ATTENTION_OUTCOMES,
+    )
+
+
+def engine_activity(workspace: Workspace) -> EngineActivity:
+    """What the engine is doing now, did lately and has waiting, with today's
+    model-call budget. Takes no lock, builds no client, writes nothing, never
+    creates the job record, and never raises for an absent or damaged one."""
+    unattended = config.read_config(workspace.root).unattended
+    raw = application_unattended.read_engine_activity(
+        workspace._layout, unattended, datetime.now().astimezone()
+    )
+    return EngineActivity(
+        current=None if raw.current is None else _engine_job(raw.current),
+        recent=tuple(_engine_job(job) for job in raw.recent),
+        waiting_files=raw.waiting_files,
+        uncommitted_paths=raw.uncommitted_paths,
+        budget=DailyBudget(
+            calls_used=raw.calls_used_today,
+            calls_limit=raw.calls_per_day,
+            exhausted=raw.budget_exhausted,
+        ),
+        jobs_unreadable=raw.jobs_unreadable,
     )
