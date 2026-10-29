@@ -281,7 +281,19 @@ def cmd_score_pool(args: argparse.Namespace) -> int:
         "first": args.first,
         "run_index": args.run_index,
     }
-    stamp = harness_stamp.build_stamp(model=MODEL, prompts={})
+    # `build_stamp` asks the local Ollama for a model digest and refuses an
+    # empty prompt set; neither fits a llama-server reranker. The model file's
+    # sha256 is its digest, and the document template is its only "prompt".
+    stamp = {
+        "stamp_version": harness_stamp.STAMP_VERSION,
+        "harness": harness_stamp.git_identity(),
+        "model": {"name": MODEL, "digest": identity["model_file_sha256"]},
+        "prompts": [
+            harness_stamp.prompt_identity(
+                "rerank-document", _document_text("{title}", "{body}")
+            )
+        ],
+    }
     existing = rr._read_json(args.out) if args.out.exists() else None
     if existing is not None and existing.get("complete") is True:
         raise SystemExit(f"{args.out} is complete; refusing to overwrite it")
@@ -308,10 +320,19 @@ def cmd_score_pool(args: argparse.Namespace) -> int:
 def cmd_evaluate(args: argparse.Namespace) -> int:
     """`gold_rerank.evaluate` plus the L and S conditions and their verdict."""
 
+    import gold_corpus
+
+    # The v1 questions are written for the v1 bundle, so the load must be told
+    # which one (the draft-bundle default refuses them).
+    corpus = (
+        gold_corpus.from_workspace(args.workspace)
+        if args.workspace is not None
+        else gold_corpus.DRAFT
+    )
     result = rr.evaluate(
         wide_run=rr._read_json(args.wide_run),
         calls_runs=[rr._read_json(p) for p in args.calls],
-        questions=rrg._load_questions(args.questions),
+        questions=rrg._load_questions(args.questions, corpus),
         judgments=rr._read_json(args.judgments),
     )
     conditions = [
@@ -354,6 +375,7 @@ def _parser() -> argparse.ArgumentParser:
     ev = sub.add_parser("evaluate", help="arms, contrasts, latency, verdict")
     ev.add_argument("--questions", type=pathlib.Path, default=rrg.QUESTIONS_V1_PATH)
     ev.add_argument("--wide-run", type=pathlib.Path, required=True)
+    ev.add_argument("--workspace", type=pathlib.Path, default=None)
     ev.add_argument("--calls", type=pathlib.Path, nargs="+", required=True)
     ev.add_argument("--judgments", type=pathlib.Path, default=rr.JUDGMENTS_V1_PATH)
     ev.add_argument("--out", type=pathlib.Path, default=None)
