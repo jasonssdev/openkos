@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError, EngineUnreachable } from "../../client/index.ts";
 import { fileQuote, job, outcome, quote, result } from "./fixtures.ts";
-import { ENGINE_WORDS, addCue, describeOutcome, nextUnseen, describeQuote, problemFor, progressLine, refusalLine } from "./wording.ts";
+import { ENGINE_WORDS, addCue, describeOutcome, describeQuote, elapsedLine, expectationLine, nextUnseen, partsLine, problemFor, progressLine, refusalLine } from "./wording.ts";
 
 const api = (code: string, retryable = false) => new ApiError({ status: 409, code, retryable, message: "x", retryAfterSeconds: null });
 
@@ -126,6 +126,42 @@ describe("progressLine", () => {
   });
   it("says it is getting started before the first step", () => {
     expect(progressLine(q, job())).toEqual({ heading: "Getting started", step: null });
+  });
+});
+
+describe("progressLine with a queue", () => {
+  const q = quote([fileQuote("b.md")]);
+  it("counts the files before and after this run", () => {
+    expect(progressLine(q, job({ index: 1, total: 1, phase: "extracting" }), { before: 2, waiting: 1 }).heading).toBe("Adding 3 of 4: b.md");
+  });
+});
+
+describe("partsLine", () => {
+  it("says how many parts the AI model has read, only while it is reading", () => {
+    expect(partsLine(job({ phase: "extracting", parts_done: 2, parts_total: 5 }))).toBe("2 of 5 parts read");
+    expect(partsLine(job({ phase: "extracting", parts_done: 0, parts_total: 2 }))).toBe("0 of 2 parts read");
+    expect(partsLine(job({ phase: "extracting", parts_done: null, parts_total: null }))).toBeNull();
+    expect(partsLine(job({ phase: "writing", parts_done: 5, parts_total: 5 }))).toBeNull();
+    expect(partsLine(job({ phase: "extracting", parts_done: 1, parts_total: 1 }))).toBe("1 of 1 part read");
+  });
+});
+
+describe("elapsedLine", () => {
+  it("says the time on this file in plain units, and nothing before it has begun", () => {
+    expect(elapsedLine(null)).toBeNull();
+    expect(elapsedLine(0)).toBeNull();
+    expect(elapsedLine(9)).toBe("On this file for 9 s.");
+    expect(elapsedLine(60)).toBe("On this file for 1 min 0 s.");
+    expect(elapsedLine(125)).toBe("On this file for 2 min 5 s.");
+  });
+});
+
+describe("expectationLine", () => {
+  it("says a file can take minutes when the AI model reads one, never a promise", () => {
+    expect(expectationLine(quote([fileQuote("a.md")]))).toBe("This can take several minutes per file on this Mac.");
+    expect(expectationLine(quote([fileQuote("a.md")], { is_local: false }))).toBe("This can take several minutes per file.");
+    expect(expectationLine(quote([fileQuote("a.md", { status: "source_only", calls: 0 })]))).toBeNull();
+    expect(expectationLine(quote([fileQuote("a.md", { status: "unchanged", calls: 0 })]))).toBeNull();
   });
 });
 

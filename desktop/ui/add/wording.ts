@@ -143,14 +143,34 @@ export interface ProgressLine {
   step: string | null;
 }
 
-/** The running line: which file, and what is happening to it. */
-export function progressLine(quote: Quote, job: Job): ProgressLine {
+/** The running line: which file, and what is happening to it. `before` and `waiting` count the files of the same batch either side of this run. */
+export function progressLine(quote: Quote, job: Job, around: { before: number; waiting: number } = { before: 0, waiting: 0 }): ProgressLine {
   if (job.phase === null || job.index === null || job.total === null) return { heading: "Getting started", step: null };
   if (job.phase === "refreshing") return { heading: "Almost done", step: STEPS.refreshing };
   const path = quote.token.files[job.index - 1]?.path;
   const name = quote.files.find((f) => f.path === path)?.name;
-  const of = `${job.index} of ${job.total}`;
+  const of = `${around.before + job.index} of ${around.before + job.total + around.waiting}`;
   return { heading: name ? `Adding ${of}: ${name}` : `Adding ${of}`, step: STEPS[job.phase] };
+}
+
+/** How far into a file the AI model has read, in words, once it has counted its parts. */
+export function partsLine(job: Job): string | null {
+  const { parts_done: done, parts_total: total } = job;
+  if (job.phase !== "extracting" || done == null || total == null || total <= 0) return null;
+  return `${done} of ${total} ${total === 1 ? "part" : "parts"} read`;
+}
+
+/** The time spent on the file in progress; nothing before a second has passed. */
+export function elapsedLine(seconds: number | null): string | null {
+  if (seconds === null || seconds < 1) return null;
+  const time = seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+  return `On this file for ${time}.`;
+}
+
+/** What to expect while the AI model reads files: an honest "can", never a promise. Nothing when no file goes to the model. */
+export function expectationLine(quote: Quote): string | null {
+  if (!quote.files.some((f) => f.status === "extracts")) return null;
+  return quote.is_local ? "This can take several minutes per file on this Mac." : "This can take several minutes per file.";
 }
 
 export interface OutcomeView {
