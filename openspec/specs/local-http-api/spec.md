@@ -1527,10 +1527,13 @@ message naming the moved fields; a missing or null token MUST answer 422
 `run_refused`; neither leaves a job. At most one ingest run MAY be active in
 the server process: a start while one is active MUST return 409 with code
 `ingest_active` and `retryable` true and start nothing. The job resource MUST be
-`{run_id, state, index, total, phase, calls, outcome, warnings, error}`, where
-`state` is
+`{run_id, state, index, total, phase, calls, parts_done, parts_total, outcome,
+warnings, error}`, where `state` is
 `running`, `stopping`, `finished` or `failed`; `index`, `total` and `phase` are
-the latest progress (null before the first event); `calls` is the chat calls
+the latest progress (null before the first event); `parts_done` and
+`parts_total` count, while a file's `phase` is `extracting`, the parts of that
+file the model has read of how many there are (null until the extraction
+reports a count, and in other phases); `calls` is the chat calls
 spent so far; `outcome` is the run's outcome when it returned (state
 `finished`, whatever its status, `busy` and `stopped` included); and `error` is
 an error body when the run raised after admission (state `failed`, no outcome),
@@ -1551,6 +1554,12 @@ grace as a judging run.
 - WHEN the run is started
 - THEN the response is 202 with `state` `running` and a `Location` header
   before the model call returns
+
+#### Scenario: A poll shows progress inside a file
+
+- GIVEN a run whose model extraction has read 2 of 5 parts of its file
+- WHEN the job is polled
+- THEN `phase` is `extracting`, `parts_done` is 2 and `parts_total` is 5
 
 #### Scenario: Poll an ingest to completion
 
