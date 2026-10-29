@@ -138,6 +138,7 @@ EXEMPT: dict[str, str] = {
     "source_title.py:_FORBIDDEN_IN_TITLE": "a character class that REFUSES link delimiters in a title; reads no destination",
     "resolution/reconciliation.py:_LINK_TARGET_RE": "compares the raw text of a Related bullet's target to deduplicate; resolves nothing",
     "application/concept_read.py:_LINK": "reduces a link to its label for a plain-text excerpt; resolves no destination",
+    "application/sensitivity_service.py:_RAISED_RE": "parses the engine's own log line for a sensitivity change, where the target equals the label by construction; resolves no destination",
 }
 
 
