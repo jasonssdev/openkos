@@ -296,7 +296,12 @@ titles of added objects, counts and verdicts is committed. The verdict updates
 
 ## The owner confirms
 
-Left open for the owner. None of these is settled by the author.
+The owner confirmed every item below unchanged on 2026-10-29, before this
+file merged and before any result existed: the bars as proposed, the futility
+stop, the frozen `EMPTY_REASK_SYSTEM_PROMPT` wording, 3 samples per empty run
+and 15 fresh runs, the GPU run with its 8-hour cap, and adjudication by a
+delegated reader disclosed in RESULTS. The items are kept as they were
+proposed.
 
 1. The bars marked **(proposed)**: B0 reused from #1642 (0.20 on `ES2015a-es`);
    B1 at half; B2 at `max(1, floor(trials / 20))`; B3 at half subjects; B4 at
