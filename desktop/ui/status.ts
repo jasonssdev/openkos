@@ -8,7 +8,7 @@ import { type EngineWording, workspaceSummary } from "./view.ts";
 
 export type WorkspaceView =
   | { kind: "waiting" }
-  | { kind: "read"; status: Schemas["WorkspaceStatus"] }
+  | { kind: "read"; status: Schemas["WorkspaceStatus"]; /** When the counts were read; the card says so rather than claim to be current. */ readAt?: Date }
   | { kind: "failed"; message: string };
 
 export interface StatusScreen {
@@ -44,6 +44,11 @@ function engineCard(engine: EngineWording, options: StatusOptions): HTMLElement 
   );
 }
 
+function readMeta(readAt: Date | undefined): string {
+  if (!readAt) return "Read from the engine.";
+  return `Read at ${readAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`;
+}
+
 function workspaceCard(workspace: WorkspaceView, options: StatusOptions): HTMLElement {
   switch (workspace.kind) {
     case "waiting":
@@ -53,7 +58,7 @@ function workspaceCard(workspace: WorkspaceView, options: StatusOptions): HTMLEl
     case "read": {
       const summary = workspaceSummary(workspace.status);
       return uiCard(
-        { title: "Your library", headingLevel: 2, meta: "Read from the engine just now." },
+        { title: "Your library", headingLevel: 2, meta: readMeta(workspace.readAt) },
         facts(summary.shown),
         options.search ?? null,
         more("workspace-folder", "Show the folder", options, facts(summary.more)),

@@ -518,9 +518,9 @@ MUST carry **Keep only on this Mac**, replaced by a quiet "Only on this Mac"
 once it is. Choosing a label MUST preview and apply in one step through
 `previewSensitivity` and `applySensitivity`, retrying a busy apply for up to
 five seconds and never a preview, and MUST confirm in the past tense with
-**Undo**, which puts back the level the engine read before the change. When
-other pages were raised with it, the confirmation MUST say so and MUST NOT
-offer Undo. Changing a page marked Only on this Mac to a lower label while a
+**Undo**, which puts back the level the engine read before the change, and
+**Dismiss**, which closes the confirmation. When other pages were raised with
+it, the confirmation MUST say so and MUST NOT offer Undo, only Dismiss. Changing a page marked Only on this Mac to a lower label while a
 cloud AI model is on MUST ask first, in a dialog that starts on keeping it, and
 MUST change nothing when declined. Every word MUST come from
 `docs/decision-wording.md`, "Who can see a page", and no engine word may reach

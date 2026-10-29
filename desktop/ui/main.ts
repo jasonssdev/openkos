@@ -23,7 +23,7 @@ import { addCue, nextUnseen } from "./add/wording.ts";
 import { AskModel } from "./ask/model.ts";
 import { renderAsk } from "./ask/render.ts";
 import { LabelModel } from "./label/model.ts";
-import { keepHereAction, labelChoice } from "./label/render.ts";
+import { keepHereAction, keepHereState, labelChoice } from "./label/render.ts";
 import { ReviewModel } from "./review/model.ts";
 import { renderReview } from "./review/render.ts";
 import { SettingsModel, cloudOn, updateOffered, watchKind } from "./settings/model.ts";
@@ -139,7 +139,7 @@ const labels = new LabelModel({
   confirm: askFirst,
 });
 const search = new SearchModel({ confirm: askFirst });
-const searchActions = { rebuild: () => search.rebuild(), stop: () => search.stop() };
+const searchActions = { rebuild: () => search.rebuild(), stop: () => search.stop(), dismiss: () => search.dismiss() };
 
 let statusOpen: number | undefined;
 let screen: StatusScreen = { engine: describeEngine({ state: "starting", attempt: 1 }), workspace: { kind: "waiting" } };
@@ -171,6 +171,9 @@ function paintAsk(): void {
     show: (id) => ask.show(id),
     expanded: askExpanded,
     onToggle: (name, open) => void (open ? askExpanded.add(name) : askExpanded.delete(name)),
+    searchCurrent: search.state.index !== null && !search.state.index.needs_rebuild && !search.state.index.model_changed,
+    citationState: (citation) =>
+      keepHereState({ conceptId: citation.concept_id, title: citation.title, level: citation.confidential ? "confidential" : "private" }, labels),
     citationAction: (citation) =>
       // A named page is never marked Only on this Mac unless the person agreed
       // to see such pages; its other level is not known here, and Undo puts
@@ -183,7 +186,7 @@ function paintAsk(): void {
     // Under an answer whose search may have been behind, the way to bring it up to date.
     afterAnswer: (answer) =>
       answer.stale_indexes.length > 0 || answer.lexical_unavailable || answer.dense_unavailable || search.state.job !== null
-        ? rebuildSection(search.state, searchActions)
+        ? rebuildSection(search.state, searchActions, { showResult: false })
         : null,
   });
 }
@@ -328,6 +331,7 @@ function show(next: View): void {
   } else {
     if (next === "settings") void settings.load();
     if (next === "settings" || next === "status") void search.load();
+    if (next === "status" && readyState !== null && statusRead) void readStatus(readyState);
     const root = { ask: askRoot, add: addRoot, status: statusRoot, setup: setupRoot, welcome: welcomeRoot, settings: settingsRoot }[next];
     root.querySelector<HTMLElement>('[data-view="heading"]')?.focus();
   }
@@ -446,6 +450,7 @@ async function tick(): Promise<void> {
     }
     launch = null;
     statusRead = false;
+    readyState = null;
     return;
   }
   const current = `${state.pid}:${state.base_url}`;
@@ -456,15 +461,30 @@ async function tick(): Promise<void> {
     startSetup(state);
     void settings.connect(createClient(state));
   }
+  readyState = state;
   if (statusRead) return;
+  await readStatus(state);
+}
+
+// The counts follow the library: read once the engine is up, and again each
+// time Status is opened, so they are never older than the last visit.
+type ReadyState = Extract<EngineState, { state: "ready" }>;
+let readyState: ReadyState | null = null;
+let statusReading = false;
+
+async function readStatus(state: ReadyState): Promise<void> {
+  if (statusReading) return;
+  statusReading = true;
   statusRead = true;
   try {
     const status = await createClient(state).status();
     statusOpen = openDecisions(status);
-    screen = { ...screen, workspace: { kind: "read", status } };
+    screen = { ...screen, workspace: { kind: "read", status, readAt: new Date() } };
   } catch (error) {
     statusRead = false;
     screen = { ...screen, workspace: { kind: "failed", message: statusFailure(error) } };
+  } finally {
+    statusReading = false;
   }
   paintStatus();
   paintNav();

@@ -129,3 +129,15 @@ describe("the search model", () => {
     expect(model.state.index).toBeNull();
   });
 });
+
+describe("dismissing how a rebuild ended", () => {
+  it("clears the result and keeps the index", async () => {
+    const { model, connect } = setup();
+    await connect();
+    await model.rebuild();
+    expect(model.state.result).not.toBeNull();
+    model.dismiss();
+    expect(model.state.result).toBeNull();
+    expect(model.state.index).not.toBeNull();
+  });
+});
