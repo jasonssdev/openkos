@@ -284,6 +284,9 @@ def load_records(
                     "origin": f"{rel}/{rec['model']}/{source}/r{rec['run']}",
                     "model": str(rec["model"]),
                     "source": source,
+                    "title": str(rec["title"]),
+                    "body": body,
+                    "raw": raw,
                     "framing_shaped": concept_mod._framing_shaped(
                         str(rec["title"]), body
                     ),
