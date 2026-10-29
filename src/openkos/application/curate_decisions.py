@@ -2075,6 +2075,26 @@ def _identity_actions(
         evaluation, reason = "judged_uncertain", "judged_uncertain"
     else:
         evaluation, reason = "pending_evaluation", "pending_evaluation"
+    if reason != "pending_evaluation" and shape is None:
+        # The judge is advisory and the person is the authority (#1699): a
+        # pair of one type is mergeable against a DIFFERENT or UNCERTAIN
+        # verdict too, the surface carrying the model's doubt beside the
+        # choice. Only an item with no verdict yet withholds it.
+        return evaluation, (Action.MERGE, Action.KEEP_DISTINCT, Action.SKIP), ()
+    if (
+        reason != "pending_evaluation"
+        and shape == "more_than_two_members"
+        and row.payload.get("tier") == Tier.LOW.value
+    ):
+        # A near-match cluster stands in for the pairs a person could merge on
+        # any verdict (#1699, #1701), so it keeps the group walk open against
+        # a doubt too: the person marks the members, the model only advises.
+        # An exact-title group has no such pairs and stays SAME-only.
+        return (
+            evaluation,
+            (Action.MERGE_GROUP, Action.KEEP_DISTINCT, Action.SKIP),
+            (WithheldAction(Action.MERGE, shape),),
+        )
     # A group that could be combined once judged says so with the same reason.
     withheld = (WithheldAction(Action.MERGE, reason),) + (
         (WithheldAction(Action.MERGE_GROUP, reason),) if shape is not None else ()

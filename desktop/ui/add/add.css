@@ -33,3 +33,27 @@
   border-color: var(--accent);
   background: var(--surface-2);
 }
+
+/* Left open during a run: smaller than the first drop zone, and beneath what is running. */
+.add-drop--more {
+  padding: var(--space-3);
+}
+
+.add-queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.add-queue__title {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.add-queue__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}

@@ -106,6 +106,17 @@ CANONICAL_SECTION_ORDER: tuple[str, ...] = tuple(ot.section for ot in REGISTRY)
 """Ordered catalog section headings, including non-classifiable types
 (`Source`) -- their rank is reserved even without a builder."""
 
+RECURRING_OCCURRENCE_TYPES: frozenset[str] = frozenset({"Event"})
+"""OKF types whose near-identical titles routinely name DIFFERENT occurrences
+(the meetings of one recurring series; #776, #796). Never attached to at
+ingest and never folded into a near-match cluster (#1701). Defined once here so
+`application.ingest` and `resolution.candidates` read the same set."""
+
+HOMONYM_TYPES: frozenset[str] = frozenset({"Person"})
+"""OKF types whose identical title routinely names different things because
+people share names (#776, #796). Never attached to at ingest; still clustered
+in a near-match question, where the person marks which pages are the same."""
+
 VOLATILITY_TIERS: frozenset[str] = frozenset({"static", "slow", "volatile"})
 """The fixed, closed three-tier knowledge-volatility taxonomy
 (freshness-lint-v1, `concept-volatility` spec): no other tier value is

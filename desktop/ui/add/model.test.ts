@@ -281,12 +281,245 @@ describe("AddModel", () => {
     expect(model.state.phase).toBe("problem");
   });
 
-  it("does not start a new choice while a run is on", async () => {
-    const { model, client } = make({ quotes: [ONE], start: [job()], polls: [finished()] });
+  it("does not start a new choice while a consent card is open", async () => {
+    const { model, client } = make({ quotes: [ONE] });
     await model.choose();
-    const run = model.agree();
     await model.choose();
-    await run;
     expect(client.quoteIngest).toHaveBeenCalledOnce();
+  });
+});
+
+describe("AddModel queue", () => {
+  const B = quote([fileQuote("b.md"), fileQuote("c.md")]);
+  const doneFor = (...names: string[]) => finished({ outcome: outcome(names.map((n) => result(n))) });
+
+  /** A run on a.md that stays on until `release` is called. */
+  async function running(script: Script, picked: string[] | null = ["/Users/me/a.md"]) {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let first = true;
+    const wait = () => {
+      if (!first) return Promise.resolve();
+      first = false;
+      return gate;
+    };
+    const made = make(script, picked, wait);
+    await made.model.choose();
+    const run = made.model.agree();
+    await vi.waitFor(() => expect(made.model.state.phase).toBe("running"));
+    return { ...made, release, run };
+  }
+
+  it("quotes files dropped during a run and waits for consent without touching the run", async () => {
+    const { model, client, release, run } = await running({ quotes: [ONE, B], start: [job()], polls: [finished()] });
+    await model.drop(["/Users/me/b.md", "/Users/me/c.md"]);
+    expect(client.quoteIngest).toHaveBeenLastCalledWith({ paths: ["/Users/me/b.md", "/Users/me/c.md"] });
+    expect(model.state.phase).toBe("running");
+    expect(model.state.incoming).toEqual({ quote: B, problem: null });
+    expect(model.state.queue).toEqual([]);
+    expect(client.startIngest).toHaveBeenCalledOnce();
+    release();
+    await run;
+  });
+
+  it("opens the chooser for more files during a run", async () => {
+    const { model, pick, client, release, run } = await running({ quotes: [ONE, B], start: [job()], polls: [finished()] });
+    await model.choose();
+    expect(pick).toHaveBeenCalledTimes(2);
+    expect(client.quoteIngest).toHaveBeenCalledTimes(2);
+    release();
+    await run;
+  });
+
+  it("queues each agreed file by name, in order, and removes one the person no longer wants", async () => {
+    const { model, release, run } = await running({ quotes: [ONE, B], start: [job()], polls: [finished()] });
+    await model.drop(["/Users/me/b.md", "/Users/me/c.md"]);
+    model.agreeIncoming();
+    expect(model.state.incoming).toBeNull();
+    expect(model.state.queue.map((q) => q.name)).toEqual(["b.md", "c.md"]);
+    model.removeQueued("/Users/me/b.md");
+    expect(model.state.queue.map((q) => q.name)).toEqual(["c.md"]);
+    release();
+    await run;
+  });
+
+  it("adds nothing for a dropped quote the person turns down", async () => {
+    const { model, release, run } = await running({ quotes: [ONE, B], start: [job()], polls: [finished()] });
+    await model.drop(["/Users/me/b.md"]);
+    model.dismissIncoming();
+    expect(model.state.incoming).toBeNull();
+    expect(model.state.queue).toEqual([]);
+    release();
+    await run;
+    expect(model.state.outcome?.files.map((f) => f.name)).toEqual(["a.md"]);
+  });
+
+  it("starts the next waiting file by itself, each with its own one-file token", async () => {
+    const { model, client, release, run } = await running({
+      quotes: [ONE, B],
+      start: [job(), job({ run_id: "r2" }), job({ run_id: "r3" })],
+      polls: [doneFor("a.md"), doneFor("b.md"), doneFor("c.md")],
+    });
+    await model.drop(["/Users/me/b.md", "/Users/me/c.md"]);
+    model.agreeIncoming();
+    release();
+    await run;
+    expect(client.startIngest).toHaveBeenCalledTimes(3);
+    const second = client.startIngest.mock.calls[1]![0].token!;
+    expect(second.files).toEqual([B.token.files[0]]);
+    expect(second.calls).toBe(B.token.files[0]!.calls);
+    expect(second.binding).toEqual(B.token.binding);
+    const third = client.startIngest.mock.calls[2]![0].token!;
+    expect(third.files).toEqual([B.token.files[1]]);
+    expect(model.state.phase).toBe("done");
+    expect(model.state.queue).toEqual([]);
+    expect(model.state.outcome?.files.map((f) => f.name)).toEqual(["a.md", "b.md", "c.md"]);
+    expect(model.state.outcome?.status).toBe("completed");
+  });
+
+  it("never starts a waiting file that was removed", async () => {
+    const { model, client, release, run } = await running({
+      quotes: [ONE, B],
+      start: [job(), job({ run_id: "r3" })],
+      polls: [doneFor("a.md"), doneFor("c.md")],
+    });
+    await model.drop(["/Users/me/b.md", "/Users/me/c.md"]);
+    model.agreeIncoming();
+    model.removeQueued("/Users/me/b.md");
+    release();
+    await run;
+    expect(client.startIngest).toHaveBeenCalledTimes(2);
+    expect(client.startIngest.mock.calls[1]![0].token!.files.map((f: { path: string }) => f.path)).toEqual(["/Users/me/c.md"]);
+  });
+
+  it("counts the files before it and the ones waiting in what it shows", async () => {
+    const { model, seen, release, run } = await running({
+      quotes: [ONE, B],
+      start: [job(), job({ run_id: "r2" }), job({ run_id: "r3" })],
+      polls: [doneFor("a.md"), job({ run_id: "r2", index: 1, total: 1, phase: "extracting" }), doneFor("b.md"), doneFor("c.md")],
+    });
+    await model.drop(["/Users/me/b.md", "/Users/me/c.md"]);
+    model.agreeIncoming();
+    release();
+    await run;
+    const second = seen.find((s) => s.job?.run_id === "r2" && s.phase === "running");
+    expect(second).toMatchObject({ before: 1 });
+    expect(second?.queue.map((q) => q.name)).toEqual(["c.md"]);
+    expect(second?.quote?.files[0]?.name).toBe("b.md");
+  });
+
+  it("leaves the waiting files out after a stop and says they were not reached", async () => {
+    const stopped = job({ state: "stopping" });
+    const { model, client, release, run } = await running({
+      quotes: [ONE, B],
+      start: [job()],
+      polls: [finished({ outcome: outcome([result("a.md")], { status: "stopped" }) })],
+      stop: stopped,
+    });
+    await model.drop(["/Users/me/b.md", "/Users/me/c.md"]);
+    model.agreeIncoming();
+    await model.stop();
+    release();
+    await run;
+    expect(client.startIngest).toHaveBeenCalledOnce();
+    expect(model.state.phase).toBe("done");
+    expect(model.state.queue).toEqual([]);
+    expect(model.state.outcome?.status).toBe("stopped");
+    expect(model.state.outcome?.files.map((f) => [f.name, f.status])).toEqual([
+      ["a.md", "added"],
+      ["b.md", "not_reached"],
+      ["c.md", "not_reached"],
+    ]);
+  });
+
+  it("does not go on to the waiting files when the library was busy", async () => {
+    const busy = finished({ outcome: outcome([result("a.md", { status: "busy" })], { status: "busy", indexes: "not_needed" }) });
+    const { model, client, release, run } = await running({ quotes: [ONE, B], start: [job()], polls: [busy] });
+    await model.drop(["/Users/me/b.md"]);
+    model.agreeIncoming();
+    release();
+    await run;
+    expect(client.startIngest).toHaveBeenCalledOnce();
+    expect(model.state.outcome?.status).toBe("busy");
+    expect(model.state.outcome?.files.map((f) => f.status)).toEqual(["busy", "not_reached", "not_reached"]);
+  });
+
+  it("starts what was dropped at once when the run ended before the person agreed", async () => {
+    const { model, client, release, run } = await running({ quotes: [ONE, B], start: [job(), job({ run_id: "r2" })], polls: [doneFor("a.md"), doneFor("b.md", "c.md")] });
+    await model.drop(["/Users/me/b.md", "/Users/me/c.md"]);
+    release();
+    await run;
+    expect(model.state.phase).toBe("done");
+    expect(model.state.incoming).toEqual({ quote: B, problem: null });
+    await model.agreeIncoming();
+    expect(client.startIngest).toHaveBeenLastCalledWith({ token: B.token });
+    expect(model.state.phase).toBe("done");
+    expect(model.state.outcome?.files.map((f) => f.name)).toEqual(["b.md", "c.md"]);
+  });
+
+  it("shows a problem quoting dropped files without disturbing the run", async () => {
+    const { model, release, run } = await running({ quotes: [ONE, api("workspace_busy", true)], start: [job()], polls: [finished()] });
+    await model.drop(["/Users/me/b.md"]);
+    expect(model.state.phase).toBe("running");
+    expect(model.state.incoming?.quote).toBeNull();
+    expect(model.state.incoming?.problem).toContain("busy");
+    model.dismissIncoming();
+    expect(model.state.incoming).toBeNull();
+    release();
+    await run;
+  });
+
+  it("queues nothing from files that cannot be added", async () => {
+    const refused = quote([fileQuote("x", { status: "refused", refusal: "not_a_file" })]);
+    const { model, release, run } = await running({ quotes: [ONE, refused], start: [job()], polls: [finished()] });
+    await model.drop(["/Users/me/x"]);
+    expect(model.state.incoming?.quote).toBe(refused);
+    model.agreeIncoming();
+    expect(model.state.queue).toEqual([]);
+    release();
+    await run;
+  });
+
+  it("counts seconds on the file it is on, starting over on the next", async () => {
+    let clock = 0;
+    const client = fakeClient({
+      quotes: [TWO],
+      start: [job({ index: 1, total: 2, phase: "extracting" })],
+      polls: [job({ index: 1, total: 2, phase: "extracting" }), job({ index: 2, total: 2, phase: "extracting" }), job({ index: 2, total: 2, phase: "extracting" }), finished()],
+    });
+    const model = new AddModel({ pick: async () => ["/Users/me/a.md"], now: () => clock, sleep: async () => void (clock += 7000) });
+    model.setClient(client);
+    const seen: (number | null)[] = [];
+    model.subscribe((s) => seen.push(s.elapsed));
+    await model.choose();
+    await model.agree();
+    expect(seen.filter((e) => e !== null)).toEqual([0, 7, 0, 7]);
+    expect(model.state.elapsed).toBeNull();
+  });
+
+  it("takes no more files once Stop is pressed, and drops a question still open", async () => {
+    const { model, client, release, run } = await running({
+      quotes: [ONE, B],
+      start: [job()],
+      polls: [finished({ outcome: outcome([result("a.md")], { status: "stopped" }) })],
+      stop: job({ state: "stopping" }),
+    });
+    await model.drop(["/Users/me/b.md"]);
+    expect(model.state.incoming?.quote).toBe(B);
+    await model.stop();
+    expect(model.state.incoming).toBeNull();
+    await model.drop(["/Users/me/c.md"]);
+    expect(client.quoteIngest).toHaveBeenCalledTimes(2);
+    release();
+    await run;
+  });
+
+  it("clears the queue and incoming files when the result is closed", async () => {
+    const { model, release, run } = await running({ quotes: [ONE, B], start: [job()], polls: [finished()] });
+    await model.drop(["/Users/me/b.md"]);
+    release();
+    await run;
+    model.close();
+    expect(model.state).toMatchObject({ phase: "idle", queue: [], incoming: null, before: 0, elapsed: null });
   });
 });

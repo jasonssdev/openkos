@@ -160,10 +160,47 @@ describe("identity decisions", () => {
   });
 
   it.each([
+    [
+      "judged_different",
+      "The AI model thinks these are different people. If you know they are the same, you can still combine them, and split them again later.",
+    ],
+    [
+      "judged_uncertain",
+      "The AI model couldn't tell. If you know they are the same, you can still combine them, and split them again later.",
+    ],
+  ] as const)("still offers the combine against %s, with the doubt beside it", (evaluation, lead) => {
+    const view = describeDecision(identity({ evaluation, actions: ["merge", "keep_distinct", "skip"] }), pages);
+    expect(view.lead).toBe(lead);
+    expect(view.reason).toBe("“Same email.”");
+    expect(view.options.map((o) => o.choice)).toEqual(["merge", "keep_distinct", "later"]);
+  });
+
+  it.each([
+    [
+      "judged_different",
+      "The AI model thinks these are different people. If you know some of them are the same, you can still combine them, and split them again later.",
+    ],
+    [
+      "judged_uncertain",
+      "The AI model couldn't tell. If you know some of them are the same, you can still combine them, and split them again later.",
+    ],
+  ] as const)("still offers the group walk against %s, with the doubt beside it", (evaluation, lead) => {
+    const view = describeDecision(
+      identity(
+        { evaluation, actions: ["merge_group", "keep_distinct", "skip"], withheld: [{ action: "merge", reason: "more_than_two_members" }] },
+        ["people/a", "people/b", "people/c"],
+      ),
+      pages,
+    );
+    expect(view.lead).toBe(lead);
+    expect(view.options.map((o) => o.choice)).toEqual(["same", "keep_distinct", "later"]);
+  });
+
+  it.each([
     ["judged_different", "The AI model thinks these are different people.", ["keep_distinct", "later"]],
     ["judged_uncertain", "The AI model couldn't tell.", ["keep_distinct", "later"]],
     ["pending_evaluation", "These haven't been checked yet.", ["check", "keep_distinct", "later"]],
-  ] as const)("words %s and withholds the combine", (evaluation, lead, choices) => {
+  ] as const)("words %s plainly when the engine withholds the combine", (evaluation, lead, choices) => {
     const view = describeDecision(identity({ evaluation, actions: ["keep_distinct", "skip"] }), pages);
     expect(view.lead).toBe(lead);
     expect(view.options.map((o) => o.choice)).toEqual(choices);

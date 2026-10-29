@@ -70,7 +70,7 @@ Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../eva
 
 ## Identity — "Are these the same?"
 
-`kind: identity`. Actions `merge`, `merge_group`, `keep_distinct`, `skip`. Neither merge is offered unless the model has judged the group the same. `merge` combines a pair of the same kind; `merge_group` takes its place for more than two pages, or for pages of different kinds, and asks the person to choose which pages are the same and which one stays.
+`kind: identity`. Actions `merge`, `merge_group`, `keep_distinct`, `skip`. `merge` is offered for a pair of one kind once the model has judged it, whatever the verdict; the person decides, and only a pair not yet checked withholds it. `merge_group` is offered when the model has judged the group the same, and also for a cluster of near-match pages (pages of one subject whose titles are close, asked as one question instead of pair by pair) against any verdict, since it takes the place of the pairs that could be combined on any verdict. `merge` combines a pair of the same kind; `merge_group` takes its place for more than two pages, or for pages of different kinds, and asks the person to choose which pages are the same and which one stays.
 
 **Question:** "Are these the same {person / place / …}?" with the two pages side by side, and "Are these the same thing?" when the pages are of different kinds. It is always the first question, for a pair, a group and pages of different kinds alike, and its two answers, **Same thing** and **Different things**, are shown side by side with the same weight: the app does not lean towards either. What happens next (which pages, or what it is) is asked only after **Same thing**. **(H)** that a person answers this question faster and more correctly than one about "duplicates", and that asking it first keeps a newcomer out of a wrong combine.
 
@@ -79,11 +79,11 @@ What the screen says above the question, by `evaluation`:
 | Evaluation | Line above the question | Options |
 | --- | --- | --- |
 | `judged_same` | "The AI model thinks these are the same {person}." | Same thing · Different things · Decide later |
-| `judged_different` | "The AI model thinks these are different {people}." | Different things · Decide later |
-| `judged_uncertain` | "The AI model couldn't tell." | Different things · Decide later |
+| `judged_different` | "The AI model thinks these are different {people}. If you know they are the same, you can still combine them, and split them again later." | Same thing · Different things · Decide later |
+| `judged_uncertain` | "The AI model couldn't tell. If you know they are the same, you can still combine them, and split them again later." | Same thing · Different things · Decide later |
 | `pending_evaluation` | "These haven't been checked yet." | Check these · Different things · Decide later |
 
-For pages of different kinds the line names a thing: "The AI model thinks these are the same thing." A withheld combine is never shown as a disabled button with no reason. The line above the question is the reason. **(H)** that people accept "different things" being the only firm answer when the model is unsure, without feeling the app is broken.
+For pages of different kinds the line names a thing: "The AI model thinks these are the same thing." A withheld combine is never shown as a disabled button with no reason. The line above the question is the reason. **(H)** that people read the model's doubt as advice they may overrule, not as a lock. For a group or pages of different kinds judged other than the same, the line is the old one ("The AI model couldn't tell.") and only Different things is offered.
 
 **Options and what they do:**
 

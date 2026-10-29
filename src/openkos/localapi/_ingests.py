@@ -151,6 +151,8 @@ class IngestRegistry:
             total=progress.total if progress is not None else None,
             phase=progress.phase if progress is not None else None,
             calls=progress.calls if progress is not None else 0,
+            parts_done=progress.parts_done if progress is not None else None,
+            parts_total=progress.parts_total if progress is not None else None,
             outcome=run.outcome,
             warnings=list(run.warnings),
             error=run.error,

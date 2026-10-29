@@ -28,7 +28,7 @@ afterAll(() => vi.useRealTimers());
 
 describe("the app", () => {
   it("draws the shell with Ask offered, Settings at the foot, and Status open", () => {
-    expect(navButtons().map((n) => n.textContent)).toEqual(["Ask", "Add files", "To review", "Status", "Settings"]);
+    expect(navButtons().map((n) => n.textContent)).toEqual(["Ask", "Add files", "To review", "Status", "Activity", "Settings"]);
     expect(document.querySelector(".ui-sidebar__footer .ui-nav-item")?.textContent).toBe("Settings");
     expect(navButtons()[0]?.hasAttribute("aria-disabled")).toBe(false);
     expect(navButtons()[3]?.getAttribute("aria-current")).toBe("page");
@@ -47,6 +47,16 @@ describe("the app", () => {
     (navButtons()[3] as HTMLButtonElement).click();
     expect(review.hidden).toBe(true);
     expect(document.activeElement?.textContent).toBe("Status");
+  });
+
+  it("opens Activity, waiting for the engine, and back", () => {
+    (navButtons()[4] as HTMLButtonElement).click();
+    const activity = document.querySelector('[data-screen="activity"]') as HTMLElement;
+    expect(activity.hidden).toBe(false);
+    expect(navButtons()[4]?.getAttribute("aria-current")).toBe("page");
+    expect(activity.textContent).toContain("Waiting for OpenKOS to start…");
+    (navButtons()[3] as HTMLButtonElement).click();
+    expect(activity.hidden).toBe(true);
   });
 
   it("opens Ask on its title, waiting for the engine, and back", () => {
