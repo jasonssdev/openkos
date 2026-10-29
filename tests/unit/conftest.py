@@ -107,6 +107,7 @@ attribution is how quickly you find the culprit, not whether you are told.
 """
 
 import gc
+import os
 import socket
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
@@ -613,6 +614,32 @@ def _offline_ollama_by_default(
     # every later test in the same pytest session.
     monkeypatch.setattr("openkos.cli.main._INSECURE_KEY_WARNING_PRINTED", False)
     monkeypatch.setattr("openkos.cli.main._REMOTE_KEY_NOTICED", set())
+
+
+_PINNED_HOST_MEMORY_BYTES = 16 * 1024**3
+"""Below the 32 GiB tier of `config.sized_context_window`, so `init` keeps the
+default window in every test whatever machine runs the suite."""
+
+
+@pytest.fixture(autouse=True)
+def _pin_host_memory(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the physical-memory probe so no test depends on the host (ADR-0084).
+
+    `application.setup.physical_memory_bytes` -- what `init` sizes
+    `context_window` from -- reads `os.sysconf`. Patching that function itself
+    would also hide it from its own tests and miss `SetupPorts`, which bound it
+    as a default at class definition; so only the two memory names of
+    `os.sysconf` are answered here and every other name passes through. A test
+    that cares sets `os.sysconf` or the function itself, and wins, because its
+    patch lands after this one. This is one cheap monkeypatch, no temp dirs.
+    """
+    real = os.sysconf
+    pinned = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": _PINNED_HOST_MEMORY_BYTES // 4096}
+
+    def sysconf(name: str | int) -> int:
+        return pinned[name] if name in pinned else real(name)
+
+    monkeypatch.setattr(os, "sysconf", sysconf)
 
 
 def make_locked_error(
