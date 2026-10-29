@@ -327,6 +327,7 @@ def _expected_config_bytes(
     values = {
         "__OPENKOS_MODEL__": model,
         "__OPENKOS_EMBEDDING_MODEL__": embedding_model,
+        "__OPENKOS_CONTEXT_WINDOW__": str(config.DEFAULT_CONTEXT_WINDOW),
     }
     content = re.sub(
         "|".join(re.escape(p) for p in values),
@@ -1258,14 +1259,17 @@ def test_adjacent_placeholders_are_scanned_as_two_tokens(
     monkeypatch.setattr(
         config,
         "_read_template",
-        lambda _: "model: __OPENKOS_MODEL____OPENKOS_EMBEDDING_MODEL__\n",
+        lambda _: (
+            "model: __OPENKOS_MODEL____OPENKOS_EMBEDDING_MODEL__\n"
+            "context_window: __OPENKOS_CONTEXT_WINDOW__\n"
+        ),
     )
 
     config.write_config(tmp_path, model="m", embedding_model="e")
 
     written = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
     assert "__OPENKOS_" not in written
-    assert written == "model: me\n"
+    assert written == f"model: me\ncontext_window: {config.DEFAULT_CONTEXT_WINDOW}\n"
 
 
 def test_placeholder_missing_from_the_substitution_mapping_raises(
