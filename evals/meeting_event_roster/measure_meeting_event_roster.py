@@ -325,7 +325,98 @@ def compose_one(
     }
 
 
-ADJUDICATION: Final[dict[str, tuple[str, str]]] = {}
+ADJUDICATION: Final[dict[str, tuple[str, str]]] = {
+    "ES2015a-es/r1": (
+        "faithful",
+        "Roles PM/ME/ID/UI, team-building, favorite animal and remote design all in source.",
+    ),
+    "ES2015a-es/r2": (
+        "faithful",
+        "Team-building with animal drawings is proposed and carried out.",
+    ),
+    "ES2015a-es/r5": (
+        "faithful",
+        "Roles introduced; team-building with animal drawings present.",
+    ),
+    "ES2015a-es/r8": (
+        "faithful",
+        "Animal team-building and functional design phase both stated.",
+    ),
+    "ES2015a-es/r11": (
+        "faithful",
+        "Whiteboard team-building, 25 euro price, international market, remote improvements all stated.",
+    ),
+    "ES2015a-es/r12": (
+        "faithful",
+        "Favorite-animal exercise and UI's dog drawing are in source.",
+    ),
+    "ES2015d-es/r1": (
+        "faithful",
+        "Prototype, budget check and the four roles all present; no date claimed.",
+    ),
+    "ES2015d-es/r2": (
+        "faithful",
+        "Evaluation criteria and alarm system both discussed.",
+    ),
+    "ES2015d-es/r3": ("faithful", "Prototype presentation and alarm system discussed."),
+    "ES2015d-es/r4": ("faithful", "Alarm system discussed; prototype presented."),
+    "ES2015d-es/r5": ("faithful", "Single-hand device and alarm system both stated."),
+    "ES2015d-es/r6": ("faithful", "Alarm system discussed; prototype presented."),
+    "IS1004b-es/r1": (
+        "faithful",
+        "Program-based interface, voice recognition, remote design all discussed.",
+    ),
+    "IS1004b-es/r2": (
+        "faithful",
+        "LCD, program interface, universal remote, buttons, TV focus, market all discussed.",
+    ),
+    "IS1004b-es/r3": (
+        "faithful",
+        "LCD, program-based interface, product name (Mando) discussed.",
+    ),
+    "IS1004b-es/r4": ("faithful", "Generic but consistent with source objects."),
+    "IS1004b-es/r5": (
+        "contested",
+        "'Dise\u00f1o de controles remotos para accesibilidad' not stated; only left/right-handed designs arguably fit; rest (hidden door, simplified) present.",
+    ),
+    "IS1004b-es/r6": (
+        "faithful",
+        "LCD, program interface, 'dispositivo de moda' all in source.",
+    ),
+    "IS1004d-es/r1": (
+        "faithful",
+        "Prototype, evaluation and banana remote all in source.",
+    ),
+    "IS1004d-es/r2": ("faithful", "Teletext and banana remote present."),
+    "IS1004d-es/r3": (
+        "faithful",
+        "Reviews prior decisions, prototype, evaluation; teletext and banana present.",
+    ),
+    "IS1004d-es/r4": (
+        "faithful",
+        "Teletext, base station, coverage, energy, safety all discussed.",
+    ),
+    "IS1004d-es/r5": ("faithful", "Teletext and banana remote present."),
+    "IS1004d-es/r6": ("faithful", "Teletext and banana remote present."),
+    "TS3009c-es/r1": (
+        "faithful",
+        "Conceptual design, interface, modern features of remote in source.",
+    ),
+    "TS3009c-es/r2": (
+        "faithful",
+        "Component design, materials, visual look in source.",
+    ),
+    "TS3009c-es/r3": ("faithful", "Component design and conceptual design in source."),
+    "TS3009c-es/r4": (
+        "faithful",
+        "Component design, UI prototype, decisions in source.",
+    ),
+    "TS3009c-es/r5": ("faithful", "Component design, look and materials in source."),
+    "TS3009c-es/r6": (
+        "faithful",
+        "Component design, interface prototype, appearance decisions in source.",
+    ),
+}
 """`"source/rN"` -> (label, reason) for every scored body of the roster phase.
 Filled by the adjudicator after `score` listed the bodies and BEFORE `decide`
 is first run; the replay never writes here (it reads the last arm's registry)."""
