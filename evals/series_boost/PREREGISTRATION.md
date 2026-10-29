@@ -273,8 +273,13 @@ the forecast, and the limits below. Only counts are published.
 
 ## The owner confirms
 
-Not yet confirmed. Each item is for the owner to accept, change or refuse
-before the first model call:
+On 2026-10-29, before this file merged and before any result of this run
+existed, the owner chose the boost over a filter (the decision this file
+measures) and gave a standing instruction to take the recommended option on
+open choices; under it every item below is confirmed unchanged, as proposed.
+The owner did not review the items one by one; this is recorded so the
+confirmation is not read as more than it is. Phase 2 (the model calls) also
+waits for the owner to release the GPU. The items:
 
 1. The bars marked **(proposed)**: exposure 3; foreign-block headroom 2 and
    a one-half fall (C1); contamination rise 0.05 (C2); control and evolution
