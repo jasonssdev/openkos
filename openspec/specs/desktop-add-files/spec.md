@@ -66,6 +66,55 @@ to try again; a run the engine lost MUST say to check To review and Status.
 - WHEN the run is refused as stale
 - THEN the screen says so and "Look again" quotes the same files again
 
+### Requirement: A Run Shows Progress Inside A File And Sets An Honest Expectation
+
+While the AI model reads a file, the running card MUST show how far into the file
+it is: a determinate bar and "{n} of {m} parts read" once the job reports
+`parts_total`, an indeterminate bar until then and in the other steps, and how
+long the person has been on this file, starting over for the next. Before a run
+(on the consent card) and while the model reads, a file that goes to the model
+MUST be accompanied by the line "This can take several minutes per file on this
+Mac." (without "on this Mac" when the model is not on this Mac); the line says
+"can", is shown only when a file is read by the model, and MUST NOT state a time
+or a promise.
+
+#### Scenario: A long file is not mistaken for a stuck one
+
+- GIVEN a single file whose job reports 2 of 5 parts read after 125 seconds
+- WHEN the running card is drawn
+- THEN the bar is at 2 of 5, the card says "2 of 5 parts read" and "On this file
+  for 2 min 5 s.", and it still says the file can take several minutes
+
+### Requirement: The Drop Zone Stays During A Run And Later Files Wait In A Queue
+
+The engine runs one ingest at a time, so the model MUST queue in the client.
+While a run is starting or running, the screen MUST keep a drop zone and
+"Choose files…", and files put in MUST be quoted and shown on the same consent
+card as any others, beneath the run, without disturbing it. Agreeing MUST add
+each file the quote covers to a visible list of waiting files, in order, each
+with a "Remove" that takes it out. When a run ends having completed, the next
+waiting file MUST start by itself as a run of its own, with a one-file token
+made from the agreed quote (its binding and that file's entry); the engine
+still checks the token on every start. The running card MUST count the files
+before it and the ones waiting ("Adding 3 of 5"). The batch MUST end with one
+result listing every file. A stop, a busy library or a failed run MUST NOT go on
+to the waiting files; after a stop they are reported as not reached, and the drop
+zone is withdrawn while stopping. Files put in after a run ended but before the
+result was closed MUST be asked about on the result and, when agreed, start at once.
+
+#### Scenario: Files dropped during a run wait their turn
+
+- GIVEN a run in progress and two files dropped on the window
+- WHEN the person agrees to them
+- THEN both are listed as waiting, one can be removed, and the other starts by
+  itself after the current run completes
+
+#### Scenario: Stop leaves the waiting files
+
+- GIVEN a run in progress with files waiting
+- WHEN the person stops it
+- THEN the files waiting are not started and the result lists them as not reached
+
 ### Requirement: Only A Too-Large Refused File Offers Add It
 
 In To review, a refused-file decision whose reason is `exceeds_pass_budget`, or

@@ -248,6 +248,7 @@ describe("the requests", () => {
       { version: { change: { inbox: null }, content_digest: "d" } },
     ],
     ["unattendedActivity", (c) => c.unattendedActivity(), "GET", "/v1/unattended", null],
+    ["engineActivity", (c) => c.engineActivity(), "GET", "/v1/activity", null],
     [
       "applyReopen",
       (c) => c.applyReopen({ version: { member_ids: ["a", "b"], content_digest: "d" } }),

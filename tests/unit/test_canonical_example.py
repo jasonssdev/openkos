@@ -58,7 +58,8 @@ def test_the_example_exists() -> None:
 def test_config_is_byte_identical_to_a_fresh_init(tmp_path: Path) -> None:
     """The example's `openkos.yaml` must be what `openkos init` writes today.
 
-    `write_config` substitutes only `model` and `embedding_model`; every other
+    `write_config` substitutes only `model`, `embedding_model` and
+    `context_window`; every other
     line is byte-identical to the packaged template regardless of the choice.
     The example uses both defaults, so a fresh write is the exact expected file
     and any difference is drift -- including drift that lives purely in comment

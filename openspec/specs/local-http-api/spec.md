@@ -1527,10 +1527,13 @@ message naming the moved fields; a missing or null token MUST answer 422
 `run_refused`; neither leaves a job. At most one ingest run MAY be active in
 the server process: a start while one is active MUST return 409 with code
 `ingest_active` and `retryable` true and start nothing. The job resource MUST be
-`{run_id, state, index, total, phase, calls, outcome, warnings, error}`, where
-`state` is
+`{run_id, state, index, total, phase, calls, parts_done, parts_total, outcome,
+warnings, error}`, where `state` is
 `running`, `stopping`, `finished` or `failed`; `index`, `total` and `phase` are
-the latest progress (null before the first event); `calls` is the chat calls
+the latest progress (null before the first event); `parts_done` and
+`parts_total` count, while a file's `phase` is `extracting`, the parts of that
+file the model has read of how many there are (null until the extraction
+reports a count, and in other phases); `calls` is the chat calls
 spent so far; `outcome` is the run's outcome when it returned (state
 `finished`, whatever its status, `busy` and `stopped` included); and `error` is
 an error body when the run raised after admission (state `failed`, no outcome),
@@ -1551,6 +1554,12 @@ grace as a judging run.
 - WHEN the run is started
 - THEN the response is 202 with `state` `running` and a `Location` header
   before the model call returns
+
+#### Scenario: A poll shows progress inside a file
+
+- GIVEN a run whose model extraction has read 2 of 5 parts of its file
+- WHEN the job is polled
+- THEN `phase` is `extracting`, `parts_done` is 2 and `parts_total` is 5
 
 #### Scenario: Poll an ingest to completion
 
@@ -1782,3 +1791,24 @@ paused on the budget.
 - WHEN `GET /v1/unattended` is sent
 - THEN the response is 200 with `budget_exhausted` true and that job as
   `last_job`
+
+### Requirement: The Engine's Activity Is Served Under `/v1/activity`
+
+The server MUST serve `GET /v1/activity`, calling `engine_activity` with the
+launch's workspace and answering `{current, recent, waiting_files,
+uncommitted_paths, budget, jobs_unreadable}`. It MUST be read-only: it MUST take
+no lock, make no model call, write nothing and never create the job record, and
+it MUST require the bearer token like every other route.
+
+#### Scenario: No history is an empty activity
+
+- GIVEN a workspace with no job record
+- WHEN `GET /v1/activity` is sent
+- THEN the response is 200 with `current` null, an empty `recent` and a budget
+  of 0 used, and nothing was written
+
+#### Scenario: A finished task is served while another writer holds the lock
+
+- GIVEN a finished watch job and another writer holding the workspace lock
+- WHEN `GET /v1/activity` is sent
+- THEN the response is 200 and `recent` names that job
