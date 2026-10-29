@@ -344,6 +344,13 @@ verdicts is committed; bodies stay outside the repository. The verdict updates
 
 ## The owner confirms
 
+On 2026-10-29, before this file merged and before any result existed, the
+owner gave a standing instruction to take the recommended option on open
+choices; under it every item below is confirmed unchanged, as proposed, with
+adjudication by a delegated reader disclosed in RESULTS. The owner did not
+review the items one by one; this is recorded so the confirmation is not read
+as more than it is.
+
 1. **The bars** marked **(proposed)**: P1/P2 (zero violations), E1 (0.50
    overlap, 0.90 of bodies), E2 (names `min(2, n)` retained titles, 0.80), E3
    (invented dates at most one per twenty scored), E4 (80 to 1500 characters,
