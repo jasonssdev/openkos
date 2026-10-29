@@ -69,9 +69,562 @@ SUBJECT: Final = "subject"
 CONTESTED: Final = "contested"
 CLASSES: Final = (CONTAINER, SUBJECT, CONTESTED)
 
-ADJUDICATION: Final[dict[tuple[str, str], tuple[str, str]]] = {}
-"""(type, title) -> (class, reason) for every object `a1` keeps. Empty at
-registration; written after `score` listed the kept objects and BEFORE
+ADJUDICATION: Final[dict[tuple[str, str], tuple[str, str]]] = {
+    ("Event", "Afternoon Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "April Movie Club Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Concept Design Meeting for Remote Control"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Conceptual Design Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Conceptual Design Meeting for Remote Control"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Conceptual design meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Conceptual design meeting for remote control"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Department Office Allocation Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Design Discussion Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Design Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Design Meeting for New Device"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Design Team Planning Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Design and Budget Discussion Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Detailed Design Meeting for Product"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Detailed Product Design and Evaluation Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Detailed design review meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Detailed product design evaluation meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Discussion Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Final Detail Design Meeting for Remote Control Prototype"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Final Meeting about the Detail Design of the Remote Control"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Final Meeting on Remote Control Design"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Final Proposal Review Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Final design meeting for remote control product"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "First New Product Development Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "First Product Design Kick-off Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Functional Design Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Functional Design Phase Kickoff Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Functional Design Phase Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Functional design meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Functional design phase meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Group Meeting Discussion"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Initial Design Direction Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Mando Banana Design Review Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting About Relocating to New Office Space"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting Discussion"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting Discussion on Product Design and Budget Constraints"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting Discussion on Remote Control Design"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting Discussion on Remote Control Requirements"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting Discussion on Remote Control Technology"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting Discussion on Remote Control and Technology"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting ES2015d-es"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting TS3009c-es"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting about film candidates"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting about functional design"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting about movie candidates"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting about the functional design of a remote control"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Conceptual Design and Remote Control Concepts"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Functional Design"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Functional Design Agenda and Teletext Removal Impact"): (
+        "contested",
+        "title names a decision or outcome, not only the gathering",
+    ),
+    ("Event", "Meeting on Movie Club Poster Design for 'The Big Lebowski'"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Office Layout Proposal Constraints"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Office Layout and Visitor Space Planning"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Office Space Allocation and Constraints"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Office Space Distribution and Lounge Usage"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Product Design"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Remote Control Concept Design"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Remote Control Conceptual Design"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on Remote Control Design"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on conceptual design and remote control decisions"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting on functional design and teletext removal"): (
+        "contested",
+        "title names a decision or outcome, not only the gathering",
+    ),
+    ("Event", "Meeting regarding final proposal circulation"): (
+        "contested",
+        "title names a decision or outcome, not only the gathering",
+    ),
+    ("Event", "Meeting regarding lounge layout and separation"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting to Decide Movie and Advertising Content"): (
+        "contested",
+        "title names a decision or outcome, not only the gathering",
+    ),
+    ("Event", "Meeting to Decide on Movie and Advertising Content"): (
+        "contested",
+        "title names a decision or outcome, not only the gathering",
+    ),
+    ("Event", "Meeting to Decide on Remote Control Concept"): (
+        "contested",
+        "title names a decision or outcome, not only the gathering",
+    ),
+    ("Event", "Meeting to discuss highly ranked movies"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Meeting with D and C"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Montreux English Movie Club meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Movie Club Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Movie Club Meeting - April"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Movie Club Meeting - April Projection Selection"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Movie Club Meeting for April Projection Selection"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Movie Club Meeting on Movie Selection and Advertising"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Movie Discussion Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Movie Selection Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Movie club meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Movie selection and poster design meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Next Tuesday afternoon meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Office Space Arrangement Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Office layout planning meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Office space allocation meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Planning Meeting for New Office/Building Space"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Product Demo Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Product Design Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Product Design Review Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Product Detail Design Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Product Detailed Design Evaluation Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Product Detailed Design Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Product Development Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Product Presentation Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Product Review Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Production cost review meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Project Design and Budget Review Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Project Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Project Meeting on User Requirements"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Project Status Meeting on Remote Control Requirements"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Project Team Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Prototype Design Review Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Prototype Evaluation Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Prototype Presentation Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Prototype presentation and evaluation meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Remote Control Conceptual Design Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Remote Control Design Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Remote Control Design Presentation Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Remote Control Design Review Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Remote Control Product Design Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Remote Control Usability Study Presentation Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Remote control conceptual design meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Remote control design evaluation meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de Desarrollo del Nuevo Producto"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de Diseño Conceptual"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de Diseño Detallado del Control Remoto"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de Diseño Final del Control Remoto"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de Diseño Funcional"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de Planificación del Proyecto"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de Proyecto"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de Trabajo"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de cumplimiento"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de decisiones técnicas"): (
+        "contested",
+        "title names a decision or outcome, not only the gathering",
+    ),
+    ("Event", "Reunión de diseño del control remoto"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de diseño detallado del control remoto"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de planificación del proyecto"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de presentación del prototipo"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de proyecto"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de revisión de procesos"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de revisión técnica sobre deriva de embeddings y duplicación"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de revisión técnica y cumplimiento"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de seguimiento"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de sincronización técnica sobre respaldos y modelo vectorial"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión de trabajo"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Reunión sobre diseño detallado del control remoto"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Second functional design meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Team Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Team Meeting to Develop New Product"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "Team Meeting to Evaluate Prototype and Discuss Finances"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "User Requirements Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+    ("Event", "User Requirements Presentation Meeting"): (
+        "container",
+        "title names one gathering, optionally with its topic area",
+    ),
+}
+"""(type, title) -> (class, reason) for every object `a1` keeps. Filled by a
+delegated agent (not the owner) after `score` listed the kept objects and BEFORE
 `decide` is first run, reading each object's type, title and description only
 (never its model or run). A contested object counts against the arm."""
 
