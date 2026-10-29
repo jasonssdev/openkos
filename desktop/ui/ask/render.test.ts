@@ -130,7 +130,7 @@ describe("the ask screen", () => {
     const answer: Answer = { ...ANSWER, outcome: "withheld", answer: null, citations: [], withheld: 2 };
     const root = draw(state({ turns: [turn(1, { kind: "answer", answer })], shown: 1 }));
     const card = root.querySelector(".ui-card") as HTMLElement;
-    expect(card.querySelector(".ui-card__meta")?.textContent).toBe("This answer stays private");
+    expect(card.querySelector(".ui-card__meta")?.textContent).toBe("This answer stays on this Mac");
     expect(card.querySelector(".ui-card__body > p")?.textContent).toMatch(/^It drew on 2 pages marked Only on this Mac/);
     expect(card.textContent).not.toContain("Maria");
     expect(card.querySelector(".ui-card__footer")).toBeNull();
@@ -202,6 +202,38 @@ describe("the ask screen", () => {
   });
 });
 
+describe("the question field after an answer", () => {
+  it("is cleared once its answer arrives, and kept while it is on its way or fails", () => {
+    const root = draw(state());
+    input(root).value = "Who runs the allotment?";
+    draw(state({ running: true, turns: [turn(1, { kind: "running", phase: null })], shown: 1 }), actions(), root);
+    expect(input(root).value).toBe("Who runs the allotment?");
+    draw(state({ turns: [turn(1, { kind: "problem", problem: { text: "x", retry: true } })], shown: 1 }), actions(), root);
+    expect(input(root).value).toBe("Who runs the allotment?");
+    draw(state({ turns: [turn(1, { kind: "answer", answer: ANSWER })], shown: 1 }), actions(), root);
+    expect(input(root).value).toBe("");
+  });
+
+  it("leaves what the person has begun typing for the next question", () => {
+    const root = draw(state());
+    input(root).value = "Who runs the allotment?";
+    draw(state({ turns: [turn(1, { kind: "running", phase: null })], shown: 1, running: true }), actions(), root);
+    input(root).value = "And the shed?";
+    draw(state({ turns: [turn(1, { kind: "answer", answer: ANSWER })], shown: 1 }), actions(), root);
+    expect(input(root).value).toBe("And the shed?");
+  });
+
+  it("does not clear again when redrawn", () => {
+    const root = draw(state());
+    input(root).value = "Who runs the allotment?";
+    const done = state({ turns: [turn(1, { kind: "answer", answer: ANSWER })], shown: 1 });
+    draw(done, actions(), root);
+    input(root).value = "Who runs the allotment?";
+    draw(done, actions(), root);
+    expect(input(root).value).toBe("Who runs the allotment?");
+  });
+});
+
 describe("the pages an answer came from, and search", () => {
   it("lists each page it came from with the screen's action beside it", () => {
     const a = {
@@ -219,6 +251,29 @@ describe("the pages an answer came from, and search", () => {
       "Mariaact:people/maria",
       "The allotmentact:places/allotment",
     ]);
+  });
+
+  it("keeps each page's state apart from its action", () => {
+    const a = {
+      ...actions(),
+      citationState: vi.fn((citation: Schemas["AnswerCitation"]) => {
+        if (citation.concept_id !== "people/maria") return null;
+        const node = document.createElement("span");
+        node.textContent = "state";
+        return node;
+      }),
+      citationAction: vi.fn(() => {
+        const node = document.createElement("button");
+        node.textContent = "act";
+        return node;
+      }),
+    };
+    const root = draw(state({ turns: [turn(1, { kind: "answer", answer: ANSWER })], shown: 1 }), a);
+    const rows = Array.from(root.querySelectorAll(".ask-from__page"));
+    const first = rows[0] as HTMLElement;
+    expect(first.querySelector(".ask-from__what")?.textContent).toBe("Mariastate");
+    expect(first.querySelector(".ask-from__do")?.textContent).toBe("act");
+    expect((rows[1] as HTMLElement).querySelector(".ask-from__what")?.textContent).toBe("The allotment");
   });
 
   it("places the screen's search note under an answer", () => {

@@ -2075,6 +2075,12 @@ def _identity_actions(
         evaluation, reason = "judged_uncertain", "judged_uncertain"
     else:
         evaluation, reason = "pending_evaluation", "pending_evaluation"
+    if reason != "pending_evaluation" and shape is None:
+        # The judge is advisory and the person is the authority (#1699): a
+        # pair of one type is mergeable against a DIFFERENT or UNCERTAIN
+        # verdict too, the surface carrying the model's doubt beside the
+        # choice. Only an item with no verdict yet withholds it.
+        return evaluation, (Action.MERGE, Action.KEEP_DISTINCT, Action.SKIP), ()
     # A group that could be combined once judged says so with the same reason.
     withheld = (WithheldAction(Action.MERGE, reason),) + (
         (WithheldAction(Action.MERGE_GROUP, reason),) if shape is not None else ()

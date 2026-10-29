@@ -70,6 +70,19 @@ confidence number is shown.
 - AND the options are Same thing, Different things and Decide later, each with
   its "what it does" line, and Same thing previews the combine
 
+#### Scenario: A pair the model doubted can still be combined
+
+- GIVEN an identity decision over a pair with `evaluation` `judged_uncertain`
+  or `judged_different` whose actions include merge
+- WHEN it is opened
+- THEN the line above the question carries the model's doubt ("The AI model
+  couldn't tell." or "The AI model thinks these are different {people}.")
+  followed by "If you know they are the same, you can still combine them, and
+  split them again later."
+- AND the model's reason stays under "Why the AI model thinks so"
+- AND the options are Same thing, Different things and Decide later, and Same
+  thing previews the combine
+
 #### Scenario: An unjudged pair offers the check, not a combine
 
 - GIVEN an identity decision with `evaluation` `pending_evaluation`
@@ -505,9 +518,9 @@ MUST carry **Keep only on this Mac**, replaced by a quiet "Only on this Mac"
 once it is. Choosing a label MUST preview and apply in one step through
 `previewSensitivity` and `applySensitivity`, retrying a busy apply for up to
 five seconds and never a preview, and MUST confirm in the past tense with
-**Undo**, which puts back the level the engine read before the change. When
-other pages were raised with it, the confirmation MUST say so and MUST NOT
-offer Undo. Changing a page marked Only on this Mac to a lower label while a
+**Undo**, which puts back the level the engine read before the change, and
+**Dismiss**, which closes the confirmation. When other pages were raised with
+it, the confirmation MUST say so and MUST NOT offer Undo, only Dismiss. Changing a page marked Only on this Mac to a lower label while a
 cloud AI model is on MUST ask first, in a dialog that starts on keeping it, and
 MUST change nothing when declined. Every word MUST come from
 `docs/decision-wording.md`, "Who can see a page", and no engine word may reach

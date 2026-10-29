@@ -20,6 +20,10 @@ export interface AskActions {
   onToggle: (key: string, open: boolean) => void;
   /** Beside each page an answer came from: what the person can do with it. */
   citationAction?: (citation: Schemas["AnswerCitation"]) => HTMLElement | null;
+  /** Beside each page's title: where it stands now, apart from what can be done. */
+  citationState?: (citation: Schemas["AnswerCitation"]) => HTMLElement | null;
+  /** Search has been rebuilt since the shown answer was written. */
+  searchCurrent?: boolean;
   /** Under a finished answer: what the screen adds, such as rebuilding search. */
   afterAnswer?: (answer: Schemas["Answer"]) => HTMLElement | null;
 }
@@ -30,6 +34,8 @@ const WAITING_ID = "ask-waiting";
 const EARLIER = "ask-earlier";
 
 interface Parts {
+  /** The last turn whose answer cleared the field. */
+  cleared: { id: number | null };
   input: HTMLInputElement;
   field: HTMLElement;
   actions: HTMLElement;
@@ -59,7 +65,7 @@ function build(root: HTMLElement, current: { current: AskActions }): Parts {
     result,
     earlier,
   );
-  return { input, field, actions, result, earlier };
+  return { input, field, actions, result, earlier, cleared: { id: null } };
 }
 
 function markBlank(parts: Parts, blank: boolean): void {
@@ -101,7 +107,7 @@ function turnCard(turn: Turn, actions: AskActions): HTMLElement {
         }),
       );
     case "answer": {
-      const told = describeAnswer(result.answer);
+      const told = describeAnswer(result.answer, actions.searchCurrent === true);
       const notes = told.notes.map((note) => el("p", { class: "ui-card__meta" }, note));
       if (told.kind === "empty") {
         const show =
@@ -123,7 +129,8 @@ function turnCard(turn: Turn, actions: AskActions): HTMLElement {
 /** "From:" and the pages, each with the screen's action beside it when it has one. */
 function fromFooter(titles: string[], answer: Schemas["Answer"], actions: AskActions): string | HTMLElement {
   const act = actions.citationAction;
-  if (act === undefined) return `From: ${titles.join(" · ")}`;
+  const stateOf = actions.citationState;
+  if (act === undefined && stateOf === undefined) return `From: ${titles.join(" · ")}`;
   return el(
     "div",
     { class: "ask-from" },
@@ -131,7 +138,14 @@ function fromFooter(titles: string[], answer: Schemas["Answer"], actions: AskAct
     el(
       "ul",
       { class: "ui-plain-list" },
-      ...answer.citations.map((citation) => el("li", { class: "ask-from__page" }, el("span", {}, citation.title), act(citation))),
+      ...answer.citations.map((citation) =>
+        el(
+          "li",
+          { class: "ask-from__page" },
+          el("span", { class: "ask-from__what" }, el("span", {}, citation.title), stateOf?.(citation) ?? null),
+          el("span", { class: "ask-from__do" }, act?.(citation) ?? null),
+        ),
+      ),
     ),
   );
 }
@@ -161,6 +175,11 @@ export function renderAsk(root: HTMLElement, state: AskState, actions: AskAction
   markBlank(parts, state.blank);
   redraw(parts.actions, "ask-actions", () => parts.actions.replaceChildren(...askButton(parts, state, actions)));
   const shown = state.turns.find((turn) => turn.id === state.shown);
+  // An answered question leaves the field; what is typed since is the next one.
+  if (shown?.result.kind === "answer" && parts.cleared.id !== shown.id) {
+    parts.cleared.id = shown.id;
+    if (parts.input.value.trim() === shown.question) parts.input.value = "";
+  }
   const after = shown?.result.kind === "answer" && actions.afterAnswer ? actions.afterAnswer(shown.result.answer) : null;
   redraw(parts.result, "ask-result", () =>
     parts.result.replaceChildren(...(shown ? [turnCard(shown, actions)] : []), ...(after ? [after] : [])),
