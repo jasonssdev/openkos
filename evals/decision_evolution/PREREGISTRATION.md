@@ -337,6 +337,13 @@ nothing else.
 
 ## The owner confirms
 
+On 2026-10-29, before this file merged and before any result existed, the
+owner gave a standing instruction to take the recommended option on open
+choices; under it every item below is confirmed unchanged, as proposed, with
+judging by delegated model judges disclosed in RESULTS. The owner did not
+review the items one by one; this is recorded so the confirmation is not read
+as more than it is.
+
 1. The bars marked **(proposed)**: B0/W0 headroom at 0.75; B1/W1 benefit of
    +0.2 with a positive cluster-bootstrap lower bound; B2/W2 corroboration of
    +0.1; B3/W3 control drop at most 0.1; B4 contamination rise at most 0.05;
