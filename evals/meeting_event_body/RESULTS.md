@@ -103,6 +103,15 @@ no GPU.
 
 ## Deviations and oddities
 
+- **Run before the registration merged.** The registration says it becomes
+  REGISTERED once the owner has confirmed it and the file has merged to
+  `main`, before the first model call. This run used the confirmed
+  registration at its pushed commit `5b918e3c` (PR #1711) before that PR merged.
+  The commit was pushed and fixed before the first model call and was not
+  edited afterwards, so the bars were not set after any result; the stated
+  merge condition was still not met. The orchestrating session made this
+  call, not the operator.
+
 - The registry `ADJUDICATION` was added to the harness by this change, as the
   registration says it is filled after `score` (the sibling #1693 did the same).
 - `score --phase composed` over all 30 cases prints `futility_stop: true`,
