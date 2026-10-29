@@ -205,6 +205,27 @@ value is classified as a lowering subject to this same rule.
 - THEN the assignment is classified as a lowering, the command refuses with
   exit 1, the message names the required flag, and nothing is written
 
+### Requirement: The Log Line Records The Pages A Change Raised
+
+WHEN a sensitivity change raises provenance descendants, the `log.md` entry it
+appends, on every surface that makes the change, MUST end with ` Also raised:`
+followed by each raised page as a bundle-relative link and the level it had
+before (`was '<level>'`), comma-separated and ending in a full stop. A change
+that raises nothing MUST write the entry it always did. The entry is the only
+record of the raised set.
+
+#### Scenario: A Source raise records its descendants
+
+- GIVEN a Source with one derived page at `private`
+- WHEN the Source is set to `confidential`
+- THEN the new `log.md` entry ends with `Also raised: [<id>](/<id>.md) (was
+  'private').`
+
+#### Scenario: A change that raised nothing is unchanged
+
+- WHEN a page that is not a Source is set to `confidential`
+- THEN the entry ends with `(was 'private').`
+
 ### Requirement: Scope Is Exactly One Named Concept
 
 The verb MUST affect only the frontmatter of the one concept named by

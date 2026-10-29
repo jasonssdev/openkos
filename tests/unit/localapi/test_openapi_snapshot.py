@@ -159,6 +159,8 @@ _ROUTE_ERRORS: dict[tuple[str, str], set[str]] = {
     ("post", "/v1/tiers/apply"): {"409", "413", "503"},
     ("post", "/v1/pages/sensitivity/preview"): {"404", "409", "413"},
     ("post", "/v1/pages/sensitivity/apply"): {"404", "409", "413", "503"},
+    ("post", "/v1/pages/sensitivity/undo/preview"): {"404", "409", "413"},
+    ("post", "/v1/pages/sensitivity/undo/apply"): {"404", "409", "413", "503"},
     ("get", "/v1/search"): set(),
     ("post", "/v1/search/rebuilds"): {"409", "413"},
     ("get", "/v1/search/rebuilds/{rebuild_id}"): {"404"},

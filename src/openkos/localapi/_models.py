@@ -486,6 +486,31 @@ class SensitivityResponse(BaseModel):
     warnings: list[str]
 
 
+class SensitivityUndoPreviewRequest(BaseModel):
+    """The page whose newest sensitivity change is to be taken back."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    concept_id: Annotated[str, Field(max_length=1024)]
+
+
+class SensitivityUndoApplyRequest(_EchoRequest):
+    """The version the undo preview issued (echoed unchanged) and how long to
+    wait for the workspace lock; a client can shorten the wait only."""
+
+    version: api.SensitivityUndoVersion
+    wait_seconds: float = Field(default=WRITE_WAIT_SECONDS, ge=0, le=WRITE_WAIT_SECONDS)
+
+
+class SensitivityUndoResponse(BaseModel):
+    """What was put back, and the warnings the apply raised along the way."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    undone: api.SensitivityUndone
+    warnings: list[str]
+
+
 class ModelSettingsPreviewRequest(BaseModel):
     """The model setup asked for. A `null` URL removes its line, so the
     backend's own default applies. There is no field for a key: the engine

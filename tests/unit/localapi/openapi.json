@@ -4304,6 +4304,45 @@
         "title": "Reopened",
         "type": "object"
       },
+      "RestoredPage": {
+        "description": "A derived page raised with the change. `now` is its level and `after` the\nlevel it ends at: its own before the change, or higher when another page it\ncites requires it (`after == now`: it stays).",
+        "properties": {
+          "after": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "After",
+            "type": "string"
+          },
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "now": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Now",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concept_id",
+          "title",
+          "now",
+          "after"
+        ],
+        "title": "RestoredPage",
+        "type": "object"
+      },
       "RevisionDetail": {
         "additionalProperties": false,
         "description": "A revision: a later Decision that reverses or refines an earlier one.\n`later_id` is `None` when the dates do not order the pair; it never comes\nfrom the model.",
@@ -4775,6 +4814,192 @@
           "warnings"
         ],
         "title": "SensitivityResponse",
+        "type": "object"
+      },
+      "SensitivityUndoApplyRequest": {
+        "description": "The version the undo preview issued (echoed unchanged) and how long to\nwait for the workspace lock; a client can shorten the wait only.",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/SensitivityUndoVersion"
+          },
+          "wait_seconds": {
+            "default": 5.0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "SensitivityUndoApplyRequest",
+        "type": "object"
+      },
+      "SensitivityUndoPreview": {
+        "description": "Taking back the newest sensitivity change to `concept_id`: the page goes\nfrom `now` to `restores`, and `pages` are the derived pages raised with it,\neach with the level it ends at, never below what its remaining sources\nrequire.",
+        "properties": {
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "now": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Now",
+            "type": "string"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/RestoredPage"
+            },
+            "title": "Pages",
+            "type": "array"
+          },
+          "restores": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Restores",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/SensitivityUndoVersion"
+          }
+        },
+        "required": [
+          "concept_id",
+          "title",
+          "now",
+          "restores",
+          "pages",
+          "version"
+        ],
+        "title": "SensitivityUndoPreview",
+        "type": "object"
+      },
+      "SensitivityUndoPreviewRequest": {
+        "additionalProperties": false,
+        "description": "The page whose newest sensitivity change is to be taken back.",
+        "properties": {
+          "concept_id": {
+            "maxLength": 1024,
+            "title": "Concept Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concept_id"
+        ],
+        "title": "SensitivityUndoPreviewRequest",
+        "type": "object"
+      },
+      "SensitivityUndoResponse": {
+        "additionalProperties": false,
+        "description": "What was put back, and the warnings the apply raised along the way.",
+        "properties": {
+          "undone": {
+            "$ref": "#/components/schemas/SensitivityUndone"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "undone",
+          "warnings"
+        ],
+        "title": "SensitivityUndoResponse",
+        "type": "object"
+      },
+      "SensitivityUndoVersion": {
+        "description": "The version a stateless caller undoes against: echo it unchanged.\n`content_digest` covers the log and every page of the bundle.",
+        "properties": {
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concept_id",
+          "content_digest"
+        ],
+        "title": "SensitivityUndoVersion",
+        "type": "object"
+      },
+      "SensitivityUndone": {
+        "additionalProperties": false,
+        "description": "The change was taken back, in one commit. `restored` went back and `kept`\nstayed where they were because another page they cite requires it.\n`commit_sha` is `None` when the commit could not be made (the writes\nlanded). `committed_confidential`: the commit holds a page explicitly marked\nconfidential.",
+        "properties": {
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "committed_confidential": {
+            "default": false,
+            "title": "Committed Confidential",
+            "type": "boolean"
+          },
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "kept": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Kept",
+            "type": "array"
+          },
+          "level": {
+            "enum": [
+              "public",
+              "private",
+              "confidential"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "restored": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Restored",
+            "type": "array"
+          }
+        },
+        "required": [
+          "concept_id",
+          "level",
+          "restored",
+          "kept",
+          "commit_sha"
+        ],
+        "title": "SensitivityUndone",
         "type": "object"
       },
       "SensitivityVersion": {
@@ -8311,6 +8536,230 @@
           }
         ],
         "summary": "Sensitivity Preview"
+      }
+    },
+    "/v1/pages/sensitivity/undo/apply": {
+      "post": {
+        "operationId": "sensitivity_undo_apply_v1_pages_sensitivity_undo_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SensitivityUndoApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SensitivityUndoResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying a busy workspace.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Sensitivity Undo Apply"
+      }
+    },
+    "/v1/pages/sensitivity/undo/preview": {
+      "post": {
+        "operationId": "sensitivity_undo_preview_v1_pages_sensitivity_undo_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SensitivityUndoPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SensitivityUndoPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerToken": []
+          }
+        ],
+        "summary": "Sensitivity Undo Preview"
       }
     },
     "/v1/pending": {

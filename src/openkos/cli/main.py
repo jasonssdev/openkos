@@ -41,6 +41,7 @@ from openkos.application import auto_merge as application_auto_merge
 from openkos.application import backends as application_backends
 from openkos.application import catalog_delta as application_catalog_delta
 from openkos.application import commit_phase as application_commit_phase
+from openkos.application import concept_read as application_concept_read
 from openkos.application import (
     contradictions_service,
     curate_decisions,
@@ -7600,7 +7601,18 @@ def set_sensitivity_cmd(
         log_bytes, log_text = _snapshot_read(log_path)
         metadata["sensitivity"] = level
         new_concept_text = okf.dump_frontmatter(metadata, body)
-        log_line = application_sensitivity.log_line(canonical_id, level, current)
+        log_line = application_sensitivity.log_line(
+            canonical_id,
+            level,
+            current,
+            [
+                (
+                    raised.concept_id,
+                    application_concept_read.sensitivity_level(raised.current),
+                )
+                for raised in descendant_raises
+            ],
+        )
 
         def set_sensitivity_log(current_log: str) -> str:
             return bundle_log.insert_log_entry(

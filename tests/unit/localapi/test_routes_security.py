@@ -41,6 +41,8 @@ EXPECTED_ROUTES = {
     ("POST", "/v1/tiers/apply"),
     ("POST", "/v1/pages/sensitivity/preview"),
     ("POST", "/v1/pages/sensitivity/apply"),
+    ("POST", "/v1/pages/sensitivity/undo/preview"),
+    ("POST", "/v1/pages/sensitivity/undo/apply"),
     ("GET", "/v1/search"),
     ("POST", "/v1/search/rebuilds"),
     ("GET", "/v1/search/rebuilds/{rebuild_id}"),
@@ -259,6 +261,8 @@ _BODY_ROUTES = [
     "/v1/setup/pulls",
     "/v1/pages/sensitivity/preview",
     "/v1/pages/sensitivity/apply",
+    "/v1/pages/sensitivity/undo/preview",
+    "/v1/pages/sensitivity/undo/apply",
     "/v1/search/rebuilds",
 ]
 

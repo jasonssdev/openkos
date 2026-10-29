@@ -21,6 +21,8 @@ reports the lexical indexes stale until a rebuild.
 """
 
 import hashlib
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,12 +43,89 @@ SensitivityReason = Literal["not_found", "unchanged"]
 _VERB: Literal["set_sensitivity"] = "set_sensitivity"
 
 
-def log_line(concept_id: str, level: str, previous: object) -> str:
-    """The `log.md` entry a sensitivity change appends, on every surface."""
-    return (
+def log_line(
+    concept_id: str,
+    level: str,
+    previous: object,
+    raised: Sequence[tuple[str, str]] = (),
+) -> str:
+    """The `log.md` entry a sensitivity change appends, on every surface.
+
+    `raised` is the derived pages raised with it, each as its id and the level
+    it had before. It is the only record of that set (#1706): an undo reads it
+    back. A change that raised nothing writes the line it always did."""
+    line = (
         f"**Set-sensitivity**: Set [{concept_id}](/{concept_id}.md) "
         f"sensitivity to {level!r} (was {previous!r})."
     )
+    if raised:
+        pages = ", ".join(f"[{page}](/{page}.md) (was {was!r})" for page, was in raised)
+        line += f" Also raised: {pages}."
+    return line
+
+
+_ENTRY_RE = re.compile(
+    r"^\* \*\*(?P<kind>Set|Undo)-sensitivity\*\*: (?:Set|Put) "
+    r"\[(?P<id>[^\]]+)\]\(/(?P=id)\.md\) sensitivity (?:back )?to "
+    r"'(?P<level>[^']*)' \(was (?P<was>'[^']*'|None|[^)]*)\)\.(?P<rest>.*)$"
+)
+_RAISED_RE = re.compile(r"\[(?P<id>[^\]]+)\]\(/(?P=id)\.md\) \(was '(?P<was>[^']*)'\)")
+_ALSO_RAISED = " Also raised: "
+
+
+def undo_log_line(concept_id: str, level: str, previous: str) -> str:
+    """The `log.md` entry an undo of a sensitivity change appends."""
+    return (
+        f"**Undo-sensitivity**: Put [{concept_id}](/{concept_id}.md) "
+        f"sensitivity back to {level!r} (was {previous!r})."
+    )
+
+
+@dataclass(frozen=True)
+class RecordedChange:
+    """The newest `log.md` entry about one page, when it is a sensitivity change
+    that recorded what it raised: the level it set (`level`), the stored value
+    it replaced (`previous`, `None` when there was none) and the derived pages
+    raised with it, each with the level it had before (`raised`)."""
+
+    concept_id: str
+    level: str
+    previous: str | None
+    raised: tuple[tuple[str, str], ...]
+
+
+def recorded_change(log_text: str, concept_id: str) -> RecordedChange | None:
+    """The newest entry in `log_text` about `concept_id`, as a recorded change.
+
+    `None` when the page has no entry, when the newest is an undo, or when it is
+    a change that did not record what it raised (a change from before the record
+    existed, one that raised nothing, or a line edited by hand). Entries are
+    newest first, so the first one found is the newest."""
+    for line in log_text.splitlines():
+        match = _ENTRY_RE.match(line)
+        if match is None or match["id"] != concept_id:
+            continue
+        rest = match["rest"]
+        if match["kind"] != "Set" or not rest.startswith(_ALSO_RAISED):
+            return None
+        body = rest[len(_ALSO_RAISED) :]
+        if not body.endswith("."):
+            return None
+        items = body[:-1].split(", [")
+        raised: list[tuple[str, str]] = []
+        for index, item in enumerate(items):
+            item_match = _RAISED_RE.fullmatch(item if index == 0 else f"[{item}")
+            if item_match is None or item_match["was"] not in okf.SENSITIVITY_ORDER:
+                return None
+            raised.append((item_match["id"], item_match["was"]))
+        was = match["was"]
+        previous = was[1:-1] if was.startswith("'") else None
+        if was != "None" and previous is None:
+            return None
+        if match["level"] not in okf.SENSITIVITY_ORDER:
+            return None
+        return RecordedChange(concept_id, match["level"], previous, tuple(raised))
+    return None
 
 
 def commit_message(concept_id: str, level: str) -> str:
@@ -240,7 +319,12 @@ def apply_sensitivity(
             new_log = bundle_log.insert_log_entry(
                 log_text,
                 datetime.now(UTC).astimezone().date(),
-                log_line(plan.concept_id, plan.level, planned.raw_current),
+                log_line(
+                    plan.concept_id,
+                    plan.level,
+                    planned.raw_current,
+                    [(r.concept_id, r.before) for r in plan.also_raised],
+                ),
             )
             for raised in planned.raises:
                 fsio.write_atomic(
