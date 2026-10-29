@@ -633,7 +633,9 @@ def _pin_host_memory(monkeypatch: pytest.MonkeyPatch) -> None:
     that cares sets `os.sysconf` or the function itself, and wins, because its
     patch lands after this one. This is one cheap monkeypatch, no temp dirs.
     """
-    real = os.sysconf
+    real = getattr(os, "sysconf", None)
+    if real is None:
+        return  # Windows has no `sysconf`: the probe answers None and keeps 12288
     pinned = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": _PINNED_HOST_MEMORY_BYTES // 4096}
 
     def sysconf(name: str | int) -> int:
