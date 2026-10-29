@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- The app has an Activity screen that shows what OpenKOS is doing in the background: the task running now, the files and unsaved changes that wait, how much of today's AI model limit is used, and the latest finished tasks with how each ended. It only reads; an unreadable job record is said plainly rather than shown as an idle engine. `openkos.api.engine_activity(workspace)` returns it (`EngineActivity`, `EngineJob`, `DailyBudget`), `GET /v1/activity` serves it, and the desktop client has `engineActivity()`. The change is additive; `API_VERSION` is unchanged (#1698).
+
 ### Fixed
 
 - A pair of pages the AI model judged "couldn't tell" or "different" can now be combined from To review. The judge is advisory and the person decides: **Same thing** is offered for such a pair, with the model's doubt on the line above the question and a note that the combine can be split again. A pair not yet checked, a group of more than two pages and pages of different kinds keep their guards (#1699).

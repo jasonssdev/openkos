@@ -292,3 +292,13 @@ equal to the shell's source.
 - GIVEN a shell that answers `check_for_update` with `{"state": "soon"}`
 - WHEN `check()` is called
 - THEN an `UpdateError` with reason `unknown` is thrown
+
+### Requirement: The Client Reads The Engine's Activity
+
+The client MUST offer `engineActivity()` (`GET /v1/activity`), typed from the
+generated schema.
+
+#### Scenario: The method calls its route
+
+- WHEN `engineActivity()` is called
+- THEN it sends a GET to `/v1/activity` with the bearer token
