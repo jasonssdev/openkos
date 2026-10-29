@@ -267,8 +267,10 @@ commit and the truncation counts.
 ## Owner confirms
 
 The owner's 2026-10-28 decision covers the opt-in `llama-server` runtime. The items
-below are the registrar's proposals, fixed here before any result and open to the
-owner's change **before this file merges**:
+below were the registrar's proposals, fixed here before any result. **The owner
+confirmed all of them unchanged on 2026-10-28, before this file merged and before
+any result existed**, together with the server settings (`-np 4 -c 8192 -ub 2048`)
+and the run budget (3 passes, 2 hours per pass):
 
 1. **Model and quantization:** `bge-reranker-v2-m3`, Q8_0.
 2. **Latency bar:** 2.0 s at p95, pool 30, absolute.
