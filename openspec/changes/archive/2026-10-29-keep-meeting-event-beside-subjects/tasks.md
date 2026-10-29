@@ -15,4 +15,4 @@ Strict TDD is ON, runner `uv run pytest`. No test reaches a model.
 - [x] 4. [TEST+IMPL] `max_extraction_calls` counts two more calls.
 - [x] 5. [DOC] ADR-0085 and its index row, `docs/cli.md`, CHANGELOG.
 - [x] 6. [SPEC] Delta for `extraction-union-judge`, merged on archive.
-- [ ] 7. [GATE] ruff check, ruff format --check, mypy, pytest --cov, eval self-tests.
+- [x] 7. [GATE] ruff check, ruff format --check, mypy, pytest --cov, eval self-tests (see the PR).
