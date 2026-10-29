@@ -86,17 +86,27 @@ bullet `* **Initialization**: Created the bundle structure and the root
 ### Requirement: Static openkos.yaml Template
 
 `openkos.yaml` MUST be byte-identical to the packaged template except for
-the `model:` line and the `embedding_model:` line, which are the ONLY
-user-selectable fields; there MUST be no other per-workspace substitution.
+the `model:` line, the `embedding_model:` line, and the `context_window:`
+value; `model` and `embedding_model` are the ONLY user-selectable fields,
+and `context_window` is sized from the machine (see below). There MUST be no
+other per-workspace substitution.
 It MUST NOT contain a `name` field or any other field derived from the
 current directory; the directory itself remains the single source of truth
 for the workspace's identity, and nothing in `openkos.yaml` duplicates it.
 The packaged template pins `review: true`, `default_sensitivity: private`,
 `confidential_local_exemption: true`, `freshness_window: 7d`,
-`chat_timeout: 600`, `max_generation_tokens: 8192`, and
-`context_window: 12288` — these MUST remain byte-identical to the template
-regardless of the chosen model(s). The template MUST NOT carry `raw` or
-`bundle` layout keys: the workspace layout is fixed and the engine does not
+`chat_timeout: 600`, and `max_generation_tokens: 8192` — these MUST remain
+byte-identical to the template regardless of the chosen model(s).
+`init` MUST write `context_window` once, sized from the machine's total
+memory at setup time: `12288` below 32 GiB or when the memory cannot be
+read, `16384` from 32 GiB, `24576` from 64 GiB, never below the floor for the
+packaged `max_generation_tokens` and never above the model's limit when that
+is known. The value MUST be written through a third plain-text placeholder,
+and nothing MUST compute it again at run time: a workspace keeps the value it
+was written with, and an absent key keeps resolving to the packaged default.
+The template comment and `docs/cli.md` MUST state the latency cost of a
+larger window as an observation, not a promise. The template MUST NOT carry
+`raw` or `bundle` layout keys: the workspace layout is fixed and the engine does not
 read them. The
 packaged template MUST also document `backend`, `base_url`, and
 `embedding_base_url` as commented-out keys with explanatory comments; `init`
@@ -218,6 +228,14 @@ the default.
 - THEN it contains no active `backend:`, `base_url:`, or
   `embedding_base_url:` line — only `model:` and `embedding_model:` were
   substituted, and the backend keys remain commented exactly as in the template
+
+#### Scenario: init sizes context_window from this machine's memory
+
+- GIVEN a machine reporting 64 GiB of total memory
+- WHEN `openkos init` succeeds
+- THEN `openkos.yaml` carries `context_window: 24576`
+- AND with 16 GiB, or memory that cannot be read, it carries `12288`
+
 ### Requirement: Vetted 1024-Dim Embedding Model Allowlist
 
 The system MUST expose a static, code-level allowlist of embedding model
