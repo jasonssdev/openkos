@@ -1,6 +1,6 @@
 # Tasks: keep-meeting-event-beside-subjects
 
-Refs #1689. ADR-0085. Proposal: `proposal.md`. Spec: `specs/extraction-union-judge`.
+Refs #1689. ADR-0087. Proposal: `proposal.md`. Spec: `specs/extraction-union-judge`.
 Strict TDD is ON, runner `uv run pytest`. No test reaches a model.
 
 - [x] 1. [TEST+IMPL] `speaker_roster`: AMI labels and the meeting detector's recurring
@@ -13,6 +13,6 @@ Strict TDD is ON, runner `uv run pytest`. No test reaches a model.
   the framing drop, Event appended after the cap and after the backstop and pass Decisions,
   report field and failure/bounded entries, produced/retained counts. RED observed.
 - [x] 4. [TEST+IMPL] `max_extraction_calls` counts two more calls.
-- [x] 5. [DOC] ADR-0085 and its index row, `docs/cli.md`, CHANGELOG.
+- [x] 5. [DOC] ADR-0087 and its index row, `docs/cli.md`, CHANGELOG.
 - [x] 6. [SPEC] Delta for `extraction-union-judge`, merged on archive.
 - [x] 7. [GATE] ruff check, ruff format --check, mypy, pytest --cov, eval self-tests (see the PR).

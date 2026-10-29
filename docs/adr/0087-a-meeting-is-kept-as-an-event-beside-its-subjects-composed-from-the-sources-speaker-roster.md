@@ -1,6 +1,6 @@
 ---
 type: Decision
-title: "ADR-0085: A meeting is kept as an Event beside its subjects, composed from the source's speaker roster"
+title: "ADR-0087: A meeting is kept as an Event beside its subjects, composed from the source's speaker roster"
 description: Proposes that extraction keep one meeting Event after the subjects, outside the cap, with a description and body composed by one bounded call from the source's own speaker list, because the pre-registered measurements licensed the placement and the roster-grounded body. It prices the extra call and names what the evidence cannot show.
 status: Proposed
 date: 2026-10-29
@@ -12,7 +12,7 @@ timestamp: 2026-10-29T00:00:00Z
 sensitivity: public
 ---
 
-# ADR-0085: A meeting is kept as an Event beside its subjects, composed from the source's speaker roster
+# ADR-0087: A meeting is kept as an Event beside its subjects, composed from the source's speaker roster
 
 - **Status:** Proposed
 - **Date:** 2026-10-29
@@ -46,7 +46,8 @@ closing with "production needs an OpenSpec change":
   reply, and a model-free participant check, both arms LICENSED: 30 of 30 bodies
   restated nothing, linked their subjects, invented no date and named no absent
   participant; faithful 29 of 30 against 0.90 on a second reading made against
-  the source. The named-speaker rule (`PREREGISTRATION_NAMED.md`) generalized the
+  the source. The named-speaker rule (`PREREGISTRATION_NAMED.md`, `RESULTS_NAMED.md`:
+  LICENSED, N1 to N6 all hold) generalized the
   roster beyond the AMI label form by reusing the meeting detector's own
   definition of a speaker.
 

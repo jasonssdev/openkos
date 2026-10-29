@@ -1,6 +1,6 @@
 # Proposal: keep-meeting-event-beside-subjects
 
-Refs #1689 (the other case of #1642). Governing decision: ADR-0085 (Proposed).
+Refs #1689 (the other case of #1642). Governing decision: ADR-0087 (Proposed).
 
 ## Intent
 
@@ -42,7 +42,7 @@ subjects, their order and the cap are untouched.
 3. `max_extraction_calls` counts the compose call and its re-ask.
 4. `ExtractionReport.meeting_event_added_titles`; a failed compose appears in
    `optional_call_failures`, a bounded prompt in `bounded_prompt_calls`.
-5. A delta to `extraction-union-judge`, ADR-0085, the CHANGELOG.
+5. A delta to `extraction-union-judge`, ADR-0087, the CHANGELOG.
 
 ### Out of Scope
 
@@ -56,7 +56,7 @@ subjects, their order and the cap are untouched.
 
 ## Approach
 
-See ADR-0085 and the design notes in `tasks.md`. A new leaf module
+See ADR-0087 and the design notes in `tasks.md`. A new leaf module
 `extraction/meeting_event.py` holds the pure parts (candidate choice, prompt
 messages, reply parsing, participant check, the compose call);
 `extraction/concept.py` gains `speaker_roster` and the wiring.
