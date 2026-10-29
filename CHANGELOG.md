@@ -18,6 +18,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- The desktop Status screen's "Your library" counts are read again each time Status is opened, and the card now says when they were read ("Read at 14:05.") instead of claiming "Read from the engine just now." Before, they were read once per engine launch, so adding files or rebuilding search left them stale (#1694).
 - `ingest` now says which filter emptied a source. When extraction ends with no concept and a candidate was removed as a framing object (a meeting-shaped title) or as a twin of the source title, the notice names those titles and the filter, where before it printed only "no concept extracted". The language gate keeps every candidate rather than empty a source, so a Spanish meeting that came out empty was losing its survivor to a later filter, not to the gate. Diagnostic only: which objects are kept is unchanged (#1642).
 
 ## [0.7.0] - 2026-10-28
