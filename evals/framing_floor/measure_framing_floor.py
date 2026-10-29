@@ -83,11 +83,69 @@ SUBJECT: Final = "subject"
 CONTESTED: Final = "contested"
 CLASSES: Final = (CONTAINER, SUBJECT, CONTESTED)
 
-ADJUDICATION: Final[dict[tuple[str, str], tuple[str, str]]] = {}
+_EVENT_REASON: Final = (
+    "Event describing the gathering itself (occurrence, topics discussed), "
+    "with no specific outcome; every Event is a container."
+)
+_CONTAINER_EVENTS: Final = (
+    # Spanish, a1
+    "Reunión de desarrollo del nuevo producto",
+    "Reunión de Planificación del Proyecto",
+    "Reunión de Presentación del Nuevo Producto",
+    "Reunión de Desarrollo del Nuevo Producto",
+    "Reunión de desarrollo del producto",
+    "Reunión de planificación del proyecto",
+    "Reunión de presentación del nuevo producto",
+    # Spanish, a2
+    "Discussion on Remote Control Design",
+    "Conversation about Drawing a Dog and Discussing a Butterfly",
+    "Drawing Session",
+    "Discussion on Product Development",
+    "Conversation about Drawing a Dog and a Butterfly",
+    "Discussion on Remote Controls and Product Development",
+    # English, a1
+    "Team Meeting to Develop New Product",
+    "Design Meeting",
+    "Meeting on Remote Control Design",
+    "Product Design Meeting",
+    "Meeting Discussion",
+    "Meeting Discussion on Remote Control Design",
+    "Meeting to Discuss Remote Design",
+    "Meeting",
+    "Reunión de trabajo",
+    "Product Development Meeting",
+    "Remote Control Prototype Evaluation Meeting",
+    "Product Discussion Meeting",
+    "Product Evaluation Meeting",
+    "Team Meeting",
+    "Remote Control Evaluation Meeting",
+    "Reunión de plataforma — revisión quincenal",
+)
+
+ADJUDICATION: Final[dict[tuple[str, str], tuple[str, str]]] = {
+    **{("Event", t): (CONTAINER, _EVENT_REASON) for t in _CONTAINER_EVENTS},
+    ("Decision", "Budget and Product Pricing Decision"): (
+        SUBJECT,
+        "A specific decision on budget and product pricing.",
+    ),
+    ("Concept", "Remote Control Design"): (
+        SUBJECT,
+        "A product design topic that makes sense without the word meeting.",
+    ),
+    ("Decision", "Decision on Backup Encryption and Retention"): (
+        SUBJECT,
+        "A specific decision on backup encryption and the retention period.",
+    ),
+    ("Decision", "Decision on Open Issues"): (
+        CONTESTED,
+        "Generic title; the description names two open issues but no outcome.",
+    ),
+}
 """(type, title) -> (class, reason) for every object an arm restores. Empty at
-registration: it is written after `score --list-restored` and BEFORE `decide`
-is first run, reading each object's type, title and description only (never
-its arm, model or run). A contested object counts as a container."""
+registration; written after `score` listed the restored objects and BEFORE
+`decide` was first run, reading each object's type, title and description only
+(never its arm, model or run). A contested object counts as a container.
+Classified by the run's delegated agent (disclosed in RESULTS.md)."""
 
 
 # --- replay -------------------------------------------------------------------
