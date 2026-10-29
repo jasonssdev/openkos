@@ -1,0 +1,11 @@
+# Unattended-apply gate verdict (#1350): FAIL
+
+model `qwen3:8b`, judge prompt `d8238af6410ac31d`
+calibration ['runs-20260928T173355Z-qwen3-8b.json']; confirmation ['runs-20260928T204537Z-qwen3-8b.json', 'runs-20260929T011322Z-qwen3-8b.json']
+
+- PASS R0 validity: ok
+- FAIL S1 separator: no right-edge confidence strictly above the highest wrong-edge confidence (1.0); confidence does not separate
+
+calibration (descriptive): {"applicable_calls": 322, "wrong": 25, "precision": 0.9224, "wrong_confidences": [[0.9, 8], [0.95, 9], [1.0, 8]], "right_confidences": [[0.95, 138], [1.0, 159]], "wrong_pairs": ["r04", "r13", "r27"]}
+
+confirmation (descriptive): {"applicable_calls": 650, "wrong": 56, "precision": 0.9138, "wrong_confidences": [[0.9, 11], [0.95, 24], [1.0, 21]], "right_confidences": [[0.9, 1], [0.95, 288], [1.0, 305]], "wrong_pairs": ["r04", "r13", "r27", "r46"]}
