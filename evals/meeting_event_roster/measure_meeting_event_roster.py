@@ -12,6 +12,9 @@ first. This harness reuses that one (cases, deterministic checks, bars) and adds
 - `compose`             model-bound: one call per case, the roster in the prompt.
 - `score` / `decide`    model-free; arm `r0` (prompt only) and `r1` (prompt plus
                         the check as a gate).
+- `roster_of_named`     the named-speaker generalization of `roster_of`
+                        (`PREREGISTRATION_NAMED.md`), and `named`, its model-free
+                        measurement. `roster_of` itself is unchanged.
 
 Model-free check: `--self-test`.
 """
@@ -79,6 +82,94 @@ def roster_of(source: str) -> tuple[str, ...]:
     return tuple(label for label, n in turns.items() if n >= ROSTER_MIN_TURNS)
 
 
+# --- the named-speaker roster rule (PREREGISTRATION_NAMED.md, pure) -----------
+
+_NAME_WORD: Final = (
+    r"(?:[A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ'\u2019\-]*[a-záéíóúüñ]\.?|[A-ZÁÉÍÓÚÜÑ]\.)"
+)
+_NAME_PARTICLE: Final = r"(?:de|del|la|las|los|van|von|der|da|di|le|el)"
+_NAME_LABEL: Final = (
+    rf"{_NAME_WORD}(?:[ \t]+(?:{_NAME_PARTICLE}[ \t]+)*{_NAME_WORD}){{0,3}}"
+)
+_NAMED_TURN_RE: Final = re.compile(
+    r"^\s{0,4}"
+    r"(?:[\[(]\d{1,2}:\d{2}(?::\d{2})?[\])][ \t]+|\d{1,2}:\d{2}(?::\d{2})?[ \t]+)?"
+    r"(?:\*\*|__)?"
+    rf"(?P<label>{_NAME_LABEL})"
+    r"(?:\*\*|__)?:(?:\*\*|__)?[ \t]+\S"
+)
+NAMED_MIN_SPEAKERS: Final = 2
+"""A source with fewer recurring labels than this has no roster (a single
+repeated label is a narration or a heading, not a conversation); production's
+transcript detector uses the same floor (`_TRANSCRIPT_MIN_SPEAKERS`)."""
+NOT_A_SPEAKER: Final = frozenset(
+    {
+        "nota", "notas", "agenda", "acción", "accion", "acciones", "acuerdo",
+        "acuerdos", "asistentes", "participantes", "fecha", "hora", "lugar",
+        "tema", "temas", "resumen", "conclusión", "conclusion", "conclusiones",
+        "decisión", "decision", "decisiones", "pendientes", "pregunta",
+        "respuesta", "ejemplo", "importante", "ojo", "aviso", "tarea", "tareas",
+        "nb", "note", "notes", "action", "actions", "attendees", "attending",
+        "date", "time", "location", "topic", "topics", "summary", "decisions",
+        "todo", "question", "answer", "example", "important", "warning", "task",
+        "tasks", "agreement", "agreements", "title", "título", "titulo",
+    }
+)  # fmt: skip
+"""A closed list of headings that open a line as `Word:` and are not people
+(disclosed lexicon; production's detector rejects labels structurally and has
+no such list). Matched case-insensitively against the whole label and against
+its first word, so `Nota importante:` is out and `Dr. Nota:` is not."""
+
+
+def _named_label(line: str) -> str | None:
+    """The speaker label a line opens with, in the named-speaker form, or None.
+    A bold label (`**Ana:** ...`, `**Ana**: ...`) and a timestamp prefix are
+    accepted; a URL (no whitespace after the colon), a digit-bearing prefix such
+    as `Reunión 10:30:` and a heading in `NOT_A_SPEAKER` are not."""
+    match = _NAMED_TURN_RE.match(line)
+    if match is None:
+        return None
+    label = match.group("label").strip()
+    if (
+        label.casefold() in NOT_A_SPEAKER
+        or label.split()[0].casefold() in NOT_A_SPEAKER
+    ):
+        return None
+    return label
+
+
+def roster_of_named(source: str) -> tuple[str, ...]:
+    """The speaker labels a source declares, AMI form or named form.
+
+    Union, in order of first appearance, of (a) the labels `roster_of` accepts,
+    unchanged, and (b) name-form labels: one to four capitalised words (titles
+    such as `Dr.`, initials, particles such as `de la` and apostrophes or
+    hyphens inside a word allowed; at least one lowercase letter, so an
+    all-caps label is only ever the AMI form), opening a line, optionally after
+    a timestamp or inside bold markers, followed by a colon and a space. A
+    name-form label counts only on at least `ROSTER_MIN_TURNS` lines, and the
+    name-form labels count only when, with the AMI-form ones, at least
+    `NAMED_MIN_SPEAKERS` labels recur. `roster_of` is untouched; this is a separate function."""
+    ami = set(roster_of(source))
+    named: Counter[str] = Counter()
+    first: dict[str, int] = {}
+    for i, line in enumerate(source.split("\n")):
+        label = _named_label(line)
+        if label is not None:
+            named[label] += 1
+            first.setdefault(label, i)
+    recurring = {label for label, n in named.items() if n >= ROSTER_MIN_TURNS}
+    if len(ami | recurring) < NAMED_MIN_SPEAKERS:
+        recurring = set()
+    order: dict[str, int] = {}
+    for m in _SPEAKER_RE.finditer(source):
+        order.setdefault(m.group(1), source.count("\n", 0, m.start()))
+    entries = [(order[label], label) for label in ami] + [
+        (first[label], label) for label in recurring
+    ]
+    return tuple(label for _line, label in sorted(entries))
+
+
 def participant_items(body: str) -> list[str]:
     """What a body lists as taking part: in each sentence with a participation
     VERB (never the noun 'participantes'), the enumeration after the verb,
@@ -108,6 +199,185 @@ def absent_participants(body: str, source: str) -> list[str]:
         for item in participant_items(body)
         if re.search(rf"(?<!\w){re.escape(item.casefold())}(?!\w)", lowered) is None
     ]
+
+
+# --- the named-speaker fixtures and bars (model-free) --------------------------
+
+NAMED_PRECISION_MIN: Final = 1.0
+NAMED_RECALL_MIN: Final = 0.95
+NAMED_EXACT_MIN: Final = 0.90
+NAMED_NEGATIVE_FALSE_MAX: Final = 0
+NAMED_AMI_SOURCES_IDENTICAL: Final = True
+
+
+def _talk(speakers: Sequence[str], rounds: int = 2, *, fmt: str = "{}: ") -> str:
+    """Turns for each speaker, `rounds` times round, in the label format `fmt`."""
+    text = "Reunión de seguimiento.\n\n"
+    for r in range(rounds):
+        for who in speakers:
+            text += fmt.format(who) + f"Intervención {r + 1} de {who}.\n\n"
+    return text
+
+
+_HEADER = "Fecha: 12 de mayo\nAsistentes: Ana, Luis\nAgenda: presupuesto\n\n"
+NAMED_FIXTURES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
+    ("plain", _talk(["Ana", "Luis"]), ("Ana", "Luis")),
+    (
+        "titles",
+        _talk(["Dr. Smith", "Dra. Pérez", "Ana"], 3),
+        ("Dr. Smith", "Dra. Pérez", "Ana"),
+    ),
+    (
+        "compound",
+        _talk(["María José", "Juan Carlos", "Sofía"]),
+        ("María José", "Juan Carlos", "Sofía"),
+    ),
+    (
+        "timestamps",
+        "[00:01:10] Ana: Empecemos.\n10:31 Luis: Vale.\n[00:02:00] Ana: Sigo.\n"
+        "10:32:05 Luis: Listo.\n",
+        ("Ana", "Luis"),
+    ),
+    (
+        "bold",
+        "**Ana:** Empecemos.\n\n**Luis**: Vale.\n\n**Ana:** Sigo.\n\n**Luis**: Listo.\n",
+        ("Ana", "Luis"),
+    ),
+    (
+        "particles",
+        _talk(["Ana de la Cruz", "Pedro van Dyke", "Marta del Río"]),
+        ("Ana de la Cruz", "Pedro van Dyke", "Marta del Río"),
+    ),
+    ("initials", _talk(["J. Smith", "M. Lee"]), ("J. Smith", "M. Lee")),
+    (
+        "apostrophe_hyphen",
+        _talk(["Conor O'Neil", "Jean-Luc"]),
+        ("Conor O'Neil", "Jean-Luc"),
+    ),
+    ("accents", _talk(["Íñigo", "Ángela", "Úrsula"]), ("Íñigo", "Ángela", "Úrsula")),
+    (
+        "header_and_headings_inside",
+        _HEADER
+        + _talk(["Ana", "Luis"])
+        + "Acción: enviar el acta.\n\nNota: revisar el presupuesto.\n\n"
+        "Acción: agendar la próxima.\n\nNota: sin más.\n",
+        ("Ana", "Luis"),
+    ),
+    (
+        "stray_label_once",
+        _talk(["Ana", "Luis"]) + "Carla: Solo hablé una vez.\n",
+        ("Ana", "Luis"),
+    ),
+    (
+        "url_and_time_lines",
+        _talk(["Ana", "Luis"])
+        + "Ana: mira https://example.org/a y vuelvo.\n\nHora: 10:30\n\n"
+        "Reunión 10:30: abierta.\n",
+        ("Ana", "Luis"),
+    ),
+    (
+        "ami_form",
+        _talk(["PM", "ID", "UI", "ME"]),
+        ("PM", "ID", "UI", "ME"),
+    ),
+    (
+        "mixed_ami_and_named",
+        _talk(["PM", "Ana"]),
+        ("PM", "Ana"),
+    ),
+)
+"""(id, source, gold roster in order of first appearance); fictional names. The
+negatives follow: sources whose gold roster is empty."""
+NAMED_NEGATIVES: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "header_block_only",
+        _HEADER + "Acuerdos: aprobar el presupuesto.\nResumen: se aprobó.\n",
+    ),
+    (
+        "repeated_headings",
+        "Nota: uno.\n\nAcción: dos.\n\nNota: tres.\n\nAcción: cuatro.\n",
+    ),
+    (
+        "question_and_answer",
+        "Pregunta: ¿Qué se decidió?\n\nRespuesta: Nada.\n\n"
+        "Pregunta: ¿Y el plazo?\n\nRespuesta: Mayo.\n",
+    ),
+    ("monologue", _talk(["Ana"], 4)),
+    (
+        "prose_with_colons",
+        "Resumen de la reunión de hoy con todo el equipo: se acordó seguir.\n\n"
+        "Conclusión general sobre el plan de trabajo completo: sin cambios.\n",
+    ),
+    (
+        "bullets_and_quotes",
+        "- Ana: no es un turno\n- Luis: tampoco\n- Ana: ni este\n- Luis: ni este\n"
+        "> Ana: una cita\n> Luis: otra cita\n",
+    ),
+    ("no_labels", "Texto corrido sin etiquetas de hablante. Otra frase.\n"),
+)
+
+
+def score_named(
+    positives: Iterable[tuple[str, str, Sequence[str]]],
+    negatives: Iterable[tuple[str, str]],
+    rule: Callable[[str], Sequence[str]] = roster_of_named,
+) -> dict[str, Any]:
+    """Speaker-level precision and recall pooled over the positives, the share
+    of positives whose roster is exactly the gold one, and the labels invented
+    on the negatives. Labels, not lines: a roster is a set of speakers."""
+    tp = fp = fn = exact = n = 0
+    wrong: list[str] = []
+    for fid, text, gold in positives:
+        got = set(rule(text))
+        want = set(gold)
+        tp += len(got & want)
+        fp += len(got - want)
+        fn += len(want - got)
+        n += 1
+        if got == want:
+            exact += 1
+        else:
+            wrong.append(fid)
+    neg_false: dict[str, list[str]] = {}
+    for fid, text in negatives:
+        got_neg = list(rule(text))
+        if got_neg:
+            neg_false[fid] = got_neg
+    return {
+        "positives": n,
+        "precision": tp / (tp + fp) if tp + fp else 1.0,
+        "recall": tp / (tp + fn) if tp + fn else 1.0,
+        "exact": exact,
+        "exact_share": exact / n if n else 0.0,
+        "wrong": wrong,
+        "negative_false_labels": sum(len(v) for v in neg_false.values()),
+        "negatives_with_a_roster": neg_false,
+    }
+
+
+def named_verdict(
+    fixture: Mapping[str, Any], ami_identical: bool, real: Mapping[str, Any]
+) -> str:
+    """LICENSED when every bar holds; REJECTED otherwise. `real` is the score on
+    the committed named-speaker transcript (`REAL_NAMED`)."""
+    ok = (
+        fixture["precision"] >= NAMED_PRECISION_MIN
+        and fixture["recall"] >= NAMED_RECALL_MIN
+        and fixture["exact_share"] >= NAMED_EXACT_MIN
+        and fixture["negative_false_labels"] <= NAMED_NEGATIVE_FALSE_MAX
+        and ami_identical == NAMED_AMI_SOURCES_IDENTICAL
+        and real["precision"] >= NAMED_PRECISION_MIN
+        and real["recall"] >= NAMED_RECALL_MIN
+    )
+    return "LICENSED" if ok else "REJECTED"
+
+
+REAL_NAMED: Final = (
+    "examples/extraction-corpus/sources/medium-10-reunion-plataforma.md",
+    ("Elena Vidal", "Marcos Iturra", "Paula Cifuentes", "Tomás Reyes"),
+)
+"""The one committed named-speaker transcript (a fictional platform meeting);
+its four speakers are the gold roster, written from its turn lines."""
 
 
 EVENT_ROSTER_SYSTEM_PROMPT: Final = (
@@ -490,6 +760,35 @@ def cmd_replay(args: argparse.Namespace) -> int:
         json.dumps(
             {"counts": counts, "flagged": flagged, "verdict": check_verdict(counts)},
             indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_named(args: argparse.Namespace) -> int:
+    """Model-free: the named-speaker roster rule against the fixtures, the
+    committed named transcript, and the five AMI sources' registered rosters."""
+    fixture = score_named(NAMED_FIXTURES, NAMED_NEGATIVES)
+    real_text = (REPO_ROOT / REAL_NAMED[0]).read_text(encoding="utf-8")
+    real = score_named([("real", real_text, REAL_NAMED[1])], [])
+    changed: list[str] = []
+    rosters: dict[str, list[str]] = {}
+    for source in mmb.SOURCES:
+        text = mff.translation_text(args.translations_dir, source)
+        old, new = roster_of(text), roster_of_named(text)
+        rosters[source] = list(new)
+        if old != new:
+            changed.append(source)
+    print(
+        json.dumps(
+            {
+                "fixtures": fixture,
+                "real": real,
+                "ami": {"rosters": rosters, "changed": changed},
+                "verdict": named_verdict(fixture, not changed, real),
+            },
+            indent=2,
+            ensure_ascii=False,
         )
     )
     return 0
@@ -975,6 +1274,93 @@ def _t_constants_reuse_the_registered_bars() -> None:
     _check(mmb.CAP == concept_mod._MAX_OBJECTS_PER_SOURCE, "the cap mirrors production")
 
 
+def _t_named_rule_reads_name_form_labels() -> None:
+    for fid, text, gold in NAMED_FIXTURES:
+        _check(roster_of_named(text) == tuple(gold), f"{fid}: {roster_of_named(text)}")
+    for fid, text in NAMED_NEGATIVES:
+        _check(roster_of_named(text) == (), f"{fid}: {roster_of_named(text)}")
+
+
+def _t_named_rule_leaves_roster_of_alone() -> None:
+    _check(roster_of(_talk(["Ana", "Luis"])) == (), "roster_of is the AMI form only")
+    _check(roster_of(SRC) == ("PM", "ID"), "roster_of is unchanged")
+
+
+def _t_named_rule_keeps_ami_form_rosters() -> None:
+    ami = (
+        "---\nmeeting_id: x\nlanguage: es\nsource: ami\nturns: 4\n---\n\n"
+        + _talk(["PM", "ID", "UI", "ME"], 3)
+        + "OK: una vez\n\nHeather: una vez\n"
+    )
+    _check(roster_of_named(ami) == roster_of(ami), "AMI-form roster is unchanged")
+    _check(roster_of_named(ami) == ("PM", "ID", "UI", "ME"), str(roster_of_named(ami)))
+    _check(roster_of_named(SRC) == roster_of(SRC), "the registered fixture too")
+
+
+def _t_named_label_guards() -> None:
+    for line in (
+        "Nota: revisar esto",
+        "Acción: enviar",
+        "Nota importante: revisar",
+        "https://example.org/a: x",
+        "Hora: 10:30",
+        "Reunión 10:30: abierta",
+        "- Ana: viñeta",
+        "> Ana: cita",
+        "Ana:sin espacio",
+        "Resumen de la reunión de hoy con el equipo: algo",
+        "ana: minúscula",
+        "INFO: servicio arriba",
+        "Ana:",
+    ):
+        _check(_named_label(line) is None, line)
+    for line, label in (
+        ("Ana: hola", "Ana"),
+        ("Dr. Smith: hola", "Dr. Smith"),
+        ("María José: hola", "María José"),
+        ("[00:01] Ana: hola", "Ana"),
+        ("**Ana:** hola", "Ana"),
+    ):
+        _check(_named_label(line) == label, line)
+
+
+def _t_named_roster_needs_two_recurring_speakers() -> None:
+    _check(roster_of_named(_talk(["Ana"], 4)) == (), "one speaker is no roster")
+    _check(roster_of_named("Ana: uno\n\nLuis: dos\n") == (), "each once is a stray")
+    _check(
+        roster_of_named("Ana: uno\n\nAna: dos\n\nLuis: tres\n") == (),
+        "one recurring speaker is no roster",
+    )
+
+
+def _t_named_scoring_and_verdict() -> None:
+    fixture = score_named(NAMED_FIXTURES, NAMED_NEGATIVES)
+    _check(fixture["wrong"] == [], str(fixture["wrong"]))
+    _check(fixture["precision"] == 1.0 and fixture["recall"] == 1.0, str(fixture))
+    _check(fixture["negative_false_labels"] == 0, str(fixture))
+    bad = score_named(NAMED_FIXTURES, NAMED_NEGATIVES, rule=roster_of)
+    _check(bad["recall"] < NAMED_RECALL_MIN, "the AMI rule misses named speakers")
+    _check(
+        named_verdict(bad, True, {"precision": 1.0, "recall": 1.0}) == "REJECTED",
+        "the old rule fails the bars",
+    )
+    _check(
+        named_verdict(fixture, True, {"precision": 1.0, "recall": 1.0}) == "LICENSED",
+        "all bars hold",
+    )
+    _check(
+        named_verdict(fixture, False, {"precision": 1.0, "recall": 1.0}) == "REJECTED",
+        "a changed AMI roster rejects",
+    )
+    over = score_named([("x", "Ana: a\nAna: b\nLuis: c\nLuis: d\n", ("Ana",))], [])
+    _check(over["precision"] < 1.0, "an extra label lowers precision")
+
+
+def _t_real_named_transcript_roster() -> None:
+    text = (REPO_ROOT / REAL_NAMED[0]).read_text(encoding="utf-8")
+    _check(set(roster_of_named(text)) == set(REAL_NAMED[1]), str(roster_of_named(text)))
+
+
 def self_test() -> int:
     tests: list[Callable[[], None]] = [
         _t_roster_reads_speaker_labels,
@@ -999,6 +1385,13 @@ def self_test() -> int:
         _t_a_raised_call_is_not_retried_here,
         _t_the_retry_is_a_fresh_seed,
         _t_seeds_are_fresh_against_the_last_run,
+        _t_named_rule_reads_name_form_labels,
+        _t_named_rule_leaves_roster_of_alone,
+        _t_named_rule_keeps_ami_form_rosters,
+        _t_named_label_guards,
+        _t_named_roster_needs_two_recurring_speakers,
+        _t_named_scoring_and_verdict,
+        _t_real_named_transcript_roster,
     ]
     failed = 0
     for test in tests:
@@ -1048,6 +1441,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", default=mmb.MODEL)
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("replay", help="model-free: the check against the last arm's bodies")
+    sub.add_parser("named", help="model-free: the named-speaker roster rule")
     compose = sub.add_parser("compose", help="model-bound: one compose call per case")
     compose.add_argument("--per-source", type=int, default=mmb.PER_SOURCE)
     compose.add_argument("--host", default=None)
@@ -1065,6 +1459,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return self_test()
     commands = {
         "replay": cmd_replay,
+        "named": cmd_named,
         "compose": cmd_compose,
         "score": cmd_score,
         "decide": cmd_decide,
