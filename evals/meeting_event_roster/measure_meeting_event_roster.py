@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib
 import re
 import sys
@@ -48,7 +49,9 @@ from harness_stamp import build_stamp  # noqa: E402
 from openkos.extraction import concept as concept_mod  # noqa: E402
 
 ARMS: Final = ("r0", "r1")
-SEED_BASE: Final = 3000
+SEED_BASE: Final = 5000
+"""Fresh against the last run (3000 + run, retry slots 4000 + run, never used):
+attempt k of a call is sent with `SEED_BASE + run + k * RETRY_SEED_STRIDE`."""
 ROSTER_MIN_TURNS: Final = 2
 REPLAY_CATCH_MIN: Final = 0.90
 REPLAY_FALSE_REJECT_MAX: Final = 1
@@ -231,6 +234,48 @@ def decide_arms(
     return {"r0": r0, "r1": r1}
 
 
+def stop_reading(summary: Mapping[str, Any], total: int) -> dict[str, Any]:
+    """The futility stop over the SAME denominators as the bars it guards.
+
+    E1, E2, E4 are shares of the SCORED bodies and E3 an allowance on them, so
+    a failed call changes them only by leaving a case unscored; failed calls
+    count against E6 (at most 10% of planned) and the INCONCLUSIVE floors
+    (20 scored bodies, at most 15% failed). Every way the `remaining` cases can
+    still end is tried: `j` of them scored (all passing, the best case for a
+    bar) and the rest failed. Only the endings that clear both floors can end
+    in a verdict. No such ending: INCONCLUSIVE is certain. Otherwise a bar that
+    no such ending can pass is out of reach: REJECTED is certain. It can only
+    end a run towards REJECTED or INCONCLUSIVE, never LICENSED."""
+    scored, failed = int(summary["scored"]), int(summary["failed"])
+    remaining = total - scored - failed
+    if scored + failed == 0:
+        return {"reasons": [], "reading": None}
+    failed_max = math.floor(mmb.RECORD_FAILURE_MAX * total + 1e-9)
+    call_max = math.floor(mmb.CALL_FAILURE_MAX * total + 1e-9)
+    endings = [
+        j
+        for j in range(remaining + 1)
+        if scored + j >= mmb.MIN_CASES and failed + remaining - j <= failed_max
+    ]
+    if not endings:
+        return {"reasons": [], "reading": "INCONCLUSIVE"}
+
+    def share_reachable(passes: int, share: float) -> bool:
+        return any(passes + j >= mmb.need_for(share, scored + j) for j in endings)
+
+    bars = {
+        "E1 restate": share_reachable(summary["restate_ok"], mmb.RESTATE_PASS_MIN),
+        "E2 linked": share_reachable(summary["linked_ok"], mmb.LINKED_PASS_MIN),
+        "E3 dates": any(
+            int(summary["dates_bad"]) <= mmb.date_allowance(scored + j) for j in endings
+        ),
+        "E4 bounded": share_reachable(summary["bounded_ok"], mmb.BOUNDED_PASS_MIN),
+        "E6 failed calls": any(failed + remaining - j <= call_max for j in endings),
+    }
+    reasons = [name for name, reachable in bars.items() if not reachable]
+    return {"reasons": reasons, "reading": "REJECTED" if reasons else None}
+
+
 def compose_one(
     source_text: str,
     event_title: str,
@@ -249,13 +294,35 @@ def compose_one(
         llm=llm,
         generation_reserve_tokens=concept_mod._OPTIONAL_CALL_RESERVE_TOKENS,
     )
+    messages = build_roster_messages(prompt_source, event_title, subject_titles, roster)
+    attempts, first_reply = 0, None
+    reply: str | None = None
     try:
-        reply = llm.chat(
-            build_roster_messages(prompt_source, event_title, subject_titles, roster)
-        )
+        reply = llm.chat(messages)
+        attempts = 1
+        if mmb.parse_compose_reply(reply) is None:
+            # One retry of a reply that does not parse, mirroring production's
+            # one retry per failed call (`_extract_window_or_skip`, a single
+            # pass on an empty result). The identical prompt makes the backend
+            # draw a fresh seed (`RETRY_SEED_STRIDE`). A second failure stands.
+            first_reply = reply
+            reply = llm.chat(messages)
+            attempts = 2
     except Exception as exc:
-        return {"reply": None, "failure": type(exc).__name__, "bounded": bounded}
-    return {"reply": reply, "failure": None, "bounded": bounded}
+        return {
+            "reply": None,
+            "failure": type(exc).__name__,
+            "bounded": bounded,
+            "attempts": max(attempts, 1),
+            "first_reply": first_reply,
+        }
+    return {
+        "reply": reply,
+        "failure": None,
+        "bounded": bounded,
+        "attempts": attempts,
+        "first_reply": first_reply,
+    }
 
 
 ADJUDICATION: Final[dict[str, tuple[str, str]]] = {}
@@ -347,7 +414,8 @@ def cmd_score(args: argparse.Namespace) -> int:
         **mmb.summarize_bodies(kept, data["planned"]),
         "yield": sum(1 for c in cases if survives(c)),
     }
-    data["futility_stop"] = mmb.futility(full, data["full_total"])
+    data["stop_reading"] = stop_reading(full, data["full_total"])
+    data["futility_stop"] = data["stop_reading"]["reading"] is not None
     data["to_adjudicate"] = [
         {k: c[k] for k in ("id", "title", "description", "body")}
         for c in cases
@@ -644,6 +712,171 @@ def _t_compose_one_degrades_and_records() -> None:
     _check(out["reply"] is None and out["failure"] == "RuntimeError", str(out))
 
 
+def _summary(
+    *, scored: int, failed: int, restate: int, linked: int, bounded: int, dates: int = 0
+) -> dict[str, Any]:
+    return {
+        "scored": scored,
+        "failed": failed,
+        "restate_ok": restate,
+        "linked_ok": linked,
+        "bounded_ok": bounded,
+        "dates_bad": dates,
+    }
+
+
+def _t_stop_uses_the_scored_denominator_not_failed_calls() -> None:
+    # The run that stopped last time: 8 scored all passing, 2 failed. Over
+    # scored bodies E4 is still reachable (18 more scored: 26 of 26 -> need 25).
+    s = _summary(scored=8, failed=2, restate=8, linked=8, bounded=8)
+    got = stop_reading(s, 30)
+    _check(got == {"reasons": [], "reading": None}, str(got))
+    # The old rule counted the two failures against 29 of 30: it would stop.
+    _check(mmb.futility(s, 30), "the inherited rule stops here (the flaw)")
+
+
+def _t_stop_fires_on_a_bar_out_of_reach_over_scored_bodies() -> None:
+    # 10 scored, 6 bounded: at best 26 of 30 scored -> need 29, out of reach.
+    s = _summary(scored=10, failed=0, restate=10, linked=10, bounded=6)
+    got = stop_reading(s, 30)
+    _check(got["reading"] == "REJECTED", str(got))
+    _check(got["reasons"] == ["E4 bounded"], str(got))
+    # The same count is fine while enough cases remain to dilute it:
+    # 4 scored of 4 done, 2 bounded -> at best 28 of 30, need 29: out of reach.
+    s = _summary(scored=4, failed=0, restate=4, linked=4, bounded=2)
+    _check(stop_reading(s, 30)["reasons"] == ["E4 bounded"], "early and certain")
+    # 3 scored, 2 bounded: 29 of 30 possible, need 29: still reachable.
+    s = _summary(scored=3, failed=0, restate=3, linked=3, bounded=2)
+    _check(stop_reading(s, 30)["reading"] is None, "29 of 30 is reachable")
+
+
+def _t_stop_names_each_deterministic_bar() -> None:
+    base = {"scored": 10, "failed": 0, "restate": 10, "linked": 10, "bounded": 10}
+    got = stop_reading(_summary(**{**base, "restate": 5}), 30)
+    _check(got["reasons"] == ["E1 restate"], str(got))
+    got = stop_reading(_summary(**{**base, "linked": 2}), 30)
+    _check(got["reasons"] == ["E2 linked"], str(got))
+    got = stop_reading(_summary(**{**base, "dates": 3}), 30)
+    _check(got["reasons"] == ["E3 dates"], str(got))
+    _check(got["reading"] == "REJECTED", str(got))
+
+
+def _t_failed_calls_count_only_against_e6_and_the_floors() -> None:
+    ok = dict(restate=0, linked=0, bounded=0)
+    # 4 failed calls: E6 (at most 3) is lost, the floor (at most 4) still holds.
+    s = _summary(scored=26, failed=4, **{k: 26 for k in ok})
+    got = stop_reading(s, 30)
+    _check(got == {"reasons": ["E6 failed calls"], "reading": "REJECTED"}, str(got))
+    # 3 failed calls: E6 still holds.
+    s = _summary(scored=27, failed=3, **{k: 27 for k in ok})
+    _check(stop_reading(s, 30)["reading"] is None, "3 failed calls hold E6")
+    # 5 failed calls: more than 15% of 30, INCONCLUSIVE whatever follows.
+    s = _summary(scored=25, failed=5, **{k: 25 for k in ok})
+    got = stop_reading(s, 30)
+    _check(got["reading"] == "INCONCLUSIVE", str(got))
+    # Too few scored bodies can remain: INCONCLUSIVE, never REJECTED, even with
+    # a bar that would otherwise be out of reach.
+    s = _summary(scored=5, failed=5, restate=0, linked=0, bounded=0)
+    _check(stop_reading(s, 30)["reading"] == "INCONCLUSIVE", "floor beats a bar")
+    _check(stop_reading(s, 30)["reasons"] == [], "no bar named under a floor")
+
+
+def _t_stop_silent_before_any_call() -> None:
+    s = _summary(scored=0, failed=0, restate=0, linked=0, bounded=0)
+    _check(stop_reading(s, 30)["reading"] is None, "nothing done, nothing to stop")
+
+
+class _Script:
+    """A scripted LLM: each call returns the next item; an Exception is raised."""
+
+    context_window = 12288
+
+    def __init__(self, *replies: Any) -> None:
+        self.replies = list(replies)
+        self.calls = 0
+
+    def chat(self, messages: Any) -> str:
+        self.calls += 1
+        item = self.replies.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return str(item)
+
+
+TRUNCATED: Final = '{"description": "d", "body": "Participaron PM y ID."'
+WHOLE: Final = '{"description": "d", "body": "Participaron PM y ID."}'
+
+
+def _t_unparseable_reply_gets_exactly_one_retry() -> None:
+    llm = _Script(TRUNCATED, WHOLE)
+    out = compose_one("fuente", "Reunión", ["A"], llm)
+    _check(llm.calls == 2 and out["attempts"] == 2, str(out))
+    _check(out["reply"] == WHOLE and out["failure"] is None, str(out))
+    _check(out["first_reply"] == TRUNCATED, "the first reply is kept")
+
+
+def _t_a_parseable_reply_is_not_retried() -> None:
+    llm = _Script(WHOLE)
+    out = compose_one("fuente", "Reunión", ["A"], llm)
+    _check(llm.calls == 1 and out["attempts"] == 1, str(out))
+    _check(out["first_reply"] is None, "no retry, no first reply to keep")
+
+
+def _t_a_second_failure_is_final() -> None:
+    llm = _Script(TRUNCATED, TRUNCATED, WHOLE)
+    out = compose_one("fuente", "Reunión", ["A"], llm)
+    _check(llm.calls == 2 and out["attempts"] == 2, "never a third call")
+    _check(mmb.parse_compose_reply(out["reply"]) is None, "second failure stands")
+
+
+def _t_a_raised_call_is_not_retried_here() -> None:
+    llm = _Script(RuntimeError("down"), WHOLE)
+    out = compose_one("fuente", "Reunión", ["A"], llm)
+    _check(llm.calls == 1 and out["failure"] == "RuntimeError", str(out))
+    _check(out["reply"] is None and out["attempts"] == 1, str(out))
+
+
+def _t_the_retry_is_a_fresh_seed() -> None:
+    import tempfile
+
+    import screen_pipeline as sp
+
+    seeds: list[int] = []
+    replies = iter([TRUNCATED, WHOLE])
+
+    def send(
+        model: str, messages: Any, seed: int, timeout_s: float
+    ) -> tuple[str | None, dict[str, Any]]:
+        seeds.append(seed)
+        content = next(replies)
+        return content, {"outcome": "ok", "content": content, "wall_s": 0.1}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        backend = sp.ScreenBackend(
+            model="m",
+            digest=None,
+            run=SEED_BASE + 1,
+            window_timeout_s=10.0,
+            whole_timeout_s=10.0,
+            cache=sp.ChatCache(pathlib.Path(tmp)),
+            send=send,
+        )
+        out = compose_one("fuente", "Reunión", ["A"], backend)
+    _check(out["attempts"] == 2, str(out))
+    _check(seeds == [SEED_BASE + 1, SEED_BASE + 1 + sp.RETRY_SEED_STRIDE], str(seeds))
+
+
+def _t_seeds_are_fresh_against_the_last_run() -> None:
+    import screen_pipeline as sp
+
+    last = {3000 + r + a * sp.RETRY_SEED_STRIDE for r in range(1, 7) for a in (0, 1)}
+    now = {
+        SEED_BASE + r + a * sp.RETRY_SEED_STRIDE for r in range(1, 7) for a in (0, 1)
+    }
+    _check(not (last & now), f"seeds reused: {sorted(last & now)}")
+    _check(min(now) > 3000 + sp.RETRY_SEED_STRIDE + 30, "above every earlier seed")
+
+
 def _t_constants_reuse_the_registered_bars() -> None:
     _check(mmb.SEED_BASE + mmb.PER_SOURCE * len(mmb.SOURCES) < SEED_BASE, "fresh seeds")
     _check(YIELD_MIN == mmb.MIN_CASES, "yield floor equals the scored floor")
@@ -664,6 +897,17 @@ def self_test() -> int:
         _t_decide_arms_floors_and_adjudication,
         _t_compose_one_degrades_and_records,
         _t_constants_reuse_the_registered_bars,
+        _t_stop_uses_the_scored_denominator_not_failed_calls,
+        _t_stop_fires_on_a_bar_out_of_reach_over_scored_bodies,
+        _t_stop_names_each_deterministic_bar,
+        _t_failed_calls_count_only_against_e6_and_the_floors,
+        _t_stop_silent_before_any_call,
+        _t_unparseable_reply_gets_exactly_one_retry,
+        _t_a_parseable_reply_is_not_retried,
+        _t_a_second_failure_is_final,
+        _t_a_raised_call_is_not_retried_here,
+        _t_the_retry_is_a_fresh_seed,
+        _t_seeds_are_fresh_against_the_last_run,
     ]
     failed = 0
     for test in tests:
@@ -685,7 +929,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     home = pathlib.Path.home()
     runs_root = home / "Dev/Projects/openkos-eval-runs"
     parser.add_argument(
-        "--out-dir", type=pathlib.Path, default=runs_root / "meeting-event-roster"
+        "--out-dir", type=pathlib.Path, default=runs_root / "meeting-event-roster-retry"
     )
     parser.add_argument(
         "--prior-dir",
