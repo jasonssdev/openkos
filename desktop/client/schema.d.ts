@@ -1663,6 +1663,10 @@ export interface components {
             /** Index */
             index: number | null;
             outcome: components["schemas"]["IngestRunOutcome"] | null;
+            /** Parts Done */
+            parts_done?: number | null;
+            /** Parts Total */
+            parts_total?: number | null;
             /** Phase */
             phase: ("reading" | "extracting" | "writing" | "refreshing") | null;
             /** Run Id */

@@ -1629,7 +1629,10 @@ result and the run MUST go on. After a run that wrote, the derived stores MUST
 be refreshed once; a refresh failure MUST leave them reported stale and MUST
 NOT fail the run. `progress`, when given, MUST hear each file's `reading`
 phase, `extracting` when its model wait starts, `writing` once it is written,
-and `refreshing` once when the run refreshes the derived stores; an exception
+and `refreshing` once when the run refreshes the derived stores. While a file is
+`extracting`, `progress` MUST also hear each count the model's extraction
+reports (`parts_done` of `parts_total` windows or passes read), leaving the
+counts `None` before one is reported and on every other phase; an exception
 from it MUST be recorded on the outcome and MUST NOT end the run.
 
 `quote_refused_file(workspace, decision_key, *, include_confidential=False)`

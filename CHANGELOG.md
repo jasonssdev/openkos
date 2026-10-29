@@ -18,6 +18,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- The Add files screen shows progress inside a file and keeps taking files during a run. While the AI model reads a file the card shows a bar and "n of m parts read" (indeterminate until the model has counted), how long it has been on this file, and "This can take several minutes per file on this Mac." before and during the run, worded as "can", never a promise. The drop zone and **Choose files…** stay available during a run; files put in are asked about as usual, then wait in a list with **Remove**, and start one after another by themselves (the engine runs one ingest at a time, so the queue lives in the app). Stop leaves the files still waiting. `IngestProgress` and the ingest job gain `parts_done` and `parts_total`, null until the extraction reports a count (#1696, #1697).
 - The app has an Activity screen that shows what OpenKOS is doing in the background: the task running now, the files and unsaved changes that wait, how much of today's AI model limit is used, and the latest finished tasks with how each ended. It only reads; an unreadable job record is said plainly rather than shown as an idle engine. `openkos.api.engine_activity(workspace)` returns it (`EngineActivity`, `EngineJob`, `DailyBudget`), `GET /v1/activity` serves it, and the desktop client has `engineActivity()`. The change is additive; `API_VERSION` is unchanged (#1698).
 
 ### Fixed

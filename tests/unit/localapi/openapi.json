@@ -1777,6 +1777,28 @@
               }
             ]
           },
+          "parts_done": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts Done"
+          },
+          "parts_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts Total"
+          },
           "phase": {
             "anyOf": [
               {

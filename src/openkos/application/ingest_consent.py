@@ -48,10 +48,11 @@ them stale and never fails the run.
 from __future__ import annotations
 
 import hashlib
+import re
 import stat as stat_module
 import threading
-from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal, cast
@@ -249,6 +250,11 @@ class IngestProgress:
     path: str
     phase: IngestPhase
     calls: int
+    parts_done: int | None = None
+    parts_total: int | None = None
+    """While `extracting`, how many of the file's parts (windows, or passes)
+    the model has finished of how many there are; `None` before the extraction
+    says, and for phases with no parts."""
 
 
 @dataclass(frozen=True)
@@ -648,6 +654,21 @@ class _Progress:
             self.failed = True
 
 
+_PARTS = re.compile(r"^(extracting|extracted) (?:chunk|pass) (\d+)/(\d+)$")
+
+
+def _parts_from_label(label: str) -> tuple[int, int] | None:
+    """Parts done and total from the extraction's phase label, or `None` for a
+    label that carries no count ("judging 5 candidates", "extracting 12 chunks,
+    2 at a time"). The extraction owns the words; only the shapes that carry a
+    count are read, and any other label leaves the last count standing."""
+    match = _PARTS.match(label)
+    if match is None:
+        return None
+    verb, number, total = match.group(1), int(match.group(2)), int(match.group(3))
+    return (number if verb == "extracted" else number - 1, total)
+
+
 class _FileObserver(ingest_service.IngestObserver):
     """One file's window onto the service: its phases become progress events
     carrying the calls spent so far, and the import names its Source."""
@@ -670,7 +691,7 @@ class _FileObserver(ingest_service.IngestObserver):
         self._spent_before = spent_before
         self.source_id: str | None = None
 
-    def phase(self, name: IngestPhase) -> None:
+    def phase(self, name: IngestPhase, parts: tuple[int, int] | None = None) -> None:
         self._reporter.emit(
             IngestProgress(
                 self._index,
@@ -678,8 +699,22 @@ class _FileObserver(ingest_service.IngestObserver):
                 self._path,
                 name,
                 self._spent_before + self._ceiling.calls,
+                parts[0] if parts is not None else None,
+                parts[1] if parts is not None else None,
             )
         )
+
+    @contextmanager
+    def extraction_progress(self) -> Iterator[ingest_service.PhaseHook | None]:
+        counted: list[tuple[int, int]] = []
+
+        def on_label(label: str) -> None:
+            parts = _parts_from_label(label)
+            if parts is not None:
+                counted[:] = [parts]
+            self.phase("extracting", counted[0] if counted else None)
+
+        yield on_label
 
     def extraction_starting(self) -> None:
         self.phase("extracting")

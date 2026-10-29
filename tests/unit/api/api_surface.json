@@ -1106,6 +1106,16 @@
           "annotation": "int",
           "default": false,
           "name": "calls"
+        },
+        {
+          "annotation": "int | None",
+          "default": true,
+          "name": "parts_done"
+        },
+        {
+          "annotation": "int | None",
+          "default": true,
+          "name": "parts_total"
         }
       ],
       "frozen": true,
