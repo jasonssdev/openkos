@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0085: A question that names a meeting series boosts that series and does not filter to it"
 description: Proposes that when a question names a meeting series, retrieval ranks that series' documents first without removing the others, identifying the series from the Source title and provenance, off by default until a pre-registered measurement licenses it.
-status: Proposed
+status: Superseded by ADR-0086
 date: 2026-10-29
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0085: A question that names a meeting series boosts that series and does not filter to it
 
-- **Status:** Proposed
+- **Status:** Superseded by ADR-0086
 - **Date:** 2026-10-29
 
 ## Context
