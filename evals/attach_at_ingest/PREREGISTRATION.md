@@ -191,7 +191,7 @@ harness (`digest --fixture heldout`, the layout `digest_of` fixes) and written o
 below and into `HELDOUT_DIGEST` in `measure_attach_at_ingest.py`, in one commit that changes
 nothing else. Until then `decide` refuses. A fixture whose digest differs is `INCONCLUSIVE`.
 
-`HELDOUT_DIGEST = PENDING`  <!-- PLACEHOLDER: replace PENDING with the sha256 of attach_fixtures_heldout.py's converted fixture before merge; HELDOUT_DIGEST in the harness changes in the same commit -->
+`HELDOUT_DIGEST = 07bc8943cf6e7995a9e43f138bae2a10384699c5559d6aaaa099971136a8abc4`
 
 ## Development set
 

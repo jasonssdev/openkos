@@ -117,7 +117,9 @@ DEV_DIGEST: Final = "7196c2e17211a58cbe044929711c50d58e5428aae36e9ce23b4cd329608
 """`attach_fixtures_dev.digest()`. The development set decides nothing; the
 digest only keeps its numbers reproducible."""
 
-HELDOUT_DIGEST: Final = PENDING
+HELDOUT_DIGEST: Final[str] = (
+    "07bc8943cf6e7995a9e43f138bae2a10384699c5559d6aaaa099971136a8abc4"
+)
 """The sha256 of the held-out fixture (`digest_of` over its converted
 documents), pinned here and in the registration before it merges. While it is
 `PENDING`, `decide` refuses. A held-out fixture with any other digest is
