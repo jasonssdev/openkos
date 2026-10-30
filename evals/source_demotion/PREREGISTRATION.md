@@ -365,7 +365,8 @@ updates #1703 and nothing else.
 
 ## The owner confirms
 
-Nothing is confirmed yet. Items to confirm, each as proposed or changed:
+Confirmed by the owner on 2026-10-30, every item below as proposed, unchanged
+(PR #1732). The items as they were put to the owner:
 
 1. The treatment: demote only when the context overflows; only a Source longer than the
    cap with a derived sibling in the same context; cut (query-aware excerpt), not reduced
