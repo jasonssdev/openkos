@@ -423,6 +423,9 @@ the way the duplicate is resolved.
 
 ## The owner confirms
 
+Confirmed by the owner on 2026-10-30, every item below as proposed, unchanged, after the
+held-out fixture was added and its digest pinned (PR #1733).
+
 1. The question and its scope: widening the shipped exact-title attach to near titles for
    Decision and Concept only, keyed on type and title, with `Event` and `Person` excluded by
    the shipped constant.
