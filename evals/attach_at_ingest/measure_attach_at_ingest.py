@@ -8,10 +8,17 @@ lookup `application.ingest.build_attach_lookup` returns, which
 
 NOTHING HERE CALLS A MODEL. Neither the chat model nor the embedder is
 contacted: the later meetings' extractions are the labelled titles of
-`attach_fixtures.py`, and every rule is deterministic over titles. A run takes
+`attach_fixtures_dev.py` or the held-out module, and every rule is
+deterministic over titles. A run takes
 a few seconds on a CPU and needs no GPU.
 
-Arms, on the library and candidates of `attach_fixtures.py`:
+THE RULE AND EVERY CONSTANT ARE FROZEN. The development fixture
+(`attach_fixtures_dev.py`) was observed while the rule was tuned and decides
+nothing. The verdict is decided only on the held-out fixture
+(`attach_fixtures_heldout.py`), written by an author who never saw this file,
+the rule or the development set (see `HELDOUT_GUIDE.md`, `heldout_schema.py`).
+
+Arms:
 
 - `shipped`       the lookup as shipped: same OKF type and same normalized
                   title key (exact), Event and Person excluded.
@@ -25,13 +32,16 @@ Arms, on the library and candidates of `attach_fixtures.py`:
 - `near`          ablation: the same without the numeral and coverage guards.
                   It shows what the guards are for. It never decides.
 
-Subcommands: `run` (writes the outcomes), `score` (every metric, no bar),
-`decide` (the registered bars). All model-free. Check: `--self-test`.
+Subcommands: `run` and `score` take `--fixture dev|heldout` (default dev),
+`digest` prints a fixture's sha256, `decide` applies the registered bars to
+the held-out fixture only and refuses until it exists and its digest is
+pinned. All model-free. Check: `--self-test`.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import pathlib
@@ -47,7 +57,8 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "evals"))
 sys.path.insert(0, str(HERE))
 
-import attach_fixtures as fx  # noqa: E402
+import attach_fixtures_dev as fx  # noqa: E402
+import heldout_schema  # noqa: E402
 from harness_stamp import build_stamp  # noqa: E402
 
 from openkos.application import ingest as application_ingest  # noqa: E402
@@ -97,11 +108,20 @@ BARS: Final[dict[str, float]] = {
     "RIGHT_ADDED_MIN": 8,
 }
 
-FIXTURE_DIGEST: Final = (
-    "7196c2e17211a58cbe044929711c50d58e5428aae36e9ce23b4cd329608be43b"
-)
-"""`attach_fixtures.digest()` at registration. A change to the library or the
-candidates is a new registration, so it must change this constant too."""
+DEV = "dev"
+HELDOUT = "heldout"
+FIXTURES: Final = (DEV, HELDOUT)
+PENDING: Final = "PENDING"
+
+DEV_DIGEST: Final = "7196c2e17211a58cbe044929711c50d58e5428aae36e9ce23b4cd329608be43b"
+"""`attach_fixtures_dev.digest()`. The development set decides nothing; the
+digest only keeps its numbers reproducible."""
+
+HELDOUT_DIGEST: Final = PENDING
+"""The sha256 of the held-out fixture (`digest_of` over its converted
+documents), pinned here and in the registration before it merges. While it is
+`PENDING`, `decide` refuses. A held-out fixture with any other digest is
+`INCONCLUSIVE`."""
 
 RULE_TEXT: Final = (
     "attach(candidate): type not in ATTACH_EXCLUDED_TYPES; shipped exact key first; "
@@ -351,10 +371,11 @@ def invariants(
     docs: Sequence[fx.LibDoc],
     *,
     digest: str,
+    expected: str,
 ) -> list[str]:
     """What must hold before any number is read; a violation is INCONCLUSIVE."""
     problems: list[str] = []
-    if digest != FIXTURE_DIGEST:
+    if digest != expected:
         problems.append("the fixture is not the registered one (digest differs)")
     by_id = {d.id: d for d in docs}
     for c in cands:
@@ -456,67 +477,214 @@ def _stamp() -> dict[str, Any]:
     )
 
 
-def run_arms() -> tuple[
-    dict[str, dict[str, str | None]], list[fx.LibDoc], list[fx.Candidate]
-]:
-    docs, cands = fx.library(), fx.candidates()
+class FixtureMissing(Exception):
+    """The held-out fixture does not exist yet."""
+
+
+def digest_of(docs: Sequence[fx.LibDoc], cands: Sequence[fx.Candidate]) -> str:
+    """sha256 of a fixture's library and candidates, so a change to either is a
+    new registration, never a silent edit. Same layout for both fixtures."""
+    payload = {
+        "library": [
+            [d.id, d.type, d.title, d.body, [list(map(str, e)) for e in d.extra]]
+            for d in docs
+        ],
+        "candidates": [
+            [c.cid, c.type, c.title, c.gold, c.klass, c.note, c.quoted] for c in cands
+        ],
+    }
+    blob = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
+    return hashlib.sha256(blob).hexdigest()
+
+
+def from_heldout_dicts(
+    library: Sequence[Mapping[str, Any]], candidates: Sequence[Mapping[str, Any]]
+) -> tuple[list[fx.LibDoc], list[fx.Candidate]]:
+    """The held-out schema (`heldout_schema.py`) as the harness's documents.
+    `ValueError` listing every schema problem or missing minimum."""
+    found = heldout_schema.problems(library, candidates)
+    if found:
+        raise ValueError("the held-out fixture is not valid: " + "; ".join(found))
+    docs: list[fx.LibDoc] = []
+    for d in library:
+        extra: list[tuple[str, object]] = []
+        if d.get("deprecated") is True:
+            extra.append(("status", "deprecated"))
+        targets = d.get("supersedes") or []
+        if targets:
+            extra.append(
+                (
+                    "relations",
+                    okf.encode_relations(
+                        [okf.Relation(target=t, type="supersedes") for t in targets]
+                    ),
+                )
+            )
+        title = str(d["title"])
+        docs.append(
+            fx.LibDoc(
+                str(d["id"]),
+                str(d["type"]),
+                title,
+                str(d.get("body") or f"# {title}\n"),
+                tuple(extra),
+            )
+        )
+    cands = [
+        fx.Candidate(
+            str(c["cid"]),
+            str(c["type"]),
+            str(c["title"]),
+            c["gold"],
+            str(c["klass"]),
+            str(c.get("note", "")),
+        )
+        for c in candidates
+    ]
+    return docs, cands
+
+
+def load_heldout(
+    module_name: str = heldout_schema.MODULE_NAME,
+) -> tuple[list[fx.LibDoc], list[fx.Candidate]]:
+    try:
+        library, candidates = heldout_schema.load(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name != module_name:
+            raise
+        raise FixtureMissing(
+            f"the held-out fixture {module_name}.py does not exist yet: it is written "
+            "by a separate author from HELDOUT_GUIDE.md and heldout_schema.py"
+        ) from exc
+    return from_heldout_dicts(library, candidates)
+
+
+def load_fixture(name: str) -> tuple[list[fx.LibDoc], list[fx.Candidate]]:
+    if name == DEV:
+        return fx.library(), fx.candidates()
+    if name == HELDOUT:
+        return load_heldout()
+    raise ValueError(f"unknown fixture {name!r}")
+
+
+def expected_digest(name: str) -> str:
+    return DEV_DIGEST if name == DEV else HELDOUT_DIGEST
+
+
+def run_arms(
+    name: str = DEV,
+) -> tuple[dict[str, dict[str, str | None]], list[fx.LibDoc], list[fx.Candidate]]:
+    docs, cands = load_fixture(name)
+    return _run(docs, cands)
+
+
+def _run(
+    docs: list[fx.LibDoc], cands: list[fx.Candidate]
+) -> tuple[dict[str, dict[str, str | None]], list[fx.LibDoc], list[fx.Candidate]]:
     with tempfile.TemporaryDirectory() as tmp:
         library = Library(pathlib.Path(tmp), docs)
         attached = {arm: evaluate(arm, library, cands) for arm in ARMS}
     return attached, docs, cands
 
 
-def _store_path(out: pathlib.Path) -> pathlib.Path:
-    return out / "attach-outcomes.json"
+def _store_path(out: pathlib.Path, name: str) -> pathlib.Path:
+    return out / f"attach-outcomes-{name}.json"
+
+
+def _refuse(message: str) -> int:
+    print(f"refused: {message}", file=sys.stderr)
+    return 2
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    attached, _docs, cands = run_arms()
-    again, _, _ = run_arms()
+    try:
+        attached, docs, cands = run_arms(args.fixture)
+    except (FixtureMissing, ValueError) as exc:
+        return _refuse(str(exc))
+    again, _, _ = run_arms(args.fixture)
     store = {
         "stamp": _stamp(),
-        "digest": fx.digest(),
+        "fixture": args.fixture,
+        "digest": digest_of(docs, cands),
         "deterministic": attached == again,
         "attached": attached,
         "candidates": len(cands),
     }
     args.out.mkdir(parents=True, exist_ok=True)
-    _store_path(args.out).write_text(
-        json.dumps(store, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    print(f"wrote {_store_path(args.out)} ({len(cands)} candidates, {len(ARMS)} arms)")
+    path = _store_path(args.out, args.fixture)
+    path.write_text(json.dumps(store, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"wrote {path} ({len(cands)} candidates, {len(ARMS)} arms)")
     return 0
 
 
-def _load(out: pathlib.Path) -> tuple[dict[str, Any], list[str]]:
-    store = json.loads(_store_path(out).read_text(encoding="utf-8"))
+def _load(
+    out: pathlib.Path, name: str
+) -> tuple[dict[str, Any], list[fx.Candidate], list[str]]:
+    store = json.loads(_store_path(out, name).read_text(encoding="utf-8"))
+    docs, cands = load_fixture(name)
     problems = invariants(
-        fx.candidates(), store["attached"], fx.library(), digest=store["digest"]
+        cands,
+        store["attached"],
+        docs,
+        digest=store["digest"],
+        expected=expected_digest(name),
     )
+    if store.get("fixture") != name:
+        problems.append("the stored outcomes are from another fixture")
+    if digest_of(docs, cands) != store["digest"]:
+        problems.append("the fixture changed since the outcomes were stored")
     if not store.get("deterministic"):
         problems.append("two runs of the same arms disagree")
-    return store, problems
-
-
-def _print_score(summary: Mapping[str, Any]) -> None:
-    print(json.dumps(summary, indent=2, ensure_ascii=False))
+    return store, cands, problems
 
 
 def cmd_score(args: argparse.Namespace) -> int:
-    store, problems = _load(args.out)
-    _print_score(score(fx.candidates(), store["attached"]))
+    try:
+        store, cands, problems = _load(args.out, args.fixture)
+    except (FixtureMissing, ValueError, OSError) as exc:
+        return _refuse(str(exc))
+    if args.fixture == DEV:
+        print("DEVELOPMENT SET: observed while tuning; it decides nothing.")
+    print(json.dumps(score(cands, store["attached"]), indent=2, ensure_ascii=False))
     for line in problems:
         print(f"invariant: {line}")
     return 0
 
 
-def cmd_decide(args: argparse.Namespace) -> int:
-    store, problems = _load(args.out)
-    summary = score(fx.candidates(), store["attached"])
+def decide_heldout(
+    out: pathlib.Path, module_name: str = heldout_schema.MODULE_NAME
+) -> int:
+    """The verdict, from the held-out fixture only. Refuses while the fixture
+    is missing, invalid, unpinned, or has no stored outcomes."""
+    try:
+        load_heldout(module_name)
+    except (FixtureMissing, ValueError) as exc:
+        return _refuse(str(exc))
+    if HELDOUT_DIGEST == PENDING:
+        return _refuse(
+            "the held-out digest is not pinned yet (HELDOUT_DIGEST = PENDING)"
+        )
+    if not _store_path(out, HELDOUT).exists():
+        return _refuse("no held-out outcomes yet: run `run --fixture heldout` first")
+    store, cands, problems = _load(out, HELDOUT)
+    summary = score(cands, store["attached"])
     verdict, reasons = decide(summary, problems)
     print(f"verdict: {verdict}")
     for line in reasons:
         print(f"  {line}")
+    return 0
+
+
+def cmd_decide(args: argparse.Namespace) -> int:
+    return decide_heldout(args.out)
+
+
+def cmd_digest(args: argparse.Namespace) -> int:
+    try:
+        docs, cands = load_fixture(args.fixture)
+    except (FixtureMissing, ValueError) as exc:
+        return _refuse(str(exc))
+    print(digest_of(docs, cands))
     return 0
 
 
@@ -647,7 +815,17 @@ def _t_rules(c: _Checks) -> None:
 
 def _t_fixture(c: _Checks) -> None:
     docs, cands = fx.library(), fx.candidates()
-    c.check(fx.digest() == FIXTURE_DIGEST, "the fixture is the registered one")
+    c.check(fx.digest() == DEV_DIGEST, "the development set is the one recorded")
+    c.check(
+        digest_of(docs, cands) == DEV_DIGEST,
+        "the harness digest and the module digest agree",
+    )
+    c.check(
+        fx.GOLD_SAME_CLASSES == heldout_schema.SAME
+        and fx.DISTINCT_CLASSES == heldout_schema.DISTINCT
+        and fx.EXCLUDED_CLASSES == heldout_schema.EXCLUDED,
+        "the class vocabulary of the schema and of the development set agree",
+    )
     c.check(len({c_.cid for c_ in cands}) == len(cands), "candidate ids are unique")
     c.check(len({d.id for d in docs}) == len(docs), "library ids are unique")
     c.check(
@@ -655,8 +833,10 @@ def _t_fixture(c: _Checks) -> None:
         "the library holds three positions of each of the 8 chains",
     )
     attached, docs2, cands2 = run_arms()
-    problems = invariants(cands2, attached, docs2, digest=fx.digest())
-    c.check(not problems, f"the invariants hold on the registered fixture: {problems}")
+    problems = invariants(
+        cands2, attached, docs2, digest=fx.digest(), expected=DEV_DIGEST
+    )
+    c.check(not problems, f"the invariants hold on the development set: {problems}")
     c.check(
         attached == run_arms()[0],
         "two runs agree (the rules are deterministic)",
@@ -843,9 +1023,17 @@ def _t_prereg(c: _Checks) -> None:
             f"{name} = {value}" in text, f"the registration states {name} = {value}"
         )
     c.check(
-        f"FIXTURE_DIGEST = {FIXTURE_DIGEST}" in text,
-        "the registration states the digest",
+        f"DEV_DIGEST = {DEV_DIGEST}" in text, "the registration states the dev digest"
     )
+    c.check(
+        f"HELDOUT_DIGEST = {HELDOUT_DIGEST}" in text,
+        "the registration states the held-out digest (or its placeholder)",
+    )
+    c.check("frozen" in text.lower(), "the registration freezes the rule")
+    for name in heldout_schema.CLASS_MINIMA:
+        c.check(
+            f"`{name}`" in text, f"the registration names the held-out class {name}"
+        )
     for arm in ARMS:
         c.check(f"`{arm}`" in text, f"the registration names arm {arm}")
     for klass in sorted(
@@ -860,6 +1048,124 @@ def _t_prereg(c: _Checks) -> None:
         BARS["WRONG_ADDED_MAX"] == 0 and BARS["EXCLUDED_ATTACHED_MAX"] == 0,
         "the safety ceilings are strict",
     )
+
+
+def _tiny_heldout() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    library: list[dict[str, Any]] = [
+        {"id": "decisions/a-v1", "type": "Decision", "title": "Keep logs for 30 days"},
+        {
+            "id": "decisions/a-v2",
+            "type": "Decision",
+            "title": "Keep logs for 60 days",
+            "supersedes": ["decisions/a-v1"],
+        },
+        {
+            "id": "concepts/x",
+            "type": "Concept",
+            "title": "Access Policy",
+            "deprecated": True,
+        },
+    ]
+    candidates: list[dict[str, Any]] = [
+        {
+            "cid": "h1",
+            "type": "Decision",
+            "title": "Keep logs for 60 days",
+            "gold": "decisions/a-v2",
+            "klass": "exact",
+        },
+        {
+            "cid": "h2",
+            "type": "Decision",
+            "title": "Keep logs for 30 days",
+            "gold": None,
+            "klass": "deprecated-target",
+        },
+    ]
+    return library, candidates
+
+
+def _t_heldout(c: _Checks) -> None:
+    library, candidates = _tiny_heldout()
+    c.check(
+        bool(heldout_schema.problems(library, candidates)),
+        "a set under the minimums is reported, not accepted",
+    )
+    bad = [dict(candidates[0], klass="no-such-class")]
+    c.check(
+        any("unknown class" in p for p in heldout_schema.problems(library, bad)),
+        "an unknown class is reported",
+    )
+    bad = [dict(candidates[0], gold=None)]
+    c.check(
+        any("not in LIBRARY" in p for p in heldout_schema.problems(library, bad)),
+        "a same-class candidate without a gold is reported",
+    )
+    bad = [dict(candidates[1], gold="decisions/a-v1")]
+    c.check(
+        any("needs gold None" in p for p in heldout_schema.problems(library, bad)),
+        "a distinct-class candidate with a gold is reported",
+    )
+    bad = [dict(candidates[0], gold="decisions/a-v1")]
+    c.check(
+        any("superseded" in p for p in heldout_schema.problems(library, bad)),
+        "a superseded page is not a valid gold",
+    )
+    bad = [dict(candidates[0], extra_key=1)]
+    c.check(
+        any("unknown keys" in p for p in heldout_schema.problems(library, bad)),
+        "an unknown key is reported",
+    )
+    saved = heldout_schema.problems
+    try:
+        heldout_schema.problems = lambda _lib, _cand: []  # type: ignore[assignment]
+        docs, cands = from_heldout_dicts(library, candidates)
+    finally:
+        heldout_schema.problems = saved
+    c.check(len(docs) == 3 and len(cands) == 2, "the schema converts to documents")
+    attached, _, _ = _run(docs, cands)
+    c.check(
+        attached[SHIPPED]["h1"] == "decisions/a-v2",
+        "a current page is an attach target",
+    )
+    c.check(
+        all(attached[a]["h2"] is None for a in (SHIPPED, NEAR_GUARDED)),
+        "a superseded page is never a target (supersedes becomes an edge)",
+    )
+    c.check(
+        digest_of(docs, cands) == digest_of(docs, cands),
+        "the digest is stable",
+    )
+    try:
+        load_heldout("attach_fixtures_heldout_does_not_exist")
+        c.check(False, "a missing held-out module is refused")
+    except FixtureMissing:
+        c.check(True, "a missing held-out module is refused")
+    with tempfile.TemporaryDirectory() as tmp:
+        code = decide_heldout(
+            pathlib.Path(tmp), "attach_fixtures_heldout_does_not_exist"
+        )
+    c.check(code == 2, "decide refuses (exit 2) while the held-out fixture is missing")
+    parser_src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    c.check(
+        '"decide", cmd_decide' in parser_src
+        and "def cmd_decide(args: argparse.Namespace) -> int:\n    return decide_heldout"
+        in parser_src,
+        "decide is wired to the held-out fixture only",
+    )
+    if HELDOUT_DIGEST == PENDING:
+        with tempfile.TemporaryDirectory() as tmp:
+            code = decide_heldout(pathlib.Path(tmp))
+        c.check(code == 2, "decide refuses while the held-out digest is PENDING")
+    else:
+        try:
+            docs, cands = load_heldout()
+            c.check(
+                digest_of(docs, cands) == HELDOUT_DIGEST,
+                "the held-out fixture is the pinned one",
+            )
+        except FixtureMissing:
+            c.check(False, "the pinned held-out fixture exists")
 
 
 def _t_stamp(c: _Checks) -> None:
@@ -878,6 +1184,7 @@ def self_test() -> int:
     for fn in (
         _t_rules,
         _t_fixture,
+        _t_heldout,
         _t_score,
         _t_decide,
         _t_mutation,
@@ -899,10 +1206,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     for name, fn, help_text in (
         ("run", cmd_run, "model-free: the outcome of every arm"),
         ("score", cmd_score, "model-free: every metric, no bar applied"),
-        ("decide", cmd_decide, "model-free: the registered bars"),
+        ("digest", cmd_digest, "the sha256 of a fixture"),
+        ("decide", cmd_decide, "model-free: the bars, on the held-out fixture only"),
     ):
         sp = sub.add_parser(name, help=help_text)
         sp.add_argument("--out", type=pathlib.Path, default=DEFAULT_OUT)
+        if name != "decide":
+            sp.add_argument(
+                "--fixture",
+                choices=FIXTURES,
+                default=DEV,
+                help="dev decides nothing; heldout is the registered one",
+            )
         sp.set_defaults(fn=fn)
     args = parser.parse_args(argv)
     if args.self_test:
