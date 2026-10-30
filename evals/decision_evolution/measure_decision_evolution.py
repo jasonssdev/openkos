@@ -23,6 +23,10 @@ Subcommands:
 - `score`      model-free. Every metric, no bar applied.
 - `decide`     model-free. The registered bars.
 
+A second registration, `PREREGISTRATION_HISTORY_24576.md`, reuses this harness
+through `--axis history24576`: arms `h24_off` and `h24_on`, both at a 24576
+window, differing only in `revision_history`.
+
 Model-free check: `--self-test`.
 """
 
@@ -67,6 +71,11 @@ EMBED_MODEL: Final = "bge-m3"
 HISTORY_ARMS: Final = ("off", "on")
 WINDOW_ARM: Final = "w24576"
 ARMS: Final = (*HISTORY_ARMS, WINDOW_ARM)
+H24_ARMS: Final = ("h24_off", "h24_on")
+"""The history-at-24576 registration (#1702): both arms use the 24576 window
+that ADR-0084 made the `init` size for hosts with 32 GiB or more."""
+AXIS_REGISTERED: Final = "registered"
+AXIS_H24: Final = "history24576"
 CANDIDATE_WINDOW: Final = 24576
 """#1703 / PR #1714: the window `init` would pick from 64 GiB of memory. The
 baseline of this axis is the `off` arm itself (12288, `revision_history` at its
@@ -76,6 +85,8 @@ ARM_SPECS: Final[dict[str, tuple[bool, int]]] = {
     "off": (False, DEFAULT_CONTEXT_WINDOW),
     "on": (True, DEFAULT_CONTEXT_WINDOW),
     WINDOW_ARM: (False, CANDIDATE_WINDOW),
+    "h24_off": (False, CANDIDATE_WINDOW),
+    "h24_on": (True, CANDIDATE_WINDOW),
 }
 """arm -> (revision_history, context_window). Everything else is the packaged
 default."""
@@ -111,6 +122,22 @@ BARS: Final[dict[str, float]] = {
     "WINDOW_EXPOSURE_MIN": 5,
     "WINDOW_LATENCY_MEAN_MAX_SECONDS": 30,
     "WINDOW_LATENCY_RATIO_MAX": 2.0,
+}
+
+# Bars of PREREGISTRATION_HISTORY_24576.md. B0 to B4, G1 and the INCONCLUSIVE
+# floors are the constants of BARS above, unchanged; only the last two are new.
+BARS_H24: Final[dict[str, float]] = {
+    "HEADROOM_MAX": BARS["HEADROOM_MAX"],
+    "BENEFIT_MIN": BARS["BENEFIT_MIN"],
+    "CORROBORATION_MIN": BARS["CORROBORATION_MIN"],
+    "CONTROL_DROP_MAX": BARS["CONTROL_DROP_MAX"],
+    "CONTAMINATION_RISE_MAX": BARS["CONTAMINATION_RISE_MAX"],
+    "FUTILITY_GAIN_MIN": BARS["FUTILITY_GAIN_MIN"],
+    "FAILED_MAX": BARS["FAILED_MAX"],
+    "UNJUDGED_MAX": BARS["UNJUDGED_MAX"],
+    "KAPPA_MIN": BARS["KAPPA_MIN"],
+    "HISTORY_DELIVERY_MIN": BARS["WINDOW_EXPOSURE_MIN"],
+    "H24_LATENCY_MEAN_RATIO_MAX": 1.5,
 }
 
 
@@ -265,14 +292,23 @@ def _assemble(
 
 
 def build_contexts(
-    qs: Sequence[eq.Question], *, embedder: Any, with_edges: bool = True
+    qs: Sequence[eq.Question],
+    *,
+    embedder: Any,
+    with_edges: bool = True,
+    arms: Sequence[str] = ARMS,
 ) -> list[Cell]:
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         bundle = eb.write_bundle(root, with_edges=with_edges)
         fts_path, vectors_path = _index(bundle, root, embedder)
         recs = _assemble(
-            [(q.id, q.text) for q in qs], bundle, fts_path, vectors_path, embedder
+            [(q.id, q.text) for q in qs],
+            bundle,
+            fts_path,
+            vectors_path,
+            embedder,
+            arms,
         )
     by_id = {q.id: q for q in qs}
     for rec in recs:
@@ -283,7 +319,9 @@ def build_contexts(
     return recs
 
 
-def prompt_differences(recs: Sequence[Mapping[str, Any]]) -> list[str]:
+def prompt_differences(
+    recs: Sequence[Mapping[str, Any]], base: str = "off", cand: str = "on"
+) -> list[str]:
     """Question ids whose prompt or block list differs between the arms."""
     by_q: dict[str, dict[str, Mapping[str, Any]]] = {}
     for rec in recs:
@@ -291,10 +329,10 @@ def prompt_differences(recs: Sequence[Mapping[str, Any]]) -> list[str]:
     return sorted(
         qid
         for qid, arms in by_q.items()
-        if "on" in arms
+        if cand in arms
         and (
-            arms["off"]["user_content"] != arms["on"]["user_content"]
-            or arms["off"]["block_ids"] != arms["on"]["block_ids"]
+            arms[base]["user_content"] != arms[cand]["user_content"]
+            or arms[base]["block_ids"] != arms[cand]["block_ids"]
         )
     )
 
@@ -319,14 +357,16 @@ NO_HISTORY_INVARIANT: Final = (
 """The history axis' own invariant. The window axis has no `on` arm."""
 
 
-def invariant_problems(recs: Sequence[Mapping[str, Any]]) -> list[str]:
+def invariant_problems(
+    recs: Sequence[Mapping[str, Any]], cand: str = "on"
+) -> list[str]:
     problems: list[str] = []
     for rec in recs:
-        if rec["arm"] != "on" and (
+        if rec["arm"] != cand and (
             rec["history_ids"] or "earlier version" in rec["user_content"]
         ):
             problems.append(f"{rec['q']}: the {rec['arm']} arm attached history")
-    if not any(rec["history_ids"] for rec in recs if rec["arm"] == "on"):
+    if not any(rec["history_ids"] for rec in recs if rec["arm"] == cand):
         problems.append(NO_HISTORY_INVARIANT)
     return problems
 
@@ -360,6 +400,49 @@ def context_summary(
     out["window_exposure"] = window_exposure(recs)
     out["window_futility_stop"] = out["window_exposure"] < BARS["WINDOW_EXPOSURE_MIN"]
     return out
+
+
+def context_summary_h24(
+    recs: Sequence[Mapping[str, Any]], qs: Sequence[eq.Question]
+) -> dict[str, Any]:
+    """Phase 1 of the history-at-24576 registration: what reached the prompt in
+    `h24_off` and `h24_on`, and how many evolution prompts carry a history
+    block. `history_delivered` counts questions whose prompt holds a history
+    block (the trace's context blocks), not blocks attached and then omitted."""
+    by = {(r["arm"], r["q"]): r for r in recs}
+    out: dict[str, Any] = {}
+    for kind in (eq.EVOLUTION, eq.CONTROL):
+        group = [q for q in qs if q.kind == kind]
+        on_recs = [by[("h24_on", q.id)] for q in group]
+        out[kind] = {
+            "n": len(group),
+            "off_both": sum(
+                delivery(q, by[("h24_off", q.id)]["user_content"])["both"]
+                for q in group
+            ),
+            "on_both": sum(
+                delivery(q, r["user_content"])["both"]
+                for q, r in zip(group, on_recs, strict=True)
+            ),
+            "history_delivered": sum(bool(r["history_ids"]) for r in on_recs),
+            "omitted_on": sum(r.get("omitted", 0) for r in on_recs),
+            "omitted_off": sum(by[("h24_off", q.id)].get("omitted", 0) for q in group),
+        }
+    out["futility_stop"] = futility_h24(out)
+    return out
+
+
+def futility_h24(summary: Mapping[str, Any]) -> bool:
+    """Phase 1 stop of the history-at-24576 registration. The `h24_on` arm is
+    not run when fewer than `HISTORY_DELIVERY_MIN` evolution prompts carry a
+    delivered history block, or when it delivers both gold values on fewer than
+    `FUTILITY_GAIN_MIN` more evolution questions than `h24_off`. A model cannot
+    state a position it was not shown. It can only end the axis in REJECTED."""
+    evo = summary[eq.EVOLUTION]
+    return bool(
+        evo["history_delivered"] < BARS_H24["HISTORY_DELIVERY_MIN"]
+        or evo["on_both"] - evo["off_both"] < BARS_H24["FUTILITY_GAIN_MIN"]
+    )
 
 
 def futility(summary: Mapping[str, Any]) -> bool:
@@ -435,16 +518,17 @@ def summarize(
     invariants: Sequence[str],
     cand: str = "on",
     window_gold: tuple[int, int] | Sequence[int] = (0, 0),
+    base: str = "off",
 ) -> dict[str, Any]:
-    cells = [c for c in cells if c["arm"] in ("off", cand)]
+    cells = [c for c in cells if c["arm"] in (base, cand)]
     out: dict[str, Any] = {"cand": cand}
     for kind in (eq.EVOLUTION, eq.CONTROL):
         group = [q for q in qs if q.kind == kind]
-        off, off_c = _rate(cells, "off", group, "verdict")
+        off, off_c = _rate(cells, base, group, "verdict")
         on, on_c = _rate(cells, cand, group, "verdict")
-        mf_off, _ = _rate(cells, "off", group, "mf_correct")
+        mf_off, _ = _rate(cells, base, group, "mf_correct")
         mf_on, _ = _rate(cells, cand, group, "mf_correct")
-        cont_off, _ = _rate(cells, "off", group, "foreign_cited")
+        cont_off, _ = _rate(cells, base, group, "foreign_cited")
         cont_on, _ = _rate(cells, cand, group, "foreign_cited")
         deltas = {k: on_c[k] - off_c[k] for k in off_c if k in on_c}
         out[kind] = {
@@ -461,13 +545,13 @@ def summarize(
     ok = [c for c in cells if not c["failed"]]
     times = {
         arm: sorted(c["elapsed_s"] for c in ok if c["arm"] == arm)
-        for arm in ("off", cand)
+        for arm in (base, cand)
     }
-    med_off = statistics.median(times["off"]) if times["off"] else 0.0
+    med_off = statistics.median(times[base]) if times[base] else 0.0
     t_on = times[cand]
     med_on = statistics.median(t_on) if t_on else 0.0
     p90_on = t_on[int(0.9 * (len(t_on) - 1))] if t_on else 0.0
-    mean_off = statistics.fmean(times["off"]) if times["off"] else 0.0
+    mean_off = statistics.fmean(times[base]) if times[base] else 0.0
     mean_on = statistics.fmean(t_on) if t_on else 0.0
     out["latency"] = {
         "off_median": med_off,
@@ -531,6 +615,70 @@ def decide(summary: Mapping[str, Any]) -> dict[str, Any]:
         and lat["cand_p90"] <= BARS["ON_P90_MAX_SECONDS"]
     ):
         failed.append("B5")
+    same, total = summary["gold_identical"]
+    if same != total:
+        failed.append("G1")
+    return {
+        "verdict": REJECTED if failed else SUPPORTED,
+        "failed": failed,
+        "reasons": [],
+    }
+
+
+def decide_h24(
+    summary: Mapping[str, Any], *, futility_stop: bool = False
+) -> dict[str, Any]:
+    """The history-at-24576 registration (#1702): `h24_on` against `h24_off`.
+
+    B0 to B4 and G1 carry the constants of `decide`. B6 replaces B5: the
+    `h24_on` mean seconds per answer is at most `H24_LATENCY_MEAN_RATIO_MAX`
+    times the `h24_off` mean (the absolute caps of B5 and W4 were set for the
+    12288 window and do not transfer). The registered futility stop is
+    REJECTED on B1 and is read before anything else."""
+    if futility_stop:
+        return {
+            "verdict": REJECTED,
+            "failed": ["B1"],
+            "reasons": ["futility stop: too few evolution prompts deliver history"],
+        }
+    reasons: list[str] = []
+    if summary["invariants"]:
+        reasons.append("invariant violated: " + "; ".join(summary["invariants"]))
+    if summary["failed_share"] > BARS_H24["FAILED_MAX"]:
+        reasons.append(
+            f"failed calls {summary['failed_share']:.2f} > {BARS_H24['FAILED_MAX']}"
+        )
+    if summary["unjudged_share"] > BARS_H24["UNJUDGED_MAX"]:
+        reasons.append(
+            f"unjudged cells {summary['unjudged_share']:.2f} > "
+            f"{BARS_H24['UNJUDGED_MAX']}"
+        )
+    k = summary["kappa"]
+    if k is None or k < BARS_H24["KAPPA_MIN"]:
+        reasons.append(f"judge agreement kappa {k} < {BARS_H24['KAPPA_MIN']}")
+    if reasons:
+        return {"verdict": INCONCLUSIVE, "failed": [], "reasons": reasons}
+    evo, ctl, lat = summary[eq.EVOLUTION], summary[eq.CONTROL], summary["latency"]
+    if evo["off"] >= BARS_H24["HEADROOM_MAX"]:
+        return {
+            "verdict": NO_HEADROOM,
+            "failed": [],
+            "reasons": [f"h24_off arm judged-correct {evo['off']:.2f}"],
+        }
+    failed: list[str] = []
+    if not (evo["delta"] >= BARS_H24["BENEFIT_MIN"] and evo["lower"] > 0):
+        failed.append("B1")
+    if not evo["mf_delta"] >= BARS_H24["CORROBORATION_MIN"]:
+        failed.append("B2")
+    if not ctl["delta"] >= -BARS_H24["CONTROL_DROP_MAX"]:
+        failed.append("B3")
+    if (
+        not evo["contamination_on"] - evo["contamination_off"]
+        <= BARS_H24["CONTAMINATION_RISE_MAX"]
+    ):
+        failed.append("B4")
+    if not lat["mean_ratio"] <= BARS_H24["H24_LATENCY_MEAN_RATIO_MAX"]:
+        failed.append("B6")
     same, total = summary["gold_identical"]
     if same != total:
         failed.append("G1")
@@ -1242,6 +1390,217 @@ def _t_window(c: _Checks) -> None:
     )
 
 
+def _h24_summary(mut: Any = None, **kw: Any) -> dict[str, Any]:
+    cells: list[dict[str, Any]] = []
+    for q in eq.questions():
+        for run in RUNS:
+            evo = q.kind == eq.EVOLUTION
+            cells.append(
+                _cell(
+                    "h24_off",
+                    q.id,
+                    run,
+                    verdict="wrong" if evo else "correct",
+                    mf=not evo,
+                    secs=40.0,
+                )
+            )
+            base = _cell(
+                "h24_on",
+                q.id,
+                run,
+                verdict="correct",
+                mf=True,
+                secs=kw.get("on_secs", 50.0),
+            )
+            cells.append(mut(base, q) if mut else base)
+    return summarize(
+        cells,
+        eq.questions(),
+        gold_identical=kw.get("gold", (56, 56)),
+        kappa_value=0.8,
+        invariants=[],
+        cand="h24_on",
+        base="h24_off",
+    )
+
+
+def _t_h24(c: _Checks) -> None:
+    qs = eq.questions()
+    emb = _StubEmbedder()
+    recs = build_contexts(qs, embedder=emb, with_edges=True, arms=H24_ARMS)
+    c.check(
+        len(recs) == 40
+        and {(r["arm"], r["q"]) for r in recs}
+        == {(a, q.id) for a in H24_ARMS for q in qs},
+        "40 cells: 20 questions x 2 arms",
+    )
+    c.check(
+        ARM_SPECS["h24_off"] == (False, 24576) and ARM_SPECS["h24_on"] == (True, 24576),
+        "the h24 arms differ only in revision_history, both at 24576",
+    )
+    c.check(
+        all(not r["history_ids"] for r in recs if r["arm"] == "h24_off"),
+        "h24_off attaches no history",
+    )
+    c.check(
+        not invariant_problems(recs, cand="h24_on"),
+        f"invariants hold: {invariant_problems(recs, cand='h24_on')}",
+    )
+    c.check(
+        bool(
+            invariant_problems(
+                [
+                    dict(r, history_ids=["x"]) if r["arm"] == "h24_off" else r
+                    for r in recs
+                ],
+                cand="h24_on",
+            )
+        ),
+        "an h24_off arm with history is an invariant violation",
+    )
+    c.check(
+        bool(prompt_differences(recs, "h24_off", "h24_on")),
+        "with edges the h24 prompts differ somewhere",
+    )
+    plain = build_contexts(qs, embedder=emb, with_edges=False, arms=H24_ARMS)
+    c.check(
+        not prompt_differences(plain, "h24_off", "h24_on"),
+        "no edges: h24 prompts are identical (the G1 shape)",
+    )
+    summary = context_summary_h24(recs, qs)
+    c.check(
+        set(summary) >= {"evolution", "control", "futility_stop"},
+        "h24 context summary keys",
+    )
+    evo = {"n": 12, "off_both": 4, "on_both": 9, "history_delivered": 9}
+    c.check(not futility_h24({"evolution": evo}), "history delivered and a gain: go")
+    c.check(
+        futility_h24({"evolution": evo | {"history_delivered": 4}}),
+        "history in 4 of 12 prompts is futile (minimum 5)",
+    )
+    c.check(
+        not futility_h24({"evolution": evo | {"history_delivered": 5}}),
+        "history in 5 prompts is the floor",
+    )
+    c.check(
+        futility_h24({"evolution": evo | {"on_both": 5}}),
+        "a gain of 1 in delivered gold values is futile",
+    )
+    c.check(
+        not futility_h24({"evolution": evo | {"on_both": 6}}),
+        "a gain of 2 is the floor",
+    )
+    c.check(
+        decide_h24({}, futility_stop=True)
+        == {
+            "verdict": REJECTED,
+            "failed": ["B1"],
+            "reasons": ["futility stop: too few evolution prompts deliver history"],
+        },
+        "the futility stop is REJECTED on B1",
+    )
+    good = _h24_summary()
+    d = decide_h24(good)
+    c.check(d["verdict"] == SUPPORTED, f"all h24 bars met: {d}")
+    c.check(
+        decide_h24(_h24_summary(on_secs=60.0))["verdict"] == SUPPORTED,
+        "exactly 1.5x the mean is inside the latency bar",
+    )
+    c.check(
+        decide_h24(_h24_summary(on_secs=60.1))["failed"] == ["B6"],
+        "over 1.5x the mean fails B6",
+    )
+    c.check(
+        decide_h24(_h24_summary(on_secs=59.0))["verdict"] == SUPPORTED,
+        "under 1.5x the mean passes B6",
+    )
+    c.check(
+        decide_h24(good | {"gold_identical": [55, 56]})["failed"] == ["G1"],
+        "a changed gold prompt fails G1",
+    )
+    c.check(
+        "B1"
+        in decide_h24(
+            _h24_summary(lambda b, q: dict(b, verdict="wrong", mf_correct=False))
+        )["failed"],
+        "no gain fails B1",
+    )
+    c.check(
+        "B2"
+        in decide_h24(
+            _h24_summary(
+                lambda b, q: dict(b, mf_correct=False) if q.kind == eq.EVOLUTION else b
+            )
+        )["failed"],
+        "a judge-only gain fails B2",
+    )
+    c.check(
+        "B3"
+        in decide_h24(
+            _h24_summary(
+                lambda b, q: (
+                    dict(b, verdict="wrong", mf_correct=False)
+                    if q.kind == eq.CONTROL
+                    else b
+                )
+            )
+        )["failed"],
+        "harm on controls fails B3",
+    )
+    c.check(
+        "B4"
+        in decide_h24(
+            _h24_summary(
+                lambda b, q: (
+                    dict(b, foreign_cited=True) if q.kind == eq.EVOLUTION else b
+                )
+            )
+        )["failed"],
+        "more contamination fails B4",
+    )
+    c.check(
+        decide_h24(good | {"kappa": 0.3})["verdict"] == INCONCLUSIVE,
+        "an unusable judge is inconclusive",
+    )
+    c.check(
+        decide_h24(good | {"invariants": ["x"]})["verdict"] == INCONCLUSIVE,
+        "an invariant violation is inconclusive",
+    )
+    ceiling = summarize(
+        [
+            _cell(arm, q.id, run, verdict="correct", mf=True)
+            for q in qs
+            for run in RUNS
+            for arm in H24_ARMS
+        ],
+        qs,
+        gold_identical=(56, 56),
+        kappa_value=0.8,
+        invariants=[],
+        cand="h24_on",
+        base="h24_off",
+    )
+    c.check(
+        decide_h24(ceiling)["verdict"] == NO_HEADROOM,
+        "an h24_off arm at the headroom limit leaves no headroom",
+    )
+
+
+def _t_prereg_h24(c: _Checks) -> None:
+    text = (HERE / "PREREGISTRATION_HISTORY_24576.md").read_text(encoding="utf-8")
+    c.check("(proposed)" in text, "the h24 registration marks the proposed bars")
+    for name, value in BARS_H24.items():
+        c.check(name in text, f"the h24 registration names bar {name}")
+        c.check(str(value) in text, f"the h24 registration states {name} = {value}")
+    c.check(
+        question_count_text() in text,
+        "the h24 registration states the question counts",
+    )
+    for arm in H24_ARMS:
+        c.check(f"`{arm}`" in text, f"the h24 registration names arm {arm}")
+
+
 def _t_sheet(c: _Checks) -> None:
     qs = eq.questions()
     recs = []
@@ -1318,9 +1677,11 @@ def self_test() -> int:
         _t_stats,
         _t_decide,
         _t_window,
+        _t_h24,
         _t_sheet,
         _t_mutation_guard,
         _t_prereg,
+        _t_prereg_h24,
     ):
         fn(c)
     if c.failures:
@@ -1336,6 +1697,9 @@ def self_test() -> int:
 
 DEFAULT_OUT: Final = (
     pathlib.Path.home() / "Dev/Projects/openkos-eval-runs/decision-evolution"
+)
+DEFAULT_OUT_H24: Final = (
+    pathlib.Path.home() / "Dev/Projects/openkos-eval-runs/decision-evolution-h24"
 )
 GOLD_WORKSPACE: Final = (
     pathlib.Path.home() / "openkos-eval-runs/retrieval-gold/bundle-v1"
@@ -1369,9 +1733,14 @@ def cmd_contexts(args: argparse.Namespace) -> int:
 
     qs = eq.questions()
     embedder = OllamaClient(model=EMBED_MODEL, timeout=args.timeout)
-    recs = build_contexts(qs, embedder=embedder)
-    summary = context_summary(recs, qs)
-    problems = invariant_problems(recs)
+    if args.axis == AXIS_H24:
+        recs = build_contexts(qs, embedder=embedder, arms=H24_ARMS)
+        summary = context_summary_h24(recs, qs)
+        problems = invariant_problems(recs, cand="h24_on")
+    else:
+        recs = build_contexts(qs, embedder=embedder)
+        summary = context_summary(recs, qs)
+        problems = invariant_problems(recs)
     _write(
         args.out / "contexts.json",
         {
@@ -1395,15 +1764,25 @@ def cmd_guardrail(args: argparse.Namespace) -> int:
 
     items = [(q["id"], q["question"]) for q in _read(GOLD_QUESTIONS)["questions"]]
     embedder = OllamaClient(model=EMBED_MODEL, timeout=args.timeout)
+    h24 = args.axis == AXIS_H24
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         bundle = root / "bundle"
         shutil.copytree(args.gold_workspace / "bundle", bundle)
         fts_path, vectors_path = _index(bundle, root, embedder)
         recs = _assemble(
-            items, bundle, fts_path, vectors_path, embedder, arms=HISTORY_ARMS
+            items,
+            bundle,
+            fts_path,
+            vectors_path,
+            embedder,
+            arms=H24_ARMS if h24 else HISTORY_ARMS,
         )
-    differ = prompt_differences(recs)
+    differ = (
+        prompt_differences(recs, "h24_off", "h24_on")
+        if h24
+        else prompt_differences(recs)
+    )
     result = {
         "identical": [len(items) - len(differ), len(items)],
         "differing": differ,
@@ -1421,7 +1800,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     from openkos.state.vectorstore import open_vector_store
 
     qs = eq.questions()
-    arms = HISTORY_ARMS if args.axis == "history" else ("off", WINDOW_ARM)
+    arms = {
+        "history": HISTORY_ARMS,
+        "window": ("off", WINDOW_ARM),
+        AXIS_H24: H24_ARMS,
+    }[args.axis]
     path = args.out / f"runs-{MODEL.replace(':', '-')}.json"
     store: dict[str, Any] = (
         _read(path) if path.exists() else {"stamp": _stamp(MODEL), "cells": []}
@@ -1530,7 +1913,7 @@ def cmd_judge_ingest(args: argparse.Namespace) -> int:
 
 
 def _build_summary(
-    args: argparse.Namespace, cand: str
+    args: argparse.Namespace, cand: str, base: str = "off"
 ) -> tuple[dict[str, Any], list[Cell]]:
     qs = eq.questions()
     by_id = {q.id: q for q in qs}
@@ -1579,12 +1962,17 @@ def _build_summary(
         kappa_value=k,
         invariants=ctx["invariants"],
         cand=cand,
+        base=base,
         window_gold=(args.window_gold_regressed, args.window_gold_total),
     )
     return summary, cells
 
 
 def cmd_score(args: argparse.Namespace) -> int:
+    if args.axis == AXIS_H24:
+        summary, _ = _build_summary(args, "h24_on", "h24_off")
+        print(json.dumps(summary, indent=1, default=str))
+        return 0
     for cand in ("on", WINDOW_ARM):
         summary, _ = _build_summary(args, cand)
         print(json.dumps(summary, indent=1, default=str))
@@ -1592,6 +1980,14 @@ def cmd_score(args: argparse.Namespace) -> int:
 
 
 def cmd_decide(args: argparse.Namespace) -> int:
+    if args.axis == AXIS_H24:
+        ctx24 = _read(args.out / "contexts.json")
+        if ctx24["summary"]["futility_stop"]:
+            print("history-24576 axis:", json.dumps(decide_h24({}, futility_stop=True)))
+            return 0
+        summary24, _ = _build_summary(args, "h24_on", "h24_off")
+        print("history-24576 axis:", json.dumps(decide_h24(summary24), indent=1))
+        return 0
     history, _ = _build_summary(args, "on")
     window, _ = _build_summary(args, WINDOW_ARM)
     ctx = _read(args.out / "contexts.json")
@@ -1610,18 +2006,30 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     def add(name: str, fn: Any, help_text: str) -> argparse.ArgumentParser:
         sp = sub.add_parser(name, help=help_text)
-        sp.add_argument("--out", type=pathlib.Path, default=DEFAULT_OUT)
+        sp.add_argument("--out", type=pathlib.Path, default=None)
         sp.add_argument("--timeout", type=float, default=600.0)
         sp.set_defaults(fn=fn)
         return sp
 
-    add("contexts", cmd_contexts, "embedder only: prompts of every cell")
+    axis_help = f"{AXIS_H24}: h24_off against h24_on at 24576"
+
+    def add_axis(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument(
+            "--axis",
+            choices=(AXIS_REGISTERED, AXIS_H24),
+            default=AXIS_REGISTERED,
+            help=axis_help,
+        )
+
+    c = add("contexts", cmd_contexts, "embedder only: prompts of every cell")
+    add_axis(c)
     g = add(
         "guardrail", cmd_guardrail, "embedder only: history walk over the gold bundle"
     )
     g.add_argument("--gold-workspace", type=pathlib.Path, default=GOLD_WORKSPACE)
+    add_axis(g)
     r = add("run", cmd_run, "model-bound: the answers")
-    r.add_argument("--axis", choices=("history", "window"), required=True)
+    r.add_argument("--axis", choices=("history", "window", AXIS_H24), required=True)
     r.add_argument("--runs", type=int, nargs="+", default=list(RUNS))
     j = add("judge-sheet", cmd_judge_sheet, "model-free: the blind sheet")
     j.add_argument("--second-sample", type=int, default=0)
@@ -1632,6 +2040,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     i.add_argument("--out-file", type=pathlib.Path, required=True)
     for name, fn in (("score", cmd_score), ("decide", cmd_decide)):
         sp = add(name, fn, "model-free")
+        add_axis(sp)
         sp.add_argument("--window-gold-regressed", type=int, default=0)
         sp.add_argument("--window-gold-total", type=int, default=0)
     args = parser.parse_args(argv)
@@ -1639,6 +2048,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return self_test()
     if not getattr(args, "fn", None):
         parser.error("choose a subcommand or --self-test")
+    if args.out is None:
+        args.out = (
+            DEFAULT_OUT_H24 if getattr(args, "axis", "") == AXIS_H24 else DEFAULT_OUT
+        )
     return int(args.fn(args))
 
 
