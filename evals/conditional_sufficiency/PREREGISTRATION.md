@@ -286,6 +286,12 @@ nothing else.
 
 ## The owner confirms
 
+Confirmed by the owner on 2026-11-09, every item below as proposed, with two answers
+recorded: configuration B **runs** (item 6), and the AMI setting is **conditional** (item 7):
+a `SUPPORTED` verdict here enables no default change and no new flag until a confirmation
+on the AMI setting has been registered and read. If every treatment is `REJECTED` here, no
+AMI registration follows. The GPU is free for the run once this file has merged (item 8).
+
 1. The question and the three treatments: `cond_unattributed` (the literal proposal,
    expected REJECTED), `cond_lowrank`, `reduced`; and that the first is worth running
    knowing it is expected to fail B1.
