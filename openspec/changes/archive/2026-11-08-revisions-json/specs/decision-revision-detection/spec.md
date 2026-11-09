@@ -8,8 +8,7 @@
 one JSON object (schema version `1`) and nothing else; every diagnostic, the
 experimental notice, the cost gate and the confirmation prompt MUST stay on
 stderr. A refusal (outside a workspace, an unreadable workspace, no `--auto`
-without a TTY) and a backend failure before any verdict MUST keep exit `1`
-with an empty stdout. Without `--json`, stdout, stderr and exit codes MUST be
+without a TTY) MUST keep exit `1` with an empty stdout. Without `--json`, stdout, stderr and exit codes MUST be
 byte-identical to a build without the flag. The flag MUST NOT change
 candidate selection, judging, persistence or ordering.
 
@@ -18,8 +17,10 @@ The object's fields, in order:
 - `schema_version` (`1`), `openkos_version`.
 - `status`: `completed`, `no_decisions`, `vectors_absent`, `model_mismatch` or
   `declined`.
-- `partial`: `true` exactly when a mid-run backend failure stopped judging
-  (the run then also exits `1`, with the failure on stderr); otherwise `false`.
+- `partial`: `true` exactly when a backend failure stopped judging, including
+  before the first verdict (the object then lists the served and judged
+  findings so far, and the run exits `1` with the failure on stderr);
+  otherwise `false`.
 - `counts`: `{candidate_pairs, served, judged, malformed,
   without_embedding, changed_since_reindex, excluded_unreadable_relations}`,
   or `null` unless `status` is `completed`.
