@@ -28,6 +28,7 @@ import json
 import math
 import pathlib
 import random
+import re
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -387,6 +388,18 @@ def collect_cells(
     synths, _ = collect_synth(contexts, synth_llm, runs)
     cells = merge_cells(checks, synths)
     return cells, runs * len(contexts) - len(cells)
+
+
+def registered_constants(path: pathlib.Path) -> dict[str, float]:
+    """The `KEY = value` lines of the fenced block in the registration that
+    holds `BOOTSTRAP_SEED`; empty when the file or the block is missing."""
+    if not path.exists():
+        return {}
+    for block in re.findall(r"```\n(.*?)```", path.read_text(encoding="utf-8"), re.S):
+        if "BOOTSTRAP_SEED" in block:
+            found = re.findall(r"^([A-Z_0-9]+) = ([0-9_.]+)$", block, re.M)
+            return {k: float(v.replace("_", "")) for k, v in found}
+    return {}
 
 
 def _self_test() -> int:
@@ -826,6 +839,16 @@ def _self_test() -> int:
         )
 
     guarded("collection", collection)
+
+    # --- the registration and the code must agree ---------------------------
+    registered = registered_constants(
+        pathlib.Path(__file__).resolve().parent / "PREREGISTRATION.md"
+    )
+    check("the registration lists a constant block", bool(registered))
+    check(
+        "every registered constant matches BARS, and none is missing",
+        registered == {k: float(v) for k, v in BARS.items()},
+    )
 
     for name in failures:
         print(f"FAIL: {name}")
