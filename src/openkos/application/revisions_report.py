@@ -26,7 +26,7 @@ directly, unchanged.
 argument rather than read off `plan`."""
 
 from collections import defaultdict
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 from openkos.application import revisions
 from openkos.model import okf
@@ -110,12 +110,14 @@ class _FindingView:
 
     __slots__ = (
         "confidence",
+        "date_states",
         "dates",
         "direction",
         "malformed",
         "pair_ids",
         "quotes",
         "rationale",
+        "served",
         "verdict",
     )
 
@@ -129,7 +131,9 @@ class _FindingView:
         quotes: tuple[str | None, str | None],
         direction: decision_revision.Direction,
         dates: tuple[str | None, str | None],
+        date_states: tuple[str, str],
         malformed: bool,
+        served: bool,
     ) -> None:
         self.pair_ids = pair_ids
         self.verdict = verdict
@@ -138,7 +142,9 @@ class _FindingView:
         self.quotes = quotes
         self.direction = direction
         self.dates = dates
+        self.date_states = date_states
         self.malformed = malformed
+        self.served = served
 
 
 def _view_from_finding(finding: RevisionFinding) -> _FindingView:
@@ -165,7 +171,9 @@ def _view_from_finding(finding: RevisionFinding) -> _FindingView:
         quotes=finding.quotes,
         direction=direction,
         dates=finding.dates,
+        date_states=finding.date_states,
         malformed=False,
+        served=True,
     )
 
 
@@ -186,7 +194,9 @@ def _view_from_verdict(verdict: RevisionVerdict) -> _FindingView:
         quotes=verdict.quotes,
         direction=verdict.direction,
         dates=dates,
+        date_states=(verdict.dates[0].state, verdict.dates[1].state),
         malformed=verdict.malformed,
+        served=False,
     )
 
 
@@ -267,6 +277,31 @@ def _render_finding(view: _FindingView) -> list[str]:
     return lines
 
 
+def _displayed_groups(
+    views: list[_FindingView], *, show_all: bool
+) -> list[tuple[str, list[_FindingView]]]:
+    """The displayed findings as `(group key, findings)` in report order:
+    groups sorted by key, then REVERSES, REFINES, REAFFIRMS, UNRELATED and
+    confidence descending within a group. The human report and the `--json`
+    array both read this, so they can never disagree on which findings exist
+    or in what order."""
+    groups: dict[str, list[_FindingView]] = defaultdict(list)
+    for view in views:
+        if _is_displayed(view, show_all=show_all):
+            group_key, _ = _group_key_and_partner(view)
+            groups[group_key].append(view)
+    return [
+        (
+            group_key,
+            sorted(
+                groups[group_key],
+                key=lambda view: (_VERDICT_ORDER[view.verdict], -view.confidence),
+            ),
+        )
+        for group_key in sorted(groups)
+    ]
+
+
 def revisions_report(
     plan: revisions.RevisionPlan,
     outcome: revisions.RevisionOutcome,
@@ -300,18 +335,8 @@ def revisions_report(
         lines.append(counts)
         lines.append("")
 
-    displayed = [view for view in views if _is_displayed(view, show_all=show_all)]
-    groups: dict[str, list[_FindingView]] = defaultdict(list)
-    for view in displayed:
-        group_key, _ = _group_key_and_partner(view)
-        groups[group_key].append(view)
-
-    for group_key in sorted(groups):
+    for group_key, ordered in _displayed_groups(views, show_all=show_all):
         lines.append(group_key)
-        ordered = sorted(
-            groups[group_key],
-            key=lambda view: (_VERDICT_ORDER[view.verdict], -view.confidence),
-        )
         for view in ordered:
             lines.extend(_render_finding(view))
         lines.append("")
@@ -319,3 +344,109 @@ def revisions_report(
     if not lines:
         return _NO_REVISIONS_MESSAGE
     return "\n".join(lines).rstrip("\n") + "\n"
+
+
+# -- The `--json` machine object (#1739) -------------------------------------
+
+JSON_SCHEMA_VERSION: Final = 1
+"""The `revisions --json` contract version. Bump on a breaking change to a
+field name, type or meaning; adding a field is not breaking."""
+
+JsonStatus = Literal[
+    "completed", "no_decisions", "vectors_absent", "model_mismatch", "declined"
+]
+
+
+def _relation(view: _FindingView) -> str | None:
+    """The relation `reconcile --from-findings` would offer for this finding:
+    only a DIRECTED `reverses`/`refines` has one. Never a relation written."""
+    if view.direction.holder is None:
+        return None
+    return decision_revision.RELATION_FOR_VERDICT.get(
+        decision_revision.RevisionVerdictValue(view.verdict)
+    )
+
+
+def _json_entry(view: _FindingView) -> dict[str, object]:
+    direction = view.direction
+    return {
+        "decisions": [
+            {
+                "id": view.pair_ids[index],
+                "event_date": view.dates[index],
+                "date_state": view.date_states[index],
+                "quote": view.quotes[index],
+            }
+            for index in (0, 1)
+        ],
+        "verdict": view.verdict,
+        "relation": _relation(view),
+        "untyped_change": view.verdict in _ACTIONABLE_VERDICTS
+        and direction.holder is None,
+        "direction": {
+            "source": "event_dates" if direction.holder is not None else "none",
+            "earlier": direction.earlier,
+            "later": direction.holder,
+            "reason": direction.reason,
+        },
+        "confidence": view.confidence,
+        "rationale": view.rationale,
+        "served": view.served,
+        "malformed": view.malformed,
+        "actionable": not view.malformed
+        and decision_revision.is_actionable_revision(
+            view.verdict, view.confidence, view.quotes[0], view.quotes[1]
+        ),
+    }
+
+
+def revisions_json_report(
+    plan: revisions.RevisionPlan,
+    outcome: revisions.RevisionOutcome,
+    *,
+    openkos_version: str,
+    excluded: int = 0,
+    show_all: bool = False,
+) -> dict[str, object]:
+    """The `revisions --json` object for a judged run: the same findings, in
+    the same order, as `revisions_report` lists (`show_all` widens both), plus
+    run counts that `show_all` never changes. Pure and I/O-free."""
+    views = [_view_from_finding(finding) for finding in plan.served] + [
+        _view_from_verdict(verdict) for verdict in outcome.results
+    ]
+    return {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "openkos_version": openkos_version,
+        "status": "completed",
+        "partial": outcome.failure is not None,
+        "counts": {
+            "candidate_pairs": len(plan.candidate_plan.candidates),
+            "served": len(plan.served),
+            "judged": len(outcome.results),
+            "malformed": sum(1 for view in views if view.malformed),
+            "without_embedding": len(plan.coverage.missing),
+            "changed_since_reindex": len(plan.coverage.stale),
+            "excluded_unreadable_relations": excluded,
+        },
+        "revisions": [
+            _json_entry(view)
+            for _, ordered in _displayed_groups(views, show_all=show_all)
+            for view in ordered
+        ],
+    }
+
+
+def revisions_json_status(
+    status: JsonStatus, *, openkos_version: str
+) -> dict[str, object]:
+    """The `revisions --json` object for a run that never judged (no
+    Decisions, vectors absent, model mismatch, declined): valid JSON with
+    `counts` null and no revisions, so a pipe never reads an empty stdout."""
+    return {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "openkos_version": openkos_version,
+        "status": status,
+        "partial": False,
+        "counts": None,
+        "revisions": [],
+    }

@@ -18,8 +18,10 @@ Decisions sharing `_embed(dim_index)`'s `dim_index` score cosine similarity
 indices score `0.0`.
 """
 
+import json
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
@@ -587,3 +589,302 @@ def test_include_confidential_reduces_excluded_count_and_releases_the_judge_send
         message["content"] for call in fake_with_flag.calls for message in call
     )
     assert "Project Nightjar" in sent_bodies
+
+
+# ---------------------------------------------------------------------------
+# --json: one machine-readable object (#1739)
+# ---------------------------------------------------------------------------
+
+
+def _json_stdout(stdout: str) -> dict[str, Any]:
+    """stdout must be exactly one JSON object and nothing else."""
+    payload = json.loads(stdout)
+    assert isinstance(payload, dict)
+    return payload
+
+
+def test_json_emits_one_object_with_the_judged_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_decision_and_vector(tmp_path, "decisions/a", 0, title="A")
+    _seed_decision_and_vector(tmp_path, "decisions/b", 0, title="B")
+    fake = _patch_llm(
+        monkeypatch, _ScriptedLLM([_verdict_reply(verdict="reverses", confidence=0.9)])
+    )
+
+    result = runner.invoke(app, ["revisions", "--auto", "--json"])
+
+    assert result.exit_code == 0
+    assert len(fake.calls) == 1
+    payload = _json_stdout(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["status"] == "completed"
+    assert payload["partial"] is False
+    assert payload["counts"]["candidate_pairs"] == 1
+    assert payload["counts"]["judged"] == 1
+    [entry] = payload["revisions"]
+    assert [d["id"] for d in entry["decisions"]] == ["decisions/a", "decisions/b"]
+    assert entry["verdict"] == "reverses"
+    assert entry["confidence"] == 0.9
+    # No Source carries an event date, so the change is untyped.
+    assert entry["untyped_change"] is True
+    assert entry["relation"] is None
+    assert entry["direction"]["source"] == "none"
+    # The experimental notice and the gate stay on stderr.
+    assert "UNMEASURED" in result.stderr or "experimental" in result.stderr.lower()
+    assert "LLM call(s) to judge" in result.stderr
+
+
+def test_json_serves_a_persisted_finding_with_no_model_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
+    _seed_decision_and_vector(tmp_path, "decisions/a", 0)
+    _seed_decision_and_vector(tmp_path, "decisions/b", 0)
+    _record_current_finding(tmp_path, ("decisions/a", "decisions/b"))
+    fake = _patch_llm(monkeypatch, _ScriptedLLM())
+
+    result = runner.invoke(app, ["revisions", "--json", "--all"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    payload = _json_stdout(result.stdout)
+    assert payload["counts"]["served"] == 1
+    assert payload["counts"]["judged"] == 0
+    [entry] = payload["revisions"]
+    assert entry["served"] is True
+    assert entry["verdict"] == "reaffirms"
+
+
+def test_json_all_widens_the_array_as_it_widens_the_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_decision_and_vector(tmp_path, "decisions/a", 0)
+    _seed_decision_and_vector(tmp_path, "decisions/b", 0)
+    _patch_llm(monkeypatch, _ScriptedLLM([_verdict_reply(), _verdict_reply()]))
+
+    default = runner.invoke(app, ["revisions", "--auto", "--json"])
+    widened = runner.invoke(app, ["revisions", "--auto", "--fresh", "--json", "--all"])
+
+    assert _json_stdout(default.stdout)["revisions"] == []
+    assert [e["verdict"] for e in _json_stdout(widened.stdout)["revisions"]] == [
+        "unrelated"
+    ]
+
+
+def test_json_no_decisions_is_a_valid_empty_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["revisions", "--json"])
+
+    assert result.exit_code == 0
+    payload = _json_stdout(result.stdout)
+    assert payload["status"] == "no_decisions"
+    assert payload["counts"] is None
+    assert payload["revisions"] == []
+
+
+def test_json_vectors_absent_keeps_the_remedy_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    layout = config.WorkspaceLayout(tmp_path)
+    _write_doc(layout.bundle_dir / "decisions" / "a.md")
+    _patch_llm(monkeypatch, _ScriptedLLM())
+
+    result = runner.invoke(app, ["revisions", "--auto", "--json"])
+
+    assert result.exit_code == 0
+    assert _json_stdout(result.stdout)["status"] == "vectors_absent"
+    assert "openkos reindex" in result.stderr
+
+
+def test_json_model_mismatch_is_reported_as_a_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_decision_and_vector(tmp_path, "decisions/a", 0, model="other-model")
+    _patch_llm(monkeypatch, _ScriptedLLM())
+
+    result = runner.invoke(app, ["revisions", "--auto", "--json"])
+
+    assert result.exit_code == 0
+    assert _json_stdout(result.stdout)["status"] == "model_mismatch"
+
+
+def test_json_no_candidates_is_completed_with_an_empty_array(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_decision_and_vector(tmp_path, "decisions/a", 0)
+    _seed_decision_and_vector(tmp_path, "decisions/b", 1)
+    _patch_llm(monkeypatch, _ScriptedLLM())
+
+    result = runner.invoke(app, ["revisions", "--auto", "--json"])
+
+    assert result.exit_code == 0
+    payload = _json_stdout(result.stdout)
+    assert payload["status"] == "completed"
+    assert payload["counts"]["candidate_pairs"] == 0
+    assert payload["revisions"] == []
+
+
+def test_json_tty_decline_prompts_on_stderr_and_reports_declined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_decision_and_vector(tmp_path, "decisions/a", 0)
+    _seed_decision_and_vector(tmp_path, "decisions/b", 0)
+    fake = _patch_llm(monkeypatch, _ScriptedLLM([_verdict_reply()]))
+    _simulate_tty(monkeypatch)
+    asked: list[bool] = []
+
+    def confirm(text: str, *, err: bool = False, **_: object) -> bool:
+        # The real prompt writes to stdout unless `err=True`; the runner
+        # would also echo typed input there, so pin the stream directly.
+        asked.append(err)
+        return False
+
+    monkeypatch.setattr("openkos.cli.main.typer.confirm", confirm)
+
+    result = runner.invoke(app, ["revisions", "--json"])
+
+    assert result.exit_code == 0
+    assert asked == [True]
+    assert fake.calls == []
+    assert _json_stdout(result.stdout)["status"] == "declined"
+    assert "Aborted -- no revisions judged." in result.stderr
+
+
+def test_tty_decline_without_json_still_prompts_on_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_decision_and_vector(tmp_path, "decisions/a", 0)
+    _seed_decision_and_vector(tmp_path, "decisions/b", 0)
+    _patch_llm(monkeypatch, _ScriptedLLM([_verdict_reply()]))
+    _simulate_tty(monkeypatch)
+    asked: list[bool] = []
+
+    def confirm(text: str, *, err: bool = False, **_: object) -> bool:
+        asked.append(err)
+        return False
+
+    monkeypatch.setattr("openkos.cli.main.typer.confirm", confirm)
+
+    result = runner.invoke(app, ["revisions"])
+
+    assert result.exit_code == 0
+    assert asked == [False]
+    assert "Aborted -- no revisions judged." in result.stdout
+
+
+def test_json_non_tty_without_auto_still_refuses_with_empty_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_decision_and_vector(tmp_path, "decisions/a", 0)
+    _seed_decision_and_vector(tmp_path, "decisions/b", 0)
+    _patch_llm(monkeypatch, _ScriptedLLM([_verdict_reply()]))
+
+    result = runner.invoke(app, ["revisions", "--json"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "refusing to spend model calls" in result.stderr
+
+
+def test_json_outside_a_workspace_refuses_with_empty_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["revisions", "--json"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "refusing to run" in result.stderr
+
+
+def test_json_partial_batch_emits_the_judged_prefix_and_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_decision_and_vector(tmp_path, "decisions/a", 0)
+    _seed_decision_and_vector(tmp_path, "decisions/b", 0)
+    _seed_decision_and_vector(tmp_path, "decisions/c", 1)
+    _seed_decision_and_vector(tmp_path, "decisions/d", 1)
+    _patch_llm(
+        monkeypatch,
+        _RaisingLLM(
+            [_verdict_reply(verdict="reverses", confidence=0.9)],
+            error=OllamaError("boom"),
+            error_at=2,
+        ),
+    )
+
+    result = runner.invoke(app, ["revisions", "--auto", "--json"])
+
+    assert result.exit_code == 1
+    payload = _json_stdout(result.stdout)
+    assert payload["partial"] is True
+    assert payload["counts"]["judged"] == 1
+    assert len(payload["revisions"]) == 1
+    assert "failed after judging 1 of 2 planned pair(s)" in result.stderr
+
+
+def test_json_withholds_a_confidential_decision_as_the_report_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
+    _seed_decision_and_vector(
+        tmp_path,
+        "decisions/secret",
+        0,
+        sensitivity="confidential",
+        body="Project Nightjar rollout.",
+    )
+    _seed_decision_and_vector(tmp_path, "decisions/open", 0)
+    _patch_llm(monkeypatch, _ScriptedLLM([_verdict_reply()]))
+
+    gated = runner.invoke(app, ["revisions", "--auto", "--json", "--all"])
+
+    assert gated.exit_code == 0
+    assert "decisions/secret" not in gated.stdout
+    assert "Nightjar" not in gated.stdout
+    assert _json_stdout(gated.stdout)["revisions"] == []
+
+    _patch_llm(monkeypatch, _ScriptedLLM([_verdict_reply()]))
+    released = runner.invoke(
+        app, ["revisions", "--auto", "--json", "--all", "--include-confidential"]
+    )
+
+    assert released.exit_code == 0
+    [entry] = _json_stdout(released.stdout)["revisions"]
+    assert {d["id"] for d in entry["decisions"]} == {
+        "decisions/secret",
+        "decisions/open",
+    }
+
+
+def test_without_json_stdout_is_not_a_json_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_decision_and_vector(tmp_path, "decisions/a", 0)
+    _seed_decision_and_vector(tmp_path, "decisions/b", 0)
+    _patch_llm(
+        monkeypatch, _ScriptedLLM([_verdict_reply(verdict="reverses", confidence=0.9)])
+    )
+
+    result = runner.invoke(app, ["revisions", "--auto"])
+
+    assert result.exit_code == 0
+    assert "[REVERSES]" in result.stdout
+    assert not result.stdout.lstrip().startswith("{")
