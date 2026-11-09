@@ -14066,11 +14066,10 @@ def revisions(
         typer.echo(exc.message, err=True)
         raise typer.Exit(code=1) from exc
 
-    if json_output:
-        try:
-            version = _pkg_version("openkos")
-        except PackageNotFoundError:
-            version = "unknown"
+    try:
+        version = _pkg_version("openkos")
+    except PackageNotFoundError:
+        version = "unknown"
     if run.status == "no_decisions":
         if json_output:
             _echo_revisions_json(
