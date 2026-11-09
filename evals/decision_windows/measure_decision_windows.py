@@ -23,11 +23,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import pathlib
 import statistics
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -70,6 +72,19 @@ CANDIDATES: Final = (ARM_OVERLAP, ARM_ROLLING)
 """Only these two are tested against `shipped`; `both` is reported, no bar."""
 OVERLAP_ARMS: Final = (ARM_OVERLAP, ARM_BOTH)
 ROLLING_ARMS: Final = (ARM_ROLLING, ARM_BOTH)
+
+GOLD_SHA256: Final = {
+    "ES2015.decisions.adjudicated.csv": (
+        "de3e6439e7e8fe79b623d1d58f72a009fb691ebe0ee96d01f1c105e18debad9c"
+    ),
+    "IS1004.decisions.adjudicated.csv": (
+        "1b84ae083f1547fc6f356663fc80df9aa2f2aa978196406e50ae2e5e9e3cae7d"
+    ),
+    "TS3009.decisions.adjudicated.csv": (
+        "40aa8312480462bcedddaa31a5f379d893ccf8235e3ed7dcf845c666cb46921a"
+    ),
+}
+"""The gold files are pinned by content. A different hash voids the run."""
 
 SHIPPED_CAP: Final = 25
 """`decision_pass.MAX_PASS_DECISIONS` as shipped; every arm is read at this cap."""
@@ -601,12 +616,34 @@ def _series_runs(
     return [m[series] for m in per_run_metrics(records, rows, arm, SHIPPED_CAP)]
 
 
+def verify_gold(
+    paths: Sequence[pathlib.Path], registered: Mapping[str, str] = GOLD_SHA256
+) -> None:
+    """Refuse a gold file whose name or SHA-256 is not the registered one."""
+    for path in paths:
+        want = registered.get(path.name)
+        if want is None:
+            raise SystemExit(f"REFUSED: {path.name} is not a registered gold file")
+        got = hashlib.sha256(path.read_bytes()).hexdigest()
+        if got != want:
+            raise SystemExit(
+                f"REFUSED: {path.name} SHA-256 {got} is not the registered {want}"
+            )
+
+
 def _self_test() -> int:
     failures: list[str] = []
 
     def check(label: str, got: object, want: object) -> None:
         if got != want:
             failures.append(f"{label}: got {got!r}, want {want!r}")
+
+    def _refused(call: Any) -> bool:
+        try:
+            call()
+        except SystemExit:
+            return True
+        return False
 
     base = prompt_budget.chunk_lines(_TEXT, _TARGET)
     check("synthetic transcript packs into four windows", len(base), 4)
@@ -1023,6 +1060,33 @@ def _self_test() -> int:
         (ARM_OVERLAP, ARM_ROLLING),
     )
 
+    with tempfile.TemporaryDirectory() as tmp:
+        gold_path = pathlib.Path(tmp) / "ES2015.decisions.adjudicated.csv"
+        gold_path.write_bytes(b"decision_id\nd1\n")
+        good_digest = hashlib.sha256(gold_path.read_bytes()).hexdigest()
+        check(
+            "a gold file whose digest matches is accepted",
+            _refused(lambda: verify_gold([gold_path], {gold_path.name: good_digest})),
+            False,
+        )
+        check(
+            "a gold file whose digest differs is refused",
+            _refused(lambda: verify_gold([gold_path], {gold_path.name: "0" * 64})),
+            True,
+        )
+        other = pathlib.Path(tmp) / "XX0000.decisions.adjudicated.csv"
+        other.write_bytes(b"x")
+        check(
+            "an unregistered gold file name is refused",
+            _refused(lambda: verify_gold([other], {gold_path.name: good_digest})),
+            True,
+        )
+        check(
+            "the registered digests cover exactly the required series",
+            sorted(GOLD_SHA256),
+            sorted(f"{series}.decisions.adjudicated.csv" for series in REQUIRED_SERIES),
+        )
+
     if failures:
         print(f"SELF-TEST FAILED ({len(failures)}):")
         for failure in failures:
@@ -1222,6 +1286,7 @@ def main(argv: list[str] | None = None) -> int:
         return _self_test()
     if not args.gold:
         parser.error("--gold is required unless --self-test")
+    verify_gold(args.gold)
     rows, meetings = harness.prepare(args.gold, allow_partial=False)
     if args.report:
         records: list[dict[str, Any]] = []
