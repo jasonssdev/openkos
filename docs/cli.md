@@ -432,6 +432,34 @@ A partial batch (a mid-run model failure) renders every verdict judged so far ex
 | `--include-confidential` | Include confidential Decisions (excluded by default). Releases the judge's chat send only — it never authorizes an embedding call, which this verb never makes at all. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 | `--fresh` | Bypass the persisted-findings serve and re-judge every candidate pair with the model. |
 | `--all` | Display-only filter: reveal every verdict, including `REAFFIRMS`/`UNRELATED`, low-confidence, and malformed results. It never changes which pairs are judged. |
+| `--json` | Emit one JSON object on stdout instead of the human text (schema below). With `--all`, the array widens exactly as the report does. |
+
+**Machine-readable output (`--json`).** With `--json`, stdout carries exactly one JSON object (`schema_version` `1`) and nothing else; the experimental notice, the cost gate and the confirmation prompt stay on stderr, and exit codes are unchanged. A refusal (outside a workspace, no `--auto` without a TTY) and a failure before any verdict exit `1` with an empty stdout. A partial batch prints the verdicts judged so far with `partial: true`, then exits `1`. Candidate selection, judging, persistence and ordering are not touched, and without the flag the output is byte-identical. It exists so a consumer can read the detected decision relations without opening `.openkos/findings.db`, whose schema is internal.
+
+| Field | Content |
+| --- | --- |
+| `schema_version`, `openkos_version` | The contract version and the installed version. |
+| `status` | `completed`; or, for a run that never judged, `no_decisions`, `vectors_absent`, `model_mismatch` or `declined` (each still prints a valid object, with `counts` `null` and `revisions` `[]`). |
+| `partial` | `true` exactly when a mid-run model failure stopped judging. |
+| `counts` | `{candidate_pairs, served, judged, malformed, without_embedding, changed_since_reindex, excluded_unreadable_relations}` for a `completed` run, otherwise `null`. They describe the run; `--all` never changes them. |
+| `revisions` | One entry per finding the report lists, in the report's order, each as below. |
+
+Each `revisions` entry:
+
+| Field | Content |
+| --- | --- |
+| `decisions` | The pair as two `{id, event_date, date_state, quote}` objects in sorted id order. `event_date` is an ISO string or `null`; `quote` is the verbatim quote from that Decision, `null` when none was verified. |
+| `verdict` | `reverses`, `refines`, `reaffirms` or `unrelated`. |
+| `relation` | `supersedes` for a directed `reverses`, `revises` for a directed `refines`, otherwise `null`. It is the relation `reconcile --from-findings` would offer, never one `revisions` wrote. |
+| `untyped_change` | `true` for a `reverses` or `refines` whose direction is unknown: a change of unknown type. |
+| `direction` | `{source, earlier, later, reason}`. `source` is `event_dates` when the Sources' event dates order the pair, otherwise `none` (then `earlier` and `later` are `null`); `reason` is `dated` or why the direction is unknown. The model never supplies the direction. |
+| `confidence`, `rationale` | The judge's number and explanation. |
+| `served`, `malformed` | Read from persisted findings with no model call; and a reply that could not be parsed (never persisted). |
+| `actionable` | `true` when `reconcile --from-findings` would offer the finding. |
+
+There is no `applied` field: a pair already joined by `supersedes`, `reconciled_with` or `revises` is never a candidate, so an applied pair does not appear in the list at all.
+
+**Sensitivity.** The array is built from the same pairs as the report. A confidential Decision (its id, quote and rationale) appears only when `--include-confidential`, or a local backend's exemption, admitted it into the run.
 
 ### `openkos reconcile <id-a> <id-b>`
 

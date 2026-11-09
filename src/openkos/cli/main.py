@@ -70,6 +70,7 @@ from openkos.application import query as application_query
 from openkos.application import query_report as application_query_report
 from openkos.application import repair as application_repair
 from openkos.application import revisions as revisions_service
+from openkos.application import revisions_report as revisions_report_service
 from openkos.application import sensitivity_service as application_sensitivity
 from openkos.application import setup as application_setup
 from openkos.application import status as application_status
@@ -13895,9 +13896,20 @@ def contradictions(
         raise typer.Exit(code=1) from exc
 
 
+def _echo_revisions_json(payload: dict[str, object]) -> None:
+    """The one `revisions --json` object, pretty-printed like `query --json`."""
+    typer.echo(json.dumps(payload, indent=2))
+
+
 class _RevisionsObserver:
     """The CLI's rendering of a `revisions` run (issue #1168): the service
-    hands it typed data and this class owns every word and the TTY question."""
+    hands it typed data and this class owns every word and the TTY question.
+
+    Under `--json` stdout carries only the one object, so the confirmation
+    prompt (which Typer writes to stdout) is sent to stderr instead."""
+
+    def __init__(self, *, json_output: bool = False) -> None:
+        self._json_output = json_output
 
     def started(self) -> None:
         output.notice(revisions_service.EXPERIMENTAL_NOTICE, verb="revisions")
@@ -13919,7 +13931,11 @@ class _RevisionsObserver:
         # a TTY asks, and non-TTY stdin without `--auto` cannot ask.
         if not sys.stdin.isatty():
             return "unavailable"
-        return "proceed" if typer.confirm("Proceed?") else "declined"
+        return (
+            "proceed"
+            if typer.confirm("Proceed?", err=self._json_output)
+            else "declined"
+        )
 
     def progress_callback(
         self,
@@ -13959,6 +13975,16 @@ def revisions(
         "--all",
         help="Show every verdict, including REAFFIRMS/UNRELATED, "
         "low-confidence, and malformed results.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help=(
+            "Emit one JSON object on stdout -- the run's counts and every "
+            "listed verdict with both Decision ids, the relation it would "
+            "record, the direction source and the confidence -- instead of "
+            "the human text. Diagnostics stay on stderr."
+        ),
     ),
 ) -> None:
     """[EXPERIMENTAL] LLM-detect Decisions that a later Decision reverses,
@@ -14008,6 +14034,14 @@ def revisions(
     harness fixture has been measured (`evals/decision_revisions/`) -- so
     one stderr line says so on every invocation, and every finding should
     be reviewed before it is applied.
+
+    `--json` replaces the human stdout with one machine-readable object
+    (schema in `docs/cli.md`): the same findings in the same order, plus the
+    run's counts, with `--all` widening the array as it widens the report. A
+    run that never judged (no Decisions, vectors absent, model mismatch,
+    declined) still prints a valid object; a refusal keeps exit 1 with an
+    empty stdout, and a partial batch prints the judged prefix with
+    `partial: true` before exiting 1.
     """
     try:
         run = revisions_service.run_revisions(
@@ -14026,36 +14060,79 @@ def revisions(
                     candidate_plan
                 ),
             ),
-            _RevisionsObserver(),
+            _RevisionsObserver(json_output=json_output),
         )
     except revisions_service.RevisionsRefused as exc:
         typer.echo(exc.message, err=True)
         raise typer.Exit(code=1) from exc
 
+    if json_output:
+        try:
+            version = _pkg_version("openkos")
+        except PackageNotFoundError:
+            version = "unknown"
     if run.status == "no_decisions":
+        if json_output:
+            _echo_revisions_json(
+                revisions_report_service.revisions_json_status(
+                    "no_decisions", openkos_version=version
+                )
+            )
+            return
         typer.echo("No Decision objects found.")
         return
     if run.status == "vectors_absent":
         typer.echo(revisions_service.NO_VECTORS_MESSAGE, err=True)
+        if json_output:
+            _echo_revisions_json(
+                revisions_report_service.revisions_json_status(
+                    "vectors_absent", openkos_version=version
+                )
+            )
         return
     if run.status == "model_mismatch":
         typer.echo(revisions_service.MODEL_MISMATCH_MESSAGE, err=True)
+        if json_output:
+            _echo_revisions_json(
+                revisions_report_service.revisions_json_status(
+                    "model_mismatch", openkos_version=version
+                )
+            )
         return
     if run.status == "declined":
+        if json_output:
+            typer.echo("Aborted -- no revisions judged.", err=True)
+            _echo_revisions_json(
+                revisions_report_service.revisions_json_status(
+                    "declined", openkos_version=version
+                )
+            )
+            return
         typer.echo("Aborted -- no revisions judged.")
         return
 
     report = run.report
     if report is None:
         return
-    _echo_report(
-        revisions_report(
-            report.plan,
-            report.outcome,
-            excluded=report.decisions.bad_relations,
-            show_all=show_all,
+    if json_output:
+        _echo_revisions_json(
+            revisions_report_service.revisions_json_report(
+                report.plan,
+                report.outcome,
+                openkos_version=version,
+                excluded=report.decisions.bad_relations,
+                show_all=show_all,
+            )
         )
-    )
+    else:
+        _echo_report(
+            revisions_report(
+                report.plan,
+                report.outcome,
+                excluded=report.decisions.bad_relations,
+                show_all=show_all,
+            )
+        )
 
     if report.outcome.failure is not None:
         # Partial batch (#441 posture, mirrored from `contradictions`): the
