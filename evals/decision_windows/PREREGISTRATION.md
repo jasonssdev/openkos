@@ -88,7 +88,7 @@ they gain; this registration cannot say by how much.
 | `shipped` | `_chunk_lines` | as shipped | control (production) |
 | `overlap` | head of 6 lines / 800 chars, overlap dedup | as shipped | **candidate** |
 | `rolling` | `_chunk_lines` | plus the subject list | **candidate** |
-| `both` | head, overlap dedup | plus the subject list | reported, no bar, optional run |
+| `both` | head, overlap dedup | plus the subject list | reported, no bar; **not run** (owner item 7) |
 
 Each arm is a separate sequence of model calls: the arms are **not** paired on shared
 replies (unlike #1737), so every comparison is between two samples of runs. Within a run the
@@ -127,8 +127,9 @@ it is copied here:
 | TS3009 | `TS3009.decisions.adjudicated.csv` | `40aa8312480462bcedddaa31a5f379d893ccf8235e3ed7dcf845c666cb46921a` | 26 | human |
 | IS1004 | `IS1004.decisions.adjudicated.csv` | `1b84ae083f1547fc6f356663fc80df9aa2f2aa978196406e50ae2e5e9e3cae7d` | 27 | **model** (Claude Opus; `PREREGISTRATION-1364-IS1004.md`) |
 
-(The digests are copied from the #1737 registration for the same files; the harness does not
-yet verify them, which the owner is asked about in item 9.) Rendered transcripts `<meeting>.md`
+(The digests are copied from the #1737 registration for the same files. The harness verifies
+them at load, for the run, `--exposure` and `--report` alike, and exits non-zero with `REFUSED`
+on a mismatch or on a file name that is not one of the three; the self-test covers both.) Rendered transcripts `<meeting>.md`
 of the same checkout, 12 meetings (a to d of each series). `_is_meeting_shaped` must be true for
 all of them or the run refuses. Unrecallable gold rows stay in every denominator, as before.
 
@@ -240,7 +241,7 @@ tokens); rolling adds at most 30 short lines (about +5%). Embedding is not used.
 | `overlap` | about 4.1 h |
 | `rolling` | about 4.1 h |
 | **Total (default three arms)** | about **12 h**, ceiling **15 h** |
-| `both` (optional, owner item 7) | about +4.2 h |
+| `both` | not run (owner item 7; it would have added about 4.2 h) |
 
 The GPU is reserved by the owner (item 10). If the first run alone (all 12 meetings, all arms)
 projects past the ceiling at 15 runs, the run stops and reports short; that is an INVALID
@@ -263,7 +264,7 @@ uv run python $M --gold $G/ES2015.decisions.adjudicated.csv \
   --gold $G/TS3009.decisions.adjudicated.csv \
   --gold $G/IS1004.decisions.adjudicated.csv --transcripts $T --exposure
 
-# the run (three arms by default; add --arms shipped,overlap,rolling,both for the fourth)
+# the run (the three arms of the default; `both` is not run)
 uv run python -u $M \
   --gold $G/ES2015.decisions.adjudicated.csv \
   --gold $G/TS3009.decisions.adjudicated.csv \
@@ -330,6 +331,12 @@ larger window would not do as well, or that the treatments compose with #1737's 
   effect` was seen at n = 5) is what the z >= 2.0 rule and n = 15 are there to absorb.
 
 ## The owner confirms
+
+Confirmed on 2026-11-09. The owner delegated these items to the author's recommendations; every item is as proposed except the answers recorded here:
+
+- **Item 7:** n = 15; the optional `both` arm is not run (saves about 4.2 h; it had no bar). The harness still contains the arm and its self-test, and `--arms` would accept it, but no documented command runs it; running it would be a deviation. The forecast is unchanged: its total already excluded `both`.
+- **Item 8:** yes. A `SUPPORTED` verdict enables no default change and no new flag until a confirmation on the thesis's held-out series (outside this repository) has been registered and read.
+- **Item 9:** the three SHA-256 values are the intended pins, and the harness verifies them at load and refuses to run or score (clear error, non-zero exit) on a mismatch.
 
 1. **Overlap**: a head of 6 lines / 800 characters; dedup by evidence line, one for one against
    the previous window only; items without a single-line position never deduplicated by position.
