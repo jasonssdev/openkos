@@ -11,6 +11,7 @@ mirroring `test_decision_revision.py`'s and `test_revisions_service.py`'s
 own posture of exercising pure functions over hand-built values."""
 
 from datetime import date, datetime
+from typing import Any, cast
 
 import pytest
 
@@ -444,3 +445,284 @@ def test_served_findings_read_back_both_shapes(
         assert "reaffirmed by" not in report
     else:
         assert f"reaffirmed by decisions/beta {expected}" in report
+
+
+# -- `--json` machine payload (#1739) ---------------------------------------
+
+
+def _finding(
+    id_a: str,
+    id_b: str,
+    verdict: str,
+    *,
+    confidence: float = 0.9,
+    quotes: tuple[str | None, str | None] = ("qa", "qb"),
+    dates: tuple[str | None, str | None] = ("2026-01-01", "2026-02-01"),
+    date_states: tuple[str, str] = ("dated", "dated"),
+) -> revision_findings.RevisionFinding:
+    return revision_findings.RevisionFinding(
+        pair_ids=(id_a, id_b),
+        verdict=verdict,
+        confidence=confidence,
+        rationale="served rationale",
+        quotes=quotes,
+        dates=dates,
+        date_states=date_states,
+        include_confidential=False,
+        prompt_version=decision_revision.JUDGE_PROMPT_VERSION,
+        input_digests=(),
+    )
+
+
+def _json(
+    plan: revisions.RevisionPlan,
+    outcome: revisions.RevisionOutcome | None = None,
+    **kwargs: object,
+) -> dict[str, object]:
+    return revisions_report.revisions_json_report(
+        plan,
+        outcome or revisions.RevisionOutcome(results=()),
+        openkos_version="9.9.9",
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def _entries(payload: dict[str, object]) -> list[dict[str, Any]]:
+    return cast(list[dict[str, Any]], payload["revisions"])
+
+
+def test_json_directed_reversal_carries_relation_direction_and_evidence() -> None:
+    verdict = _verdict(
+        "decisions/a",
+        "decisions/b",
+        RevisionVerdictValue.REVERSES,
+        confidence=0.9,
+        quotes=("A said.", "B said."),
+    )
+    plan = _plan([("decisions/a", "decisions/b")])
+
+    payload = _json(plan, revisions.RevisionOutcome(results=(verdict,)))
+
+    assert list(payload) == [
+        "schema_version",
+        "openkos_version",
+        "status",
+        "partial",
+        "counts",
+        "revisions",
+    ]
+    assert payload["schema_version"] == 1
+    assert payload["openkos_version"] == "9.9.9"
+    assert payload["status"] == "completed"
+    assert payload["partial"] is False
+    assert payload["revisions"] == [
+        {
+            "decisions": [
+                {
+                    "id": "decisions/a",
+                    "event_date": "2026-01-01",
+                    "date_state": "dated",
+                    "quote": "A said.",
+                },
+                {
+                    "id": "decisions/b",
+                    "event_date": "2026-02-01",
+                    "date_state": "dated",
+                    "quote": "B said.",
+                },
+            ],
+            "verdict": "reverses",
+            "relation": "supersedes",
+            "untyped_change": False,
+            "direction": {
+                "source": "event_dates",
+                "earlier": "decisions/a",
+                "later": "decisions/b",
+                "reason": "dated",
+            },
+            "confidence": 0.9,
+            "rationale": "stub rationale",
+            "served": False,
+            "malformed": False,
+            "actionable": True,
+        }
+    ]
+
+
+def test_json_refines_maps_to_revises_and_untyped_change_has_no_relation() -> None:
+    refines = _verdict(
+        "decisions/a",
+        "decisions/b",
+        RevisionVerdictValue.REFINES,
+        confidence=0.9,
+        quotes=("qa", "qb"),
+    )
+    undated = _verdict(
+        "decisions/c",
+        "decisions/d",
+        RevisionVerdictValue.REVERSES,
+        confidence=0.9,
+        quotes=("qc", "qd"),
+        date_a=DecisionDate(value=None, state="missing"),
+        date_b=DecisionDate(value=None, state="missing"),
+    )
+    plan = _plan([("decisions/a", "decisions/b"), ("decisions/c", "decisions/d")])
+
+    payload = _json(plan, revisions.RevisionOutcome(results=(refines, undated)))
+
+    by_pair = {
+        entry["decisions"][0]["id"]: entry
+        for entry in payload["revisions"]  # type: ignore[attr-defined]
+    }
+    assert by_pair["decisions/a"]["relation"] == "revises"
+    untyped = by_pair["decisions/c"]
+    assert untyped["relation"] is None
+    assert untyped["untyped_change"] is True
+    assert untyped["direction"] == {
+        "source": "none",
+        "earlier": None,
+        "later": None,
+        "reason": "missing",
+    }
+    assert untyped["decisions"][0]["event_date"] is None
+
+
+def test_json_served_finding_is_flagged_and_counts_describe_the_run() -> None:
+    served = _finding("decisions/a", "decisions/b", "reaffirms")
+    fresh = _verdict(
+        "decisions/c",
+        "decisions/d",
+        RevisionVerdictValue.REAFFIRMS,
+        confidence=0.9,
+        quotes=("qc", "qd"),
+    )
+    plan = _plan(
+        [("decisions/a", "decisions/b"), ("decisions/c", "decisions/d")],
+        served=(served,),
+    )
+
+    payload = _json(
+        plan, revisions.RevisionOutcome(results=(fresh,)), excluded=2, show_all=False
+    )
+
+    flags = {
+        entry["decisions"][0]["id"]: (
+            entry["served"],
+            entry["relation"],
+            entry["actionable"],
+        )
+        for entry in payload["revisions"]  # type: ignore[attr-defined]
+    }
+    assert flags == {
+        "decisions/a": (True, None, False),
+        "decisions/c": (False, None, False),
+    }
+    assert payload["counts"] == {
+        "candidate_pairs": 2,
+        "served": 1,
+        "judged": 1,
+        "malformed": 0,
+        "without_embedding": 0,
+        "changed_since_reindex": 0,
+        "excluded_unreadable_relations": 2,
+    }
+
+
+def test_json_array_follows_the_human_filter_and_all_widens_it() -> None:
+    unrelated = _verdict(
+        "decisions/a",
+        "decisions/b",
+        RevisionVerdictValue.UNRELATED,
+        confidence=0.9,
+        quotes=(None, None),
+    )
+    malformed = _verdict(
+        "decisions/c",
+        "decisions/d",
+        RevisionVerdictValue.UNRELATED,
+        confidence=0.0,
+        quotes=(None, None),
+        malformed=True,
+    )
+    plan = _plan([("decisions/a", "decisions/b"), ("decisions/c", "decisions/d")])
+    outcome = revisions.RevisionOutcome(results=(unrelated, malformed))
+
+    default = _json(plan, outcome)
+    widened = _json(plan, outcome, show_all=True)
+
+    assert default["revisions"] == []
+    assert [e["verdict"] for e in _entries(widened)] == ["unrelated", "unrelated"]
+    assert [e["malformed"] for e in _entries(widened)] == [False, True]
+    assert widened["counts"]["malformed"] == 1  # type: ignore[index]
+
+
+def test_json_orders_like_the_human_report() -> None:
+    low = _verdict(
+        "decisions/a",
+        "decisions/c",
+        RevisionVerdictValue.REVERSES,
+        confidence=0.8,
+        quotes=("q", "q"),
+    )
+    high = _verdict(
+        "decisions/a",
+        "decisions/b",
+        RevisionVerdictValue.REVERSES,
+        confidence=0.95,
+        quotes=("q", "q"),
+    )
+    reaffirm = _verdict(
+        "decisions/a",
+        "decisions/d",
+        RevisionVerdictValue.REAFFIRMS,
+        confidence=0.99,
+        quotes=("q", "q"),
+    )
+    plan = _plan([(v.pair_ids[0], v.pair_ids[1]) for v in (low, high, reaffirm)])
+
+    payload = _json(plan, revisions.RevisionOutcome(results=(reaffirm, low, high)))
+
+    ordered = [
+        (e["verdict"], e["decisions"][1]["id"])
+        for e in payload["revisions"]  # type: ignore[attr-defined]
+    ]
+    assert ordered == [
+        ("reverses", "decisions/b"),
+        ("reverses", "decisions/c"),
+        ("reaffirms", "decisions/d"),
+    ]
+
+
+def test_json_no_candidates_is_an_empty_array_with_counts() -> None:
+    payload = _json(_plan([]))
+
+    assert payload["status"] == "completed"
+    assert payload["revisions"] == []
+    assert payload["counts"]["candidate_pairs"] == 0  # type: ignore[index]
+
+
+def test_json_partial_batch_is_flagged() -> None:
+    outcome = revisions.RevisionOutcome(results=(), failure=RuntimeError("x"))  # type: ignore[arg-type]
+
+    payload = _json(_plan([("decisions/a", "decisions/b")]), outcome)
+
+    assert payload["partial"] is True
+
+
+@pytest.mark.parametrize(
+    "status", ["no_decisions", "vectors_absent", "model_mismatch", "declined"]
+)
+def test_json_status_object_for_runs_that_never_judged(status: str) -> None:
+    payload = revisions_report.revisions_json_status(
+        status,  # type: ignore[arg-type]
+        openkos_version="9.9.9",
+    )
+
+    assert payload == {
+        "schema_version": 1,
+        "openkos_version": "9.9.9",
+        "status": status,
+        "partial": False,
+        "counts": None,
+        "revisions": [],
+    }
