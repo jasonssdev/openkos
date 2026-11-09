@@ -107,11 +107,9 @@ Applied to the raw set of one meeting, in window order:
    row, while the representative did not, costs recall. That is deliberate: it is what the
    production body (one quote) would do, and it is what bars K and M measure.
 
-Ranking (applied to clusters): most members first, then an explicit-agreement cue in the
-representative's evidence line, then the earliest. The cue is the case-insensitive regex
-`decided | agree(d) | agreement | settled | go(ing) with | let's go | let's use | let's do |
-we'll go | we'll use | we'll have` on word boundaries, fixed here before any run, English
-only, with no other lexicon.
+Ranking (applied to clusters): most members first, then the earliest. There is no language
+cue and no lexicon: the ranking reads no evidence text, because a language-specific pattern
+cannot ship in a multilingual engine and a cap measured under it would not transfer.
 
 ## Arms
 
@@ -120,7 +118,7 @@ All derived from the same raw capture, per meeting-run.
 | Arm | Merge | Order | Cap | Role |
 |---|---|---|---|---|
 | `shipped` | exact-subject dedup only | window order | 25 | control (production) |
-| `rank_only` | none | ranked (all supports are 1, so cue, then window order) | 25 | decomposition, no bar |
+| `rank_only` | none | ranked (all supports are 1, so this is window order) | 25 | decomposition, no bar |
 | `merge_only` | consolidation | window order | 25 | decomposition, no bar |
 | `consolidate` | consolidation | ranked | 25 | **candidate** (every bar) |
 | `raw_uncapped` | none | window order | none | reference for bar M |
@@ -155,7 +153,7 @@ the harness reports them per series.
   This harness refuses them by construction and never reads them, here or at any step. The
   external 0.149 / 0.308 came from that set.
 - **Tuning.** Nothing of this treatment has been run on any series. The merge gate, the guard
-  prompt, the cue list, the cap grid and every bar are fixed in this file before any output of
+  prompt, the cap grid and every bar are fixed in this file before any output of
   the treatment exists, and a different value is a new registration. There is no gate sweep:
   sweeping the gate on the three development series would be tuning on them.
 - **What the author already knows, disclosed.** The three series were used to build and judge
@@ -327,7 +325,7 @@ disclosed deviation).
   ceiling above (INVALID).
 - A deviation (a re-run, a harness fix that does not change a registered quantity, a missing
   meeting-run) is listed in `RESULTS.md` with its reason. A change to the gate, the guard
-  prompt, the cue list, a bar, the cap grid or the arms is a new registration.
+  prompt, a bar, the cap grid or the arms is a new registration.
 - `RESULTS.md` applies this file mechanically. It may add readings, not verdicts.
 
 ## Disclosed before the run
@@ -343,9 +341,11 @@ disclosed deviation).
   drift can be missed, and the earliest item is not always the best-worded one. Both would
   lower Q, not raise it.
 - The guard sees the extracted statements and their evidence lines, not the transcript.
-- `ranked` uses support and a small English cue list. It is the issue's "explicitness of
-  agreement" in its cheapest honest form; it is deterministic and model-free, not a model
-  judgement of quality, and it is unmeasured.
+- `ranked` uses support, then window order, with no language cue. The issue's "explicitness
+  of agreement" is therefore not ranked on, by the owner's decision; the ranking is
+  deterministic and model-free, not a model judgement of quality, and it is unmeasured. With
+  singleton supports `rank_only` equals window order, so the `ranked` against `positional`
+  contrast shows only where merging produced support above 1.
 - The bars with no earlier analogue (Q, K, M, F, C and the exposure floor of 10) are the
   author's picks. V is tighter than #1348's on purpose.
 
@@ -365,6 +365,12 @@ English transcripts. It does not establish a window overlap or a rolling summary
 - Embedding vectors come from a local Ollama; a different `bge-m3` build moves the gate.
 
 ## The owner confirms
+
+Confirmed on 2026-11-09. The owner delegated these items to the author's recommendations; every item is as proposed except the answers recorded here:
+
+- **Item 3 (ranking): no English cue.** Rank by support, then window order only. A language-specific regex cannot ship in a multilingual engine (the owner's corpora are Spanish), so a cap measured under an English cue would not transfer to production. The harness no longer carries the cue anywhere (it was used only by the ranking, so no readout or bar changed).
+- **Item 8 (held-out): yes.** A `SUPPORTED` verdict enables no default change and no new flag until a confirmation on the thesis's held-out series (outside this repository) has been registered and read.
+- **Item 10 (thesis-metric secondary reading): yes, run it.**
 
 1. **The treatment**: merge on top of the exact dedup, nearest representative only, one guard
    call per candidate, fail closed; representative is the earliest; absorbed evidence is not

@@ -34,7 +34,6 @@ import hashlib
 import json
 import math
 import pathlib
-import re
 import statistics
 import sys
 import tempfile
@@ -95,14 +94,6 @@ MERGE_COSINE: Final = 0.75
 only when their cosine is at least this. Proposed, unmeasured (owner sign-off)."""
 CAP_GRID: Final[tuple[int | None, ...]] = (8, 10, 12, 15, 20, 25, 40, None)
 """Caps swept; None is no cap."""
-CUE_RE: Final = re.compile(
-    r"\b(?:decided|agreed?|agreement|settled|go with|going with|let'?s go|"
-    r"let'?s use|let'?s do|we'?ll go|we'?ll use|we'?ll have)\b",
-    re.IGNORECASE,
-)
-"""Explicit-agreement cues in the quoted evidence line. English only, small and
-fixed before any run; used as the second ranking key."""
-
 # Bars (primary arm `consolidate` against `shipped`, per series).
 Q_RATIO: Final = 1.5
 Q_PAIRED_MIN: Final = 13
@@ -229,16 +220,14 @@ def consolidate(
     return Consolidation(tuple(Cluster(tuple(c)) for c in clusters), calls, failures)
 
 
-def has_cue(item: Item) -> bool:
-    return CUE_RE.search(item.evidence) is not None
-
-
 def rank(clusters: Sequence[Cluster], items: Sequence[Item]) -> list[Cluster]:
-    """Strongest first: most restatements, then an explicit-agreement cue in the
-    representative's evidence line, then the earliest. Stable and total."""
-    return sorted(
-        clusters, key=lambda c: (-c.support, not has_cue(items[c.rep]), c.rep)
-    )
+    """Strongest first: most restatements, then the earliest. Stable and total.
+
+    Deliberately reads no evidence text: a language-specific cue would not
+    transfer to a multilingual engine, so none is used. `items` is kept for the
+    call sites and the arm-building signature."""
+    del items
+    return sorted(clusters, key=lambda c: (-c.support, c.rep))
 
 
 @contextlib.contextmanager
@@ -1149,7 +1138,7 @@ def _self_test() -> int:
         True,
     )
 
-    # --- ranking: support, then cue, then position ---------------------------
+    # --- ranking: support, then position (no language-specific cue) ------------
     ranked_items = [
         Item("a", "s", "v", "plain line here", ()),
         Item("b", "s", "v", "so we agreed on that", ()),
@@ -1158,20 +1147,14 @@ def _self_test() -> int:
     ]
     clusters = [Cluster((0,)), Cluster((1,)), Cluster((2, 4)), Cluster((3,))]
     check(
-        "support first, then cue, then position",
+        "support first, then position; an agreement phrase does not reorder",
         [c.rep for c in rank(clusters, ranked_items)],
-        [2, 1, 3, 0],
+        [2, 0, 1, 3],
     )
     check(
-        "cue is case-insensitive",
-        has_cue(Item("x", "s", "v", "We DECIDED it", ())),
-        True,
-    )
-    check("no cue", has_cue(Item("x", "s", "v", "nothing explicit", ())), False)
-    check(
-        "cue needs a word boundary",
-        has_cue(Item("x", "s", "v", "undecidedly", ())),
-        False,
+        "ranking reads no evidence text",
+        [c.rep for c in rank(clusters, [Item("z", "s", "v", "", ())] * 5)],
+        [2, 0, 1, 3],
     )
 
     # --- views -----------------------------------------------------------------
