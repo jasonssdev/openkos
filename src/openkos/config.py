@@ -492,8 +492,11 @@ verifies replace the general pass's topic-bundle Decisions for that source.
 
 `False`, and deliberately so: a pre-registered measurement on AMI meeting
 transcripts (`evals/transcript_decisions/`) found it recovers about three times
-as many hand-annotated decisions as the general pass, at high precision, but
-short of the bar set for making it the default. So it stays opt-in, and off
+as many hand-annotated decisions as the general pass (precision on annotated
+decisions about 0.9; Decisions with no hand annotation are not scored, so this
+is not precision over every extracted Decision, see
+`evals/transcript_decisions/README.md`), but short of the bar set for making it
+the default. So it stays opt-in, and off
 restores the pre-pass path byte-for-byte."""
 
 DEFAULT_QUERY_AWARE_EXCERPTS = True

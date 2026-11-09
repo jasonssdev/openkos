@@ -127,8 +127,9 @@ context_window: __OPENKOS_CONTEXT_WINDOW__  # tokens the model holds at once (pr
                           # (a failed window is asked once more) and applies
                           # only to the union extractor (`union_judge`).
                           # Measured on meeting transcripts: about 3x the
-                          # decisions recalled at high precision, yet short of
-                          # the bar for turning it on by default.
+                          # decisions recalled (precision ~0.9 on annotated
+                          # decisions only; unannotated ones are not scored),
+                          # yet short of the bar for turning it on by default.
 # concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one
                           # by one (default OFF). Chunked sources only; below
                           # the chunk threshold there are no windows to
