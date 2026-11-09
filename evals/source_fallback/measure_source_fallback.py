@@ -119,7 +119,7 @@ BARS: Final[dict[str, float]] = {
     "HEADROOM_MAX": 0.6,
     "BENEFIT_MIN": 0.25,
     "SPAN_SHARE_MIN": 0.8,
-    "FALSE_ANSWER_RISE_MAX": 0.05,
+    "FALSE_ANSWER_RISE_MAX": 0.0,
     "PRECISION_MIN": 0.7,
     "CONTAMINATION_RISE_MAX": 0.05,
     "LATENCY_MEAN_RATIO_MAX": 1.25,
@@ -1508,8 +1508,8 @@ def _t_decide(c: _Checks) -> None:
 
     d = decide(_summary(one_false))
     c.check(
-        d["verdict"] == SUPPORTED,
-        "one false answer in 42 cells is within FALSE_ANSWER_RISE_MAX",
+        d["verdict"] == REJECTED and "B3" in d["failed"],
+        "one false answer in 42 cells fails B3 (FALSE_ANSWER_RISE_MAX is 0)",
     )
 
     def false_in_base(cells: list[Cell]) -> None:

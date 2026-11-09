@@ -214,7 +214,7 @@ REACH_MIN = 0.5
 HEADROOM_MAX = 0.6
 BENEFIT_MIN = 0.25
 SPAN_SHARE_MIN = 0.8
-FALSE_ANSWER_RISE_MAX = 0.05
+FALSE_ANSWER_RISE_MAX = 0.0
 PRECISION_MIN = 0.7
 CONTAMINATION_RISE_MAX = 0.05
 LATENCY_MEAN_RATIO_MAX = 1.25
@@ -234,8 +234,8 @@ FAILED_MAX = 0.15
   lines do not contain the value is the model's prior, not the Source, and must not count
   as recovery.
 - **B3, abstention is protected.** On the 14 unanswerable questions the false-answer
-  rate of `fallback` minus that of `base` is at most `FALSE_ANSWER_RISE_MAX` (0.05; with
-  42 cells that is two cells). **This is the bar the issue's "correct abstention is a
+  rate of `fallback` minus that of `base` is at most `FALSE_ANSWER_RISE_MAX` (0.0: a single
+  new false answer in the 42 cells fails it). **This is the bar the issue's "correct abstention is a
   property to protect" maps to.**
 - **B4, precision.** Among sourced answers on answerable questions the correct share is at
   least `PRECISION_MIN` (0.7), with at least one sourced answer. The fallback converts a
@@ -366,8 +366,8 @@ forecast, the verdict and the limits below. The verdict updates #1741 and nothin
 - **One re-check is a second chance for the same judge.** The sufficiency check was
   measured to false-refuse 0 of 100 grounded checks and to refuse the adjacent questions;
   a second look at different text is not independent evidence that the first refusal was
-  wrong. B3 is the measurement that matters, and it has 42 cells: two false answers is the
-  bar's whole margin.
+  wrong. B3 is the measurement that matters, and it has 42 cells with no margin: one new
+  false answer rejects the treatment.
 - **Adjacent questions are easy refusals.** They are about general topics; the absent-fact
   questions are the hard ones and there are 4 of them (12 cells). A rise concentrated there
   would be 3 cells of 12 and is below the resolution of the pooled bar. The per-item
@@ -404,6 +404,21 @@ the unanswerable questions.
   lines.
 
 ## The owner confirms
+
+Confirmed on 2026-11-09. The owner confirmed item 1 directly and delegated the rest to
+the author's recommendations. Every item is as proposed except the answers recorded here:
+
+- Item 3: the total-loss fixture only. A partial-loss variant is a separate registration,
+  worth making only if this one is `SUPPORTED`.
+- Item 4: B3 is **strict**. `FALSE_ANSWER_RISE_MAX` is 0.0, not 0.05, so one new false
+  answer on an unanswerable question rejects the treatment. This matches B3 in
+  `evals/conditional_sufficiency/` (#1740), where a withheld or invented answer is the harm
+  the change may not cause.
+- Item 6: `qwen3:8b` throughout, as written. The result is about the mechanism.
+  `evals/conditional_sufficiency/RESULTS.md` found the `qwen3:8b` check kept every refusal
+  the `gemma4:26b-a4b` check kept, with no false refusal.
+- Item 8: no neutral verdict. A treatment that does not clear B1 is `REJECTED` on B1.
+- Item 9: the GPU is free for the run once this file has merged.
 
 1. The treatment: trigger only on `insufficient_context`; at most 3 Sources from the same
    fused pool, cut to the shipped budget by query-aware excerpts; one re-check; one
