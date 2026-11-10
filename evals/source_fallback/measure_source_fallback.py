@@ -143,7 +143,7 @@ class Item:
     cond: str
     bundle: str
     text: str
-    question: eq.Question | None
+    question: Any | None
 
 
 @dataclass(frozen=True)
@@ -213,6 +213,28 @@ def fixture_sha256() -> str:
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _default_holds(item: Item, text: str) -> bool:
+    """Whether `text` names the gold value of `item` (None question: never)."""
+    if item.question is None:
+        return False
+    return eq.matches(item.question.late_markers(), text) is not None
+
+
+@dataclass
+class Hooks:
+    """The fixture-bound seams. The registration of #1748 installs the
+    defaults; a sibling registration over another fixture
+    (`measure_source_fallback_long.py`) replaces `HOOKS` before any command
+    runs, so the arms, the readouts and the bars are one implementation."""
+
+    items: Callable[[], list[Item]]
+    fixture_sha256: Callable[[], str]
+    build_bundle: Callable[[str, pathlib.Path], pathlib.Path]
+    holds: Callable[[Item, str], bool]
+    score: Callable[[Item, str, Sequence[str], str], dict[str, Any]] | None
+    kinds: tuple[str, ...]
 
 
 def should_fall_back(cause: str) -> bool:
@@ -364,6 +386,8 @@ def score_item(
 ) -> dict[str, Any]:
     if item.question is None:
         return {"correct": False, "foreign_value": False}
+    if HOOKS.score is not None:
+        return HOOKS.score(item, text, cited, outcome)
     s = mde.score_answer(item.question, text, cited, outcome)
     return {"correct": bool(s["mf_correct"]), "foreign_value": bool(s["foreign_value"])}
 
@@ -392,7 +416,7 @@ def arm_view(cell: Mapping[str, Any], arm: str) -> dict[str, Any]:
 
 
 def _fired(cells: Sequence[Mapping[str, Any]], cond: str) -> list[Mapping[str, Any]]:
-    by_id = {i.id: i for i in items()}
+    by_id = {i.id: i for i in HOOKS.items()}
     return [
         c for c in cells if c.get("plan") is not None and by_id[c["item"]].cond == cond
     ]
@@ -438,7 +462,7 @@ def _cluster_rates(
     arm: str,
     pick: Callable[[Item, dict[str, Any]], bool],
 ) -> dict[str, float]:
-    by_id = {i.id: i for i in items()}
+    by_id = {i.id: i for i in HOOKS.items()}
     per_item: dict[str, list[float]] = {}
     for c in cells:
         item = by_id[c["item"]]
@@ -467,7 +491,7 @@ def _mean(d: Mapping[str, float]) -> float:
 
 
 def summarize(cells: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    by_id = {i.id: i for i in items()}
+    by_id = {i.id: i for i in HOOKS.items()}
     expected = len(by_id) * len(RUNS)
     loss_b = _cluster_rates(cells, LOSS, BASE, _correct)
     loss_f = _cluster_rates(cells, LOSS, FALLBACK, _correct)
@@ -493,10 +517,7 @@ def summarize(cells: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             continue
         v = arm_view(c, FALLBACK)
         if _correct(item, v) and item.question is not None:
-            markers = item.question.late_markers()
-            span_hits.append(
-                any(eq.matches(markers, t) is not None for t in fb["span_texts"])
-            )
+            span_hits.append(any(HOOKS.holds(item, t) for t in fb["span_texts"]))
     sourced: list[bool] = []
     for c in cells:
         item = by_id[c["item"]]
@@ -620,6 +641,27 @@ def build_bundle(kind: str, root: pathlib.Path) -> pathlib.Path:
     return bundle
 
 
+HOOKS = Hooks(
+    items=items,
+    fixture_sha256=fixture_sha256,
+    build_bundle=build_bundle,
+    holds=_default_holds,
+    score=None,
+    kinds=(B_LOSS, B_INTACT, B_GROUNDING),
+)
+
+
+def _deadline(args: argparse.Namespace) -> float | None:
+    """Monotonic time after which no new cell starts; None when uncapped.
+    `args.cap_hours` is absent for the registration of #1748."""
+    hours = getattr(args, "cap_hours", None)
+    return None if hours is None else time.monotonic() + float(hours) * 3600.0
+
+
+def _expired(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
 def load_sources(bundle: pathlib.Path, ids: Sequence[str]) -> list[Source]:
     out: list[Source] = []
     for cid in ids:
@@ -647,7 +689,11 @@ def _load_store(out: pathlib.Path) -> dict[str, Any]:
     if path.exists():
         store: dict[str, Any] = _read(path)
         return store
-    return {"fixture_sha256": fixture_sha256(), "stamp": _stamp(MODEL), "cells": []}
+    return {
+        "fixture_sha256": HOOKS.fixture_sha256(),
+        "stamp": _stamp(MODEL),
+        "cells": [],
+    }
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -658,11 +704,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     store = _load_store(args.out)
     done = {(c["item"], c["run"]) for c in store["cells"]}
     embedder = OllamaClient(model=EMBED_MODEL, timeout=args.timeout)
-    for kind in (B_LOSS, B_INTACT, B_GROUNDING):
-        todo = [i for i in items() if i.bundle == kind]
+    deadline = _deadline(args)
+    for kind in HOOKS.kinds:
+        todo = [i for i in HOOKS.items() if i.bundle == kind]
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            bundle = build_bundle(kind, root)
+            bundle = HOOKS.build_bundle(kind, root)
             fts_path, vectors_path = mde._index(bundle, root, embedder)
             fts_index = open_fts_index_readonly(fts_path)
             if fts_index is None:
@@ -673,6 +720,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                         for item in todo:
                             if (item.id, run) in done:
                                 continue
+                            if _expired(deadline):
+                                print("wall-clock cap reached; stopping", flush=True)
+                                return 0
                             llm = OllamaClient(
                                 model=MODEL,
                                 max_generation_tokens=DEFAULT_MAX_GENERATION_TOKENS,
@@ -753,7 +803,7 @@ def plan_fallback(
     text = "\n".join(b["text"] for b in blocks)
     gold = None
     if item.question is not None:
-        gold = eq.matches(item.question.late_markers(), text) is not None
+        gold = HOOKS.holds(item, text)
     return {
         "source_ids": ids,
         "budget": budget,
@@ -793,14 +843,15 @@ def cmd_fallback(args: argparse.Namespace) -> int:
         return 0
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
-        bundles = {
-            kind: build_bundle(kind, root / kind)
-            for kind in (B_LOSS, B_INTACT, B_GROUNDING)
-        }
-        by_id = {i.id: i for i in items()}
+        bundles = {kind: HOOKS.build_bundle(kind, root / kind) for kind in HOOKS.kinds}
+        by_id = {i.id: i for i in HOOKS.items()}
+        deadline = _deadline(args)
         for cell in store["cells"]:
             if cell["plan"] is None or cell["fb"] is not None:
                 continue
+            if _expired(deadline):
+                print("wall-clock cap reached; stopping", flush=True)
+                return 0
             item = by_id[cell["item"]]
             llm = OllamaClient(
                 model=MODEL,
