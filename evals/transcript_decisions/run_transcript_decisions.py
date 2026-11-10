@@ -39,7 +39,7 @@ import pathlib
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -308,10 +308,31 @@ def write_results(
     return path
 
 
+def refuse_duplicate_records(records: Sequence[Mapping[str, Any]]) -> None:
+    """Refuse a record set that holds one (arm, run, meeting) more than once.
+
+    The documented `--report` glob also matches the `-PARTIAL` checkpoint the
+    harness writes next to the final store, so every record would be counted
+    once per file and the pooled score would be inflated.
+    """
+    seen: set[tuple[Any, Any, Any]] = set()
+    for record in records:
+        key = (record.get("arm"), record.get("run"), record.get("meeting"))
+        if key in seen:
+            raise SystemExit(
+                f"REFUSED: record (arm={key[0]!r}, run={key[1]!r}, "
+                f"meeting={key[2]!r}) appears more than once in the --report "
+                "input; it probably includes a -PARTIAL checkpoint together "
+                "with the final store"
+            )
+        seen.add(key)
+
+
 def load_records(paths: Sequence[pathlib.Path]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in paths:
         records.extend(json.loads(path.read_text(encoding="utf-8"))["records"])
+    refuse_duplicate_records(records)
     return records
 
 
@@ -577,6 +598,26 @@ def _self_test() -> int:
     def check(label: str, got: object, want: object) -> None:
         if got != want:
             failures.append(f"{label}: got {got!r}, want {want!r}")
+
+    def _dup_refused(recs: list[dict[str, Any]]) -> bool:
+        try:
+            refuse_duplicate_records(recs)
+        except SystemExit as exc:
+            return "-PARTIAL" in str(exc) and "REFUSED" in str(exc)
+        return False
+
+    dup_set = [
+        {"arm": "pass", "run": 1, "meeting": "ES2015a"},
+        {"arm": "pass", "run": 2, "meeting": "ES2015a"},
+    ]
+    check(
+        "a single record set passes the duplicate guard", _dup_refused(dup_set), False
+    )
+    check(
+        "checkpoint plus final store is refused",
+        _dup_refused(dup_set + dup_set),
+        True,
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)

@@ -638,12 +638,32 @@ def _self_test() -> int:
         if got != want:
             failures.append(f"{label}: got {got!r}, want {want!r}")
 
+    def _dup_refused(recs: list[dict[str, Any]]) -> bool:
+        try:
+            harness.refuse_duplicate_records(recs)
+        except SystemExit as exc:
+            return "-PARTIAL" in str(exc) and "REFUSED" in str(exc)
+        return False
+
     def _refused(call: Any) -> bool:
         try:
             call()
         except SystemExit:
             return True
         return False
+
+    dup_set = [
+        {"arm": "pass", "run": 1, "meeting": "ES2015a"},
+        {"arm": "pass", "run": 2, "meeting": "ES2015a"},
+    ]
+    check(
+        "a single record set passes the duplicate guard", _dup_refused(dup_set), False
+    )
+    check(
+        "checkpoint plus final store is refused",
+        _dup_refused(dup_set + dup_set),
+        True,
+    )
 
     base = prompt_budget.chunk_lines(_TEXT, _TARGET)
     check("synthetic transcript packs into four windows", len(base), 4)
@@ -1289,9 +1309,7 @@ def main(argv: list[str] | None = None) -> int:
     verify_gold(args.gold)
     rows, meetings = harness.prepare(args.gold, allow_partial=False)
     if args.report:
-        records: list[dict[str, Any]] = []
-        for path in args.report:
-            records.extend(json.loads(path.read_text(encoding="utf-8"))["records"])
+        records = harness.load_records(args.report)
         exposure = 0
         if args.transcripts is not None:
             exposure = exposure_of(
