@@ -34,6 +34,7 @@ EXEMPT: dict[str, str] = {
     "bakeoff/run_bakeoff.py": "the driver: it reads and checks the children's stamps",
     "concept_model_screen/screen_pipeline.py": "transport module with no entry point; `run_concept_screen.py` stamps every result it stores",
     "decision_extraction/scripts/run_type_coverage.py": "prints to stdout; stores no result",
+    "excerpt_strategy/measure_excerpt_strategy.py": "embedding model only, zero chat calls; the stored run records the harness commit and the embedder digest itself",
     "extraction_collapse/run_collapse_probe.py": "prints to stdout; stores no result",
     "ingest_concurrency/probe_fanout_share.py": "prints to stdout; stores no result",
     "ingest_concurrency/probe_server_capacity.py": "raw server timing with a fixed user prompt and no system prompt; stores no result",
