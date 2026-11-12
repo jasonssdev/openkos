@@ -37,7 +37,7 @@ If any item cannot be met, the session is a pilot, never the binding session.
 
 - [ ] The binding session installs the build **exactly as a user would get it**: from the download page, the unsigned `.dmg`, then the app's guided setup. Do not pre-download or pre-copy it.
 - [ ] The published release asset and the download page exist and work (they are separate issues this one is blocked on).
-- [ ] Record the build identity **before** the session from the published release, not from the Mac: the version, the installer's sha256 (from the release notes and `OpenKOS.dmg.sha256`), and the engine version the app reports once it runs. For the binding session this is the published v0.7.0 `.dmg`; a session on any other build is a pilot.
+- [ ] Record the build identity **before** the session from the published release, not from the Mac: the version, the installer's sha256 (from the release notes and `OpenKOS.dmg.sha256`), and the engine version the app reports once it runs. For the binding session this is the published v0.7.1 `.dmg`; a session on any other build is a pilot.
 
 ## 5. The session files
 
