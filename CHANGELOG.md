@@ -16,10 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
-### Changed
+## [0.7.1] - 2026-11-11
 
-- The `transcript_decisions` docs (the packaged-default docstring, the `openkos.yaml` template and `docs/cli.md`) no longer say the decision pass recovers decisions "at high precision". They state the metric: about 0.9 precision on hand-annotated decisions, where Decisions with no hand annotation are not scored (#1742).
-- To review asks one question per subject instead of one per pair of near-duplicate pages. Pages of one type whose titles are close (the pairs the review already offered) are now grouped by connected component: a subject that recurs across a meeting series is one question where it was five or six, answered through the existing choose-which-are-the-same step. A group of two stays a pair, a group of more than eight, one that holds an exact-title pair, pages of different kinds, and meetings (Events, whose near-identical titles name different occurrences of a series) stay as they were, and no pair is added or dropped. A near-match group the model doubted can still be combined, as the pairs it replaces could (#1699). A group that would contain two pages you already kept apart is not formed; those pages stay as pairs, and the pair you ruled stays suppressed. Attaching a later meeting to an existing page at ingest is unchanged and stays open (#1701).
+A patch release that carries the desktop app changes merged since 0.7.0, so the MVP 6 exit session runs on the app as it is now. The app gains an Activity screen, progress inside a file and a queue on Add files, and undo of a whole label change; To review asks one question per subject instead of one per near-duplicate pair, and offers **Same thing** for a pair the model doubted. A meeting source keeps the meeting as an `Event`, `openkos init` sizes `context_window` from the machine's memory, and `openkos revisions --json` prints the detected decision relations. Existing workspaces keep their configuration.
+
 ### Added
 
 - `openkos revisions --json` prints the detected decision relations as one JSON object instead of the human text: both Decision ids, the verdict, the relation `reconcile --from-findings` would offer (`supersedes` or `revises`), whether the Sources' event dates ordered the pair, the confidence and the evidence, plus the run's counts. A run that never judged still prints a valid object, a partial batch prints what was judged with `partial: true`, and confidential Decisions follow `--include-confidential` as the report does. It makes the detected relations readable without opening `.openkos/findings.db`, whose schema is internal. The human output is unchanged (#1739).
@@ -30,6 +30,8 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- The `transcript_decisions` docs (the packaged-default docstring, the `openkos.yaml` template and `docs/cli.md`) no longer say the decision pass recovers decisions "at high precision". They state the metric: about 0.9 precision on hand-annotated decisions, where Decisions with no hand annotation are not scored (#1742).
+- To review asks one question per subject instead of one per pair of near-duplicate pages. Pages of one type whose titles are close (the pairs the review already offered) are now grouped by connected component: a subject that recurs across a meeting series is one question where it was five or six, answered through the existing choose-which-are-the-same step. A group of two stays a pair, a group of more than eight, one that holds an exact-title pair, pages of different kinds, and meetings (Events, whose near-identical titles name different occurrences of a series) stay as they were, and no pair is added or dropped. A near-match group the model doubted can still be combined, as the pairs it replaces could (#1699). A group that would contain two pages you already kept apart is not formed; those pages stay as pairs, and the pair you ruled stays suppressed. Attaching a later meeting to an existing page at ingest is unchanged and stays open (#1701).
 - `openkos init` now sizes `context_window` once from the machine's total memory and writes it into `openkos.yaml`: `24576` from 32 GiB, `12288` below that or when memory cannot be read. The larger window is the one measured on a synthetic evolution bundle with `qwen3:8b` (evolution questions judged correct 0.36 to 0.75), at a mean of 14.9 s per answer against 40.4 s on one Apple Silicon Mac (about 2.7x); it was adopted against the registered latency bar (ADR-0084). Existing workspaces keep what they have, and nothing is computed at run time. Partly addresses #1703; sending derived pages instead of whole Source bodies is still open there.
 
 ### Fixed
@@ -3728,7 +3730,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/jasonssdev/openkos/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jasonssdev/openkos/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jasonssdev/openkos/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/jasonssdev/openkos/compare/v0.5.4...v0.5.5
