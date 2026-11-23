@@ -1201,6 +1201,37 @@ The key goes only to the endpoint it belongs to: chat requests to `base_url` car
 
 `doctor` reports the effective endpoint and its resolution source, and whether the key is set — see [`openkos doctor`](#openkos-doctor).
 
+#### Hosted providers
+
+`openai-compatible` also reaches a hosted API. Set `backend: openai-compatible`, the provider's `base_url`, and a `model` the provider serves; export the key as `OPENKOS_OPENAI_API_KEY` in the shell that runs `openkos`. One endpoint per provider:
+
+| Provider | `base_url` |
+|---|---|
+| OpenAI | `https://api.openai.com` |
+| Anthropic (its OpenAI-compatible endpoint) | `https://api.anthropic.com` |
+| Google (its OpenAI-compatible endpoint) | `https://generativelanguage.googleapis.com/v1beta/openai` |
+
+```yaml
+backend: openai-compatible
+base_url: https://api.openai.com
+model: <a model id your provider serves>
+embedding_base_url: http://127.0.0.1:11434   # embeddings stay local (Ollama)
+embedding_model: bge-m3
+```
+
+**Keep embeddings local.** Every embedding must be 1024-dimensional, and a response of any other length is refused as a permanent error, not retried. Anthropic has no embeddings endpoint, and a hosted provider's default embedding model is not 1024-dimensional, so point `embedding_base_url` at a local Ollama serving the embedding model. The chat key is not sent there: it reaches `embedding_base_url` only when that URL has the same origin as `base_url`, and a different origin receives a key only from `OPENKOS_OPENAI_EMBEDDING_API_KEY`. `openkos doctor`'s *API key destination* check states which endpoint receives which key, and a command that builds a client prints a notice, once per origin, naming each non-local origin a key is about to be sent to.
+
+**Confidential documents.** A hosted endpoint is not verifiably local, so `confidential` concepts are withheld from it exactly as the [table above](#sensitivity-and-the-local-backend) describes, and `--include-confidential` (on `ingest`, `query`, `curate`, `adjudicate`, `suggest-relations`, `suggest-volatility`, `contradictions` and `revisions`) is the explicit bypass. It sends those documents to the provider. The local embedding endpoint above is local, so it stays exempt.
+
+**Limits that follow from the provider, not from OpenKOS:**
+
+- The generation ceiling (`max_generation_tokens`) is sent as `max_completion_tokens`, the field OpenAI's reasoning models require in place of `max_tokens`.
+- Some models accept only their default sampling. Leave `temperature` and `seed` unset for them; if a provider refuses one, the error names the key to remove from `openkos.yaml`.
+- A transient failure (HTTP 429, 500, 502, 503 or 504, or a failed connection) is retried a bounded number of times, honouring an integer `Retry-After`, before the call fails. A timeout is not retried.
+- A model id the provider has retired or does not serve fails with the provider's own error. `doctor` lists the ids the endpoint reports where it exposes them.
+
+Which hosted model extracts best has not been measured, so none is recommended here.
+
 ### `union_judge`
 
 Which extraction pipeline `ingest` runs. Default `true`.
