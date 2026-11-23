@@ -73,6 +73,13 @@ Environment Variable"). Never `OPENAI_API_KEY` (no prefix) -- that name is
 never read anywhere in this module, on purpose (Threat Matrix "Credential
 confusion")."""
 
+EMBEDDING_API_KEY_ENV: Literal["OPENKOS_OPENAI_EMBEDDING_API_KEY"] = (
+    "OPENKOS_OPENAI_EMBEDDING_API_KEY"
+)
+"""The opt-in environment variable whose value is sent to the EMBEDDING
+endpoint, whatever origin it has (#1765). Like `API_KEY_ENV` it is read only
+from the environment, never from `openkos.yaml`, and never printed."""
+
 EndpointSource = Literal["OLLAMA_HOST", "embedding_base_url", "base_url", "default"]
 """Which precedence rung `resolve_endpoint` resolved an endpoint from
 (design Decision 5). `doctor` (Phase 12) reads this to disclose the
@@ -185,6 +192,40 @@ def _read_api_key(environ: Mapping[str, str]) -> str | None:
     raw = environ.get(API_KEY_ENV, "")
     stripped = raw.strip()
     return stripped or None
+
+
+def _origin(url: str) -> str:
+    """`scheme://host[:port]` of `url`: never the path, query or userinfo
+    (`classify_backend_host`'s `display_host` is already userinfo-redacted)."""
+    scheme = "https" if url.lower().startswith("https://") else "http"
+    return f"{scheme}://{classify_backend_host(url).display_host}"
+
+
+def _same_origin(left: str, right: str) -> bool:
+    """Scheme, host and port equal, compared case-insensitively (a host name
+    is case-insensitive) after the same normalization `_origin` applies."""
+    return _origin(left).lower() == _origin(right).lower()
+
+
+def _embed_api_key(
+    cfg: config.Config, environ: Mapping[str, str]
+) -> tuple[str | None, str | None]:
+    """`(key, variable name)` the EMBEDDING endpoint receives, first match
+    wins (#1765): the opt-in `EMBEDDING_API_KEY_ENV` when set (any origin);
+    else `API_KEY_ENV` when `embedding_base_url` is unset (the request goes to
+    `base_url`) or shares `base_url`'s origin; else `(None, None)` -- the chat
+    provider's credential is never forwarded to a different host."""
+    own = environ.get(EMBEDDING_API_KEY_ENV, "").strip()
+    if own:
+        return own, EMBEDDING_API_KEY_ENV
+    chat_key = _read_api_key(environ)
+    if chat_key is None:
+        return None, None
+    if not cfg.embedding_base_url or (
+        cfg.base_url is not None and _same_origin(cfg.embedding_base_url, cfg.base_url)
+    ):
+        return chat_key, API_KEY_ENV
+    return None, None
 
 
 def _apply_endpoint_host(kwargs: dict[str, Any], endpoint: Endpoint) -> None:
@@ -329,7 +370,7 @@ def embed_client(
             factories.openai_compatible(
                 model=cfg.embedding_model,
                 base_url=endpoint.url,
-                api_key=_read_api_key(environ),
+                api_key=_embed_api_key(cfg, environ)[0],
             ),
         )
     host_kwargs: dict[str, Any] = {}
@@ -367,7 +408,11 @@ def diagnostics_client(
                 model=model,
                 timeout=timeout,
                 base_url=endpoint.url,
-                api_key=_read_api_key(environ),
+                api_key=(
+                    _embed_api_key(cfg, environ)[0]
+                    if purpose == "embed"
+                    else _read_api_key(environ)
+                ),
             ),
         )
     host_kwargs: dict[str, Any] = {}
@@ -505,57 +550,92 @@ def insecure_key_warning(
     )
 
 
-def key_destinations(
+@dataclass(frozen=True, slots=True)
+class KeyRoute:
+    """One endpoint the `openai-compatible` backend talks to and which
+    environment variable's key it receives (`None`: no key). Never carries a
+    key value."""
+
+    purpose: Literal["chat", "embed"]
+    origin: str
+    env_var: str | None
+
+
+def key_routes(
     cfg: config.Config, *, environ: Mapping[str, str] = os.environ
-) -> tuple[str, ...]:
-    """Every distinct origin (`scheme://host[:port]`, never the path, query
-    or userinfo) the `openai-compatible` API key would be sent to: the
-    resolved chat endpoint, then the embedding endpoint when it differs.
-    Empty for `backend == "ollama"` (no key exists there), when no key is
-    set, and for an endpoint that resolves to no URL. Pure: the key's VALUE
-    is never read into the result, only its presence."""
+) -> tuple[KeyRoute, ...]:
+    """The chat route, then the embedding route (the same origin when
+    `embedding_base_url` is unset), each naming the variable whose key it
+    receives. Empty for `backend == "ollama"` and for an endpoint that
+    resolves to no URL. Pure: only presence is read, never a value."""
     if cfg.backend != BACKEND_OPENAI_COMPATIBLE:
         return ()
-    if _read_api_key(environ) is None:
-        return ()
-    origins: list[str] = []
+    routes: list[KeyRoute] = []
     for purpose in ("chat", "embed"):
         url = resolve_endpoint(cfg, purpose=purpose).url
         if not url:
             continue
-        scheme = "https" if url.lower().startswith("https://") else "http"
-        origin = f"{scheme}://{classify_backend_host(url).display_host}"
-        if origin not in origins:
-            origins.append(origin)
+        var: str | None
+        if purpose == "chat":
+            var = API_KEY_ENV if _read_api_key(environ) is not None else None
+        else:
+            var = _embed_api_key(cfg, environ)[1]
+        routes.append(KeyRoute(purpose, _origin(url), var))
+    return tuple(routes)
+
+
+def key_destinations(
+    cfg: config.Config, *, environ: Mapping[str, str] = os.environ
+) -> tuple[str, ...]:
+    """Every distinct origin (`scheme://host[:port]`, never the path, query
+    or userinfo) that actually receives an API key: the chat endpoint when
+    its key is set, then the embedding endpoint when it receives one (and
+    differs). Empty for `backend == "ollama"` and when no key is sent."""
+    origins: list[str] = []
+    for route in key_routes(cfg, environ=environ):
+        if route.env_var is not None and route.origin not in origins:
+            origins.append(route.origin)
     return tuple(origins)
 
 
 def remote_key_notices(
     cfg: config.Config, *, environ: Mapping[str, str] = os.environ
 ) -> tuple[tuple[str, str], ...]:
-    """`(origin, message)` for each distinct non-local origin the API key is
+    """`(origin, message)` for each distinct non-local origin an API key is
     about to be sent to, so a workspace `openkos.yaml` cloned from elsewhere
-    cannot redirect the user's key silently. Local origins produce nothing,
-    and neither does the chat origin `insecure_key_warning` already covers
-    (its plain-`http://` warning supersedes: one line per host). Advisory
-    only; the message names the origin and never the key or the URL path.
-    Callers own printing each origin at most once per process."""
+    cannot redirect the user's key silently. Each message names the variable
+    that supplies the key; the chat notice also states when a separate
+    embedding endpoint receives none. Local origins, keyless endpoints and
+    the chat origin `insecure_key_warning` already covers (its plain-`http://`
+    warning supersedes: one line per host) produce nothing. Advisory only;
+    the message names the origin and never the key or the URL path. Callers
+    own printing each origin at most once per process."""
     superseded = insecure_key_warning(cfg, environ=environ) is not None
-    chat_url = resolve_endpoint(cfg, purpose="chat").url or ""
-    chat_origin = (
-        f"http://{classify_backend_host(chat_url).display_host}" if superseded else None
-    )
+    routes = key_routes(cfg, environ=environ)
+    chat_route = next((r for r in routes if r.purpose == "chat"), None)
+    embed_route = next((r for r in routes if r.purpose == "embed"), None)
     notices: list[tuple[str, str]] = []
-    for origin in key_destinations(cfg, environ=environ):
-        if origin == chat_origin:
+    seen: set[str] = set()
+    for route in routes:
+        if route.env_var is None or route.origin in seen:
             continue
-        if classify_backend_host(origin).is_local:
+        seen.add(route.origin)
+        if superseded and route is chat_route:
             continue
-        notices.append(
-            (
-                origin,
-                "notice: OPENKOS_OPENAI_API_KEY is being sent to a non-local "
-                f"server ({origin}) -- check that this host is trusted",
-            )
+        if classify_backend_host(route.origin).is_local:
+            continue
+        message = (
+            f"notice: {route.env_var} is being sent to a non-local "
+            f"server ({route.origin}) -- check that this host is trusted"
         )
+        if (
+            route is chat_route
+            and embed_route is not None
+            and embed_route.env_var is None
+            and embed_route.origin != route.origin
+        ):
+            message += (
+                f"; the embedding endpoint ({embed_route.origin}) receives no key"
+            )
+        notices.append((route.origin, message))
     return tuple(notices)

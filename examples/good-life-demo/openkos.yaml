@@ -31,7 +31,9 @@ context_window: 12288  # tokens the model holds at once (prompt + reply);
                           # served by a different process or port than the
                           # chat model. UNSET by default: embedding requests
                           # fall back to base_url (or that backend's own
-                          # default).
+                          # default). The API key is sent there only when it
+                          # has the same origin as base_url; for another host
+                          # set OPENKOS_OPENAI_EMBEDDING_API_KEY, else none.
 # temperature: 0.2        # sampling temperature forwarded as options.temperature.
                           # UNSET by default -- unpinned, sampling follows whatever
                           # the model's Modelfile ships (qwen3:8b: 0.6). Pinning it

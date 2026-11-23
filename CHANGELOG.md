@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Changed
+
+- With `backend: openai-compatible`, `OPENKOS_OPENAI_API_KEY` is now sent to the embedding endpoint only when `embedding_base_url` is unset or has the same origin as `base_url`; a different host used to receive the chat provider's key on every embedding request. A remote embedding provider that needs a key reads it from the new opt-in `OPENKOS_OPENAI_EMBEDDING_API_KEY` environment variable, and without it that endpoint receives none. `doctor`'s `API key destination` line and the remote-key notice now state which endpoint receives which key, including an embedding endpoint that receives none. A workspace without `embedding_base_url` behaves as before (#1765).
+
 ### Fixed
 
 - A transient failure from an `openai-compatible` backend no longer makes `ingest` give up extraction on the first attempt. `chat()` now retries an HTTP 429, 500, 502, 503 or 504, and a connection that is refused or reset before any response, up to 3 attempts in all, pausing 0.5 s then 1 s, or the server's `Retry-After` when it is a whole number of seconds (never more than 30 s). When the attempts run out the same error as before is raised, so the "keeping the Source only" outcome is unchanged. A timeout, and a failure while the reply is being read, are deliberately not retried, which narrows the "transport timeouts" the issue asked for: a generation can run for minutes and a retry would multiply that wait by the attempt count. Other 4xx statuses, a missing model and a length-capped reply still fail at once. The Ollama backend is unchanged. Whether a run that skipped extraction should still exit 0 stays open (#1764).

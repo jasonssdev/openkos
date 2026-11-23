@@ -600,10 +600,16 @@ _KEY_ENV = {"OPENKOS_OPENAI_API_KEY": "secret"}
             ["https://api.example.com:8443"],
         ),
         (
-            _KEY_ENV,
+            {**_KEY_ENV, "OPENKOS_OPENAI_EMBEDDING_API_KEY": "embed-secret"},
             "https://api.example.com/v1",
             "https://embed.example.org/v1",
             ["https://api.example.com", "https://embed.example.org"],
+        ),
+        (
+            _KEY_ENV,
+            "https://api.example.com/v1",
+            "https://embed.example.org/v1",
+            ["https://api.example.com"],
         ),
         (_KEY_ENV, "http://127.0.0.1:8080", None, []),
         (_KEY_ENV, "https://localhost:8080/v1", None, []),
@@ -611,7 +617,7 @@ _KEY_ENV = {"OPENKOS_OPENAI_API_KEY": "secret"}
         # plain http to a non-local host: the stronger warning owns that host.
         (_KEY_ENV, "http://example.com:8080", None, []),
         (
-            _KEY_ENV,
+            {**_KEY_ENV, "OPENKOS_OPENAI_EMBEDDING_API_KEY": "embed-secret"},
             "http://example.com:8080",
             "https://embed.example.org",
             ["https://embed.example.org"],
@@ -620,7 +626,8 @@ _KEY_ENV = {"OPENKOS_OPENAI_API_KEY": "secret"}
     ids=[
         "https_remote",
         "port_kept_path_query_dropped",
-        "chat_and_embed_differ",
+        "chat_and_embed_differ_with_embedding_key",
+        "chat_and_embed_differ_embed_gets_no_key",
         "loopback_ip",
         "localhost",
         "no_key",
@@ -648,6 +655,7 @@ def test_remote_key_notices_matrix(
     for origin, message in notices:
         assert origin in message
         assert "secret" not in message
+        assert "embed-secret" not in message
         assert "?" not in message
         assert "/v1" not in message
 
@@ -742,3 +750,263 @@ def test_resolve_local_exemption_all_needs_every_client_local(tmp_path: Path) ->
     assert backends.resolve_local_exemption_all([], cfg) is False
     off = dataclasses.replace(cfg, confidential_local_exemption=False)
     assert backends.resolve_local_exemption_all([local, local], off) is False
+
+
+# ---------------------------------------------------------------------------
+# #1765 -- the API key is sent only to the endpoint it belongs to.
+# ---------------------------------------------------------------------------
+
+_CHAT_KEY = "chat-secret"
+_EMBED_KEY = "embed-secret"
+_BOTH_KEYS = {
+    "OPENKOS_OPENAI_API_KEY": _CHAT_KEY,
+    "OPENKOS_OPENAI_EMBEDDING_API_KEY": _EMBED_KEY,
+}
+_ONLY_CHAT_KEY = {"OPENKOS_OPENAI_API_KEY": _CHAT_KEY}
+_ONLY_EMBED_KEY = {"OPENKOS_OPENAI_EMBEDDING_API_KEY": _EMBED_KEY}
+
+
+def _factories() -> backends.BackendFactories:
+    return backends.BackendFactories(
+        ollama=_RecordingFactory, openai_compatible=_RecordingFactory
+    )
+
+
+_EMBED_KEY_MATRIX = [
+    pytest.param(
+        _ONLY_CHAT_KEY,
+        "https://api.example.com/v1",
+        None,
+        _CHAT_KEY,
+        id="embedding_base_url_unset",
+    ),
+    pytest.param(
+        _ONLY_CHAT_KEY,
+        "https://api.example.com/v1",
+        "https://api.example.com/embed",
+        _CHAT_KEY,
+        id="same_origin_other_path",
+    ),
+    pytest.param(
+        _ONLY_CHAT_KEY,
+        "https://API.example.com/v1",
+        "https://api.example.com/v1",
+        _CHAT_KEY,
+        id="same_origin_host_case",
+    ),
+    pytest.param(
+        _ONLY_CHAT_KEY,
+        "https://api.example.com",
+        "http://127.0.0.1:11434",
+        None,
+        id="different_origin_no_embedding_key",
+    ),
+    pytest.param(
+        _ONLY_CHAT_KEY,
+        "https://api.example.com",
+        "https://embed.example.org",
+        None,
+        id="different_host",
+    ),
+    pytest.param(
+        _ONLY_CHAT_KEY,
+        "https://api.example.com",
+        "https://api.example.com:8443",
+        None,
+        id="same_host_different_port",
+    ),
+    pytest.param(
+        _ONLY_CHAT_KEY,
+        "https://api.example.com",
+        "http://api.example.com",
+        None,
+        id="same_host_different_scheme",
+    ),
+    pytest.param(
+        _BOTH_KEYS,
+        "https://api.example.com",
+        "http://127.0.0.1:11434",
+        _EMBED_KEY,
+        id="different_origin_with_embedding_key",
+    ),
+    pytest.param(
+        _BOTH_KEYS,
+        "https://api.example.com",
+        "https://api.example.com/embed",
+        _EMBED_KEY,
+        id="same_origin_embedding_key_wins",
+    ),
+    pytest.param(
+        _ONLY_EMBED_KEY,
+        "https://api.example.com",
+        "http://127.0.0.1:11434",
+        _EMBED_KEY,
+        id="embedding_key_alone",
+    ),
+    pytest.param(
+        {**_ONLY_CHAT_KEY, "OPENKOS_OPENAI_EMBEDDING_API_KEY": "   "},
+        "https://api.example.com",
+        "http://127.0.0.1:11434",
+        None,
+        id="blank_embedding_key_is_absent",
+    ),
+    pytest.param({}, "https://api.example.com", None, None, id="no_keys"),
+]
+
+
+@pytest.mark.parametrize(
+    ("environ", "base_url", "embedding_base_url", "expected"), _EMBED_KEY_MATRIX
+)
+def test_embed_client_api_key_follows_the_endpoint(
+    tmp_path: Path,
+    environ: dict[str, str],
+    base_url: str,
+    embedding_base_url: str | None,
+    expected: str | None,
+) -> None:
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url=base_url,
+        embedding_base_url=embedding_base_url,
+    )
+
+    client = backends.embed_client(cfg, factories=_factories(), environ=environ)
+
+    assert isinstance(client, _RecordingFactory)
+    assert client.kwargs["api_key"] == expected
+
+
+@pytest.mark.parametrize(
+    ("environ", "base_url", "embedding_base_url", "expected"), _EMBED_KEY_MATRIX
+)
+def test_diagnostics_embed_client_follows_the_embed_rule(
+    tmp_path: Path,
+    environ: dict[str, str],
+    base_url: str,
+    embedding_base_url: str | None,
+    expected: str | None,
+) -> None:
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url=base_url,
+        embedding_base_url=embedding_base_url,
+    )
+
+    client = backends.diagnostics_client(
+        cfg,
+        model="m",
+        timeout=1.0,
+        factories=_factories(),
+        purpose="embed",
+        environ=environ,
+    )
+
+    assert isinstance(client, _RecordingFactory)
+    assert client.kwargs["api_key"] == expected
+
+
+@pytest.mark.parametrize("purpose", ["chat", "embed"])
+def test_chat_and_chat_diagnostics_keep_the_chat_key(
+    tmp_path: Path, purpose: str
+) -> None:
+    """The embedding variable and a different-origin embedding endpoint never
+    change what chat receives."""
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="https://api.example.com",
+        embedding_base_url="http://127.0.0.1:11434",
+    )
+
+    chat = backends.chat_client(cfg, factories=_factories(), environ=_BOTH_KEYS)
+    diag = backends.diagnostics_client(
+        cfg,
+        model="m",
+        timeout=1.0,
+        factories=_factories(),
+        purpose="chat",
+        environ=_BOTH_KEYS,
+    )
+
+    assert isinstance(chat, _RecordingFactory)
+    assert isinstance(diag, _RecordingFactory)
+    assert chat.kwargs["api_key"] == _CHAT_KEY
+    assert diag.kwargs["api_key"] == _CHAT_KEY
+
+
+def test_embedding_key_is_never_read_for_ollama(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, embedding_base_url="http://127.0.0.1:11434")
+
+    client = backends.embed_client(cfg, factories=_factories(), environ=_BOTH_KEYS)
+
+    assert isinstance(client, _RecordingFactory)
+    assert "api_key" not in client.kwargs
+
+
+def test_key_destinations_omit_a_keyless_embedding_origin(tmp_path: Path) -> None:
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="https://api.example.com/v1",
+        embedding_base_url="http://127.0.0.1:11434",
+    )
+
+    assert backends.key_destinations(cfg, environ=_ONLY_CHAT_KEY) == (
+        "https://api.example.com",
+    )
+    assert backends.key_destinations(cfg, environ=_BOTH_KEYS) == (
+        "https://api.example.com",
+        "http://127.0.0.1:11434",
+    )
+
+
+def test_key_destinations_for_an_embedding_key_alone(tmp_path: Path) -> None:
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="https://api.example.com/v1",
+        embedding_base_url="http://127.0.0.1:11434",
+    )
+
+    assert backends.key_destinations(cfg, environ=_ONLY_EMBED_KEY) == (
+        "http://127.0.0.1:11434",
+    )
+
+
+def test_notice_states_that_a_separate_embedding_endpoint_gets_no_key(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="https://api.example.com/v1",
+        embedding_base_url="https://embed.example.org/v1",
+    )
+
+    notices = backends.remote_key_notices(cfg, environ=_ONLY_CHAT_KEY)
+
+    assert [origin for origin, _ in notices] == ["https://api.example.com"]
+    message = notices[0][1]
+    assert "OPENKOS_OPENAI_API_KEY" in message
+    assert "https://embed.example.org" in message
+    assert "no key" in message
+    assert _CHAT_KEY not in message
+
+
+def test_notice_names_the_embedding_variable_for_the_embedding_origin(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="https://api.example.com/v1",
+        embedding_base_url="https://embed.example.org/v1",
+    )
+
+    notices = dict(backends.remote_key_notices(cfg, environ=_BOTH_KEYS))
+
+    assert "OPENKOS_OPENAI_EMBEDDING_API_KEY" in notices["https://embed.example.org"]
+    assert "OPENKOS_OPENAI_EMBEDDING_API_KEY" not in notices["https://api.example.com"]
+    assert _EMBED_KEY not in "".join(notices.values())
