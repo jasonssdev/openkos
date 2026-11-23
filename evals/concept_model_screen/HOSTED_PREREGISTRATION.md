@@ -1,10 +1,9 @@
 # Pre-registration: hosted providers vs the local default on the concept screen (#1767)
 
-**Status: DRAFT, not yet registered.** It becomes binding only when this file
-is merged to `main`, and no hosted call may be sent before that. A change
-after the merge is a new registration, not an edit to this one. The owner
-decisions in "Owner decisions before the run" are open: the arms, ceilings and
-run count below are recommendations, and the owner settles them in review.
+**Status: registered on merge to `main`.** No hosted call may be sent before
+that merge. A change after the merge is a new registration, not an edit to
+this one. The owner settled every decision on 2026-11-23; they are recorded in
+"Owner decisions" below and bind the run.
 
 ## Question
 
@@ -200,8 +199,8 @@ Method, all model-free (`hosted_screen.py forecast`, reproducible):
   OpenAI from [developers.openai.com/api/docs/pricing](https://developers.openai.com/api/docs/pricing);
   Google from [aistudio.google.com/docs/pricing](https://aistudio.google.com/docs/pricing)
   (Gemini 3.8 Flash $0.75 / $3.75 through 2026-12-31, then double). The OpenAI
-  and Google pages were read through a summarising fetch, so **re-check those
-  rates on the page before spending** (UNCONFIRMED against the raw page).
+  rates were then confirmed on the raw page (see "Owner decisions"); the Google
+  rate was not, and Google is not a registered arm.
   Prompt caching and batch discounts are not assumed.
 
 Two runs per arm (102 calls), US dollars:
@@ -264,9 +263,28 @@ rule above is applied to the stored scores.
 - No hosted model becomes a default, and nothing here weakens the local-first,
   no-mandatory-cloud principle.
 
-## Owner decisions before the run
+## Owner decisions
 
-These are open. Each has a recommendation, and none is decided by this file.
+Settled by the owner on 2026-11-23, accepting every recommendation below:
+
+- **Arms:** `openai-gpt-4.1-mini`, `openai-gpt-5-mini`,
+  `anthropic-claude-haiku-5-5`, `openai-gpt-6-luna`. `openai-gpt-5.5` and
+  `google-gemini-3.8-flash` are not registered arms.
+- **Ceilings:** `--max-usd` 1.50, 2.00, 0.50 and 0.50 respectively (4.50 total).
+- **Runs per arm:** 2, paired with the reference's cached runs 1 and 2.
+- **Prices:** confirmed on the raw provider pages on 2026-11-23.
+  [developers.openai.com/api/docs/pricing](https://developers.openai.com/api/docs/pricing),
+  Standard tier: gpt-4.1-mini $0.40 / $1.60, gpt-5-mini $0.25 / $2.00,
+  gpt-6-luna $0.10 / $0.50 (short context, up to 272K input tokens).
+  [platform.claude.com/docs/en/about-claude/pricing](https://platform.claude.com/docs/en/about-claude/pricing):
+  Claude Haiku 5.5 $0.10 / $0.50 for prompts up to 100,000 tokens. OpenAI's
+  [reasoning guide](https://developers.openai.com/api/docs/guides/reasoning)
+  states reasoning tokens are billed as output tokens. The Anthropic token
+  factor of 1.4 stays an assumption; the ceiling, not the forecast, bounds the
+  spend.
+- **Local GPU:** authorized for the G1 judge and the embeddings.
+
+The original recommendations, kept for the record:
 
 1. **Which hosted arms.** Recommendation: the first four rows (`gpt-4.1-mini`,
    `gpt-5-mini`, `claude-haiku-5-5`, `gpt-6-luna`): one non-reasoning and one
