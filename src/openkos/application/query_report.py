@@ -44,7 +44,7 @@ def _llm_section(cfg: config.Config) -> dict[str, object]:
     """What OpenKOS sends, per backend; `None` for what it does not set.
 
     Ollama receives `options.num_ctx` and `options.num_predict`; an
-    OpenAI-compatible server receives `max_tokens` (reported as
+    OpenAI-compatible server receives `max_completion_tokens` (reported as
     `num_predict`) and never `num_ctx`. `temperature`/`seed` are forwarded
     only when the workspace pins them."""
     openai = cfg.backend == BACKEND_OPENAI_COMPATIBLE
