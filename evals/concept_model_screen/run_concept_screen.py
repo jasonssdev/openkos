@@ -540,15 +540,89 @@ def run_digest(args: argparse.Namespace, model: str) -> str | None:
     return str(args.digest)
 
 
+API_KEY_ENV: Final = "OPENKOS_OPENAI_API_KEY"
+"""Where a hosted arm's key is read from, as in the product (ADR-0070). It is
+never written to a cache entry, a record, a stamp or the ledger."""
+
+
+def is_hosted(base_url: str | None) -> bool:
+    """Whether `base_url` is a remote service rather than a loopback or
+    private-network server. A name other than `localhost` counts as hosted."""
+    import ipaddress
+    import urllib.parse
+
+    host = urllib.parse.urlparse(base_url or "").hostname or ""
+    if host == "localhost":
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return not (addr.is_loopback or addr.is_private)
+
+
+def validate_hosted(args: Any, environ: Mapping[str, str]) -> None:
+    """Fail closed before any hosted call (#1767): a registered budget, the
+    stage-0 timeout of the reference model, a key in the environment, and no
+    prose fixtures (they are real-world material, not a public corpus)."""
+    if args.prose:
+        raise SystemExit("refusing: --prose would send non-public fixtures to a host")
+    missing = [
+        flag
+        for flag, value in (
+            ("--max-usd", args.max_usd),
+            ("--max-calls", args.max_calls),
+            ("--price-in", args.price_in),
+            ("--price-out", args.price_out),
+            ("--timeout-from", args.timeout_from),
+        )
+        if value is None
+    ]
+    if missing:
+        raise SystemExit("a hosted run needs " + ", ".join(missing))
+    if not environ.get(API_KEY_ENV):
+        raise SystemExit(f"a hosted run needs {API_KEY_ENV} in the environment")
+
+
+def ledger_path(args: argparse.Namespace) -> pathlib.Path:
+    return (
+        pathlib.Path(args.runs_dir) / "hosted" / f"{safe(args.models[0])}-ledger.json"
+    )
+
+
 def run_sender(args: argparse.Namespace) -> sp.Sender:
     if getattr(args, "backend", "ollama") == "ollama":
         return sp.ollama_sender(args.host)
-    return sp.openai_compatible_sender(args.base_url, served_model=args.served_model)
+    cached: sp.Sender | None = getattr(args, "_sender", None)
+    if cached is not None:
+        return cached
+    hosted = is_hosted(args.base_url)
+    sender = sp.openai_compatible_sender(
+        args.base_url,
+        served_model=args.served_model,
+        api_key=os.environ.get(API_KEY_ENV) if hosted else None,
+        send_seed=not getattr(args, "no_seed", False),
+    )
+    if hosted:
+        sender = sp.guarded_sender(
+            sender,
+            sp.SpendGuard.open(
+                ledger_path(args),
+                max_calls=args.max_calls,
+                max_usd=args.max_usd,
+                price_in=args.price_in,
+                price_out=args.price_out,
+            ),
+        )
+    args._sender = sender
+    return sender
 
 
 def run_warm_up(args: argparse.Namespace, model: str) -> float:
     if getattr(args, "backend", "ollama") == "ollama":
         return warm_up(model, args.host)
+    if is_hosted(args.base_url):
+        return 0.0  # a hosted service has no cold load, and a call costs money
     started = time.monotonic()
     with contextlib.suppress(Exception):
         run_sender(args)(model, [{"role": "user", "content": "Reply ok."}], 0, 600)
@@ -589,6 +663,9 @@ def run_one(
         cache=cache,
         send=run_sender(args),
         windows=windows,
+        cache_errors=not (
+            getattr(args, "backend", "ollama") != "ollama" and is_hosted(args.base_url)
+        ),
     )
     record = sp.run_source(text=text, title=title, backend=backend, cache=cache)
     record.update({"model": model, "digest": digest, "source": source, "run": run})
@@ -616,6 +693,8 @@ def sources_for(pool: str, prose: bool) -> list[str]:
 
 def cmd_run(args: argparse.Namespace) -> int:
     refuse_judge_as_candidate(args.models)
+    if args.backend != "ollama" and is_hosted(args.base_url):
+        validate_hosted(args, os.environ)
     assert_prose_present()
     timeouts = load_timeouts(args.runs_dir)
     corpus = Corpus(args.runs_dir)
@@ -1480,6 +1559,7 @@ def self_test() -> int:
         _t_judge_parse,
         _t_backend_timeout_and_cache,
         _t_stage_capture,
+        _t_hosted_arm,
         _t_judge_never_candidate,
     ]
     failed = 0
@@ -1935,6 +2015,134 @@ def _t_backend_timeout_and_cache() -> None:
         check(len(sent) == n + 1, "a timeout under a shorter bound must not replay")
 
 
+def _t_hosted_arm() -> None:
+    import tempfile
+    import types
+
+    check(not is_hosted("http://127.0.0.1:8080"), "loopback is local")
+    check(not is_hosted("http://localhost:8080/v1"), "localhost is local")
+    check(not is_hosted("http://192.168.1.5:8080"), "private network is local")
+    check(is_hosted("https://api.openai.com"), "a public name is hosted")
+    base = {
+        "prose": False,
+        "max_usd": 1.0,
+        "max_calls": 10,
+        "price_in": 1.0,
+        "price_out": 2.0,
+        "timeout_from": "qwen3:8b",
+    }
+    key = {API_KEY_ENV: "k"}
+    validate_hosted(types.SimpleNamespace(**base), key)
+    for field, value, env in (
+        ("prose", True, key),
+        ("max_usd", None, key),
+        ("max_calls", None, key),
+        ("price_in", None, key),
+        ("timeout_from", None, key),
+        ("prose", False, {}),
+    ):
+        try:
+            validate_hosted(types.SimpleNamespace(**{**base, field: value}), env)
+        except SystemExit:
+            continue
+        raise _Fail(f"a hosted run must be refused without {field}")
+
+    seen: list[tuple[str | None, bytes]] = []
+
+    class _Resp:
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "choices": [
+                        {"message": {"content": "[]"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1000, "completion_tokens": 500},
+                }
+            ).encode()
+
+    def fake_open(request: Any, timeout: float) -> Any:
+        seen.append((request.get_header("Authorization"), request.data))
+        return _Resp()
+
+    inner = sp.openai_compatible_sender(
+        "https://api.example.com",
+        served_model="m",
+        urlopen=fake_open,
+        api_key="secret",
+        send_seed=False,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = pathlib.Path(tmp) / "l.json"
+        guard = sp.SpendGuard.open(
+            ledger, max_calls=2, max_usd=1.0, price_in=2.0, price_out=4.0
+        )
+        send = sp.guarded_sender(inner, guard)
+        msgs = [{"role": "user", "content": "x"}]
+        _c, entry = send("label", msgs, 1, 5.0)
+        check(entry["outcome"] == "ok", f"{entry}")
+        check(seen[0][0] == "Bearer secret", "the key is sent as a bearer token")
+        check(b'"seed"' not in seen[0][1], "no seed is sent under send_seed=False")
+        check(b"max_completion_tokens" in seen[0][1], "reasoning-safe token field")
+        check("secret" not in json.dumps(entry), "the key never reaches an entry")
+        # 1000 in at $2/M + 500 out at $4/M = $0.004
+        check(abs(guard.usd - 0.004) < 1e-12 and guard.calls == 1, f"{guard.usd}")
+        reopened = sp.SpendGuard.open(
+            ledger, max_calls=2, max_usd=1.0, price_in=2.0, price_out=4.0
+        )
+        check(reopened.calls == 1, "the ledger survives a restart")
+        send2 = sp.guarded_sender(inner, reopened)
+        send2("label", msgs, 2, 5.0)
+        try:
+            send2("label", msgs, 3, 5.0)
+        except sp.BudgetExceeded:
+            pass
+        else:
+            raise _Fail("the call ceiling must stop the third call before it is sent")
+        check(len(seen) == 2, "a refused call is never sent")
+        check(not issubclass(sp.BudgetExceeded, Exception), "must not be swallowable")
+        usd_cap = sp.SpendGuard.open(
+            pathlib.Path(tmp) / "u.json",
+            max_calls=99,
+            max_usd=0.003,
+            price_in=2.0,
+            price_out=4.0,
+        )
+        sp.guarded_sender(inner, usd_cap)("label", msgs, 1, 5.0)
+        try:
+            sp.guarded_sender(inner, usd_cap)("label", msgs, 2, 5.0)
+        except sp.BudgetExceeded:
+            pass
+        else:
+            raise _Fail("the spend ceiling must stop the next call")
+
+        # A provider error is not cached on a hosted arm; a capped reply is.
+        calls: list[int] = []
+
+        def flaky(
+            model: str, messages: Sequence[Any], seed: int, timeout: float
+        ) -> tuple[str | None, dict[str, Any]]:
+            calls.append(seed)
+            return None, {"outcome": "error", "wall_s": 0.1, "error": "503"}
+
+        cache = sp.ChatCache(pathlib.Path(tmp) / "c")
+        for cache_errors, expected in ((False, 2), (True, 1)):
+            calls.clear()
+            for _ in range(2):
+                be = sp.ScreenBackend(
+                    model=f"m{cache_errors}",
+                    digest="d",
+                    run=1,
+                    window_timeout_s=60,
+                    whole_timeout_s=180,
+                    cache=cache,
+                    send=flaky,
+                    cache_errors=cache_errors,
+                )
+                with contextlib.suppress(Exception):
+                    be.chat(msgs)
+            check(len(calls) == expected, f"cache_errors={cache_errors}: {calls}")
+
+
 def _t_stage_capture() -> None:
     import tempfile
 
@@ -2074,6 +2282,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     r.add_argument("--digest", default=None)
     r.add_argument(
         "--timeout-from", default=None, help="use this model's stage-0 timeout"
+    )
+    r.add_argument(
+        "--no-seed", action="store_true", help="do not send a seed (hosted arms)"
+    )
+    r.add_argument("--max-calls", type=int, default=None, help="hosted call ceiling")
+    r.add_argument("--max-usd", type=float, default=None, help="hosted spend ceiling")
+    r.add_argument(
+        "--price-in", type=float, default=None, help="USD per 1M input tokens"
+    )
+    r.add_argument(
+        "--price-out", type=float, default=None, help="USD per 1M output tokens"
     )
     j = sub.add_parser("judge")
     j.add_argument("--models", nargs="+", required=True)
