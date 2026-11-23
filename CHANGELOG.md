@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Fixed
+
+- A transient failure from an `openai-compatible` backend no longer makes `ingest` give up extraction on the first attempt. `chat()` now retries an HTTP 429, 500, 502, 503 or 504, and a connection that is refused or reset before any response, up to 3 attempts in all, pausing 0.5 s then 1 s, or the server's `Retry-After` when it is a whole number of seconds (never more than 30 s). When the attempts run out the same error as before is raised, so the "keeping the Source only" outcome is unchanged. A timeout, and a failure while the reply is being read, are deliberately not retried, which narrows the "transport timeouts" the issue asked for: a generation can run for minutes and a retry would multiply that wait by the attempt count. Other 4xx statuses, a missing model and a length-capped reply still fail at once. The Ollama backend is unchanged. Whether a run that skipped extraction should still exit 0 stays open (#1764).
+
 ## [0.7.1] - 2026-11-11
 
 A patch release that carries the desktop app changes merged since 0.7.0, so the MVP 6 exit session runs on the app as it is now. The app gains an Activity screen, progress inside a file and a queue on Add files, and undo of a whole label change; To review asks one question per subject instead of one per near-duplicate pair, and offers **Same thing** for a pair the model doubted. A meeting source keeps the meeting as an `Event`, `openkos init` sizes `context_window` from the machine's memory, and `openkos revisions --json` prints the detected decision relations. Existing workspaces keep their configuration.

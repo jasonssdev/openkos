@@ -60,6 +60,22 @@ DEFAULT_EMBED_RETRY_BACKOFF_BASE = 0.5
 """Default exponential-backoff base, in seconds, mirroring
 `ollama.DEFAULT_EMBED_RETRY_BACKOFF_BASE` (see note above)."""
 
+DEFAULT_CHAT_RETRY_ATTEMPTS = 3
+"""Default number of `chat()` attempts (1 initial + 2 retries) for a transient
+failure (issue #1764)."""
+
+DEFAULT_CHAT_RETRY_BACKOFF_BASE = 0.5
+"""Default exponential-backoff base, in seconds, between `chat()` attempts."""
+
+MAX_CHAT_RETRY_PAUSE = 30.0
+"""Longest pause, in seconds, `chat()` takes between two attempts, whether it
+came from the backoff or from a server's `Retry-After`: a server cannot stall
+ingest by asking for an hour."""
+
+_TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
+"""HTTP statuses `chat()` retries. Every other status, and every redirect, is
+final on the first attempt."""
+
 _API_KEY_ENV_NAME = "OPENKOS_OPENAI_API_KEY"
 """The environment variable name named in user-facing error text (issue
 #1057 backend-selection spec). This module never reads the environment --
@@ -133,6 +149,35 @@ def _order_embedding_rows(rows: list[Any]) -> list[Any]:
     return [row["embedding"] for row in ordered]
 
 
+class _TransientChatFailure(Exception):
+    """One `chat()` attempt failed in a way worth retrying (issue #1764).
+
+    Carries the already-mapped error, so exhausting the budget raises exactly
+    what a single attempt would have raised, and the server's `Retry-After`
+    pause (seconds), or `None` when it sent no usable one. Never leaves
+    `chat()`."""
+
+    def __init__(self, error: OpenAICompatibleError, retry_after: float | None):
+        super().__init__(str(error))
+        self.error = error
+        self.retry_after = retry_after
+
+
+def _parse_retry_after(headers: Any) -> float | None:
+    """A `Retry-After` given as a non-negative integer number of seconds, or
+    `None`. The HTTP-date form, a negative or fractional number and garbage
+    all read as absent: the exponential backoff then applies."""
+    if headers is None:
+        return None
+    value = headers.get("Retry-After")
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value.isascii() or not value.isdigit():
+        return None
+    return float(int(value))
+
+
 class OpenAICompatibleError(BackendError):
     """Base error for any OpenAI-compatible chat/embed/diagnostics failure;
     also raised directly for non-404/400-marker HTTP errors and
@@ -199,6 +244,8 @@ class OpenAICompatibleClient:
         urlopen: Callable[..., Any] | None = None,
         embed_retry_attempts: int = DEFAULT_EMBED_RETRY_ATTEMPTS,
         embed_retry_backoff_base: float = DEFAULT_EMBED_RETRY_BACKOFF_BASE,
+        chat_retry_attempts: int = DEFAULT_CHAT_RETRY_ATTEMPTS,
+        chat_retry_backoff_base: float = DEFAULT_CHAT_RETRY_BACKOFF_BASE,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         """Store every constructor argument; no I/O, no environment read.
@@ -247,6 +294,8 @@ class OpenAICompatibleClient:
         )
         self._embed_retry_attempts = embed_retry_attempts
         self._embed_retry_backoff_base = embed_retry_backoff_base
+        self._chat_retry_attempts = chat_retry_attempts
+        self._chat_retry_backoff_base = chat_retry_backoff_base
         self._sleep = sleep
 
     @property
@@ -297,10 +346,41 @@ class OpenAICompatibleClient:
         return `choices[0].message.content` (openai-compatible-client spec:
         "Successful Chat Call Returns Assistant Text").
 
+        Retries a transient failure (HTTP 429/500/502/503/504, or a
+        connect-phase transport failure) up to `chat_retry_attempts` times
+        in total, pausing `Retry-After` seconds when the server sent an
+        integer one, else `chat_retry_backoff_base * 2 ** (attempt - 1)`,
+        each capped at `MAX_CHAT_RETRY_PAUSE` (issue #1764). A timeout and a
+        failure while reading the body are NOT retried: the server may still
+        be generating, and a retry would multiply the wall time by the
+        attempt count. When the budget is spent the mapped error of the last
+        attempt is raised unchanged.
+
         Builds everything as locals and writes nothing back onto `self` --
         the same thread-safety contract `OllamaClient.chat` upholds for
         #744's concurrent fan-out, pinned here by an AST guard mirroring
-        `test_ollama.py`'s (#748)."""
+        `test_ollama.py`'s (#748). The pause goes through a local binding
+        of `self._sleep`, which that guard reads as a call on a local."""
+        sleep = self._sleep
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self._chat_once(messages)
+            except _TransientChatFailure as transient:
+                if attempt >= self._chat_retry_attempts:
+                    raise transient.error from transient.error.__cause__
+                pause = (
+                    transient.retry_after
+                    if transient.retry_after is not None
+                    else self._chat_retry_backoff_base * 2 ** (attempt - 1)
+                )
+                sleep(min(pause, MAX_CHAT_RETRY_PAUSE))
+
+    def _chat_once(self, messages: Sequence[Message]) -> str:
+        """One `chat()` attempt, with no retry logic of its own. Raises
+        `_TransientChatFailure` for a failure `chat()` may retry and the
+        mapped `OpenAICompatibleError` for any other."""
         url = f"{self.resolved_base_url}/v1/chat/completions"
         request_body: dict[str, Any] = {
             "model": self._model,
@@ -330,8 +410,22 @@ class OpenAICompatibleClient:
                 # `_NoRedirectHandler` never returns a `Request`, so ANY
                 # 3xx surfaces here rather than being silently followed.
                 raise self._map_redirect(exc) from exc
-            raise self._map_http_error(exc) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
+            mapped = self._map_http_error(exc)
+            if exc.code in _TRANSIENT_STATUSES:
+                mapped.__cause__ = exc
+                raise _TransientChatFailure(
+                    mapped, _parse_retry_after(exc.headers)
+                ) from exc
+            raise mapped from exc
+        except urllib.error.URLError as exc:
+            unavailable = self._unavailable(exc)
+            if isinstance(exc.reason, TimeoutError):
+                # A connect timeout already cost the whole `timeout`.
+                raise unavailable from exc
+            # Refused or reset while connecting: no response began.
+            unavailable.__cause__ = exc
+            raise _TransientChatFailure(unavailable, None) from exc
+        except TimeoutError as exc:
             raise self._unavailable(exc) from exc
 
         try:
