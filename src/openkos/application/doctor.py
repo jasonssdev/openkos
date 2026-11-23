@@ -276,24 +276,43 @@ def _api_key_destination_check(cfg: config.Config | None) -> CheckResult:
             critical=False,
             detail="backend is ollama; no API key is sent",
         )
-    origins = application_backends.key_destinations(cfg)
-    if not origins:
+    routes = application_backends.key_routes(cfg)
+    if not any(route.env_var for route in routes):
         return CheckResult(
             label,
             "pass",
             critical=False,
             detail=f"no API key set ({application_backends.API_KEY_ENV}); none is sent",
         )
-    described = ", ".join(
-        f"{origin} ({'this machine' if classify_backend_host(origin).is_local else 'not this machine'})"
-        for origin in origins
-    )
-    return CheckResult(
-        label,
-        "pass",
-        critical=False,
-        detail=f"API key will be sent to {described}",
-    )
+
+    def _where(origin: str) -> str:
+        local = classify_backend_host(origin).is_local
+        return f"{origin} ({'this machine' if local else 'not this machine'})"
+
+    def _gets(var: str | None, *, plural: bool) -> str:
+        verb = "receive" if plural else "receives"
+        return f"{verb} {var}" if var else f"{verb} no key"
+
+    chat = next((r for r in routes if r.purpose == "chat"), None)
+    embed = next((r for r in routes if r.purpose == "embed"), None)
+    parts: list[str] = []
+    if (
+        chat is not None
+        and embed is not None
+        and (chat.origin, chat.env_var) == (embed.origin, embed.env_var)
+    ):
+        parts.append(
+            f"chat and embedding {_where(chat.origin)} "
+            f"{_gets(chat.env_var, plural=True)}"
+        )
+    else:
+        for name, route in (("chat", chat), ("embedding", embed)):
+            if route is not None:
+                parts.append(
+                    f"{name} {_where(route.origin)} "
+                    f"{_gets(route.env_var, plural=False)}"
+                )
+    return CheckResult(label, "pass", critical=False, detail="; ".join(parts))
 
 
 def configured_task_models(cfg: config.Config | None) -> dict[str, str]:

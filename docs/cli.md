@@ -1197,6 +1197,8 @@ Which LLM backend family this workspace targets, and where to reach it. Default 
 
 Neither URL may carry userinfo (`user@host` or `user:password@host`): an optional API key for `openai-compatible` is read **only** from the `OPENKOS_OPENAI_API_KEY` environment variable, never from `openkos.yaml` or a URL — the same reasoning that keeps any secret out of a file `init` commits to your repository. Its absence never gates startup or any command: a server that needs no key works identically whether or not it is set. `OPENAI_API_KEY` (the name many cloud SDKs use) is deliberately never read, so a value already exported for an unrelated tool is never forwarded as a credential to whatever `base_url` names.
 
+The key goes only to the endpoint it belongs to: chat requests to `base_url` carry `OPENKOS_OPENAI_API_KEY`, and embedding requests carry it only when `embedding_base_url` is unset or has the same origin (scheme, host and port) as `base_url`. An embedding endpoint on another origin receives no `Authorization` header unless the opt-in `OPENKOS_OPENAI_EMBEDDING_API_KEY` environment variable is set, in which case that value is sent there instead; like the chat key it is never read from `openkos.yaml` and never printed. `doctor` and the remote-key notice state which endpoint receives which key.
+
 `doctor` reports the effective endpoint and its resolution source, and whether the key is set — see [`openkos doctor`](#openkos-doctor).
 
 ### `union_judge`

@@ -1003,6 +1003,7 @@ def _openai_compatible_cfg(
     monkeypatch: pytest.MonkeyPatch,
     *,
     base_url: str = "http://127.0.0.1:8000",
+    embedding_base_url: str | None = None,
     model: str = config.DEFAULT_MODEL,
 ) -> config.WorkspaceLayout:
     """A workspace with a real, `backend`-less `openkos.yaml` on disk (so
@@ -1014,7 +1015,10 @@ def _openai_compatible_cfg(
     layout = _workspace(tmp_path, model=model)
     real_cfg = config.read_config(tmp_path)
     oc_cfg = dataclasses.replace(
-        real_cfg, backend="openai-compatible", base_url=base_url
+        real_cfg,
+        backend="openai-compatible",
+        base_url=base_url,
+        embedding_base_url=embedding_base_url,
     )
     monkeypatch.setattr(config, "read_config", lambda _root: oc_cfg)
     return layout
@@ -1428,6 +1432,44 @@ def test_api_key_destination_marks_a_loopback_host_as_this_machine(
     assert "http://127.0.0.1:8000" in detail
     assert "this machine" in detail
     assert "not this machine" not in detail
+
+
+def test_api_key_destination_states_a_keyless_embedding_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = _openai_compatible_cfg(
+        tmp_path,
+        monkeypatch,
+        base_url="https://api.example.com/v1",
+        embedding_base_url="http://127.0.0.1:11434",
+    )
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "sk-super-secret-sentinel")
+
+    detail = _key_destination_detail(_run(layout))
+
+    assert "chat https://api.example.com (not this machine)" in detail
+    assert "embedding http://127.0.0.1:11434 (this machine) receives no key" in detail
+    assert "sk-super-secret-sentinel" not in detail
+
+
+def test_api_key_destination_states_a_separate_embedding_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = _openai_compatible_cfg(
+        tmp_path,
+        monkeypatch,
+        base_url="https://api.example.com/v1",
+        embedding_base_url="https://embed.example.org/v1",
+    )
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "sk-chat-sentinel")
+    monkeypatch.setenv("OPENKOS_OPENAI_EMBEDDING_API_KEY", "sk-embed-sentinel")
+
+    detail = _key_destination_detail(_run(layout))
+
+    assert "chat https://api.example.com (not this machine)" in detail
+    assert "embedding https://embed.example.org (not this machine)" in detail
+    assert "OPENKOS_OPENAI_EMBEDDING_API_KEY" in detail
+    assert "sentinel" not in detail
 
 
 def test_api_key_destination_reports_no_key_set(
