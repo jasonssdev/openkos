@@ -153,9 +153,10 @@ def _capped_body(
     return json.dumps(payload).encode("utf-8")
 
 
-def test_max_tokens_forwarded_when_configured() -> None:
-    """`max_generation_tokens=256` sends top-level `max_tokens: 256`
-    (spec: "max_tokens is forwarded per request")."""
+def test_max_completion_tokens_forwarded_when_configured() -> None:
+    """`max_generation_tokens=256` sends top-level `max_completion_tokens: 256`
+    and never `max_tokens`, which OpenAI's reasoning models reject (spec:
+    "max_completion_tokens is forwarded per request")."""
     captured: list[urllib.request.Request] = []
     client = OpenAICompatibleClient(
         model="qwen3",
@@ -167,11 +168,12 @@ def test_max_tokens_forwarded_when_configured() -> None:
     client.chat([{"role": "user", "content": "hi"}])
 
     sent = _sent_body(captured[0])
-    assert sent["max_tokens"] == 256
+    assert sent["max_completion_tokens"] == 256
+    assert "max_tokens" not in sent
 
 
-def test_max_tokens_omitted_when_none() -> None:
-    """`max_generation_tokens=None` (the default) sends no `max_tokens` key
+def test_max_completion_tokens_omitted_when_none() -> None:
+    """`max_generation_tokens=None` (the default) sends neither ceiling key
     at all."""
     captured: list[urllib.request.Request] = []
     client = OpenAICompatibleClient(
@@ -183,6 +185,7 @@ def test_max_tokens_omitted_when_none() -> None:
     client.chat([{"role": "user", "content": "hi"}])
 
     sent = _sent_body(captured[0])
+    assert "max_completion_tokens" not in sent
     assert "max_tokens" not in sent
 
 

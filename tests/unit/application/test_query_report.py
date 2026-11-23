@@ -61,7 +61,7 @@ def test_the_openai_compatible_backend_never_reports_num_ctx(
     cfg: config.Config,
 ) -> None:
     """An OpenAI-compatible server is never sent the context window; the
-    reply ceiling goes out as `max_tokens` and is reported as `num_predict`."""
+    reply ceiling goes out as `max_completion_tokens` and is reported as `num_predict`."""
     openai = dataclasses.replace(
         cfg, backend="openai-compatible", context_window=16384, temperature=0.3
     )

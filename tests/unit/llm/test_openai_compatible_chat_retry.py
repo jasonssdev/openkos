@@ -318,3 +318,53 @@ def test_the_api_key_never_appears_in_an_exhausted_retry_error() -> None:
 
     assert _KEY not in str(excinfo.value)
     assert _KEY not in repr(excinfo.value)
+
+
+# --- A refused sampling setting names the config key (issue #1766) ----------
+
+_TEMPERATURE_REFUSAL = (
+    b'{"error": {"message": "Unsupported value: \'temperature\' does not '
+    b'support 0.2 with this model. Only the default (1) value is supported."}}'
+)
+
+
+def test_refused_temperature_names_the_config_key_and_is_not_retried() -> None:
+    script = _Script(_http_error(400, _TEMPERATURE_REFUSAL))
+    sleeps: list[float] = []
+
+    with pytest.raises(OpenAICompatibleError) as excinfo:
+        _client(script, sleeps, temperature=0.2, api_key=_KEY).chat(_MESSAGES)
+
+    message = str(excinfo.value)
+    assert "`temperature` in openkos.yaml" in message
+    assert "unset" in message
+    assert "Only the default (1) value is supported" in message
+    assert _KEY not in message
+    assert script.calls == 1
+    assert sleeps == []
+
+
+def test_refused_deprecated_temperature_is_named_too() -> None:
+    body = b'{"error": {"message": "`temperature` is deprecated for this model."}}'
+    script = _Script(_http_error(400, body))
+
+    with pytest.raises(OpenAICompatibleError, match="`temperature` in openkos.yaml"):
+        _client(script, []).chat(_MESSAGES)
+
+
+def test_refused_seed_names_the_config_key() -> None:
+    body = b'{"error": {"message": "Unsupported parameter: \'seed\' is not supported."}}'
+    script = _Script(_http_error(400, body))
+
+    with pytest.raises(OpenAICompatibleError, match="`seed` in openkos.yaml"):
+        _client(script, []).chat(_MESSAGES)
+
+
+def test_unrelated_400_is_mapped_as_before() -> None:
+    script = _Script(_http_error(400, b"bad request"))
+
+    with pytest.raises(OpenAICompatibleError) as excinfo:
+        _client(script, []).chat(_MESSAGES)
+
+    assert "openkos.yaml" not in str(excinfo.value)
+    assert "(400)" in str(excinfo.value)

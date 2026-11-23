@@ -103,7 +103,7 @@ def test_openai_sender_sends_the_served_model_seed_and_ceiling() -> None:
     sent = json.loads(request.data)  # type: ignore[arg-type]
     assert sent["model"] == "/models/qwen3.gguf"
     assert sent["seed"] == 3
-    assert sent["max_tokens"] == sp.MAX_GENERATION_TOKENS
+    assert sent["max_completion_tokens"] == sp.MAX_GENERATION_TOKENS
     assert "num_ctx" not in json.dumps(sent)
     assert entry["outcome"] == "ok"
     assert entry["prompt_eval_count"] == 120
@@ -195,7 +195,7 @@ def test_ask_openai_factory_builds_the_production_client_per_seed() -> None:
     sent = json.loads(opener.requests[0][0].data)  # type: ignore[arg-type]
     assert sent["model"] == "/models/qwen3.gguf"
     assert sent["seed"] == 4
-    assert sent["max_tokens"] == ask.DEFAULT_MAX_GENERATION_TOKENS
+    assert sent["max_completion_tokens"] == ask.DEFAULT_MAX_GENERATION_TOKENS
     assert opener.requests[0][1] == 60.0
 
 

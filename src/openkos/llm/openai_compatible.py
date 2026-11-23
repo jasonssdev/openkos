@@ -118,6 +118,11 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
+# The `openkos.yaml` keys sent as sampling fields; a 400 naming one means the
+# model does not accept it (OpenAI reasoning models, Anthropic's endpoint).
+_SAMPLING_CONFIG_KEYS = ("temperature", "seed")
+
+
 def _redact_location_query(location: str) -> str:
     """Strip the query string and fragment from a `Location` header value
     before it is ever interpolated into a message this client produces
@@ -387,7 +392,7 @@ class OpenAICompatibleClient:
             "messages": list(messages),
             "stream": False,
         }
-        # `max_tokens`/`temperature`/`seed` are TOP-LEVEL fields (unlike
+        # `max_completion_tokens`/`temperature`/`seed` are TOP-LEVEL fields (unlike
         # Ollama's nested `options`, Decision 2) and each follows the same
         # `is not None` -> omit rule: `temperature=0.0`/`seed=0` are real
         # values, not absent ones, so a falsy check would drop them.
@@ -395,7 +400,11 @@ class OpenAICompatibleClient:
         # advisory-only and MUST NEVER be sent (spec: "context_window Is
         # Advisory-Only And Never Sent").
         if self._max_generation_tokens is not None:
-            request_body["max_tokens"] = self._max_generation_tokens
+            # `max_completion_tokens`, not `max_tokens`: OpenAI's reasoning
+            # models reject `max_tokens` with a 400, while every backend the
+            # template names (OpenAI, Anthropic's compatible endpoint, Ollama
+            # /v1, llama.cpp, MLX, vLLM) accepts and honours the newer field.
+            request_body["max_completion_tokens"] = self._max_generation_tokens
         if self._temperature is not None:
             request_body["temperature"] = self._temperature
         if self._seed is not None:
@@ -790,6 +799,15 @@ class OpenAICompatibleClient:
                 f"{_API_KEY_ENV_NAME} environment variable to a valid key. "
                 f"{detail}"
             )
+        if exc.code == 400:
+            for key in _SAMPLING_CONFIG_KEYS:
+                if key in detail_lower:
+                    return OpenAICompatibleError(
+                        f"OpenAI-compatible request failed ({exc.code}): the "
+                        f"server refused the `{key}` in openkos.yaml for this "
+                        f"model; unset `{key}` there and retry. Server said: "
+                        f"{detail}"
+                    )
         return OpenAICompatibleError(
             f"OpenAI-compatible request failed ({exc.code}): {detail}"
         )
