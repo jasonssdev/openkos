@@ -261,6 +261,8 @@ def openai_compatible_sender(
     *,
     served_model: str,
     urlopen: Callable[..., Any] | None = None,
+    api_key: str | None = None,
+    send_seed: bool = True,
 ) -> Sender:
     """The runtime screen's transport (#1586): the production
     `OpenAICompatibleClient` against `llama-server` or `mlx_lm.server`, with
@@ -271,7 +273,12 @@ def openai_compatible_sender(
     the harness's model name. The context window is fixed when the server
     starts and is never sent, as in production. The entry carries the same
     fields as `ollama_sender`'s, read from the OpenAI `usage` block, and a
-    reasoning segment (`reasoning_content`) is counted, not returned."""
+    reasoning segment (`reasoning_content`) is counted, not returned.
+
+    Hosted arms (#1767) pass `api_key` (the caller reads it from
+    `OPENKOS_OPENAI_API_KEY`; it is never stored in a cache entry or a record)
+    and `send_seed=False` where a provider rejects `seed`. The seed still
+    enters the cache key, so run r and the production retry stay distinct."""
 
     def send(
         model: str, messages: Sequence[Any], seed: int, timeout_s: float
@@ -284,7 +291,8 @@ def openai_compatible_sender(
             timeout=timeout_s,
             max_generation_tokens=MAX_GENERATION_TOKENS,
             context_window=CONTEXT_WINDOW,
-            seed=seed,
+            seed=seed if send_seed else None,
+            api_key=api_key,
             urlopen=opener,
         )
         started = time.monotonic()
@@ -324,6 +332,111 @@ def openai_compatible_sender(
     return send
 
 
+# --- spend guard (hosted arms, #1767) ---------------------------------------
+
+
+class BudgetExceeded(SystemExit):
+    """A hosted arm reached its registered call or spend ceiling. A
+    `SystemExit`, so no `except Exception` in the pipeline can swallow it and
+    score the abort as an empty window; calls already made stay cached."""
+
+
+@dataclass
+class SpendGuard:
+    """Counts hosted calls and their cost BEFORE each one is sent.
+
+    The ledger persists across invocations, so a re-run of an arm continues
+    from what it already spent. The ceiling is checked before a call, so the
+    overshoot is at most one call (at most `MAX_GENERATION_TOKENS` of output).
+    Spend is rated from the `usage` the provider returns; a reply with no
+    usable counters is charged the full generation ceiling as output, so the
+    ledger never under-counts."""
+
+    path: pathlib.Path
+    max_calls: int
+    max_usd: float
+    price_in: float
+    price_out: float
+    """USD per 1,000,000 tokens."""
+    calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    usd: float = 0.0
+
+    @classmethod
+    def open(
+        cls,
+        path: pathlib.Path,
+        *,
+        max_calls: int,
+        max_usd: float,
+        price_in: float,
+        price_out: float,
+    ) -> SpendGuard:
+        guard = cls(path, max_calls, max_usd, price_in, price_out)
+        if path.is_file():
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            guard.calls = int(saved.get("calls", 0))
+            guard.prompt_tokens = int(saved.get("prompt_tokens", 0))
+            guard.completion_tokens = int(saved.get("completion_tokens", 0))
+            guard.usd = float(saved.get("usd", 0.0))
+        return guard
+
+    def check(self) -> None:
+        if self.calls >= self.max_calls:
+            raise BudgetExceeded(
+                f"budget: {self.calls} calls sent, ceiling {self.max_calls}"
+            )
+        if self.usd >= self.max_usd:
+            raise BudgetExceeded(
+                f"budget: ${self.usd:.4f} spent, ceiling ${self.max_usd:.4f}"
+            )
+
+    def record(self, entry: dict[str, Any]) -> None:
+        self.calls += 1
+        outcome = entry.get("outcome")
+        prompt = entry.get("prompt_eval_count")
+        done = entry.get("eval_count")
+        if outcome in ("ok", "capped") and not isinstance(done, int):
+            done = MAX_GENERATION_TOKENS
+        prompt_n = prompt if isinstance(prompt, int) else 0
+        done_n = done if isinstance(done, int) else 0
+        self.prompt_tokens += prompt_n
+        self.completion_tokens += done_n
+        self.usd += (prompt_n * self.price_in + done_n * self.price_out) / 1_000_000
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(
+            json.dumps(
+                {
+                    "calls": self.calls,
+                    "prompt_tokens": self.prompt_tokens,
+                    "completion_tokens": self.completion_tokens,
+                    "usd": self.usd,
+                    "max_calls": self.max_calls,
+                    "max_usd": self.max_usd,
+                    "price_in": self.price_in,
+                    "price_out": self.price_out,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+
+def guarded_sender(inner: Sender, guard: SpendGuard) -> Sender:
+    """`inner` behind `guard`: the ceiling is checked before every send."""
+
+    def send(
+        model: str, messages: Sequence[Any], seed: int, timeout_s: float
+    ) -> tuple[str | None, dict[str, Any]]:
+        guard.check()
+        content, entry = inner(model, messages, seed, timeout_s)
+        guard.record(entry)
+        return content, entry
+
+    return send
+
+
 class ScreenBackend:
     """Cached, timed, recorded `LLMBackend` for one source run.
 
@@ -346,7 +459,9 @@ class ScreenBackend:
         send: Sender,
         windows: Sequence[str] = (),
         num_ctx: int = CONTEXT_WINDOW,
+        cache_errors: bool = True,
     ) -> None:
+        self.cache_errors = cache_errors
         self.model = model
         self.num_ctx = num_ctx
         self.digest = digest
@@ -408,7 +523,11 @@ class ScreenBackend:
         if entry is None:
             _content, entry = self.send(self.model, messages, seed, timeout_s)
             entry["timeout_s"] = timeout_s
-            self.cache.put(key, entry)
+            # A hosted arm's provider error (429/5xx after the client's own
+            # retries) is not an observation of the model: it is not cached,
+            # so a re-run sends the call again instead of replaying it (#1767).
+            if self.cache_errors or entry.get("outcome") != "error":
+                self.cache.put(key, entry)
         content = entry.get("content")
         outcome = str(entry.get("outcome"))
         self.records.append(
@@ -619,9 +738,16 @@ def run_source(
             }
         )
 
+    # #1767: per final object, whether its written text quotes no line of the
+    # source (production's own `_unevidenced_titles` predicate, one object at
+    # a time so duplicate titles stay aligned with `stages.final`).
+    final_unevidenced = [
+        bool(concept_mod._unevidenced_titles([r], source_text=text)) for r in final
+    ]
     return {
         "title": title,
         "failure": failure,
+        "final_unevidenced": final_unevidenced,
         "wall_s": wall,
         "chunked": rec.chunked,
         "windows": windows_out,
