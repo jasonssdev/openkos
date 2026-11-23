@@ -575,6 +575,7 @@ def key_routes(
         url = resolve_endpoint(cfg, purpose=purpose).url
         if not url:
             continue
+        var: str | None
         if purpose == "chat":
             var = API_KEY_ENV if _read_api_key(environ) is not None else None
         else:
