@@ -519,37 +519,6 @@ def endpoint_label(cfg: config.Config, *, purpose: Literal["chat", "embed"]) -> 
     return resolve_endpoint(cfg, purpose=purpose).source
 
 
-def insecure_key_warning(
-    cfg: config.Config, *, environ: Mapping[str, str] = os.environ
-) -> str | None:
-    """A warning string when an `openai-compatible` API key is configured,
-    the resolved CHAT endpoint is `http://`, and that endpoint classifies
-    non-local (design Decision 8, Threat Matrix "Secret over plain HTTP") --
-    `None` in every other case, including for `backend == "ollama"` (no key
-    exists there) and whenever no key is set.
-
-    Never includes the key's VALUE (task 13.12, sentinel-proof) -- only
-    `locality.display_host`, already userinfo-redacted (#355). Pure and
-    side-effect-free: callers (Phase 13b) own printing it, at most once per
-    process."""
-    if cfg.backend != BACKEND_OPENAI_COMPATIBLE:
-        return None
-    if _read_api_key(environ) is None:
-        return None
-    endpoint = resolve_endpoint(cfg, purpose="chat")
-    url = endpoint.url or ""
-    if not url.lower().startswith("http://"):
-        return None
-    locality = classify_backend_host(url)
-    if locality.is_local:
-        return None
-    return (
-        "warning: OPENKOS_OPENAI_API_KEY is being sent to a non-local server "
-        f"({locality.display_host}) over plain HTTP -- consider using "
-        "https:// or a loopback endpoint"
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class KeyRoute:
     """One endpoint the `openai-compatible` backend talks to and which
@@ -559,6 +528,55 @@ class KeyRoute:
     purpose: Literal["chat", "embed"]
     origin: str
     env_var: str | None
+
+
+def insecure_key_warnings(
+    cfg: config.Config, *, environ: Mapping[str, str] = os.environ
+) -> tuple[str, ...]:
+    """One warning per distinct origin that receives an `openai-compatible`
+    API key, is plain `http://` and classifies non-local (design Decision 8,
+    Threat Matrix "Secret over plain HTTP"), built from `key_routes` so the
+    endpoints that get a key have one source of truth. The chat warning comes
+    first; an embedding endpoint on an origin already warned about is not
+    warned twice (one line per host). Empty for `backend == "ollama"` (no key
+    exists there) and whenever no key reaches a plain-HTTP non-local host.
+
+    Never includes a key's VALUE (task 13.12, sentinel-proof) -- only the
+    variable's name and `locality.display_host`, already userinfo-redacted
+    (#355). Pure and side-effect-free: callers own printing, at most once per
+    process."""
+    warnings: list[str] = []
+    for origin, route in _plain_http_key_routes(cfg, environ):
+        locality = classify_backend_host(origin)
+        target = (
+            "a non-local server"
+            if route.purpose == "chat"
+            else "the embedding endpoint, a non-local server"
+        )
+        warnings.append(
+            f"warning: {route.env_var} is being sent to {target} "
+            f"({locality.display_host}) over plain HTTP -- consider using "
+            "https:// or a loopback endpoint"
+        )
+    return tuple(warnings)
+
+
+def _plain_http_key_routes(
+    cfg: config.Config, environ: Mapping[str, str]
+) -> tuple[tuple[str, KeyRoute], ...]:
+    """The routes that receive a key over plain `http://` to a non-local
+    host, one per distinct origin (the first route, chat, wins)."""
+    found: list[tuple[str, KeyRoute]] = []
+    seen: set[str] = set()
+    for route in key_routes(cfg, environ=environ):
+        key = route.origin.lower()
+        if route.env_var is None or key in seen:
+            continue
+        if not key.startswith("http://") or classify_backend_host(key).is_local:
+            continue
+        seen.add(key)
+        found.append((route.origin, route))
+    return tuple(found)
 
 
 def key_routes(
@@ -606,11 +624,11 @@ def remote_key_notices(
     cannot redirect the user's key silently. Each message names the variable
     that supplies the key; the chat notice also states when a separate
     embedding endpoint receives none. Local origins, keyless endpoints and
-    the chat origin `insecure_key_warning` already covers (its plain-`http://`
+    an origin `insecure_key_warnings` already covers (its plain-`http://`
     warning supersedes: one line per host) produce nothing. Advisory only;
     the message names the origin and never the key or the URL path. Callers
     own printing each origin at most once per process."""
-    superseded = insecure_key_warning(cfg, environ=environ) is not None
+    superseded = {origin.lower() for origin, _ in _plain_http_key_routes(cfg, environ)}
     routes = key_routes(cfg, environ=environ)
     chat_route = next((r for r in routes if r.purpose == "chat"), None)
     embed_route = next((r for r in routes if r.purpose == "embed"), None)
@@ -620,7 +638,7 @@ def remote_key_notices(
         if route.env_var is None or route.origin in seen:
             continue
         seen.add(route.origin)
-        if superseded and route is chat_route:
+        if route.origin.lower() in superseded:
             continue
         if classify_backend_host(route.origin).is_local:
             continue

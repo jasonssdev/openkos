@@ -464,7 +464,7 @@ def test_api_key_only_passed_for_openai_compatible_backend(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
-# Phase 13a -- wording functions + `insecure_key_warning` (issue #1057,
+# Phase 13a -- wording functions + `insecure_key_warnings` (issue #1057,
 # design Decision 8/9). `doctor` never calls these (tasks-phase decision 2);
 # only the CLI/curate/MCP wiring in Phase 13b does.
 # ---------------------------------------------------------------------------
@@ -553,7 +553,7 @@ def test_endpoint_label_openai_compatible_names_the_config_key(
     ],
     ids=["key_nonlocal_http", "key_local_http", "key_nonlocal_https", "no_key"],
 )
-def test_insecure_key_warning_matrix(
+def test_insecure_key_warnings_matrix(
     tmp_path: Path, has_key: bool, base_url: str, expect_warning: bool
 ) -> None:
     """The full key x scheme x locality matrix (task 13.10, Threat Matrix
@@ -562,16 +562,16 @@ def test_insecure_key_warning_matrix(
     cfg = _cfg(tmp_path, backend="openai-compatible", base_url=base_url)
     environ = {"OPENKOS_OPENAI_API_KEY": "secret"} if has_key else {}
 
-    warning = backends.insecure_key_warning(cfg, environ=environ)
+    warnings = backends.insecure_key_warnings(cfg, environ=environ)
 
     if expect_warning:
-        assert warning is not None
-        assert "example.com:8080" in warning
+        assert len(warnings) == 1
+        assert "example.com:8080" in warnings[0]
     else:
-        assert warning is None
+        assert warnings == ()
 
 
-def test_insecure_key_warning_never_includes_the_key_value(tmp_path: Path) -> None:
+def test_insecure_key_warnings_never_include_the_key_value(tmp_path: Path) -> None:
     """Sentinel test (task 13.12): the warning string never contains the
     key VALUE, only the fact that a credential is present. Mutation-proof
     below."""
@@ -580,10 +580,134 @@ def test_insecure_key_warning_never_includes_the_key_value(tmp_path: Path) -> No
     )
     environ = {"OPENKOS_OPENAI_API_KEY": "sk-super-secret-sentinel"}
 
-    warning = backends.insecure_key_warning(cfg, environ=environ)
+    warnings = backends.insecure_key_warnings(cfg, environ=environ)
 
-    assert warning is not None
-    assert "sk-super-secret-sentinel" not in warning
+    assert len(warnings) == 1
+    assert "sk-super-secret-sentinel" not in warnings[0]
+
+
+_CHAT_ENV = "OPENKOS_OPENAI_API_KEY"
+_EMBED_ENV = "OPENKOS_OPENAI_EMBEDDING_API_KEY"
+_PLAIN_HOST = "http://203.0.113.5:9000"
+
+
+def test_plain_http_embedding_endpoint_with_its_own_key_is_warned(
+    tmp_path: Path,
+) -> None:
+    """A key the embedding endpoint receives over plain http to a non-local
+    host is warned about, naming the embedding endpoint (issue #1776)."""
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="https://api.example.com/v1",
+        embedding_base_url=_PLAIN_HOST,
+    )
+    environ = {_CHAT_ENV: "chat-sentinel", _EMBED_ENV: "embed-sentinel"}
+
+    warnings = backends.insecure_key_warnings(cfg, environ=environ)
+
+    assert len(warnings) == 1
+    assert _EMBED_ENV in warnings[0]
+    assert "embedding" in warnings[0]
+    assert "203.0.113.5:9000" in warnings[0]
+    assert "sentinel" not in warnings[0]
+
+
+def test_same_origin_plain_http_embedding_is_one_warning_for_the_host(
+    tmp_path: Path,
+) -> None:
+    """The chat key reaches a same-origin embedding endpoint: one host, one
+    warning, and it is the chat wording."""
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="http://203.0.113.5:9000/v1",
+        embedding_base_url="http://203.0.113.5:9000/embed",
+    )
+
+    warnings = backends.insecure_key_warnings(cfg, environ={_CHAT_ENV: "secret"})
+
+    assert warnings == (
+        "warning: OPENKOS_OPENAI_API_KEY is being sent to a non-local server "
+        "(203.0.113.5:9000) over plain HTTP -- consider using https:// or a "
+        "loopback endpoint",
+    )
+
+
+def test_unset_embedding_url_on_plain_http_chat_is_one_warning(
+    tmp_path: Path,
+) -> None:
+    """`embedding_base_url` unset resolves to the chat host: still one line."""
+    cfg = _cfg(
+        tmp_path, backend="openai-compatible", base_url="http://203.0.113.5:9000"
+    )
+
+    warnings = backends.insecure_key_warnings(cfg, environ={_CHAT_ENV: "secret"})
+
+    assert len(warnings) == 1
+    assert "embedding" not in warnings[0]
+
+
+def test_chat_and_embedding_on_different_plain_http_hosts_warn_for_each(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="http://198.51.100.7:8000",
+        embedding_base_url=_PLAIN_HOST,
+    )
+    environ = {_CHAT_ENV: "a", _EMBED_ENV: "b"}
+
+    warnings = backends.insecure_key_warnings(cfg, environ=environ)
+
+    assert len(warnings) == 2
+    assert "198.51.100.7:8000" in warnings[0]
+    assert "embedding" not in warnings[0]
+    assert "203.0.113.5:9000" in warnings[1]
+    assert "embedding" in warnings[1]
+
+
+@pytest.mark.parametrize(
+    ("embedding_url", "environ"),
+    [
+        ("https://203.0.113.5:9000", {_CHAT_ENV: "a", _EMBED_ENV: "b"}),
+        ("http://127.0.0.1:9000", {_CHAT_ENV: "a", _EMBED_ENV: "b"}),
+        (_PLAIN_HOST, {_CHAT_ENV: "a"}),
+    ],
+    ids=["https_embedding", "local_http_embedding", "no_key_to_embedding"],
+)
+def test_embedding_endpoint_that_needs_no_warning_adds_none(
+    tmp_path: Path, embedding_url: str, environ: dict[str, str]
+) -> None:
+    """Chat is https here, so any warning could only come from the embedding
+    endpoint: https, loopback, or a different origin that receives no key."""
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="https://api.example.com/v1",
+        embedding_base_url=embedding_url,
+    )
+
+    assert backends.insecure_key_warnings(cfg, environ=environ) == ()
+
+
+def test_plain_http_origin_is_named_by_the_warning_not_the_notice(
+    tmp_path: Path,
+) -> None:
+    """`remote_key_notices` leaves out an embedding origin the plain-http
+    warning already names (one line per host)."""
+    cfg = _cfg(
+        tmp_path,
+        backend="openai-compatible",
+        base_url="https://api.example.com/v1",
+        embedding_base_url=_PLAIN_HOST,
+    )
+    environ = {_CHAT_ENV: "a", _EMBED_ENV: "b"}
+
+    origins = [o for o, _ in backends.remote_key_notices(cfg, environ=environ)]
+
+    assert origins == ["https://api.example.com"]
 
 
 _KEY_ENV = {"OPENKOS_OPENAI_API_KEY": "secret"}

@@ -326,11 +326,10 @@ def test_a_quote_carries_the_insecure_key_advisory_before_any_consent(
 ) -> None:
     _use_remote_backend(root, "http://llm.example.test/v1")
     monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", _KEY)
-    expected = backends.insecure_key_warning(config.read_config(root))
+    (expected,) = backends.insecure_key_warnings(config.read_config(root))
 
     quote = _quote(root, Factory())
 
-    assert expected is not None
     assert "llm.example.test" in expected
     assert _insecure_notices(quote) == [QuoteNotice("insecure_key", text=expected)]
     assert _KEY not in repr(quote)
@@ -357,7 +356,7 @@ def test_every_kind_of_quote_carries_the_insecure_key_advisory(
 ) -> None:
     _use_remote_backend(root, "http://llm.example.test/v1")
     monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", _KEY)
-    expected = backends.insecure_key_warning(config.read_config(root))
+    (expected,) = backends.insecure_key_warnings(config.read_config(root))
 
     quote = quote_judging(Workspace.open(root), kind, chat_client=Factory())
 

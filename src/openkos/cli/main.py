@@ -214,7 +214,7 @@ def _backend_factories() -> application_backends.BackendFactories:
 _INSECURE_KEY_WARNING_PRINTED = False
 """Module-level once-per-process guard (issue #1057 Phase 13b, design
 Decision 8): a curate/ingest run can build many chat/embed clients in one
-process, and printing `insecure_key_warning`'s advisory on every one would
+process, and printing `insecure_key_warnings`' advisories on every one would
 drown it out. `tests/unit/conftest.py`'s autouse `_offline_ollama_by_default`
 fixture resets this to `False` before every test, so it never leaks across
 the test suite the way a bare process-lifetime flag normally would."""
@@ -249,7 +249,7 @@ def _echo_warning_once() -> Callable[[str], None]:
 
 
 def _maybe_warn_insecure_key(cfg: config.Config) -> None:
-    """Print `application_backends.insecure_key_warning(cfg)` to stderr, at
+    """Print `application_backends.insecure_key_warnings(cfg)` to stderr, at
     most once per process, and one `remote_key_notices` line per distinct
     non-local origin the key is about to be sent to (an `http://` chat host
     gets only the stronger warning). Called from both `_chat_client` and
@@ -257,10 +257,11 @@ def _maybe_warn_insecure_key(cfg: config.Config) -> None:
     remembering to call it itself."""
     global _INSECURE_KEY_WARNING_PRINTED
     if not _INSECURE_KEY_WARNING_PRINTED:
-        warning = application_backends.insecure_key_warning(cfg)
-        if warning is not None:
+        warnings = application_backends.insecure_key_warnings(cfg)
+        if warnings:
             _INSECURE_KEY_WARNING_PRINTED = True
-            typer.echo(f"openkos: {warning}", err=True)
+            for warning in warnings:
+                typer.echo(f"openkos: {warning}", err=True)
     for origin, message in application_backends.remote_key_notices(cfg):
         if origin in _REMOTE_KEY_NOTICED:
             continue
