@@ -20,6 +20,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 - With `backend: openai-compatible`, `OPENKOS_OPENAI_API_KEY` is now sent to the embedding endpoint only when `embedding_base_url` is unset or has the same origin as `base_url`; a different host used to receive the chat provider's key on every embedding request. A remote embedding provider that needs a key reads it from the new opt-in `OPENKOS_OPENAI_EMBEDDING_API_KEY` environment variable, and without it that endpoint receives none. `doctor`'s `API key destination` line and the remote-key notice now state which endpoint receives which key, including an embedding endpoint that receives none. A workspace without `embedding_base_url` behaves as before (#1765).
 
+### Added
+
+- With `backend: openai-compatible`, the "secret over plain HTTP" warning now covers every endpoint that receives a key, not only the chat endpoint. A key sent to a non-local `http://` embedding endpoint (`OPENKOS_OPENAI_EMBEDDING_API_KEY`, or the chat key on a same-origin endpoint) is warned about, naming the embedding endpoint and its host and never the key. One host gets one line, and the warning still never blocks a request. Output for a chat-only warning is unchanged (#1776).
+
 ### Fixed
 
 - `chat()` against an `openai-compatible` backend now sends the generation ceiling as `max_completion_tokens` instead of `max_tokens`. OpenAI's reasoning models (o3, gpt-5-mini, gpt-5.5, gpt-6-luna) rejected `max_tokens` with a 400, so with the packaged `max_generation_tokens: 8192` their first call failed. `max_completion_tokens` was accepted and honoured by OpenAI, Anthropic's compatible endpoint, Ollama's `/v1`, llama.cpp's `llama-server` and MLX's `mlx_lm.server` when checked, and is in vLLM's request schema. When a server refuses a `temperature` or `seed` set in `openkos.yaml` (OpenAI reasoning models and Anthropic's endpoint refuse `temperature`), the error now names that key and says to unset it, and is not retried (#1766).

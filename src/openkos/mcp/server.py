@@ -758,7 +758,7 @@ async def serve_streams(
 
 
 def _warn_insecure_key_at_startup(root: Path) -> None:
-    """Print `insecure_key_warning`'s advisory once at MCP server startup
+    """Print `insecure_key_warnings`' advisories once at MCP server startup
     (issue #1057 Phase 13b, design Decision 8), mirroring the CLI's
     once-per-process `_maybe_warn_insecure_key` (`cli/main.py`) -- there is
     only one startup per process here, so no separate guard flag is needed.
@@ -769,8 +769,7 @@ def _warn_insecure_key_at_startup(root: Path) -> None:
         cfg = config.read_config(root)
     except OSError, ValueError:
         return
-    warning = application_backends.insecure_key_warning(cfg)
-    if warning is not None:
+    for warning in application_backends.insecure_key_warnings(cfg):
         logger.warning("%s", warning)
     for _origin, message in application_backends.remote_key_notices(cfg):
         logger.warning("%s", message)

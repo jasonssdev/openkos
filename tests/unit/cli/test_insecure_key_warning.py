@@ -1,6 +1,6 @@
 """Unit tests for the once-per-process insecure-key-over-plain-HTTP warning
 (issue #1057 Phase 13b, design Decision 8): `application/backends.py`'s
-`insecure_key_warning(cfg)` is pure, but `_chat_client`/`_embed_client`
+`insecure_key_warnings(cfg)` is pure, but `_chat_client`/`_embed_client`
 (`cli/main.py`) print it to stderr AT MOST ONCE per process, via a private
 module-level guard.
 
@@ -40,7 +40,7 @@ def test_insecure_key_warning_printed_once_per_process(
 ) -> None:
     """Two chat/embed constructions in one process print the plain-HTTP-key
     warning at most ONCE to stderr (task 13.26). RED today: `_chat_client`/
-    `_embed_client` never call `insecure_key_warning` at all."""
+    `_embed_client` never call `insecure_key_warnings` at all."""
     monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "secret")
     cfg = _openai_compatible_cfg(tmp_path)
 
@@ -184,3 +184,30 @@ def test_http_remote_prints_only_the_existing_warning(
     assert err.count("plain HTTP") == 1
     assert "notice:" not in err
     assert len(err.strip().splitlines()) == 1
+
+
+def test_plain_http_embedding_endpoint_is_warned_once_naming_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A key the embedding endpoint receives over plain http to a non-local
+    host is warned about, once per process, naming the embedding endpoint and
+    never the key (issue #1776)."""
+    monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", "chat-sentinel")
+    monkeypatch.setenv("OPENKOS_OPENAI_EMBEDDING_API_KEY", "embed-sentinel")
+    cfg = dataclasses.replace(
+        _openai_compatible_cfg(tmp_path, base_url="https://api.example.com/v1"),
+        embedding_base_url="http://203.0.113.5:9000",
+    )
+
+    main_mod._chat_client(cfg)
+    main_mod._embed_client(cfg)
+    main_mod._embed_client(cfg)
+
+    err = capsys.readouterr().err
+    assert err.count("over plain HTTP") == 1
+    assert "OPENKOS_OPENAI_EMBEDDING_API_KEY" in err
+    assert "the embedding endpoint" in err
+    assert "203.0.113.5:9000" in err
+    assert "sentinel" not in err

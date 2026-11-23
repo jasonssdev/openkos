@@ -362,11 +362,12 @@ def test_the_insecure_key_advisory_reaches_the_client_without_the_key(
     )
     monkeypatch.setenv("OPENKOS_OPENAI_API_KEY", _KEY)
     monkeypatch.setattr(_wiring, "OpenAICompatibleClient", _ClientFactory())
-    expected = backends.insecure_key_warning(config.read_config(real_workspace.root))
+    (expected,) = backends.insecure_key_warnings(
+        config.read_config(real_workspace.root)
+    )
 
     response = quote(client, {"kind": "identity"})
 
-    assert expected is not None
     notices = [n for n in response.json()["notices"] if n["code"] == "insecure_key"]
     assert notices == [
         {

@@ -57,7 +57,7 @@ from openkos.application.judging import (
     _CeilingClient,
     _Context,
     _context,
-    _insecure_key_notice,
+    _insecure_key_notices,
     _ObserverGuard,
     _open_workspace,
     _RetryingSection,
@@ -269,9 +269,7 @@ def quote_finding(
     unattended = _unattended_notice(layout, cfg, ports.now())
     if unattended is not None:
         notices.append(unattended)
-    insecure = _insecure_key_notice(cfg)
-    if insecure is not None:
-        notices.append(insecure)
+    notices.extend(_insecure_key_notices(cfg))
     token = QuoteToken(
         binding=binding,
         include_confidential=include_confidential,
