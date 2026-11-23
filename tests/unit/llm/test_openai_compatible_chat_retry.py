@@ -348,15 +348,17 @@ def test_refused_deprecated_temperature_is_named_too() -> None:
     body = b'{"error": {"message": "`temperature` is deprecated for this model."}}'
     script = _Script(_http_error(400, body))
 
-    with pytest.raises(OpenAICompatibleError, match="`temperature` in openkos.yaml"):
+    with pytest.raises(OpenAICompatibleError, match=r"`temperature` in openkos\.yaml"):
         _client(script, []).chat(_MESSAGES)
 
 
 def test_refused_seed_names_the_config_key() -> None:
-    body = b'{"error": {"message": "Unsupported parameter: \'seed\' is not supported."}}'
+    body = (
+        b'{"error": {"message": "Unsupported parameter: \'seed\' is not supported."}}'
+    )
     script = _Script(_http_error(400, body))
 
-    with pytest.raises(OpenAICompatibleError, match="`seed` in openkos.yaml"):
+    with pytest.raises(OpenAICompatibleError, match=r"`seed` in openkos\.yaml"):
         _client(script, []).chat(_MESSAGES)
 
 
