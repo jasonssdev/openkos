@@ -5,8 +5,8 @@ before that merge, and none before the harness fix for the `not_called`
 miscount (#1790, PR #1791) has merged too: the runs wait for both. A change
 after the merge is a new registration, not an edit to this one. The owner
 decisions this file rests on were settled on 2026-11-24, before registration
-("Owner decisions" at the end); the questions it leaves open are under "Open
-questions for the owner".
+("Owner decisions" at the end); the two questions raised by the power analysis are under "Questions the
+owner settled before merge".
 
 ## Question
 
@@ -188,9 +188,8 @@ that is a reason to read a failure carefully (the results will report the
 point and the per-meeting deltas next to the bound), not a reason to move the
 bar after seeing the data. Whether to register a different bar (a wider
 margin, or a point-estimate condition) is a design question, recorded under
-"Open questions for the owner" with the numbers; it is not decided and not
-registered here. If the owner wants it, it is a change to this file before
-merge, made before any treatment call.
+"Questions the owner settled before merge" with the numbers; the owner kept
+-0.05 (owner decision 6), so no other bar is registered here.
 
 ## Metrics
 
@@ -404,9 +403,10 @@ each bound.
   replies; its interaction with the instruction (#1571) is not separated. The
   re-ask and participant-capture prompts do not ask for the field.
 
-## Open questions for the owner
+## Questions the owner settled before merge
 
-Not registered; decide before merge, or leave as is.
+Both were put to the owner with the numbers below and settled on 2026-11-24,
+before merge, as recommended (owner decisions 6 and 7).
 
 1. **G1's bar.** Kept at -0.05 as registered. The numbers above say a
    harmless arm passes it 55% (haiku) and 73% (luna) of the time on DEV12.
@@ -440,6 +440,11 @@ Settled on 2026-11-24, before registration.
    series; DA or DEV12 delegated to this registration's power analysis, which
    chose DEV12.
 5. **Product mechanism:** decided only after the results.
+6. **G1's bar stays at -0.05**, accepting that a harmless arm fails it by
+   width about half the time on haiku; a G1 failure is read with its
+   per-meeting values.
+7. **Haiku's ten #1768 DA treatment records are reused**, with the DA stratum
+   and the seven new meetings reported apart.
 
 ## Disclosed before registration
 
