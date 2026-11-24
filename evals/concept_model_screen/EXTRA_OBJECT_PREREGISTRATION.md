@@ -2,9 +2,9 @@
 
 **Status: registered on merge to `main`.** No judge call may be sent before
 that merge. A change after the merge is a new registration, not an edit to
-this one. The owner approved the design on 2026-11-23. Where this file
-departs from that design or adds to it, the reason is given under "Design
-adjustments".
+this one. The owner settled the design on 2026-11-23 ("Owner decisions" at
+the end). Where this file departs from the first approved design or adds to
+it, the reason is given under "Design adjustments".
 
 ## Question
 
@@ -170,33 +170,35 @@ The labels, as the prompt defines them, in precedence order:
 3. **Agreed items only.** Every share below counts only items both judges
    gave the same label. Agreed useful share = agreed `useful` / all agreed
    items of that side; agreed redundant share likewise.
-4. **INSUFFICIENT** for an arm with fewer than 20 agreed items, or when the
-   control has fewer than 20.
-5. **Bootstrap.** Two-stage, 10,000 resamples, seed 42. For the useful-share
-   difference (arm minus control): draw the five meetings with replacement,
-   one draw shared by arm and control, then resample each side's items within
-   each drawn meeting with replacement. A draw in which either side is empty
-   is dropped and the number dropped is reported. For the arm's redundant
-   share: the screen's `two_stage_bootstrap` (meetings, then items) over the
-   arm alone. Percentile 95% intervals.
+4. **INSUFFICIENT** for an arm with fewer than 20 agreed items. The control
+   does not decide, so its size does not make an arm insufficient.
+5. **Bootstrap.** Two-stage, 10,000 resamples, seed 42, percentile 95%
+   intervals: the screen's `two_stage_bootstrap` (draw the five meetings with
+   replacement, then the side's items within each drawn meeting with
+   replacement), over one side at a time, for its agreed useful share and its
+   agreed redundant share.
+6. **The control is descriptive.** The `qwen3:8b` control's agreed useful and
+   redundant shares are reported with the same intervals, and so is the
+   arm-minus-control useful difference (meetings drawn once for both sides,
+   then each side's items; a draw with an empty side is dropped and counted).
+   None of these enters a rule.
 
 ### Replacement rule for V4 (verbatim)
 
-> An arm **PASSES** if its agreed useful share is not lower than the
-> `qwen3:8b` control's by more than 0.10 (the bootstrap 95% lower bound of
-> the difference, meetings then objects, seed 42, 10,000 resamples, is at
-> least -0.10) **AND** the 95% upper bound of its agreed redundant share is
-> at most 0.20. Otherwise it **FAILS**. Both bounds are inclusive.
+> An arm **PASSES** if the bootstrap 95% **lower** bound of its agreed useful
+> share is at least **0.70** **AND** the 95% **upper** bound of its agreed
+> redundant share is at most **0.20** (bootstrap: meetings then objects,
+> seed 42, 10,000 resamples; both bounds inclusive). Otherwise it **FAILS**.
+> The `qwen3:8b` control is judged and reported with its interval as a
+> descriptive reference; it does not decide.
 
 A FAIL is stated with one of two readings, fixed now:
 
-- **FAIL (inferior):** the interval excludes the bar: the useful-share
-  difference's upper bound is below -0.10, or the redundant share's lower
-  bound is above 0.20. The extra objects are shown to be worse.
+- **FAIL (inferior):** the interval excludes the bar: the useful share's
+  upper bound is below 0.70, or the redundant share's lower bound is above
+  0.20. The arm's objects are shown to fall short of the bar.
 - **FAIL (unresolved):** the bar lies inside the interval. The arm is not
-  shown to be non-inferior; it is not shown to be worse either. See the power
-  check below: at this n, this is the expected outcome even for an arm equal
-  to the control.
+  shown to meet the bar; it is not shown to fall short either.
 
 ### Re-reading the #1767 verdicts
 
@@ -215,21 +217,22 @@ unchanged:
 - Rule INSUFFICIENT, or the study INCONCLUSIVE or DEGRADED: the registered V4
   veto stands, **VETOED (G1, V4 (replacement undecided))**.
 
-**No verdict can flip at n = 2.** G1's lower bound fails for all three arms,
-so replacing V4 alone leaves each one VETOED. Even without G1, every lift
+**No #1767 verdict can flip.** G1's lower bound fails for all three arms, so
+replacing V4 alone leaves each one VETOED. Even without G1, every lift
 interval contains 0, so the best reachable label would be NOT
-DISTINGUISHABLE, not BETTER. What this study can change is the reason: a PASS
-says V4 was not the binding problem for that arm and G1's wide interval at
-n = 2 is.
+DISTINGUISHABLE, not BETTER. The result informs V4 for future screens: a
+PASS says V4 was not the binding problem for that arm and G1's wide interval
+at n = 2 is.
 
 ### How the outcome is stated
 
 Per arm, one line: `<arm>: V4 replacement <PASS | FAIL (inferior) | FAIL
 (unresolved) | INSUFFICIENT>; #1767 verdict under the replacement: <re-read
-verdict>`, with the agreed useful share against the control's, the
-difference and its interval, the redundant share and its interval, the agreed
-and disagreed counts. Once for the study: kappa, unlabelled count, and
-DECIDED, INCONCLUSIVE or DEGRADED.
+verdict>`, with the agreed useful share and its interval, the redundant share
+and its interval, the agreed and disagreed counts, and, as description only,
+the arm-minus-control useful difference. Once for the study: kappa,
+unlabelled count, DECIDED, INCONCLUSIVE or DEGRADED, and the control's agreed
+shares with their intervals.
 
 Consequences, none of which changes a default or a shipped veto:
 
@@ -242,33 +245,40 @@ Consequences, none of which changes a default or a shipped veto:
 
 ## Power check (model-free, before any label)
 
-The rule was simulated with the harness's own `paired_share_delta`, the
-registered population sizes spread over five meetings, both sides drawn at the
-**same** true useful share (1,000 resamples per interval, 200 simulations per
-cell; a forecast, not a result):
+Simulated with the harness's own `share_interval` and `arm_rule`, the
+registered arm sizes spread evenly over five meetings, each item drawn
+independently as useful with the true share shown, redundant with 0.10, and
+trivial otherwise (1,000 resamples per interval, 200 simulations per cell,
+seed 1783; a forecast, not a result). Each cell gives P(PASS), then
+P(useful lower bound >= 0.70) and P(redundant upper bound <= 0.20):
 
-| Agreement | Arm n / control n | True useful share 0.8 | True useful share 0.6 |
+| Agreement | Arm (agreed n) | True useful 0.80 | True useful 0.70 |
 |---|---|---|---|
-| all items agreed | 72 / 41 (`gpt-5-mini`) | 0.14 | 0.07 |
-| all items agreed | 130 / 41 (haiku) | 0.11 | 0.07 |
-| all items agreed | 88 / 41 (luna) | 0.12 | 0.09 |
-| 70% agreed | 50 / 29 | 0.13 | 0.03 |
-| 70% agreed | 91 / 29 | 0.10 | 0.06 |
-| 70% agreed | 62 / 29 | 0.08 | 0.07 |
+| all items agreed | `gpt-5-mini` (72) | **0.29** (0.34, 0.56) | **0.01** (0.01, 0.54) |
+| all items agreed | haiku (130) | **0.53** (0.56, 0.76) | **0.01** (0.01, 0.85) |
+| all items agreed | luna (88) | **0.38** (0.45, 0.59) | **0.01** (0.01, 0.61) |
+| 70% agreed | `gpt-5-mini` (50) | **0.20** (0.27, 0.43) | **0.02** (0.02, 0.48) |
+| 70% agreed | haiku (91) | **0.35** (0.41, 0.60) | **0.01** (0.01, 0.62) |
+| 70% agreed | luna (62) | **0.22** (0.26, 0.43) | **0.01** (0.01, 0.42) |
 
-The cells give P(useful lower bound >= -0.10). Under equality at 0.8 and 70%
-agreement, the median lower bound is about -0.20 to -0.23. The 41-object
-control is the binding side. For the redundant ceiling, an arm whose true
-redundant share is 0.10 keeps its upper bound at or under 0.20 about half the
-time (0.46 to 0.62).
+**Read this before the result:**
 
-**Read this before the result:** the approved rule passes an arm that is
-exactly as useful as the reference only about one time in ten. A PASS is
-strong evidence. A FAIL (unresolved) is close to the expected outcome
-whatever the truth, and must not be read as "the extra objects are worse".
-The margin and the ceiling are the owner's approved values and are kept.
-Loosening them now, after the power is known but before any label, would be
-a new owner decision and therefore a new registration.
+- An arm whose true useful share is 0.80 and redundant share 0.10 passes 20%
+  to 53% of the time. One at exactly the bar (0.70) passes at most 2% of the
+  time, as a lower-bound rule should.
+- Both bounds bind. At true redundant 0.10, the redundant ceiling alone holds
+  only 42% to 85% of the time.
+- The simulation spreads items evenly over meetings with no between-meeting
+  difference, so real pass rates are likely lower.
+- A PASS is strong evidence. A FAIL (unresolved) is a common outcome even for
+  an arm that truly meets the bar, and must not be read as "the objects are
+  worse".
+
+The first approved rule (the arm's useful share no more than 0.10 below the
+control's, by the lower bound of the difference) was simulated the same way,
+at equal true shares on both sides. It passed 3% to 14% of the time
+(median lower bound about -0.20 to -0.23), because the 41-object control set
+the width. That is why the owner replaced it (see "Design adjustments").
 
 ## Cost and time
 
@@ -282,7 +292,7 @@ a new owner decision and therefore a new registration.
   1.9 s warm (Ask screen #1560; the #1571 judge-study cache, 162 calls,
   median 1.94 s): about **11 min**. Total about **1 h**, plus two warm-ups.
   Planning figure 2 h for retries and longer replies. Local GPU time is free
-  but needs the owner's go-ahead.
+  and the owner authorized it to start after the #1768 A/B finishes.
 
 ## Procedure
 
@@ -312,13 +322,15 @@ only read. The rule is applied by `report`, not by hand.
   style preference cannot be ruled out. `gemma4:26b-a4b` (Google) has no
   same-vendor arm, and the decision uses only the items both judges agree on.
 - **n = 2 runs, five meetings.** The bootstrap rests on five meetings, and
-  the power check above shows the rule is hard to pass at this n.
+  the power check above shows that even an arm well above the bar often fails
+  to clear it at this n.
 - **Objects without a window are not judged** (73 arm objects, 9 control),
   though V4 counts them. They are mostly participant and meeting-Event
   objects.
 - **The control is the reference's whole windowed output, not its "extras".**
-  It is the baseline for what share of a model's objects are useful; it is
-  only 41 objects.
+  It is only 41 objects, so it is a descriptive reference, not a decision
+  baseline. The 0.70 floor is an absolute bar the owner set, not a measured
+  property of the reference.
 - **The redundancy context is the side's other titles only,** not their
   descriptions. A judge may miss a restatement it could see only in a
   description; this applies to arms and control alike, and the arms list
@@ -351,17 +363,43 @@ reason:
    (`run_concept_screen.judge_call`) does; still fail-closed and counted.
 5. **DEGRADED above 10% unlabelled**, the label study's (#1579) threshold:
    kappa over a set that silently lost many items would not describe the run.
-6. **INSUFFICIENT below 20 agreed items** on either side, so that a rule is
-   never read off a handful of objects.
-7. **Shared meeting draw in the difference bootstrap, empty draws dropped and
-   counted,** so the arm and control are compared on the same meetings and an
-   empty side never scores as a share of 0.
+6. **INSUFFICIENT below 20 agreed items** on the arm, so that a rule is
+   never read off a handful of objects. (With the absolute rule the control
+   no longer decides, so its size no longer makes an arm insufficient.)
+7. **Shared meeting draw in the descriptive difference bootstrap, empty draws
+   dropped and counted,** so the arm and control are compared on the same
+   meetings and an empty side never scores as a share of 0.
 8. **Kappa pooled over arms and control**, the "labelled set" of the
    approved design.
 9. **The FAIL readings (inferior, unresolved)** do not change when an arm
    passes; they only state a FAIL honestly, given the power check.
 10. **Bodies come from a cache-only replay**, because the records keep only
     their length.
+11. **The relative rule was replaced by an absolute one (owner decision,
+    2026-11-23).** The first approved rule passed an arm only if its agreed
+    useful share was no more than 0.10 below the `qwen3:8b` control's. The
+    power check showed it would pass an arm exactly as useful as the control
+    only 3% to 14% of the time, because the 41-object control made the
+    interval wide. The control cannot be enlarged: only two `qwen3:8b` runs
+    are cached, and new local extraction runs would be a different study. The
+    rule now bounds the arm's own shares (useful lower bound >= 0.70,
+    redundant upper bound <= 0.20), and the control is reported only as a
+    descriptive reference. The redundant ceiling, the bootstrap, the FAIL
+    readings, kappa, DEGRADED, INSUFFICIENT and the "no verdict can flip"
+    statement are unchanged. The change was made before any label existed.
+
+## Owner decisions
+
+Settled by the owner on 2026-11-23, before registration:
+
+- **The absolute V4 replacement rule** above, replacing the relative rule
+  (Design adjustment 11).
+- **No human adjudication.** Labels come only from the two local judges; the
+  decision uses only the items both agree on.
+- **The two local judges** `gpt-oss:20b` and `gemma4:26b-a4b`, at the digests
+  pinned above.
+- **Local GPU use** for the judge run, **after the #1768 evidence A/B
+  finishes**, so the two studies do not share the GPU.
 
 ## Disclosed before registration
 
@@ -372,5 +410,7 @@ reason:
 - No model was called: the population build ran with `OLLAMA_HOST` pointing
   at a closed port. The two judge digests and bge-m3's were read from the
   local Ollama's `/api/tags`, which runs no model.
-- The power check above was computed after the counts were known and before
-  any label; it changed no threshold.
+- The power checks above were computed after the counts were known and
+  before any label. The first one led the owner to replace the relative rule
+  with the absolute one (Design adjustment 11). The second one, for the
+  absolute rule, changed no threshold.
