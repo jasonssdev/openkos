@@ -40,7 +40,7 @@ fixed in [`PREREGISTRATION.md`](PREREGISTRATION.md); the outcome is in
 | `downstream_cost.py` | #1579: model-free count of the post-extraction work the judge's cut saves (identity groups, reindex embedding calls, revision pool), by running the production candidate generators over temporary bundles built from the #1571 records (`measure`, `--self-test`); results in `DOWNSTREAM_COST.md` |
 | `cut_profile.py` | #1579: descriptive profile of what the selector judge's cut removes (by type, bundle size, body size), model-free over the #1571 records (`profile`, `--self-test`); the decision document is `NEXT_STEP.md` |
 | `label_study.py` | #1579 step 3: `gpt-oss:20b` labels the ceiling objects keep / merge / drop (cut and kept together), with a duplicate-control (`population`, `run`, `score`, `--self-test`); rules in `LABEL_STUDY_PREREGISTRATION.md`, outcome in `LABEL_STUDY_RESULTS.md` |
-| `hosted_screen.py` | #1767: hosted-provider arms on this screen: model-free cost forecast, cache-only replay, unevidenced-object and near-duplicate rates (`forecast`, `replay`, `metrics`, `--self-test`); the spend guard and key handling live in `screen_pipeline.py` and `run_concept_screen.py run`; rules in `HOSTED_PREREGISTRATION.md` (draft until merged), outcome in `HOSTED_RESULTS.md` once it has run |
+| `hosted_screen.py` | #1767: hosted-provider arms on this screen: model-free cost forecast, cache-only replay, unevidenced-object and near-duplicate rates (`forecast`, `replay`, `metrics`, `--self-test`); the spend guard and key handling live in `screen_pipeline.py` and `run_concept_screen.py run`; rules in `HOSTED_PREREGISTRATION.md`, outcome in `HOSTED_RESULTS.md` |
 
 ## Data stays outside the repository
 
