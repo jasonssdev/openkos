@@ -3,21 +3,28 @@
 The hosted screen (#1767, `HOSTED_RESULTS.md`) vetoed three arms on V4 volume:
 they wrote 2 to 3 times the reference's objects per meeting-run. V4 is
 anchored to the reference (`qwen3:8b`), so it cannot say whether the extra
-objects are noise or recall. This harness measures it from the cached #1767
-records, and decides nothing `EXTRA_OBJECT_PREREGISTRATION.md` does not.
+objects are noise or recall. This harness measures it on the twelve thesis
+development meetings (pool DEV12): pool DA from the cached #1767 records, the
+seven others from new runs made by `run_concept_screen.py run --pool DEV12`.
+It decides nothing `EXTRA_OBJECT_PREREGISTRATION.md` does not.
 
 Subcommands:
 
 - `population`  model-free: each vetoed arm's final objects with no
                 counterpart in the `qwen3:8b` output of the same meeting-run,
                 plus the `qwen3:8b` control, with their bodies recovered by a
-                cache-only replay. Prints counts and hashes and checks them
-                against the pins in this file. A cache or embedding miss stops
-                it; nothing is generated and nothing under the screen's runs
-                directory is written.
+                cache-only replay. Checks every record, the pool-DA pins in this
+                file, and pins DEV12 on its first clean build. A cache or
+                embedding miss stops it; nothing is generated and nothing under
+                the screen's runs directory is written.
+- `budget`      model-free: each hosted arm's registered `run_concept_screen.py
+                run` line for the seven new meetings, with its cumulative
+                spend ceilings, refused if its ledger moved since registration.
+- `embed`       bge-m3 vectors of every DEV12 final object, into the screen's
+                embedding cache (an embedding model call, no generation).
 - `run`         the two registered judges over the pinned population, one call
-                per object per judge, cached and resumable. The ONLY subcommand
-                that calls a model, and it refuses an unpinned population or a
+                per object per judge, cached and resumable. The only judge
+                calls, and it refuses an unpinned population or a
                 judge whose digest is not the registered one.
 - `report`      kappa, agreed shares, the registered V4 replacement rule and
                 the re-read #1767 verdicts, applied mechanically.
@@ -33,6 +40,7 @@ import json
 import math
 import pathlib
 import random
+import re
 import sqlite3
 import struct
 import sys
@@ -46,6 +54,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(HERE))
 sys.path.append(str(REPO_ROOT / "evals"))
 
+import hosted_screen as hs  # noqa: E402
 import run_concept_screen as rcs  # noqa: E402
 import screen_data as data  # noqa: E402
 import screen_metrics as sm  # noqa: E402
@@ -68,7 +77,18 @@ ARMS: Final = ("openai-gpt-5-mini", "anthropic-claude-haiku-5-5", "openai-gpt-6-
 """The three arms #1767 vetoed on V4."""
 CONTROL: Final = "control"
 RUNS: Final = (1, 2)
-MEETINGS: Final = data.POOL_DA
+MEETINGS: Final = data.POOL_DEV12
+"""All twelve development meetings (owner decision, 2026-11-23). Pool F stays
+reserved as the confirmation pool."""
+NEW_MEETINGS: Final = data.POOL_DEV_NEW
+"""Need new extraction runs; pool DA's records are reused from cache."""
+REFERENCE_DIGEST: Final = (
+    "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41"
+)
+"""`qwen3:8b` as its #1557 stamp and records name it. Every control record,
+old or new, must carry it."""
+DA_DATE: Final = "2026-11-23"
+"""The date the #1767 hosted runs carry in their digest."""
 
 EMBED_DIGEST: Final = "7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab"
 """`bge-m3` as the local Ollama lists it; the screen's embedding cache is keyed
@@ -107,7 +127,7 @@ MIN_AGREED: Final = 20
 MAX_UNLABELLED_SHARE: Final = 0.10
 """More items than this share without a label from either judge: degraded."""
 
-EXPECTED: Final = {
+EXPECTED_DA: Final = {
     "openai-gpt-5-mini": (
         72,
         "68973bcfaf90d58f86e4cfde87fc6c1b5a3fb4b88dcd3047bf068f09f39bf779",
@@ -125,9 +145,71 @@ EXPECTED: Final = {
         "6c4e564f055809b6b5f5e12cb6deb0a0716225bcfea31d0767d485545415919e",
     ),
 }
-"""Per side: (objects, sha256 of the sorted keys), as registered."""
+"""Per side: (objects, sha256 of the sorted keys) over the pool-DA meetings,
+as registered. The DEV12 population is pinned at run time (`population-pin.json`)."""
 
 G1_FLOOR: Final = -0.05
+
+BUDGET_USD: Final = 3.00
+"""The owner's total ceiling for the new hosted runs."""
+OVERSHOOT_PROMPT_TOKENS: Final = 2 * sp.CONTEXT_WINDOW
+"""A bound on one call's provider-counted prompt (twice the context window,
+for a tokenizer that counts more than the local one)."""
+
+
+@dataclass(frozen=True)
+class HostedBudget:
+    digest_prefix: str
+    """The `<provider>:<served-model>` part of the arm's `--digest`."""
+    prior_calls: int
+    prior_usd: float
+    """The arm's ledger after #1767, read on 2026-11-23. The ledger is
+    cumulative, so the run's flags add the new ceilings to these."""
+    ceiling_usd: float
+    ceiling_calls: int
+
+
+HOSTED: Final = {
+    "openai-gpt-5-mini": HostedBudget("openai:gpt-5-mini", 112, 0.479312, 1.68, 250),
+    "anthropic-claude-haiku-5-5": HostedBudget(
+        "anthropic:claude-haiku-5-5", 112, 0.1386496, 0.68, 250
+    ),
+    "openai-gpt-6-luna": HostedBudget(
+        "openai:gpt-6-luna", 112, 0.10268819999999998, 0.60, 250
+    ),
+}
+
+
+def hosted_arm(label: str) -> hs.Arm:
+    return next(a for a in hs.ARMS if a.label == label)
+
+
+def overshoot_usd(budget: HostedBudget) -> float:
+    """The most one call past the ceiling can cost: the guard checks before a
+    call, so a run stops at most one call over."""
+    arm = hosted_arm(next(k for k, v in HOSTED.items() if v is budget))
+    return (
+        OVERSHOOT_PROMPT_TOKENS * arm.price_in
+        + sp.MAX_GENERATION_TOKENS * arm.price_out
+    ) / 1_000_000
+
+
+def budget_flags(label: str, ledger: Mapping[str, Any]) -> dict[str, Any]:
+    """`--max-usd` and `--max-calls` for the new runs of `label`. Refuses a
+    ledger that moved since registration: the new ceiling would then not be
+    the registered one."""
+    b = HOSTED[label]
+    if int(ledger.get("calls", 0)) != b.prior_calls or not math.isclose(
+        float(ledger.get("usd", 0.0)), b.prior_usd, abs_tol=1e-9
+    ):
+        raise ValueError(
+            f"{label}: ledger at {ledger.get('calls')} calls, ${ledger.get('usd')}; "
+            f"registered {b.prior_calls}, ${b.prior_usd}"
+        )
+    return {
+        "max_usd": b.prior_usd + b.ceiling_usd,
+        "max_calls": b.prior_calls + b.ceiling_calls,
+    }
 
 
 @dataclass(frozen=True)
@@ -205,17 +287,27 @@ def population_hash(keys: Sequence[str]) -> str:
     return hashlib.sha256("\n".join(sorted(keys)).encode("utf-8")).hexdigest()
 
 
-def pin_problems(sides: Mapping[str, Sequence[str]]) -> list[str]:
-    """Empty when every side is the registered population."""
-    out: list[str] = []
-    for side, (count, sha) in EXPECTED.items():
-        keys = sides.get(side, [])
-        got = population_hash(keys)
-        if len(keys) != count or got != sha:
-            out.append(
-                f"{side}: {len(keys)} objects, sha256 {got}; registered {count}, {sha}"
-            )
-    return out
+def population_pin(items: Sequence[Mapping[str, Any]]) -> dict[str, list[Any]]:
+    """Per side: [objects, sha256 of the sorted keys]."""
+    keys = side_keys(items)
+    return {side: [len(k), population_hash(k)] for side, k in keys.items()}
+
+
+def pin_mismatch(
+    saved: Mapping[str, Sequence[Any]], current: Mapping[str, Sequence[Any]]
+) -> list[str]:
+    """Empty when `current` is the pinned population."""
+    return [
+        f"{side}: {list(current.get(side, []))}, pinned {list(saved[side])}"
+        for side in saved
+        if list(current.get(side, [])) != list(saved[side])
+    ]
+
+
+def da_pin_problems(items: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Empty when the pool-DA part of the population is the registered one."""
+    da = population_pin([i for i in items if i["meeting"] in data.POOL_DA])
+    return pin_mismatch({k: list(v) for k, v in EXPECTED_DA.items()}, da)
 
 
 def judge_messages(
@@ -339,6 +431,7 @@ FAIL: Final = "FAIL"
 INSUFFICIENT: Final = "INSUFFICIENT"
 INCONCLUSIVE: Final = "INCONCLUSIVE"
 DEGRADED: Final = "DEGRADED"
+INCOMPLETE: Final = "INCOMPLETE"
 
 
 def arm_rule(useful: sm.Interval, redundant: sm.Interval, n_arm: int) -> str:
@@ -498,15 +591,57 @@ class ReadOnlyEmbeddings:
         return list(struct.unpack(f"{len(blob) // 4}f", blob))
 
 
+_DATE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def record_problems(model: str, meeting: str, rec: Mapping[str, Any]) -> list[str]:
+    """Why a record is not one this study may use: the control's digest, a
+    hosted arm's provider, model and date, and no seed-0 call (seed 0 is the
+    stage-0 calibration's; a scored run never sends it)."""
+    where = f"{model} {meeting} r{rec.get('run', '?')}"
+    out: list[str] = []
+    digest = str(rec.get("digest"))
+    if model == REFERENCE:
+        if digest != REFERENCE_DIGEST:
+            out.append(f"{where}: digest {digest}, registered {REFERENCE_DIGEST}")
+    else:
+        prefix, _sep, date = digest.rpartition(":")
+        if prefix != HOSTED[model].digest_prefix or not _DATE.match(date):
+            out.append(
+                f"{where}: digest {digest} is not {HOSTED[model].digest_prefix}:<date>"
+            )
+        elif meeting in data.POOL_DA and date != DA_DATE:
+            out.append(f"{where}: a pool-DA record must be the #1767 run of {DA_DATE}")
+        elif meeting not in data.POOL_DA and date < DA_DATE:
+            out.append(f"{where}: dated {date}, before the #1767 runs")
+    if any(int(c.get("seed", -1)) == 0 for c in rec.get("calls", [])):
+        out.append(f"{where}: holds a seed-0 call")
+    return out
+
+
+def provider_failures(rec: Mapping[str, Any]) -> int:
+    """Windows that ended in a provider error (#1767: never a model result)."""
+    return sum(
+        1
+        for w in rec.get("windows", [])
+        if w.get("outcome") in hs.PROVIDER_ERROR_OUTCOMES
+    )
+
+
 def build_population(
     load: Callable[[str, str, int], Mapping[str, Any] | None],
     vector: Callable[[str], list[float]],
     bodies: Callable[[str, int, Mapping[str, Any]], list[str]],
 ) -> dict[str, Any]:
-    """Items per side plus counts. `load(model, meeting, run)` reads a record,
-    `bodies(meeting, run, rec)` recovers its final bodies."""
+    """Items per side, counts, record problems, and per side the reasons it is
+    INCOMPLETE (a missing hosted record, a provider-failure window).
+    `load(model, meeting, run)` reads a record, `bodies(meeting, run, rec)`
+    recovers its final bodies. A missing control record stops the build: the
+    counterpart rule needs it."""
     items: list[Obj] = []
     counts: dict[str, Any] = {}
+    problems: list[str] = []
+    incomplete: dict[str, list[str]] = {}
     for model in (*ARMS, REFERENCE):
         side = CONTROL if model == REFERENCE else model
         row: dict[str, Any] = {
@@ -514,16 +649,31 @@ def build_population(
             "no_window": 0,
             "with_counterpart": 0,
             "population": 0,
+            "meeting_runs": 0,
+            "dates": [],
         }
         row["sensitivity"] = {str(t): 0 for t in SENSITIVITY}
         for meeting in MEETINGS:
             for run in RUNS:
-                rec = load(model, meeting, run)
                 ref = load(REFERENCE, meeting, run)
-                if rec is None or ref is None:
-                    raise SystemExit(
-                        f"no record for {model} or {REFERENCE} {meeting} r{run}"
+                if ref is None:
+                    raise SystemExit(f"no {REFERENCE} record for {meeting} r{run}")
+                rec = load(model, meeting, run)
+                if rec is None:
+                    incomplete.setdefault(side, []).append(
+                        f"{meeting} r{run}: no record"
                     )
+                    continue
+                problems += record_problems(model, meeting, rec)
+                failed = provider_failures(rec)
+                if failed:
+                    incomplete.setdefault(side, []).append(
+                        f"{meeting} r{run}: {failed} provider-failure windows"
+                    )
+                row["meeting_runs"] += 1
+                date = str(rec.get("digest")).rpartition(":")[2]
+                if model != REFERENCE and date not in row["dates"]:
+                    row["dates"].append(date)
                 final = rec["stages"]["final"] or []
                 ref_final = ref["stages"]["final"] or []
                 body = bodies(meeting, run, rec)
@@ -571,7 +721,12 @@ def build_population(
                         }
                     )
         counts[side] = row
-    return {"items": items, "counts": counts}
+    return {
+        "items": items,
+        "counts": counts,
+        "problems": problems,
+        "incomplete": incomplete,
+    }
 
 
 def side_keys(items: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
@@ -579,6 +734,9 @@ def side_keys(items: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
     for item in items:
         out[str(item["side"])].append(str(item["key"]))
     return out
+
+
+PIN_FILE: Final = "population-pin.json"
 
 
 def cmd_population(args: argparse.Namespace) -> int:
@@ -596,21 +754,103 @@ def cmd_population(args: argparse.Namespace) -> int:
         ),
     )
     pop["unrecorded_misses"] = unrecorded
-    keys = side_keys(pop["items"])
+    pin = population_pin(pop["items"])
     summary = {
-        side: {**pop["counts"][side], "sha256": population_hash(keys[side])}
-        for side in keys
+        side: {**pop["counts"][side], "objects": pin[side][0], "sha256": pin[side][1]}
+        for side in pin
     }
     print(json.dumps(summary, indent=2))
     print(f"unrecorded optional calls that missed the cache: {len(unrecorded)}")
+    failed = False
+    for p in pop["problems"]:
+        print(f"RECORD NOT USABLE: {p}")
+        failed = True
+    for p in da_pin_problems(pop["items"]):
+        print(f"NOT THE REGISTERED POOL-DA POPULATION: {p}")
+        failed = True
+    for side, reasons in pop["incomplete"].items():
+        print(f"INCOMPLETE {side}: {'; '.join(reasons)}")
+    if pop["incomplete"] and not args.final:
+        print(
+            "re-run the affected meeting-runs (at most two re-runs per arm), or pass "
+            "--final once they are spent or a ceiling stopped the run"
+        )
+        failed = True
+    if failed:
+        return 1
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "population.json").write_text(
         json.dumps(pop, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
     )
-    problems = pin_problems(keys)
-    for p in problems:
-        print(f"NOT THE REGISTERED POPULATION: {p}")
-    return 1 if problems else 0
+    pin_path = args.out_dir / PIN_FILE
+    if not pin_path.is_file():
+        pin_path.write_text(json.dumps(pin, indent=1) + "\n", encoding="utf-8")
+        print(f"pinned the DEV12 population in {pin_path}")
+        return 0
+    mismatch = pin_mismatch(json.loads(pin_path.read_text(encoding="utf-8")), pin)
+    for p in mismatch:
+        print(f"NOT THE PINNED DEV12 POPULATION: {p}")
+    return 1 if mismatch else 0
+
+
+def cmd_embed(args: argparse.Namespace) -> int:
+    """Embed every DEV12 final object on the local bge-m3 into the screen's
+    own embedding cache, so `population` can stay model-free. Refuses a bge-m3
+    whose digest is not the registered one."""
+    from harness_stamp import model_identity
+
+    got = model_identity(rcs.EMBED_MODEL, args.host).get("digest")
+    if got != EMBED_DIGEST:
+        raise SystemExit(f"refusing: bge-m3 digest {got}, registered {EMBED_DIGEST}")
+    store = rcs.make_store(args)
+    texts: list[str] = []
+    for model in (*ARMS, REFERENCE):
+        for meeting in MEETINGS:
+            for run in RUNS:
+                rec = rcs.load_record(args.runs_dir, model, meeting, run)
+                if rec is not None:
+                    texts += [unit_text(o) for o in rec["stages"]["final"] or []]
+    store.vectors(texts)
+    print(f"{len(set(texts))} texts embedded or already cached")
+    return 0
+
+
+def cmd_budget(args: argparse.Namespace) -> int:
+    """Model-free: the registered `run` command line of each hosted arm, with
+    its cumulative `--max-usd` and `--max-calls` read against its ledger."""
+    for label in ARMS:
+        path = args.runs_dir / "hosted" / f"{rcs.safe(label)}-ledger.json"
+        ledger = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        flags = budget_flags(label, ledger)
+        arm = hosted_arm(label)
+        print(
+            "uv run python evals/concept_model_screen/run_concept_screen.py run "
+            f"--models {label} --pool DEV12 --runs 1 2 "
+            f"--backend openai-compatible --base-url {arm.base_url} "
+            f"--served-model {arm.served_model} "
+            f"--digest {HOSTED[label].digest_prefix}:<date of run> "
+            "--timeout-from qwen3:8b --no-seed "
+            f"--max-calls {flags['max_calls']} --max-usd {math.floor(flags['max_usd'] * 1e6) / 1e6:.6f} "
+            f"--price-in {arm.price_in:.2f} --price-out {arm.price_out:.2f}"
+        )
+    return 0
+
+
+def _load_pinned(out_dir: pathlib.Path) -> tuple[list[Obj], dict[str, list[str]]]:
+    """The population, refused unless its DA part is the registered one and
+    the whole is the one pinned when it was first built."""
+    path = out_dir / "population.json"
+    pin_path = out_dir / PIN_FILE
+    if not path.is_file() or not pin_path.is_file():
+        raise SystemExit("population.json or its pin missing: run `population` first")
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    items = list(loaded["items"])
+    problems = da_pin_problems(items) + pin_mismatch(
+        json.loads(pin_path.read_text(encoding="utf-8")), population_pin(items)
+    )
+    if problems:
+        raise SystemExit("not the registered population: " + "; ".join(problems))
+    return items, dict(loaded.get("incomplete") or {})
 
 
 # --- run -------------------------------------------------------------------------
@@ -679,23 +919,10 @@ def run_judges(
     return labels
 
 
-def _load_population(out_dir: pathlib.Path) -> list[Obj]:
-    path = out_dir / "population.json"
-    if not path.is_file():
-        raise SystemExit("population.json missing: run `population` first")
-    loaded = json.loads(path.read_text(encoding="utf-8"))
-    return list(loaded["items"])
-
-
 def cmd_run(args: argparse.Namespace) -> int:
     from harness_stamp import build_stamp, model_identity
 
-    items = _load_population(args.out_dir)
-    problems = pin_problems(side_keys(items))
-    if problems:
-        raise SystemExit(
-            "refusing to run, not the registered population: " + "; ".join(problems)
-        )
+    items, _incomplete = _load_pinned(args.out_dir)
     for model, digest in JUDGES:
         got = model_identity(model, args.host).get("digest")
         if got != digest:
@@ -741,8 +968,10 @@ def report(
     labels: Mapping[str, Mapping[str, Mapping[str, Any]]],
     judges: Sequence[str] = JUDGE_MODELS,
     resamples: int = sm.BOOTSTRAP_RESAMPLES,
+    incomplete: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
-    """The registered analysis, mechanically."""
+    """The registered analysis, mechanically. An arm in `incomplete` is
+    reported with its numbers and decides nothing."""
     a, b = judges
     pairs: list[tuple[str, str]] = []
     unlabelled = 0
@@ -802,6 +1031,9 @@ def report(
             },
         }
         rule = blocked
+        if arm in (incomplete or {}):
+            row["incomplete"] = list((incomplete or {})[arm])
+            rule = rule or INCOMPLETE
         if rule is None and n_arm < MIN_AGREED:
             rule = INSUFFICIENT
         if rule is None:
@@ -828,15 +1060,12 @@ def report(
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    items = _load_population(args.out_dir)
-    problems = pin_problems(side_keys(items))
-    if problems:
-        raise SystemExit("not the registered population: " + "; ".join(problems))
+    items, incomplete = _load_pinned(args.out_dir)
     path = args.out_dir / "labels.json"
     if not path.is_file():
         raise SystemExit("labels.json missing: run `run` first")
     labels = json.loads(path.read_text(encoding="utf-8"))
-    print(json.dumps(report(items, labels), indent=2))
+    print(json.dumps(report(items, labels, incomplete=incomplete), indent=2))
     return 0
 
 
@@ -1028,6 +1257,13 @@ def _t_judge_one() -> None:
         check(none["label"] is None and none["attempts"] == 2, f"no label {none}")
 
 
+def _fixture_digest(model: str, meeting: str) -> str:
+    if model == REFERENCE:
+        return REFERENCE_DIGEST
+    date = DA_DATE if meeting in data.POOL_DA else "2026-11-24"
+    return f"{HOSTED[model].digest_prefix}:{date}"
+
+
 def _fixture_records() -> dict[tuple[str, str, int], Obj]:
     recs: dict[tuple[str, str, int], Obj] = {}
     for model in (*ARMS, REFERENCE):
@@ -1058,28 +1294,45 @@ def _fixture_records() -> dict[tuple[str, str, int], Obj]:
                 ]
                 recs[(model, meeting, run)] = {
                     "model": model,
+                    "digest": _fixture_digest(model, meeting),
+                    "calls": [{"seed": run}, {"seed": run + sp.RETRY_SEED_STRIDE}],
+                    "windows": [{"outcome": "ok"}, {"outcome": "ok"}],
                     "stages": {"final": final},
                 }
     return recs
 
 
-def _t_population() -> None:
-    recs = _fixture_records()
-
-    def vector(text: str) -> list[float]:
-        return (
-            [1.0, 0.0]
-            if text.startswith("Shared") or text.startswith("Loose")
-            else [0.0, 1.0]
-            if "extra" in text and REFERENCE not in text
-            else [0.6, 0.8]
-        )
-
-    pop = build_population(
-        lambda m, s, r: recs.get((m, s, r)),
-        vector,
-        lambda s, r, rec: [f"body {i}" for i in range(len(rec["stages"]["final"]))],
+def _fixture_vector(text: str) -> list[float]:
+    return (
+        [1.0, 0.0]
+        if text.startswith("Shared") or text.startswith("Loose")
+        else [0.0, 1.0]
+        if "extra" in text and REFERENCE not in text
+        else [0.6, 0.8]
     )
+
+
+def _fixture_bodies(meeting: str, run: int, rec: Mapping[str, Any]) -> list[str]:
+    return [f"body {i}" for i in range(len(rec["stages"]["final"]))]
+
+
+def _build(recs: Mapping[tuple[str, str, int], Obj]) -> dict[str, Any]:
+    return build_population(
+        lambda m, s, r: recs.get((m, s, r)), _fixture_vector, _fixture_bodies
+    )
+
+
+def _t_pools() -> None:
+    check(MEETINGS == data.POOL_DEV12, f"the population is DEV12: {MEETINGS}")
+    check(len(MEETINGS) == 12 and set(data.POOL_DA) <= set(MEETINGS), "DA inside")
+    reserved = set(data.POOL_F_WINDOWED) | set(data.POOL_F_MEETING_ONLY)
+    check(not set(MEETINGS) & reserved, "pool F stays reserved")
+    check(set(HOSTED) == set(ARMS), "every arm has a registered budget")
+
+
+def _t_population() -> None:
+    pop = _build(_fixture_records())
+    check(not pop["problems"] and not pop["incomplete"], f"clean fixture {pop}")
     per_run = len(MEETINGS) * len(RUNS)
     keys = side_keys(pop["items"])
     for arm in ARMS:
@@ -1102,7 +1355,72 @@ def _t_population() -> None:
         f"item {item}",
     )
     check(len({i["key"] for i in pop["items"]}) == len(pop["items"]), "unique keys")
-    check(pin_problems(keys) != [], "fixture is not the registered population")
+    check(da_pin_problems(pop["items"]) != [], "fixture is not the registered DA")
+
+
+def _t_incomplete() -> None:
+    recs = _fixture_records()
+    del recs[(ARMS[0], "TS3009d", 2)]
+    recs[(ARMS[1], "IS1004a", 1)]["windows"][0]["outcome"] = "error"
+    recs[(ARMS[2], "ES2015c", 1)]["windows"][1]["outcome"] = "not_called"
+    pop = _build(recs)
+    check(set(pop["incomplete"]) == set(ARMS), f"incomplete {pop['incomplete']}")
+    check(
+        pop["counts"][ARMS[0]]["population"] == len(MEETINGS) * len(RUNS) - 1,
+        "a missing meeting-run contributes nothing",
+    )
+    gone = _fixture_records()
+    del gone[(REFERENCE, "ES2015b", 1)]
+    try:
+        _build(gone)
+    except SystemExit:
+        pass
+    else:
+        raise _Fail("a missing control record must stop the build")
+    bad = _fixture_records()
+    bad[(REFERENCE, "ES2015c", 1)]["digest"] = "500a1f067a9f"
+    bad[(ARMS[0], "ES2015a", 1)]["digest"] = "openai:gpt-5-mini:2026-11-24"
+    bad[(ARMS[1], "TS3009a", 2)]["digest"] = "openai:gpt-5-mini:2026-11-24"
+    bad[(ARMS[2], "IS1004c", 2)]["calls"][0]["seed"] = 0
+    probs = _build(bad)["problems"]
+    check(len(probs) == 4, f"digest, DA date, provider and seed-0 problems: {probs}")
+    earlier = _fixture_records()
+    earlier[(ARMS[0], "ES2015c", 1)]["digest"] = "openai:gpt-5-mini:2026-11-22"
+    check(_build(earlier)["problems"] != [], "a new-meeting run predating DA")
+
+
+def _t_pins() -> None:
+    pop = _build(_fixture_records())
+    pin = population_pin(pop["items"])
+    check(set(pin) == {*ARMS, CONTROL}, f"one pin per side: {pin}")
+    check(pin_mismatch(pin, pin) == [], "a population matches its own pin")
+    fewer = [i for i in pop["items"] if i["key"] != pop["items"][0]["key"]]
+    check(pin_mismatch(pin, population_pin(fewer)) != [], "one object less")
+    da_only = [i for i in pop["items"] if i["meeting"] in data.POOL_DA]
+    check(
+        da_pin_problems(da_only) == da_pin_problems(pop["items"]),
+        "the DA pin reads only DA meetings",
+    )
+
+
+def _t_budget() -> None:
+    total = sum(h.ceiling_usd + overshoot_usd(h) for h in HOSTED.values())
+    check(total <= BUDGET_USD, f"ceilings plus one-call overshoot {total:.4f}")
+    check(BUDGET_USD == 3.00, "the owner's ceiling")
+    for arm, h in HOSTED.items():
+        ledger = {"calls": h.prior_calls, "usd": h.prior_usd}
+        flags = budget_flags(arm, ledger)
+        check(
+            abs(flags["max_usd"] - (h.prior_usd + h.ceiling_usd)) < 1e-9
+            and flags["max_calls"] == h.prior_calls + h.ceiling_calls,
+            f"{arm}: the ledger is cumulative, so the flags add the prior spend",
+        )
+        try:
+            budget_flags(arm, {"calls": h.prior_calls + 1, "usd": h.prior_usd})
+        except ValueError:
+            pass
+        else:
+            raise _Fail(f"{arm}: a moved ledger must refuse")
 
 
 def _t_align() -> None:
@@ -1139,6 +1457,15 @@ def _t_report() -> None:
                 labels["jb"][key] = {"label": lab}
     out = report(items, labels, ("ja", "jb"), resamples=200)
     check(out["study"] == "DECIDED" and out["kappa"] == 1.0, f"study {out['study']}")
+    partial = report(
+        items, labels, ("ja", "jb"), resamples=200, incomplete={ARMS[0]: ["x"]}
+    )
+    check(partial["arms"][ARMS[0]]["rule"] == INCOMPLETE, "an incomplete arm")
+    check(
+        "V4 (replacement undecided)" in partial["arms"][ARMS[0]]["reread_1767"],
+        "an incomplete arm leaves V4 standing",
+    )
+    check(partial["arms"][ARMS[1]]["rule"] == PASS, "the others still decide")
     check(
         "useful_interval" in out["control"], "the control is reported with its interval"
     )
@@ -1171,7 +1498,11 @@ def self_test() -> int:
         _t_rule,
         _t_reread,
         _t_judge_one,
+        _t_pools,
         _t_population,
+        _t_incomplete,
+        _t_pins,
+        _t_budget,
         _t_align,
         _t_report,
     )
@@ -1194,7 +1525,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-dir", type=pathlib.Path, default=OUT_DIR)
     parser.add_argument("--host", default=None)
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("population")
+    pop = sub.add_parser("population")
+    pop.add_argument(
+        "--final",
+        action="store_true",
+        help="extraction is over: record missing or failed meeting-runs as INCOMPLETE",
+    )
+    sub.add_parser("budget")
+    sub.add_parser("embed")
     sub.add_parser("run")
     sub.add_parser("report")
     return parser.parse_args(argv)
@@ -1204,7 +1542,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.self_test:
         return self_test()
-    commands = {"population": cmd_population, "run": cmd_run, "report": cmd_report}
+    commands = {
+        "population": cmd_population,
+        "budget": cmd_budget,
+        "embed": cmd_embed,
+        "run": cmd_run,
+        "report": cmd_report,
+    }
     if args.command not in commands:
         raise SystemExit("choose a subcommand, or --self-test")
     return commands[args.command](args)
