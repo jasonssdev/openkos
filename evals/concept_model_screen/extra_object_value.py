@@ -96,9 +96,10 @@ ORDER_SEED: Final = 1783
 
 LABELS: Final = ("useful", "redundant", "trivial")
 KAPPA_FLOOR: Final = 0.6
-MARGIN: Final = 0.10
-"""The arm's agreed useful share may sit at most this far below the control's
-(95% lower bound of the difference)."""
+USEFUL_FLOOR: Final = 0.70
+"""The 95% lower bound of the arm's agreed useful share must reach this
+(owner decision, 2026-11-23: an absolute bar, because the 41-object control
+made a relative bound fail by power alone)."""
 REDUNDANT_CEILING: Final = 0.20
 """The 95% upper bound of the arm's agreed redundant share."""
 MIN_AGREED: Final = 20
@@ -340,25 +341,22 @@ INCONCLUSIVE: Final = "INCONCLUSIVE"
 DEGRADED: Final = "DEGRADED"
 
 
-def arm_rule(
-    useful_delta: sm.Interval, redundant: sm.Interval, n_arm: int, n_control: int
-) -> str:
-    """The registered V4 replacement for one arm."""
-    if n_arm < MIN_AGREED or n_control < MIN_AGREED:
+def arm_rule(useful: sm.Interval, redundant: sm.Interval, n_arm: int) -> str:
+    """The registered V4 replacement for one arm: absolute bounds on its own
+    agreed shares. The control does not decide."""
+    if n_arm < MIN_AGREED:
         return INSUFFICIENT
-    if useful_delta.low >= -MARGIN and redundant.high <= REDUNDANT_CEILING:
+    if useful.low >= USEFUL_FLOOR and redundant.high <= REDUNDANT_CEILING:
         return PASS
     return FAIL
 
 
-def fail_reading(useful_delta: sm.Interval, redundant: sm.Interval) -> str:
+def fail_reading(useful: sm.Interval, redundant: sm.Interval) -> str:
     """How a FAIL is stated. `inferior`: the interval excludes the bar (the
-    useful-share difference's upper bound is below -MARGIN, or the redundant
-    share's lower bound is above the ceiling). `unresolved`: the bar sits
-    inside the interval, which at the registered n is the expected FAIL even
-    for an arm equal to the control (see the power check in the
-    registration)."""
-    if useful_delta.high < -MARGIN or redundant.low > REDUNDANT_CEILING:
+    useful share's upper bound is below the floor, or the redundant share's
+    lower bound is above the ceiling). `unresolved`: the bar sits inside the
+    interval."""
+    if useful.high < USEFUL_FLOOR or redundant.low > REDUNDANT_CEILING:
         return "inferior"
     return "unresolved"
 
@@ -779,10 +777,19 @@ def report(
         "labelled": labelled[CONTROL],
         "agreed": n_control,
         "disagreed": disagreed[CONTROL],
+        "decides": False,
         "shares": {
             lab: share([x for v in control.values() for x in v], lab) for lab in LABELS
         },
     }
+    if n_control:
+        # Descriptive reference only (owner decision): never enters a rule.
+        out["control"]["useful_interval"] = share_interval(
+            control, "useful", resamples=resamples
+        ).fmt()
+        out["control"]["redundant_interval"] = share_interval(
+            control, "redundant", resamples=resamples
+        ).fmt()
     for arm in ARMS:
         own = agreed[arm]
         n_arm = sum(len(v) for v in own.values())
@@ -795,21 +802,25 @@ def report(
             },
         }
         rule = blocked
-        if rule is None and (n_arm < MIN_AGREED or n_control < MIN_AGREED):
+        if rule is None and n_arm < MIN_AGREED:
             rule = INSUFFICIENT
         if rule is None:
-            delta, dropped = paired_share_delta(
-                own, control, "useful", resamples=resamples
-            )
+            useful = share_interval(own, "useful", resamples=resamples)
             red = share_interval(own, "redundant", resamples=resamples)
-            row["useful_delta"] = delta.fmt()
-            row["useful_delta_low"] = delta.low
-            row["dropped_draws"] = dropped
+            row["useful"] = useful.fmt()
+            row["useful_low"] = useful.low
             row["redundant"] = red.fmt()
             row["redundant_high"] = red.high
-            rule = arm_rule(delta, red, n_arm, n_control)
+            if n_control:
+                # Reported, not decided on.
+                delta, dropped = paired_share_delta(
+                    own, control, "useful", resamples=resamples
+                )
+                row["useful_minus_control"] = delta.fmt()
+                row["dropped_draws"] = dropped
+            rule = arm_rule(useful, red, n_arm)
             if rule == FAIL:
-                row["fail_reading"] = fail_reading(delta, red)
+                row["fail_reading"] = fail_reading(useful, red)
         row["rule"] = rule
         row["reread_1767"] = reread_1767(RESULTS_1767[arm], rule)
         out["arms"][arm] = row
@@ -943,27 +954,15 @@ def _t_bootstrap() -> None:
 def _t_rule() -> None:
     iv = sm.Interval
     ok_red = iv(0.1, 0.05, REDUNDANT_CEILING)
-    check(
-        arm_rule(iv(0.0, -MARGIN, 0.1), ok_red, 30, 30) == PASS, "bounds are inclusive"
-    )
-    check(arm_rule(iv(0.0, -0.1001, 0.1), ok_red, 30, 30) == FAIL, "useful too low")
-    check(
-        arm_rule(iv(0.0, 0.0, 0.1), iv(0.1, 0.0, 0.2001), 30, 30) == FAIL, "redundant"
-    )
-    check(
-        arm_rule(iv(0.0, 0.0, 0.1), ok_red, MIN_AGREED - 1, 30) == INSUFFICIENT, "n arm"
-    )
-    check(
-        arm_rule(iv(0.0, 0.0, 0.1), ok_red, 30, MIN_AGREED - 1) == INSUFFICIENT,
-        "n ctrl",
-    )
-    check(
-        fail_reading(iv(-0.2, -0.3, -0.1001), ok_red) == "inferior", "useful excluded"
-    )
-    check(
-        fail_reading(iv(0.0, 0.0, 0.1), iv(0.3, 0.2001, 0.4)) == "inferior", "redundant"
-    )
-    check(fail_reading(iv(0.0, -0.2, 0.1), iv(0.1, 0.0, 0.25)) == "unresolved", "spans")
+    check(USEFUL_FLOOR == 0.70, "the owner's absolute floor")
+    check(arm_rule(iv(0.8, USEFUL_FLOOR, 0.9), ok_red, 30) == PASS, "inclusive bounds")
+    check(arm_rule(iv(0.8, 0.6999, 0.9), ok_red, 30) == FAIL, "useful too low")
+    check(arm_rule(iv(0.8, 0.75, 0.9), iv(0.1, 0.0, 0.2001), 30) == FAIL, "redundant")
+    check(arm_rule(iv(0.8, 0.75, 0.9), ok_red, MIN_AGREED - 1) == INSUFFICIENT, "n arm")
+    check(arm_rule(iv(0.8, 0.75, 0.9), ok_red, MIN_AGREED) == PASS, "n arm floor")
+    check(fail_reading(iv(0.6, 0.5, 0.6999), ok_red) == "inferior", "useful excluded")
+    check(fail_reading(iv(0.8, 0.75, 0.9), iv(0.3, 0.2001, 0.4)) == "inferior", "red")
+    check(fail_reading(iv(0.7, 0.6, 0.8), iv(0.1, 0.0, 0.25)) == "unresolved", "spans")
     check(study_verdict(0.59, 0, 100) == INCONCLUSIVE, "kappa below the floor")
     check(study_verdict(None, 0, 100) == INCONCLUSIVE, "undefined kappa")
     check(study_verdict(0.6, 10, 100) is None, "kappa 0.6 and 10% unlabelled decide")
@@ -1140,6 +1139,12 @@ def _t_report() -> None:
                 labels["jb"][key] = {"label": lab}
     out = report(items, labels, ("ja", "jb"), resamples=200)
     check(out["study"] == "DECIDED" and out["kappa"] == 1.0, f"study {out['study']}")
+    check(
+        "useful_interval" in out["control"], "the control is reported with its interval"
+    )
+    check(
+        "decides" not in out["control"] or not out["control"]["decides"], "descriptive"
+    )
     for arm in ARMS:
         check(out["arms"][arm]["rule"] == PASS, f"{arm}: {out['arms'][arm]}")
         check(out["arms"][arm]["reread_1767"] == "VETOED (G1)", arm)
