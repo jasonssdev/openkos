@@ -406,7 +406,8 @@ def cmd_metrics(args: argparse.Namespace) -> int:
 
 def cmd_replay(args: argparse.Namespace) -> int:
     """Re-derive each record from the chat cache only. A miss raises, so no
-    model is called; the replayed final titles must equal the recorded ones."""
+    model is called; the replayed final titles must equal the recorded ones.
+    `--pool` picks the meetings (default DA, as #1767 and #1768 used)."""
     corpus = rcs.Corpus(args.runs_dir)
     timeouts = rcs.load_timeouts(args.runs_dir)
     out_root = args.runs_dir / "hosted" / "replay"
@@ -416,7 +417,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
         raise RuntimeError("cache miss: replay never calls a model")
 
     for model in args.models:
-        for meeting in data.POOL_DA:
+        for meeting in rcs.sources_for(args.pool, prose=False):
             for run in args.runs:
                 rec = rcs.load_record(args.runs_dir, model, meeting, run)
                 if rec is None:
@@ -577,6 +578,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     rp.add_argument("--models", nargs="+", required=True)
     rp.add_argument("--runs", nargs="+", type=int, required=True)
     rp.add_argument("--timeout-from", default=None)
+    rp.add_argument("--pool", choices=("DA", "DEV12"), default="DA")
     m = sub.add_parser("metrics")
     m.add_argument("--models", nargs="+", required=True)
     m.add_argument("--runs", nargs="+", type=int, required=True)
