@@ -225,11 +225,7 @@ def arm_result(
         result.incomplete.append(f"control replay has {n_ctrl} meeting-runs")
     if n_treat != len(data.POOL_DA) * len(runs):
         result.incomplete.append(f"treatment has {n_treat} meeting-runs")
-    provider = sum(
-        n
-        for k, n in hs.window_causes([r for v in treat.values() for r in v]).items()
-        if k in hs.PROVIDER_ERROR_OUTCOMES
-    )
+    provider = sum(hs.provider_error_count(r) for v in treat.values() for r in v)
     if provider:
         result.incomplete.append(f"{provider} provider-failure windows")
     if not pair.hosted:

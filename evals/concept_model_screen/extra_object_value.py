@@ -621,11 +621,7 @@ def record_problems(model: str, meeting: str, rec: Mapping[str, Any]) -> list[st
 
 def provider_failures(rec: Mapping[str, Any]) -> int:
     """Windows that ended in a provider error (#1767: never a model result)."""
-    return sum(
-        1
-        for w in rec.get("windows", [])
-        if w.get("outcome") in hs.PROVIDER_ERROR_OUTCOMES
-    )
+    return hs.provider_error_count({"windows": [], **rec})
 
 
 def build_population(
@@ -1365,6 +1361,12 @@ def _t_incomplete() -> None:
     recs[(ARMS[2], "ES2015c", 1)]["windows"][1]["outcome"] = "not_called"
     pop = _build(recs)
     check(set(pop["incomplete"]) == set(ARMS), f"incomplete {pop['incomplete']}")
+    whole = _fixture_records()
+    for key in (r for r in whole if r[1] == "IS1004a"):
+        whole[key]["chunked"] = False
+        for w in whole[key]["windows"]:
+            w["outcome"] = "not_called"
+    check(not _build(whole)["incomplete"], "whole-source not_called is no failure")
     check(
         pop["counts"][ARMS[0]]["population"] == len(MEETINGS) * len(RUNS) - 1,
         "a missing meeting-run contributes nothing",
