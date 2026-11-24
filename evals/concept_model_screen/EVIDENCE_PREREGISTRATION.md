@@ -2,8 +2,8 @@
 
 **Status: registered on merge to `main`.** No treatment call, local or hosted,
 may be sent before that merge. A change after the merge is a new
-registration, not an edit to this one. The owner decisions listed at the end
-are open and must be settled before the first call.
+registration, not an edit to this one. The owner decisions at the end were
+settled on 2026-11-23, before registration.
 
 ## Question
 
@@ -307,7 +307,12 @@ procedure listed.
   objects they add stay evidenced or not by their body alone.
 - Reasoning budgets and sampling are provider defaults on the hosted arms.
 
-## Owner decisions needed
+## Owner decisions
+
+Settled by the owner on 2026-11-23, before merge: all three recommendations
+below are accepted (budget $2.00 total, the local GPU is authorized for this
+lane, and the 2026-11-23 hosted controls are reused).
+
 
 1. **Budget.** Recommendation: **$2.00 total**, enforced per arm by
    `--max-usd` 1.00 and 1.00 with `--max-calls` 200 each, against a central
