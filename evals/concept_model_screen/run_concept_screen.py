@@ -48,6 +48,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(HERE))
 sys.path.append(str(REPO_ROOT / "evals"))
 
+import evidence_prompt as ep  # noqa: E402
 import screen_data as data  # noqa: E402
 import screen_judge as sj  # noqa: E402
 import screen_metrics as sm  # noqa: E402
@@ -584,10 +585,17 @@ def validate_hosted(args: Any, environ: Mapping[str, str]) -> None:
         raise SystemExit(f"a hosted run needs {API_KEY_ENV} in the environment")
 
 
-def ledger_path(args: argparse.Namespace) -> pathlib.Path:
-    return (
-        pathlib.Path(args.runs_dir) / "hosted" / f"{safe(args.models[0])}-ledger.json"
-    )
+def record_label(args: Any, model: str) -> str:
+    """The label a run's records, stamp and ledger live under. A prompt arm
+    (#1768) is `<model>+<arm>`; the model sent and its cache key stay `model`,
+    so the control's cached calls and records are never overwritten."""
+    arm = getattr(args, "prompt_arm", None)
+    return f"{model}+{arm}" if arm else model
+
+
+def ledger_path(args: Any) -> pathlib.Path:
+    label = record_label(args, args.models[0])
+    return pathlib.Path(args.runs_dir) / "hosted" / f"{safe(label)}-ledger.json"
 
 
 def run_sender(args: argparse.Namespace) -> sp.Sender:
@@ -696,16 +704,26 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.backend != "ollama" and is_hosted(args.base_url):
         validate_hosted(args, os.environ)
     assert_prose_present()
+    arm = getattr(args, "prompt_arm", None)
+    with ep.installed(arm):
+        if arm is not None:
+            ep.require_registered(arm, concept_mod._SYSTEM_PROMPT)
+        return _run_models(args, arm)
+
+
+def _run_models(args: argparse.Namespace, arm: str | None) -> int:
     timeouts = load_timeouts(args.runs_dir)
     corpus = Corpus(args.runs_dir)
     for model in args.models:
         digest = run_digest(args, model)
-        stamp_path = args.runs_dir / "records" / safe(model) / "stamp.json"
+        label = record_label(args, model)
+        stamp_path = args.runs_dir / "records" / safe(label) / "stamp.json"
         stamp_path.parent.mkdir(parents=True, exist_ok=True)
         if not stamp_path.is_file():
             stamp = build_stamp(
-                model=model, prompts=extraction_prompts(), host=args.host
+                model=model, prompts=extraction_prompts(arm=arm), host=args.host
             )
+            stamp["prompt_arm"] = arm
             if args.backend != "ollama":
                 stamp["model"] = {
                     "name": model,
@@ -718,7 +736,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         warmed = False
         for source in sources_for(args.pool, args.prose):
             for run in args.runs:
-                path = record_path(args.runs_dir, model, source, run)
+                path = record_path(args.runs_dir, label, source, run)
                 if path.is_file():
                     continue
                 if not warmed:
@@ -728,13 +746,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                     )
                     warmed = True
                 record = run_one(args, corpus, model, digest, source, run, timeouts)
+                record["prompt_arm"] = arm
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(
                     json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8"
                 )
                 states = [w["outcome"] for w in record["windows"]]
                 print(
-                    f"{time.strftime('%H:%M:%S')} {model} {source} r{run}: "
+                    f"{time.strftime('%H:%M:%S')} {label} {source} r{run}: "
                     f"{len(record['stages']['final'] or [])} objects, {record['wall_s']:.0f} s, "
                     f"windows {dict((s, states.count(s)) for s in set(states))}, failure {record['failure']}",
                     flush=True,
@@ -951,6 +970,7 @@ def score_pool(
     *,
     prose_runs: Sequence[int] | None = None,
     load: Callable[[str, str, int], dict[str, Any] | None] | None = None,
+    reference: str = BASELINE,
 ) -> dict[str, Any]:
     """Every registered number for (models x pool x runs).
 
@@ -1103,7 +1123,7 @@ def score_pool(
     )
     for model in models:
         out["models"][model]["prose"] = prose[model]
-    baseline = BASELINE if BASELINE in models else None
+    baseline = reference if reference in models else None
     if baseline is not None:
         for model in models:
             if model == baseline:
@@ -1348,9 +1368,13 @@ def cmd_score(args: argparse.Namespace) -> int:
         store,
         corpus,
         prose_runs=args.prose_runs,
+        reference=args.reference,
     )
+    result["reference"] = args.reference
     result["g1"] = (
-        score_g1(args.runs_dir, args.models, args.pool, args.runs) if args.g1 else None
+        score_g1(args.runs_dir, args.models, args.pool, args.runs, args.reference)
+        if args.g1
+        else None
     )
     out = args.runs_dir / "scores" / f"{args.name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1360,7 +1384,11 @@ def cmd_score(args: argparse.Namespace) -> int:
 
 
 def score_g1(
-    runs_dir: pathlib.Path, models: Sequence[str], pool: str, runs: Sequence[int]
+    runs_dir: pathlib.Path,
+    models: Sequence[str],
+    pool: str,
+    runs: Sequence[int],
+    reference: str = BASELINE,
 ) -> dict[str, Any]:
     per: dict[str, dict[str, dict[int, tuple[int, int]]]] = {}
     out: dict[str, Any] = {}
@@ -1399,12 +1427,12 @@ def score_g1(
             "precision": asdict(sm.Ratio(sup, sup + part + uns)),
             "judge_coverage_mean": sm.mean(cov) if cov else None,
         }
-    if BASELINE in per:
+    if reference in per:
         for model in models:
-            if model == BASELINE:
+            if model == reference:
                 continue
             clusters: dict[str, list[tuple[int, int, int, int]]] = {}
-            for meeting, wins in per[BASELINE].items():
+            for meeting, wins in per[reference].items():
                 for index in sorted(set(wins) | set(per[model].get(meeting, {}))):
                     sb, tb = wins.get(index, (0, 0))
                     sc, tc = per[model].get(meeting, {}).get(index, (0, 0))
@@ -1560,6 +1588,7 @@ def self_test() -> int:
         _t_backend_timeout_and_cache,
         _t_stage_capture,
         _t_hosted_arm,
+        _t_prompt_arm_and_reference,
         _t_judge_never_candidate,
     ]
     failed = 0
@@ -2240,6 +2269,52 @@ def _t_stage_capture() -> None:
     )
 
 
+def _t_prompt_arm_and_reference() -> None:
+    """#1768: a prompt arm records, stamps and budgets under its own label
+    while sending the real model; `score --reference` pairs against any arm."""
+    import tempfile
+    import types
+
+    plain = types.SimpleNamespace(prompt_arm=None)
+    treated = types.SimpleNamespace(prompt_arm="evidence")
+    check(record_label(plain, "qwen3:8b") == "qwen3:8b", "control keeps its label")
+    check(
+        record_label(treated, "qwen3:8b") == "qwen3:8b+evidence",
+        "a prompt arm records under <model>+<arm>",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        ns = types.SimpleNamespace(
+            runs_dir=root, models=["openai-x"], prompt_arm="evidence"
+        )
+        check(
+            ledger_path(ns).name == "openai-x+evidence-ledger.json",
+            f"the treatment's spend is its own ledger: {ledger_path(ns).name}",
+        )
+        ns.prompt_arm = None
+        check(ledger_path(ns).name == "openai-x-ledger.json", "control ledger kept")
+        for model, labels in (
+            ("a", ["supported", "unsupported"]),
+            ("b", ["supported"] * 2),
+        ):
+            for meeting in sources_for("DA", prose=False):
+                path = root / "judge" / safe(model) / meeting / "r1.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    json.dumps({"g1": [{"window": 0, "labels": labels, "n": 2}]}),
+                    encoding="utf-8",
+                )
+        out = score_g1(root, ["a", "b"], "DA", [1], reference="a")
+        check("dprecision" in out["b"], "the candidate is paired with the reference")
+        check("dprecision" not in out["a"], "the reference is not paired with itself")
+        check(abs(out["b"]["dprecision"]["point"] - 0.5) < 1e-9, f"{out['b']}")
+        default = score_g1(root, ["a", "b"], "DA", [1])
+        check(
+            "dprecision" not in default["b"],
+            "without --reference the baseline stays qwen3:8b",
+        )
+
+
 def _t_judge_never_candidate() -> None:
     try:
         refuse_judge_as_candidate([BASELINE, sj.JUDGE_MODEL])
@@ -2294,6 +2369,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     r.add_argument(
         "--price-out", type=float, default=None, help="USD per 1M output tokens"
     )
+    r.add_argument(
+        "--prompt-arm",
+        choices=ep.PROMPT_ARMS,
+        default=None,
+        help="send a registered treatment prompt; records go under <model>+<arm>",
+    )
     j = sub.add_parser("judge")
     j.add_argument("--models", nargs="+", required=True)
     j.add_argument("--pool", required=True, choices=("DA", "F", "F-noTS", "F-IB"))
@@ -2306,6 +2387,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     sc.add_argument("--runs", nargs="+", type=int, required=True)
     sc.add_argument("--prose-runs", nargs="*", type=int)
     sc.add_argument("--g1", action="store_true")
+    sc.add_argument(
+        "--reference",
+        default=BASELINE,
+        help="the arm every delta is paired against (default: the baseline)",
+    )
     d = sub.add_parser("decide")
     d.add_argument("--name", required=True)
     d.add_argument("--round", required=True, choices=("validity", "1", "2", "confirm"))

@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Final
 
 from openkos.extraction import concept as concept_mod
+from openkos.extraction import evidence as evidence_mod
 from openkos.extraction import judge as judge_mod
 from openkos.llm import parsing
 from openkos.llm.base import BackendError, BackendUnavailable
@@ -635,6 +636,32 @@ def capture_stages(rec: StageRecorder) -> Iterator[None]:
             setattr(concept_mod, name, fn)
 
 
+EVIDENCE_NONE: Final = "none"
+EVIDENCE_VERIFIED: Final = "verified"
+EVIDENCE_NOT_IN_SOURCE: Final = "not_in_source"
+EVIDENCE_TOO_SHORT: Final = "too_short"
+
+
+def evidence_status(quote: str, source_text: str) -> str:
+    """What became of one object's `evidence` field (#1768): `none` (absent
+    or empty), `verified` (production's `evidence.verified_quote` accepts it),
+    `not_in_source` (the source does not contain it: a fabricated quote), or
+    `too_short` (the source contains it, but it is under the word floor).
+
+    `verified` is production's own predicate; the other two only split its
+    `None`, using the same normalization, so they never disagree with it."""
+    if not quote.strip():
+        return EVIDENCE_NONE
+    if evidence_mod.verified_quote(quote, source_text) is not None:
+        return EVIDENCE_VERIFIED
+    needle = evidence_mod._normalize(quote).rstrip(
+        evidence_mod._NEEDLE_TRAILING_PUNCTUATION
+    )
+    if needle not in evidence_mod._normalize(source_text):
+        return EVIDENCE_NOT_IN_SOURCE
+    return EVIDENCE_TOO_SHORT
+
+
 def _obj(result: Any, window: int | None) -> dict[str, Any]:
     return {
         "type": result.type,
@@ -744,10 +771,14 @@ def run_source(
     final_unevidenced = [
         bool(concept_mod._unevidenced_titles([r], source_text=text)) for r in final
     ]
+    # #1768: per final object, what became of its `evidence` field. A
+    # verified quote is already counted as evidence by `final_unevidenced`.
+    final_evidence = [evidence_status(r.evidence, text) for r in final]
     return {
         "title": title,
         "failure": failure,
         "final_unevidenced": final_unevidenced,
+        "final_evidence": final_evidence,
         "wall_s": wall,
         "chunked": rec.chunked,
         "windows": windows_out,
