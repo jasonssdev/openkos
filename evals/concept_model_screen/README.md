@@ -41,6 +41,8 @@ fixed in [`PREREGISTRATION.md`](PREREGISTRATION.md); the outcome is in
 | `cut_profile.py` | #1579: descriptive profile of what the selector judge's cut removes (by type, bundle size, body size), model-free over the #1571 records (`profile`, `--self-test`); the decision document is `NEXT_STEP.md` |
 | `label_study.py` | #1579 step 3: `gpt-oss:20b` labels the ceiling objects keep / merge / drop (cut and kept together), with a duplicate-control (`population`, `run`, `score`, `--self-test`); rules in `LABEL_STUDY_PREREGISTRATION.md`, outcome in `LABEL_STUDY_RESULTS.md` |
 | `hosted_screen.py` | #1767: hosted-provider arms on this screen: model-free cost forecast, cache-only replay, unevidenced-object and near-duplicate rates (`forecast`, `replay`, `metrics`, `--self-test`); the spend guard and key handling live in `screen_pipeline.py` and `run_concept_screen.py run`; rules in `HOSTED_PREREGISTRATION.md`, outcome in `HOSTED_RESULTS.md` |
+| `evidence_prompt.py` | #1768: the `evidence` treatment prompt (two registered splices on the shipped extraction prompt, refused on drift or an unregistered hash) and the context manager that installs it for `run --prompt-arm evidence` |
+| `evidence_ab.py` | #1768: the evidence-instruction A/B report per registered pair (unevidenced-rate delta, verified and fabricated quote shares, guardrails against the arm's own control, the ship decision; `report`, `--self-test`); `score --reference` pairs each treatment with its control; rules in `EVIDENCE_PREREGISTRATION.md` |
 
 ## Data stays outside the repository
 
