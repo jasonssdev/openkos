@@ -7986,3 +7986,100 @@ def test_report_names_source_title_twin_removals() -> None:
         "Call with Maria Salazar — 2026-07-14",
     )
     assert outcome.report.framing_dropped_titles == ()
+
+
+# --- Verified `evidence` quote field (#1768) -------------------------------
+
+_PARAPHRASED_PERSON = concept_mod.ExtractionResult(
+    type="Person",
+    title="Priya Nair",
+    description="Responsible for the database schema migration.",
+    body="Priya is the owner of the schema migration effort.",
+)
+"""A faithful paraphrase: neither direction of `evidence_line` matches it."""
+
+
+def test_validate_reads_an_evidence_quote() -> None:
+    result = concept_mod._validate(
+        {
+            "type": "Person",
+            "title": "Priya Nair",
+            "description": "Owns the migration.",
+            "body": "Priya runs it.",
+            "evidence": " Priya owns the schema migration plan. ",
+        }
+    )
+
+    assert result is not None
+    assert result.evidence == "Priya owns the schema migration plan."
+    assert result.body == "Priya runs it."
+    assert result.description == "Owns the migration."
+
+
+def test_validate_defaults_evidence_to_empty_and_tolerates_a_bad_value() -> None:
+    base = {"type": "Person", "title": "P", "description": "d", "body": "b"}
+
+    absent = concept_mod._validate(dict(base))
+    bad = concept_mod._validate({**base, "evidence": ["not", "a", "string"]})
+
+    assert absent is not None and absent.evidence == ""
+    assert bad is not None and bad.evidence == ""
+
+
+def test_unevidenced_titles_accepts_a_verified_evidence_quote() -> None:
+    results = [
+        dataclasses.replace(
+            _PARAPHRASED_PERSON, evidence="Priya owns the schema migration plan."
+        )
+    ]
+
+    unevidenced = concept_mod._unevidenced_titles(results, source_text=_HELIOS_SOURCE)
+
+    assert unevidenced == ()
+
+
+def test_unevidenced_titles_still_flags_an_unverified_evidence_quote() -> None:
+    """A quote the source does not contain is no evidence: behaviour is
+    exactly what it is without the field."""
+    results = [
+        dataclasses.replace(
+            _PARAPHRASED_PERSON, evidence="Priya is the owner of the migration."
+        )
+    ]
+
+    unevidenced = concept_mod._unevidenced_titles(results, source_text=_HELIOS_SOURCE)
+
+    assert unevidenced == ("Priya Nair",)
+
+
+def test_unevidenced_titles_without_the_field_is_unchanged() -> None:
+    unevidenced = concept_mod._unevidenced_titles(
+        [_PARAPHRASED_PERSON], source_text=_HELIOS_SOURCE
+    )
+
+    assert unevidenced == ("Priya Nair",)
+
+
+def test_extract_carries_the_evidence_quote_through_the_report() -> None:
+    reply = json.dumps(
+        [
+            {
+                "type": "Person",
+                "title": "Priya Nair",
+                "description": "Responsible for the database schema migration.",
+                "body": "Priya is the owner of the schema migration effort.",
+                "evidence": "Priya owns the schema migration plan.",
+            }
+        ]
+    )
+
+    class _Llm:
+        def chat(self, *args: object, **kwargs: object) -> str:
+            return reply
+
+    outcome = concept_mod.extract_concept_union(
+        _HELIOS_SOURCE, source_title="Helios", llm=_Llm()  # type: ignore[arg-type]
+    )
+
+    assert [o.title for o in outcome.objects] == ["Priya Nair"]
+    assert outcome.report.unevidenced_titles == ()

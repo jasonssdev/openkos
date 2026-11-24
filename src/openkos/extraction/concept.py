@@ -174,6 +174,14 @@ class ExtractionResult:
     `_validate` to be a member of the closed vocabulary AND different from
     `type`; anything else is normalized to `None` there rather than carried
     forward."""
+    evidence: str = ""
+    """The verbatim source quote the model supplied in an optional `evidence`
+    field (#1768); `""` when it supplied none or a non-string.
+
+    UNVERIFIED here -- `_validate` has no source text. `_unevidenced_titles`
+    accepts it only when `evidence.verified_quote` finds it in the source,
+    and it is never written into the body or description. Not persisted:
+    it only decides whether the ingest notice names the object."""
 
 
 _MEETING_SHAPED_TITLE_RE: Final = re.compile(
@@ -672,6 +680,10 @@ def _validate(data: dict[str, Any]) -> ExtractionResult | None:
     ):
         type_alternative = None
 
+    # `evidence` (#1768) is advisory like `type_alternative`: a bad value
+    # degrades to "no field" and never drops the candidate.
+    evidence = data.get("evidence")
+
     # #1231: scrub export UI chrome. A description that is ONLY chrome keeps
     # its original text -- an empty one would invalidate the whole candidate.
     description = _strip_export_chrome(description.strip()) or description.strip()
@@ -681,6 +693,7 @@ def _validate(data: dict[str, Any]) -> ExtractionResult | None:
         description=description,
         body=_strip_export_chrome(body),
         type_alternative=type_alternative,
+        evidence=evidence.strip() if isinstance(evidence, str) else "",
     )
 
 
@@ -1468,7 +1481,8 @@ def _unevidenced_titles(
     return tuple(
         result.title
         for result in results
-        if evidence_mod.evidence_line(
+        if evidence_mod.verified_quote(result.evidence, source_text) is None
+        and evidence_mod.evidence_line(
             result.body.strip() or result.description, source_text
         )
         is None

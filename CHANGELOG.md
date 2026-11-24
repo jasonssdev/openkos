@@ -22,6 +22,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- A concept extraction item may carry an optional `evidence` string, a line copied from the source. The engine accepts it as the object's evidence only when it occurs verbatim in the source (casefolded, whitespace collapsed, at least four words), so a faithful paraphrase that quotes its source is no longer named by the `objects-without-evidence` notice. A missing, short or unverifiable quote leaves the check as it was, the quote is never stored, and the extraction prompt does not yet ask for it (#1768).
 - With `backend: openai-compatible`, the "secret over plain HTTP" warning now covers every endpoint that receives a key, not only the chat endpoint. A key sent to a non-local `http://` embedding endpoint (`OPENKOS_OPENAI_EMBEDDING_API_KEY`, or the chat key on a same-origin endpoint) is warned about, naming the embedding endpoint and its host and never the key. One host gets one line, and the warning still never blocks a request. Output for a chat-only warning is unchanged (#1776).
 
 ### Fixed
