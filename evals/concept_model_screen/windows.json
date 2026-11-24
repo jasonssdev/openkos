@@ -374,5 +374,69 @@
   "windows_with_gold": 9,
   "has_summlink": true,
   "foreign": "ES2015b"
+ },
+ "ES2015c": {
+  "windows_sha256": [
+   "11a0da617c20f7b147b7fdc054fc09be4b5fcd3855f293491f616f5f58a73a95",
+   "4cc7469a907f4dc3d13b9031846beeb3b27ddfc76437d4722d68a146ceaaf676",
+   "6133575885eedb6633f8dec49ab8ddaee99e514d4a5932456c74f0ca8d3f16d0",
+   "20cb5ad605885b9ef9c2c199411b7d670825ccdc081af096429dd195e5ed0664",
+   "a73c920d6e79e25382068da8de2c1e4465f98a1c1283f429d8b9afd2b3924595",
+   "e216e0409913ee9bc8568fbce3add1c87ec3a619760dfab62ff2055a44a24d27",
+   "5744af68581293a71de82db4da4faf18963512ea3abd53542ba70a31577469a3",
+   "77f629829d7aacc816a805c89aba4c5776b69e1b2492af5d0a50782d8219053a",
+   "cf599419ae4ce4bafe60f83624de6bce2c19d53c9b74182c83695ca2af88a210"
+  ],
+  "gold_sentences": 19,
+  "gold_assigned_to_a_window": 19,
+  "windows_with_gold": 9,
+  "has_summlink": true,
+  "foreign": "IS1004c"
+ },
+ "IS1004a": {
+  "windows_sha256": [
+   "8b82da8087f241dd685e4d7efb82d522a815da3db419b50b5b67d78ec9ade868",
+   "0d49fc6782791238cbcc6a2083f416b558a50ea0cfa2cc9d60b4a2186801bcf9",
+   "1150cc5d2ba2136fc5c1a8726eea99b9f58b2fa03fbc0aede57c6ca5263c0cfd"
+  ],
+  "gold_sentences": 18,
+  "gold_assigned_to_a_window": 17,
+  "windows_with_gold": 3,
+  "has_summlink": true,
+  "foreign": "TS3009a"
+ },
+ "TS3009a": {
+  "windows_sha256": [
+   "657d30078117a166540ad88d90b096877fbd57ef7bb03b3cb5efe60164d55786",
+   "2a814645ac859c7d6010bb6f29f3fe7c4a26d7d44b3b1e389d803dd9fdc0b5fd",
+   "0c575306c183eddd93a3a5379b46196b680fa2f46af009d4b348226c23d93bcc",
+   "62a32628aa7252c0b886321d9ea1373e39826562aa854b08abd94a4e2473439b",
+   "33055ac6f81729cbd80d4bba93a1902afb6ae3c825a12a8ac9c5eeb7ea312912",
+   "13d3320f6eee295090c76e3e924fa15437368d4caa49d91a35d656ec831b7c74"
+  ],
+  "gold_sentences": 10,
+  "gold_assigned_to_a_window": 9,
+  "windows_with_gold": 6,
+  "has_summlink": true,
+  "foreign": "ES2015a"
+ },
+ "TS3009d": {
+  "windows_sha256": [
+   "5f1e75666255822901dc8b608f35d268d77195efeb0df05d39ab86ff2a9f48da",
+   "d8a3be29ddf752259ea234a5120b3e127917c9981c73b7378f51e1219bad2b42",
+   "89b0b08ac55daee4e4925f8e391ece4b2feb374aecc3d72c623c676827d6d0f8",
+   "c28902dec3fd7c2daf36de4837c30c0573b908a5425f7a9355b351905c553b85",
+   "75597a6c0d33b108407aecada85d2a3ee8e0fa11aebe91d71780f22b9262c103",
+   "24006484a44163aa50ae5065b4051edb84e81a677310ee7a82a0cda765db6ee1",
+   "f79c1df73c527f15bdae0fbd1a9a5a6f0453f94d3380c3bd81d2f3b5a52e62c0",
+   "ed453a4d6bfbf7b96f119c75e279b393d953c04cbe85727995f5eb31ace84b33",
+   "954cdb8679c93f4f1b337dabba007cd339007293f2cec3af5772a89a308552e0",
+   "5901dfde5633014d0c7c34a70906c2751f3496f4d96040f341ba95bc2e3b89cf"
+  ],
+  "gold_sentences": 23,
+  "gold_assigned_to_a_window": 21,
+  "windows_with_gold": 8,
+  "has_summlink": true,
+  "foreign": "ES2015d"
  }
 }

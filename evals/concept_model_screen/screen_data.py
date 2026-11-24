@@ -86,6 +86,24 @@ THESIS_EVALUATION_SERIES: Final = (
 POOL_DA: Final = ("ES2015a", "IS1004b", "TS3009c", "ES2015d", "IS1004d")
 """Stage A selection pool: five whole development meetings (#1557 design 3.2)."""
 
+POOL_DEV_NEW: Final = (
+    "ES2015b",
+    "ES2015c",
+    "IS1004a",
+    "IS1004c",
+    "TS3009a",
+    "TS3009b",
+    "TS3009d",
+)
+"""The seven development meetings outside `POOL_DA` (#1783). ES2015b, IS1004c
+and TS3009b also hold the `STAGE0_WINDOWS`; their stage-0 calls were sent at
+seed 0 and a scored run's calls never are, so no calibration reply is reused
+as a scored one."""
+
+POOL_DEV12: Final = (*POOL_DA, *POOL_DEV_NEW)
+"""Every meeting of the three development series (#1783): `POOL_DA` first,
+unchanged, then `POOL_DEV_NEW`. Never pool F."""
+
 POOL_F_WINDOWED: Final = (
     "IS1002b",
     "IS1002c",

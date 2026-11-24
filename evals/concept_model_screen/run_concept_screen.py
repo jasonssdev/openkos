@@ -683,6 +683,8 @@ def run_one(
 def sources_for(pool: str, prose: bool) -> list[str]:
     if pool == "DA":
         meetings = list(data.POOL_DA)
+    elif pool == "DEV12":
+        meetings = list(data.POOL_DEV12)
     elif pool == "F":
         meetings = list(data.POOL_F_WINDOWED)
     elif pool == "F-noTS":
@@ -1636,6 +1638,18 @@ def _t_allowlist() -> None:
         sources_for("DA", prose=False)
     except data.DisallowedMeeting as exc:
         raise _Fail(f"pool DA refused: {exc}") from exc
+    dev12 = sources_for("DEV12", prose=False)
+    check(
+        dev12 == [*data.POOL_DA, *data.POOL_DEV_NEW], f"DEV12 is DA + the new: {dev12}"
+    )
+    check(
+        len(set(dev12)) == 12
+        and {data.series_of(m) for m in dev12} == set(data.DEV_SERIES),
+        "DEV12 is every meeting of the three development series",
+    )
+    reserved = set(data.POOL_F_WINDOWED) | set(data.POOL_F_MEETING_ONLY)
+    check(not set(dev12) & reserved, "pool F stays reserved")
+    check(all(m in REGISTERED_WINDOWS for m in dev12), "DEV12 windows registered")
 
 
 def _t_foreign() -> None:
@@ -2346,7 +2360,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     s0.add_argument("--models", nargs="*")
     r = sub.add_parser("run")
     r.add_argument("--models", nargs="+", required=True)
-    r.add_argument("--pool", required=True, choices=("DA", "F", "F-noTS", "F-IB"))
+    r.add_argument(
+        "--pool", required=True, choices=("DA", "DEV12", "F", "F-noTS", "F-IB")
+    )
     r.add_argument("--runs", nargs="+", type=int, required=True)
     r.add_argument("--prose", action="store_true")
     r.add_argument(
@@ -2377,13 +2393,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     j = sub.add_parser("judge")
     j.add_argument("--models", nargs="+", required=True)
-    j.add_argument("--pool", required=True, choices=("DA", "F", "F-noTS", "F-IB"))
+    j.add_argument(
+        "--pool", required=True, choices=("DA", "DEV12", "F", "F-noTS", "F-IB")
+    )
     j.add_argument("--runs", nargs="+", type=int, required=True)
     j.add_argument("--coverage", action="store_true")
     sc = sub.add_parser("score")
     sc.add_argument("--name", required=True)
     sc.add_argument("--models", nargs="+", required=True)
-    sc.add_argument("--pool", required=True, choices=("DA", "F", "F-noTS", "F-IB"))
+    sc.add_argument(
+        "--pool", required=True, choices=("DA", "DEV12", "F", "F-noTS", "F-IB")
+    )
     sc.add_argument("--runs", nargs="+", type=int, required=True)
     sc.add_argument("--prose-runs", nargs="*", type=int)
     sc.add_argument("--g1", action="store_true")
