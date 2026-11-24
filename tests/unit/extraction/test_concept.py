@@ -8022,8 +8022,10 @@ def test_validate_defaults_evidence_to_empty_and_tolerates_a_bad_value() -> None
     absent = concept_mod._validate(dict(base))
     bad = concept_mod._validate({**base, "evidence": ["not", "a", "string"]})
 
-    assert absent is not None and absent.evidence == ""
-    assert bad is not None and bad.evidence == ""
+    assert absent is not None
+    assert absent.evidence == ""
+    assert bad is not None
+    assert bad.evidence == ""
 
 
 def test_unevidenced_titles_accepts_a_verified_evidence_quote() -> None:
@@ -8078,7 +8080,7 @@ def test_extract_carries_the_evidence_quote_through_the_report() -> None:
             return reply
 
     outcome = concept_mod.extract_concept_union(
-        _HELIOS_SOURCE, source_title="Helios", llm=_Llm()  # type: ignore[arg-type]
+        _HELIOS_SOURCE, source_title="Helios", llm=_Llm()
     )
 
     assert [o.title for o in outcome.objects] == ["Priya Nair"]
