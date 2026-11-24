@@ -46,9 +46,6 @@ REFERENCE: Final = rcs.BASELINE
 NEAR_DUP_THRESHOLD: Final = 0.85
 """The near-duplicate cosine `cut_redundancy.py` registered; 0.80 and 0.90 are
 sensitivity only."""
-PROVIDER_ERROR_OUTCOMES: Final = ("error", "not_called")
-"""Window outcomes that are the provider's, not the model's: a call that
-failed after the client's own bounded retry."""
 
 
 @dataclass(frozen=True)
@@ -260,6 +257,20 @@ def window_causes(records: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     return out
 
 
+def provider_error_count(rec: Mapping[str, Any]) -> int:
+    """Windows of one record that ended in a provider error. `not_called` is
+    one only when the record was chunked, i.e. a window call was expected: a
+    source small enough for production's single whole-source call has no
+    window-level call, and nothing failed (#1790). A record that does not say
+    (`chunked` absent) stays fail-closed and counts it."""
+    chunked = rec.get("chunked", True)
+    return sum(
+        1
+        for w in rec["windows"]
+        if w["outcome"] == "error" or (chunked and w["outcome"] == "not_called")
+    )
+
+
 def near_dup_flags(vectors: Sequence[Sequence[float]], threshold: float) -> list[bool]:
     """Per object, whether another object of the SAME meeting-run reaches
     `threshold` cosine (unit vectors in)."""
@@ -333,9 +344,7 @@ def arm_metrics(
         dup[meeting] = (d_n, d_d)
     return {
         "windows": window_causes(flat),
-        "provider_error_windows": sum(
-            n for k, n in window_causes(flat).items() if k in PROVIDER_ERROR_OUTCOMES
-        ),
+        "provider_error_windows": sum(provider_error_count(r) for r in flat),
         "unevidenced": unev,
         "near_dup": dup,
         "unmeasured_records": unmeasured,
@@ -522,6 +531,14 @@ def _t_arm_metrics() -> None:
 
     row = arm_metrics({"M": [rec, old]}, vectors_for)
     check(row["provider_error_windows"] == 2, f"provider errors {row['windows']}")
+    # A whole-source record has no window-level call, so `not_called` there is
+    # no failure; the same windows on a chunked record are (#1790).
+    whole = {**rec, "chunked": False}
+    check(provider_error_count(whole) == 1, "whole-source not_called is no failure")
+    check(provider_error_count({**rec, "chunked": True}) == 2, "chunked not_called")
+    check(provider_error_count(rec) == 2, "an unknown record stays fail-closed")
+    whole_row = arm_metrics({"M": [whole]}, vectors_for)
+    check(whole_row["provider_error_windows"] == 1, f"arm {whole_row['windows']}")
     check(row["unevidenced"] == {"M": (1, 2)}, f"unevidenced {row['unevidenced']}")
     check(row["unmeasured_records"] == 1, "a record without the flag is unmeasured")
     check(row["near_dup"] == {"M": (4, 4)}, f"near-dup {row['near_dup']}")
