@@ -234,3 +234,29 @@ def evidence_line(text: str, source_text: str) -> str | None:
             best_words = words
 
     return best
+
+
+def verified_quote(quote: object, source_text: str) -> str | None:
+    """The model-supplied `evidence` quote when the source contains it
+    verbatim (#1768), else `None`.
+
+    "Verbatim" is the decision pass's rule (`decision_pass.quoted_verbatim`):
+    the quote, normalized by `_normalize` and with its terminal punctuation
+    trimmed, is a substring of the normalized source. Two deliberate
+    differences from `evidence_line`: the containment is ONE-directional (a
+    quote that extends a source line copied nothing), and the quote must
+    clear `_MIN_EVIDENCE_WORDS`, because the field is model-chosen and a
+    one- or two-word "quote" would verify nearly any object -- the vacuous
+    guard `_MIN_EVIDENCE_WORDS` documents. A non-string, empty or
+    unverifiable value is `None`, which callers treat as "no field", so the
+    check falls back to `evidence_line` over the written text.
+
+    Returns the stripped quote as written, so a reader can search for it."""
+    if not isinstance(quote, str):
+        return None
+    needle = _normalize(quote).rstrip(_NEEDLE_TRAILING_PUNCTUATION)
+    if len(needle.split()) < _MIN_EVIDENCE_WORDS:
+        return None
+    if needle not in _normalize(source_text):
+        return None
+    return quote.strip()

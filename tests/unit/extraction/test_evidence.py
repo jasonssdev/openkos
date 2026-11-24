@@ -285,3 +285,50 @@ def test_evidence_module_imports_no_sibling_extraction_module() -> None:
             imported.append(node.module)
 
     assert not [name for name in imported if name.startswith("openkos")]
+
+
+# --- verified_quote: the model-supplied evidence field (#1768) -------------
+
+_QUOTE_SOURCE = (
+    "# Platform sync\n"
+    "- Priya owns the schema migration plan.\n"
+    "- The team chose PostgreSQL as the primary datastore.\n"
+)
+
+
+def test_verified_quote_accepts_a_verbatim_source_line() -> None:
+    quote = "Priya owns the schema migration plan."
+
+    assert evidence_mod.verified_quote(quote, _QUOTE_SOURCE) == quote
+
+
+def test_verified_quote_ignores_case_whitespace_and_trailing_punctuation() -> None:
+    quote = "  priya   owns the schema\nmigration plan  "
+
+    assert evidence_mod.verified_quote(quote, _QUOTE_SOURCE) is not None
+
+
+def test_verified_quote_rejects_a_paraphrase() -> None:
+    quote = "Priya is responsible for the schema migration plan."
+
+    assert evidence_mod.verified_quote(quote, _QUOTE_SOURCE) is None
+
+
+def test_verified_quote_rejects_a_quote_that_extends_the_source() -> None:
+    """Unlike `evidence_line`'s arm (b), a quote must be CONTAINED in the
+    source: a model that adds words to a source line did not copy it."""
+    quote = "Priya owns the schema migration plan for Project Helios."
+
+    assert evidence_mod.verified_quote(quote, _QUOTE_SOURCE) is None
+
+
+def test_verified_quote_rejects_a_fragment_below_the_word_floor() -> None:
+    """`Priya owns` occurs in the source, but a fragment that short would
+    verify almost anything."""
+    assert evidence_mod.verified_quote("Priya owns", _QUOTE_SOURCE) is None
+
+
+def test_verified_quote_rejects_empty_and_non_string_values() -> None:
+    assert evidence_mod.verified_quote("", _QUOTE_SOURCE) is None
+    assert evidence_mod.verified_quote("   ", _QUOTE_SOURCE) is None
+    assert evidence_mod.verified_quote(None, _QUOTE_SOURCE) is None
