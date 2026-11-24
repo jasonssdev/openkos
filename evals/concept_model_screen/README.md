@@ -44,6 +44,7 @@ fixed in [`PREREGISTRATION.md`](PREREGISTRATION.md); the outcome is in
 | `evidence_prompt.py` | #1768: the `evidence` treatment prompt (two registered splices on the shipped extraction prompt, refused on drift or an unregistered hash) and the context manager that installs it for `run --prompt-arm evidence` |
 | `evidence_ab.py` | #1768: the evidence-instruction A/B report per registered pair (unevidenced-rate delta, verified and fabricated quote shares, guardrails against the arm's own control, the ship decision; `report`, `--self-test`); `score --reference` pairs each treatment with its control; rules in `EVIDENCE_PREREGISTRATION.md`, outcome in `EVIDENCE_RESULTS.md` |
 | `extra_object_value.py` | #1783: value of the V4-vetoed hosted arms' extra objects on the twelve development meetings: two local judges label each object useful / redundant / trivial, kappa, agreed shares and the registered V4 replacement rule (`population`, `budget`, `embed`, `run`, `report`, `--self-test`); rules in `EXTRA_OBJECT_PREREGISTRATION.md`, outcome in `EXTRA_OBJECT_RESULTS.md` |
+| `hosted_evidence_ab.py` | #1768, second registration: the evidence-instruction A/B on the two hosted arms over the twelve development meetings: unevidenced-rate delta, verified and fabricated quote shares, guardrails against each arm's own control and the registered outcome (`report`, `--self-test`); rules in `HOSTED_EVIDENCE_PREREGISTRATION.md`, outcome in `HOSTED_EVIDENCE_RESULTS.md` |
 
 ## Data stays outside the repository
 
