@@ -43,6 +43,7 @@ fixed in [`PREREGISTRATION.md`](PREREGISTRATION.md); the outcome is in
 | `hosted_screen.py` | #1767: hosted-provider arms on this screen: model-free cost forecast, cache-only replay, unevidenced-object and near-duplicate rates (`forecast`, `replay`, `metrics`, `--self-test`); the spend guard and key handling live in `screen_pipeline.py` and `run_concept_screen.py run`; rules in `HOSTED_PREREGISTRATION.md`, outcome in `HOSTED_RESULTS.md` |
 | `evidence_prompt.py` | #1768: the `evidence` treatment prompt (two registered splices on the shipped extraction prompt, refused on drift or an unregistered hash) and the context manager that installs it for `run --prompt-arm evidence` |
 | `evidence_ab.py` | #1768: the evidence-instruction A/B report per registered pair (unevidenced-rate delta, verified and fabricated quote shares, guardrails against the arm's own control, the ship decision; `report`, `--self-test`); `score --reference` pairs each treatment with its control; rules in `EVIDENCE_PREREGISTRATION.md`, outcome in `EVIDENCE_RESULTS.md` |
+| `extra_object_value.py` | #1783: value of the V4-vetoed hosted arms' extra objects on the twelve development meetings: two local judges label each object useful / redundant / trivial, kappa, agreed shares and the registered V4 replacement rule (`population`, `budget`, `embed`, `run`, `report`, `--self-test`); rules in `EXTRA_OBJECT_PREREGISTRATION.md`, outcome in `EXTRA_OBJECT_RESULTS.md` |
 
 ## Data stays outside the repository
 
