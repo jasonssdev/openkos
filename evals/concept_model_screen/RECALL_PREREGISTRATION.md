@@ -284,6 +284,10 @@ Settled by the owner on 2026-11-25, before registration:
   being prepared, which is held until this study finishes.
 - **Pool DEV12, development series only**; pool F and every evaluation and
   reserve series stay untouched.
+- **Local GPU authorized** for the 28 missing G1 judge records (`qwen3:8b`
+  and `openai-gpt-5-mini` on the seven non-DA meetings, runs 1 and 2), with
+  local `gpt-oss:20b`, after this registration merges. Forecast 20 to 40
+  minutes and about 15 GB of unified memory, from the 2026-11-23 judge logs.
 
 The tau (0.70, the screen's own) and the near-duplicate ceiling (+0.05, the
 magnitude of G1's floor) were proposed by the author of this registration from
