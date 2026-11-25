@@ -6900,6 +6900,7 @@ def _capturing_extractor(seen: dict[str, object]) -> object:
         concurrent: bool = False,
         transcript_decisions: bool = False,
         selector_judge: bool = False,
+        evidence_quote: bool = False,
     ) -> concept_mod.ExtractionOutcome:
         seen["concurrent"] = concurrent
         seen["selector_judge"] = selector_judge

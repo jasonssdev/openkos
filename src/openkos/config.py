@@ -499,6 +499,19 @@ is not precision over every extracted Decision, see
 the default. So it stays opt-in, and off
 restores the pre-pass path byte-for-byte."""
 
+DEFAULT_EVIDENCE_QUOTE = False
+"""Packaged default for `evidence_quote` (#1768): whether concept extraction
+asks the model for one verbatim supporting line per object, which the engine
+then verifies against the source.
+
+`False`, because the measurement splits by model. A pre-registered A/B found
+the instruction worse on `qwen3:8b` and `gpt-4.1-mini`
+(`evals/concept_model_screen/EVIDENCE_RESULTS.md`) and a second one found it
+supported on `anthropic-claude-haiku-5-5` and `openai-gpt-6-luna`
+(`evals/concept_model_screen/HOSTED_EVIDENCE_RESULTS.md`). It is not switched
+on for `openai-compatible` either, since that backend also serves local
+models. Off sends the shipped prompt byte for byte."""
+
 DEFAULT_QUERY_AWARE_EXCERPTS = True
 """Packaged default for `query_aware_excerpts` (#1647): whether `query`, when a
 retrieved document exceeds its share of the prompt window, keeps the 800-char
@@ -1653,6 +1666,12 @@ class Config:
     extractor only (`union_judge`, the default). Added LAST and DEFAULTED,
     like `attach_at_ingest`, so a positional or partial `Config(...)`
     construction elsewhere is unchanged."""
+    evidence_quote: bool = DEFAULT_EVIDENCE_QUOTE
+    """Whether concept extraction asks for a verbatim evidence quote
+    (#1768), defaulting to `DEFAULT_EVIDENCE_QUOTE` (`False`) when the key is
+    absent or explicitly null. Honoured by both extraction entry points; the
+    re-ask, decision pass and participant capture are never affected. Added
+    LAST and DEFAULTED, like `transcript_decisions`."""
     selector_judge: bool = DEFAULT_SELECTOR_JUDGE
     """Whether the union extractor runs the selector judge (ADR-0080),
     defaulting to `DEFAULT_SELECTOR_JUDGE` (`False`) when the key is absent or
@@ -1739,6 +1758,7 @@ def parse_config(root: Path, text: str) -> Config:
     revision_history = raw.get("revision_history")
     query_aware_excerpts = raw.get("query_aware_excerpts")
     transcript_decisions = raw.get("transcript_decisions")
+    evidence_quote = raw.get("evidence_quote")
     attach_at_ingest = raw.get("attach_at_ingest")
     backend = raw.get("backend")
     base_url = raw.get("base_url")
@@ -2045,6 +2065,14 @@ def parse_config(root: Path, text: str) -> Config:
             f"{layout.config_path.name}: 'transcript_decisions' must be a "
             f"boolean, got {type(transcript_decisions).__name__}"
         )
+    if evidence_quote is not None and not isinstance(evidence_quote, bool):
+        # Same narrow `isinstance(x, bool)` guard as `transcript_decisions`: this
+        # key changes the prompt of every extraction call, so a value that
+        # merely looks truthy must not switch it on.
+        raise ValueError(
+            f"{layout.config_path.name}: 'evidence_quote' must be a "
+            f"boolean, got {type(evidence_quote).__name__}"
+        )
     if rationale_language is not None and (
         not isinstance(rationale_language, str)
         or not rationale_language.strip()
@@ -2250,6 +2278,9 @@ def parse_config(root: Path, text: str) -> Config:
             transcript_decisions
             if transcript_decisions is not None
             else DEFAULT_TRANSCRIPT_DECISIONS
+        ),
+        evidence_quote=(
+            evidence_quote if evidence_quote is not None else DEFAULT_EVIDENCE_QUOTE
         ),
     )
 
