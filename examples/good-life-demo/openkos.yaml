@@ -132,6 +132,12 @@ context_window: 12288  # tokens the model holds at once (prompt + reply);
                           # decisions recalled (precision ~0.9 on annotated
                           # decisions only; unannotated ones are not scored),
                           # yet short of the bar for turning it on by default.
+# evidence_quote: true    # ask the model to copy one supporting line of the source
+                          # verbatim into each object, which the engine then
+                          # verifies (default OFF). Measured to help
+                          # anthropic-claude-haiku-5-5 and openai-gpt-6-luna and to
+                          # hurt qwen3:8b and gpt-4.1-mini, so enable it only for a
+                          # model measured to gain. No extra model call.
 # concurrent_extraction: true  # send chunk windows 2-at-a-time instead of one
                           # by one (default OFF). Chunked sources only; below
                           # the chunk threshold there are no windows to

@@ -26,6 +26,7 @@ from typing import Any, Final
 
 from openkos import prompt_budget
 from openkos.extraction import evidence as evidence_mod
+from openkos.extraction import evidence_quote as evidence_quote_mod
 from openkos.extraction import judge as judge_mod
 from openkos.llm import parsing
 from openkos.llm.base import BackendError, BackendUnavailable, LLMBackend, Message
@@ -564,7 +565,9 @@ both ways -- an unmeasured addition to the common path is exactly the shape
 of change that regressed `large-03` from 0.75 to 0.57."""
 
 
-def _build_messages(source_text: str, source_title: str) -> list[Message]:
+def _build_messages(
+    source_text: str, source_title: str, *, evidence_quote: bool = False
+) -> list[Message]:
     """Assemble the 2-message prompt: system classification rules + the raw
     source text as the user turn, prefixed with its title labeled as
     non-authoritative metadata (design DD1) -- the title is still handed
@@ -592,7 +595,13 @@ def _build_messages(source_text: str, source_title: str) -> list[Message]:
     the gate-fired probe measured working (4/4 anchored Persons), and one
     predicate everywhere is the design D3 rule. On the chunked paths this
     runs per WINDOW; a transcript's windows are themselves turn-dense, so
-    the per-window verdict tracks the whole-source one."""
+    the per-window verdict tracks the whole-source one.
+
+    `evidence_quote` (the `evidence_quote` config key) sends the system prompt
+    with the registered evidence-quote splices (`extraction.evidence_quote`);
+    off, the shipped prompt goes out untouched. The splice reads the module's
+    CURRENT `_SYSTEM_PROMPT`, so a harness that swaps the constant sees its
+    swap in both arms."""
     if _is_meeting_shaped(source_title, source_text):
         user_content = f"{_LANGUAGE_ANCHOR}\n\nSOURCE TEXT:\n{source_text}"
     else:
@@ -602,7 +611,14 @@ def _build_messages(source_text: str, source_title: str) -> list[Message]:
             f"SOURCE TEXT:\n{source_text}"
         )
     return [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {
+            "role": "system",
+            "content": (
+                evidence_quote_mod.treat(_SYSTEM_PROMPT)
+                if evidence_quote
+                else _SYSTEM_PROMPT
+            ),
+        },
         {"role": "user", "content": user_content},
     ]
 
@@ -2391,12 +2407,18 @@ def _bounded_prompt_source(
 
 
 def _extract_once(
-    source_text: str, source_title: str, llm: LLMBackend
+    source_text: str,
+    source_title: str,
+    llm: LLMBackend,
+    *,
+    evidence_quote: bool = False,
 ) -> list[ExtractionResult]:
     """One chat call's validated results, in reply order -- the pre-#454
     whole-document pipeline up to (not including) twin-drop and the cap,
     shared verbatim by the single-call and per-chunk paths."""
-    reply = llm.chat(_build_messages(source_text, source_title))
+    reply = llm.chat(
+        _build_messages(source_text, source_title, evidence_quote=evidence_quote)
+    )
     items = parsing.extract_json_items(reply)
     results: list[ExtractionResult] = []
     for item in items:
@@ -2441,6 +2463,7 @@ def _fan_out_windows(
     *,
     concurrent: bool,
     on_progress: ProgressHook | None,
+    evidence_quote: bool = False,
 ) -> tuple[list[ExtractionResult], tuple[int, ...]]:
     """Every window's validated results, concatenated in WINDOW order,
     alongside the 1-indexed positions of any window skipped after its retry
@@ -2498,6 +2521,7 @@ def _fan_out_windows(
         llm,
         concurrent=concurrent,
         on_progress=on_progress,
+        evidence_quote=evidence_quote,
     )
     return (
         [result for window_results in window_lists for result in window_results],
@@ -2512,6 +2536,7 @@ def _fan_out_window_lists(
     *,
     concurrent: bool,
     on_progress: ProgressHook | None,
+    evidence_quote: bool = False,
 ) -> tuple[list[list[ExtractionResult]], tuple[int, ...]]:
     """`_fan_out_windows` with the per-window grouping kept (#905): one
     inner list per window, in WINDOW order, empty lists included -- plus the
@@ -2554,7 +2579,9 @@ def _fan_out_window_lists(
     def _extract_window_or_skip(index: int, window: str) -> list[ExtractionResult]:
         nonlocal last_error
         try:
-            return _extract_once(window, source_title, llm)
+            return _extract_once(
+                window, source_title, llm, evidence_quote=evidence_quote
+            )
         except BackendUnavailable:
             # The backend itself is unreachable -- retrying or skipping
             # buys nothing (the next window will not answer either), and
@@ -2567,7 +2594,9 @@ def _fan_out_window_lists(
                 f"retrying chunk {index}/{chunk_count} after {type(exc).__name__}",
             )
             try:
-                return _extract_once(window, source_title, llm)
+                return _extract_once(
+                    window, source_title, llm, evidence_quote=evidence_quote
+                )
             except BackendUnavailable:
                 raise
             except BackendError as retry_exc:
@@ -3550,6 +3579,7 @@ def extract_concept(
     llm: LLMBackend,
     on_progress: ProgressHook | None = None,
     concurrent: bool = False,
+    evidence_quote: bool = False,
 ) -> ExtractionOutcome:
     """Prompt `llm` to classify zero or more distinct derived objects from
     `source_text`.
@@ -3610,6 +3640,12 @@ def extract_concept(
     source exactly as a pre-#1053 single-window failure did. The caller
     loops `openkos.model.okf.build_concept` once per returned object.
 
+    `evidence_quote` (the `evidence_quote` config key) sends the concept
+    prompt with the evidence-quote instruction (`extraction.evidence_quote`).
+    It reaches the concept prompt only: the re-ask, decision pass and
+    participant capture are untouched. `False`, the default, sends the shipped
+    prompt byte for byte.
+
     `concurrent` (issue #744) opts the CHUNKED fan-out into sending its
     windows `FAN_OUT_CONCURRENCY` at a time instead of one after another.
     It changes the schedule and nothing else: results still concatenate in
@@ -3627,7 +3663,9 @@ def extract_concept(
     # level down.
     if not fans_out(source_text, source_title=source_title):
         _report(on_progress, "extracting the source")
-        results = _extract_once(source_text, source_title, llm)
+        results = _extract_once(
+            source_text, source_title, llm, evidence_quote=evidence_quote
+        )
         if not results:
             # #524: the model answers `[]` on substantive sources in ~5% of
             # single-pass runs (meeting-framed material, re-measured
@@ -3637,7 +3675,9 @@ def extract_concept(
             # Single-call path only -- an empty CHUNK is normal fan-out
             # (#454), and the union path's second run already covers it.
             _report(on_progress, "retrying an empty extraction")
-            results = _extract_once(source_text, source_title, llm)
+            results = _extract_once(
+                source_text, source_title, llm, evidence_quote=evidence_quote
+            )
         results = _strip_ungrounded_expansions(results, source_text=source_text)
         chunk_count = 1
         skipped_chunks: tuple[int, ...] = ()
@@ -3662,6 +3702,7 @@ def extract_concept(
             llm,
             concurrent=concurrent,
             on_progress=on_progress,
+            evidence_quote=evidence_quote,
         )
         # Grounding checks against the FULL source, not the window that
         # produced the object -- an expansion stated once in chunk 1 grounds
@@ -3980,6 +4021,7 @@ def extract_concept_union(
     concurrent: bool = False,
     transcript_decisions: bool = False,
     selector_judge: bool = False,
+    evidence_quote: bool = False,
 ) -> ExtractionOutcome:
     """Union-of-runs + selector-judge orchestrator (design D1, #456): a
     SIBLING to `extract_concept` in this same module, replacing the blind
@@ -4115,13 +4157,17 @@ def extract_concept_union(
         # from a one-window fan-out and should not be described as one.
         _report(on_progress, "extracting pass 1/2")
         raw1 = _strip_ungrounded_expansions(
-            _extract_once(source_text, source_title, llm),
+            _extract_once(
+                source_text, source_title, llm, evidence_quote=evidence_quote
+            ),
             source_text=source_text,
         )
         run1 = _drop_framing_objects(raw1, framing_shaped=framing_shaped)
         _report(on_progress, "extracting pass 2/2")
         raw2 = _strip_ungrounded_expansions(
-            _extract_once(source_text, source_title, llm),
+            _extract_once(
+                source_text, source_title, llm, evidence_quote=evidence_quote
+            ),
             source_text=source_text,
         )
         run2 = _drop_framing_objects(raw2, framing_shaped=framing_shaped)
@@ -4163,6 +4209,7 @@ def extract_concept_union(
             llm,
             concurrent=concurrent,
             on_progress=on_progress,
+            evidence_quote=evidence_quote,
         )
         # #905: the expansion strip is an item-wise rewrite, so applying it
         # per window is the identical filter -- the per-window shape is kept

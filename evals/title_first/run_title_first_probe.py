@@ -344,7 +344,11 @@ def applied_lever(*, framing_shaped: bool, ledger: LeverLedger) -> Iterator[None
     original = concept._extract_once
 
     def patched(
-        source_text: str, source_title: str, llm: LLMBackend
+        source_text: str,
+        source_title: str,
+        llm: LLMBackend,
+        *,
+        evidence_quote: bool = False,
     ) -> list[concept.ExtractionResult]:
         return title_first_extract_once(
             source_text,
