@@ -1071,6 +1071,8 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); siz
                           # (default on); false restores `-2` copies
 # transcript_decisions: true  # on a meeting-shaped source, add a decision pass
                           # (default off; measured, opt-in)
+# evidence_quote: true    # ask the model for a verbatim supporting line per
+                          # object (default off; measured, hosted models only)
 # concurrent_extraction: true  # send chunk windows 2-at-a-time (default off);
                           # needs OLLAMA_NUM_PARALLEL>=2 on the server
 # type_sensitivity_defaults:  # per-type birth floor: offset above default_sensitivity
@@ -1230,6 +1232,8 @@ embedding_model: bge-m3
 - A transient failure (HTTP 429, 500, 502, 503 or 504, or a failed connection) is retried a bounded number of times, honouring an integer `Retry-After`, before the call fails. A timeout is not retried.
 - A model id the provider has retired or does not serve fails with the provider's own error. `doctor` lists the ids the endpoint reports where it exposes them.
 
+**Evidence quotes.** Set `evidence_quote: true` for `anthropic-claude-haiku-5-5` and `openai-gpt-6-luna`. Both flagged many of their objects as `objects-without-evidence` because they paraphrase; asking each object for a verbatim line cut that sharply on both without moving the guardrails ([results](../evals/concept_model_screen/HOSTED_EVIDENCE_RESULTS.md)). Leave it off for `qwen3:8b` and `gpt-4.1-mini`, where the same instruction measured worse ([results](../evals/concept_model_screen/EVIDENCE_RESULTS.md)). OpenKOS does not turn it on for a backend or a model, and no other hosted model has been measured. See [`evidence_quote`](#evidence_quote).
+
 Which hosted model extracts best has not been measured, so none is recommended here.
 
 ### `union_judge`
@@ -1265,6 +1269,14 @@ Whether `ingest` runs a dedicated decision pass over a meeting-shaped source. De
 The general extraction pass tends to return a few topic-bundle Decisions on a raw transcript. With the key on, each chunk window of a meeting-shaped source (the whole text when it is short) is also asked one narrow question: which decisions the participants actually reached. An answer is `{subject, value, evidence}`, and it survives only when its evidence is found verbatim in the window that produced it. A surviving item becomes a `Decision` whose title is the value (so two different decisions about the same subject stay two objects), whose description names the subject, and whose body is the value plus the quoted evidence. When the pass yields at least one Decision for a source, those replace the general pass's Decisions for that source; otherwise the general pass's Decisions are kept. A failed pass is reported as an optional-call failure and never aborts the ingest.
 
 It costs one extra model call per window (a window whose reply is unusable is asked once more) and applies to the union extractor only (`union_judge`). Off restores the previous path byte-for-byte. Absent or explicitly null falls back to the default; a non-boolean value is refused when the config is read, on the same strict boolean check `union_judge` uses.
+
+### `evidence_quote`
+
+Whether concept extraction asks the model to copy one supporting line of the source into an optional `evidence` field for every object. Default `false`, **opt-in**. The engine accepts the quote as the object's evidence only when it occurs verbatim in the source (casefolded, whitespace collapsed, at least four words), so a faithful paraphrase that quotes its source is no longer named by the `objects-without-evidence` notice. The quote is never stored.
+
+The measurement splits by model, which is why it is off by default and is not switched on by choosing `openai-compatible` (that backend also serves local models). A pre-registered A/B on `qwen3:8b` and `gpt-4.1-mini` found the instruction worse ([`EVIDENCE_RESULTS.md`](../evals/concept_model_screen/EVIDENCE_RESULTS.md)); a second one on `anthropic-claude-haiku-5-5` and `openai-gpt-6-luna` supported it ([`HOSTED_EVIDENCE_RESULTS.md`](../evals/concept_model_screen/HOSTED_EVIDENCE_RESULTS.md)). Enable it for those two models; treat any other model as unmeasured.
+
+It adds one instruction paragraph and one reply field to the concept extraction prompt and makes no extra model call. The re-ask, the decision pass and the participant capture are unaffected. Off sends the shipped prompt byte for byte. Absent or explicitly null falls back to the default; a non-boolean value is refused when the config is read, on the same strict boolean check `union_judge` uses.
 
 ### `concurrent_extraction`
 
