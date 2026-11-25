@@ -7,4 +7,4 @@ Refs #1768. Strict TDD is ON, runner `uv run pytest`.
 - [x] 3. [IMPL] `evidence_quote` module, `_build_messages` and extractor threading, config key, ingest.
 - [x] 4. [TEST] Mutation check on the default.
 - [x] 5. [DOC] `docs/cli.md`, template, hosted providers how-to, CHANGELOG.
-- [ ] 6. [GATE] ruff check, ruff format --check, mypy ., pytest --cov, evals self-tests.
+- [x] 6. [GATE] ruff check, ruff format --check, mypy ., pytest --cov, evals self-tests (PR #1794 CI 10/10 green).
