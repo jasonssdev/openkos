@@ -1234,7 +1234,7 @@ embedding_model: bge-m3
 
 **Evidence quotes.** Set `evidence_quote: true` for `anthropic-claude-haiku-5-5` and `openai-gpt-6-luna`. Both flagged many of their objects as `objects-without-evidence` because they paraphrase; asking each object for a verbatim line cut that sharply on both without moving the guardrails ([results](../evals/concept_model_screen/HOSTED_EVIDENCE_RESULTS.md)). Leave it off for `qwen3:8b` and `gpt-4.1-mini`, where the same instruction measured worse ([results](../evals/concept_model_screen/EVIDENCE_RESULTS.md)). OpenKOS does not turn it on for a backend or a model, and no other hosted model has been measured. See [`evidence_quote`](#evidence_quote).
 
-Which hosted model extracts best has not been measured, so none is recommended here.
+**Which hosted model to choose.** On the development meetings of the concept screen, `openai-gpt-6-luna` with `evidence_quote: true` is the only hosted configuration measured to cover more of the human reference summaries than the local default `qwen3:8b`, with no measured loss of precision and no more near-duplicates ([results](../evals/concept_model_screen/RECALL_RESULTS.md)). `openai-gpt-5-mini` and `anthropic-claude-haiku-5-5` covered more as well, but their precision intervals were too wide to clear the guardrail, so they are not recommended. Expect a hosted model to write about twice as many concepts per source as `qwen3:8b`; that volume is the point, not a defect, and the screen found it was not duplication. The local default does not change.
 
 ### `union_judge`
 
