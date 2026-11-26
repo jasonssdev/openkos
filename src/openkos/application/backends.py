@@ -44,6 +44,7 @@ from openkos.llm.base import (
     BackendDiagnostics,
     Embedder,
     LLMBackend,
+    UsageSink,
     classify_backend_host,
 )
 
@@ -244,6 +245,7 @@ def chat_client(
     factories: BackendFactories,
     task: str | None = None,
     environ: Mapping[str, str] = os.environ,
+    usage_sink: UsageSink | None = None,
 ) -> LLMBackend:
     """Build the CHAT client for a workspace, honoring its `chat_timeout`.
 
@@ -310,8 +312,15 @@ def chat_client(
     this backend existed. An API key is read from `environ` and passed
     ONLY to the `openai_compatible` factory call (task 9.17) -- the Ollama
     factory's kwargs never carry one.
+
+    `usage_sink` (#1807) is handed to whichever client is built so the caller
+    can total the tokens its responses report. It is forwarded ONLY when
+    given, so every other verb builds a client with the kwargs it always had.
     """
     endpoint = resolve_endpoint(cfg, purpose="chat", environ=environ)
+    sink_kwargs: dict[str, Any] = {}
+    if usage_sink is not None:
+        sink_kwargs["usage_sink"] = usage_sink
     if cfg.backend == BACKEND_OPENAI_COMPATIBLE:
         return cast(
             LLMBackend,
@@ -325,6 +334,7 @@ def chat_client(
                 reasoning_effort=cfg.reasoning_effort,
                 base_url=endpoint.url,
                 api_key=_read_api_key(environ),
+                **sink_kwargs,
             ),
         )
     host_kwargs: dict[str, Any] = {}
@@ -339,6 +349,7 @@ def chat_client(
             temperature=cfg.temperature,
             seed=cfg.seed,
             **host_kwargs,
+            **sink_kwargs,
         ),
     )
 
