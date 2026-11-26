@@ -1049,6 +1049,8 @@ context_window: 12288     # tokens the model holds at once (prompt + reply); siz
                           # Reduces run-to-run variance -- not a determinism guarantee
 # seed: 42                # sampling seed forwarded as options.seed; unset means
                           # unseeded. Same caveat as temperature.
+# reasoning_effort: low   # reasoning effort sent to an openai-compatible server;
+                          # unset leaves the provider's default
 # volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
 #   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
 #   volatile: 7d
@@ -1191,6 +1193,16 @@ Pairs with `temperature` to further reduce run-to-run variance — the same cave
 
 Validated as a plain integer when the config is read: a boolean or a fractional value is refused rather than coerced — Ollama treats a seed as an opaque reproducibility token, not a quantity, so `seed: 7.5` is a config error rather than a silently truncated `7`.
 
+### `reasoning_effort`
+
+How much a reasoning model thinks before it answers, sent on every `openai-compatible` chat request as the `reasoning_effort` field. Default unset.
+
+Unset sends a request byte-identical to one made without this key, so the provider applies its own default effort. Set, it reaches every chat request and never an embedding request.
+
+The value is a non-empty lowercase word, such as `none`, `minimal`, `low`, `medium` or `high`. OpenKOS checks only that shape: providers accept different words, so it does not hold a list of them. A provider that refuses the field or the word fails the call with an error naming `reasoning_effort` in `openkos.yaml` to change or unset, and the call is not retried.
+
+It requires `backend: openai-compatible`. With the default `ollama` backend the key is refused when the config is read, because Ollama's native API has no such field. A value that is not a lowercase word (a number, a boolean, an empty string, capitals, a space) is refused the same way. `openkos doctor` shows the configured value on its reachability line for an `openai-compatible` workspace.
+
 ### `backend`, `base_url`, `embedding_base_url`
 
 Which LLM backend family this workspace targets, and where to reach it. Default `backend: ollama`; `openai-compatible` is the other accepted value, for a server speaking the OpenAI-compatible HTTP API (llama.cpp, LM Studio, vLLM, LocalAI, and similar). Both are read once by `config.read_config` and shape every chat/embed construction through the same resolver seam (`application/backends.py`) — no command flag or picker selects a backend; you edit `openkos.yaml`.
@@ -1230,7 +1242,7 @@ embedding_model: bge-m3
 - The generation ceiling (`max_generation_tokens`) is sent as `max_completion_tokens`, the field OpenAI's reasoning models require in place of `max_tokens`.
 - Some models accept only their default sampling. Leave `temperature` and `seed` unset for them; if a provider refuses one, the error names the key to remove from `openkos.yaml`.
 - A transient failure (HTTP 429, 500, 502, 503 or 504, or a failed connection) is retried a bounded number of times, honouring an integer `Retry-After`, before the call fails. A timeout is not retried.
-- A reasoning model may spend the generation ceiling thinking before it answers. On one short source, Google's `gemini-3.7-flash` and `gemini-3.8-flash` stopped at the packaged `max_generation_tokens: 8192` and kept the Source only; raising it to 32768 (and `context_window` to fit) let `gemini-3.8-flash` finish, in about 15 minutes. The provider can also refuse with a 503 under load, which is retried and then fails like any transient error.
+- A reasoning model may spend the generation ceiling thinking before it answers. On one short source, Google's `gemini-3.7-flash` and `gemini-3.8-flash` stopped at the packaged `max_generation_tokens: 8192` and kept the Source only; raising it to 32768 (and `context_window` to fit) let `gemini-3.8-flash` finish, in about 15 minutes. [`reasoning_effort`](#reasoning_effort) is the lever for this: a lower effort asks the model to think less. A one-line prompt checked on 2026-11-25 showed OpenAI's endpoint accepting it, with `low` lowering the reasoning tokens spent, Anthropic's endpoint accepting it, and Google's endpoint accepting it for `gemini-3.8-flash`, where `low` removed most of the hidden reasoning (about 290 tokens unset, a few at `low`); that endpoint refused `minimal` for that model with a 400, so the words a model takes differ. These are single-prompt observations: no full ingest was re-run with the key, so whether it keeps a Gemini model under the ceiling on a real source is unmeasured. The provider can also refuse with a 503 under load, which is retried and then fails like any transient error.
 - A model id the provider has retired or does not serve fails with the provider's own error. `doctor` lists the ids the endpoint reports where it exposes them.
 
 **Evidence quotes.** If you use `anthropic-claude-haiku-5-5` or `openai-gpt-6-luna`, set `evidence_quote: true`. Both flagged many of their objects as `objects-without-evidence` because they paraphrase; asking each object for a verbatim line cut that sharply on both without moving the guardrails ([results](../evals/concept_model_screen/HOSTED_EVIDENCE_RESULTS.md)). Leave it off for `qwen3:8b` and `gpt-4.1-mini`, where the same instruction measured worse ([results](../evals/concept_model_screen/EVIDENCE_RESULTS.md)). OpenKOS does not turn it on for a backend or a model, and no other hosted model has been measured. See [`evidence_quote`](#evidence_quote).

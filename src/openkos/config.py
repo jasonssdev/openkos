@@ -512,6 +512,17 @@ supported on `anthropic-claude-haiku-5-5` and `openai-gpt-6-luna`
 on for `openai-compatible` either, since that backend also serves local
 models. Off sends the shipped prompt byte for byte."""
 
+DEFAULT_REASONING_EFFORT: str | None = None
+"""Packaged default for `reasoning_effort` (#1800): send nothing, so the
+provider applies its own default reasoning effort and every `openai-compatible`
+chat request stays byte-identical to one made before this key existed.
+
+The value is a provider-defined word (`none`, `minimal`, `low`, `medium`,
+`high`, ...). Providers disagree on the set, so OpenKOS validates only its
+shape and lets the provider refuse a word it does not take. Only the
+`openai-compatible` backend honours it; `backend: ollama` refuses it at load,
+since Ollama's native API has no such field."""
+
 DEFAULT_QUERY_AWARE_EXCERPTS = True
 """Packaged default for `query_aware_excerpts` (#1647): whether `query`, when a
 retrieved document exceeds its share of the prompt window, keeps the 800-char
@@ -1672,6 +1683,12 @@ class Config:
     absent or explicitly null. Honoured by both extraction entry points; the
     re-ask, decision pass and participant capture are never affected. Added
     LAST and DEFAULTED, like `transcript_decisions`."""
+    reasoning_effort: str | None = DEFAULT_REASONING_EFFORT
+    """The provider-defined reasoning effort sent on every `openai-compatible`
+    chat request (#1800), or `None` -- the default -- to send nothing. An absent
+    key and an explicit null both resolve to `None`. Never set under
+    `backend: ollama`: `parse_config` refuses that combination. Added LAST and
+    DEFAULTED, like `evidence_quote`."""
     selector_judge: bool = DEFAULT_SELECTOR_JUDGE
     """Whether the union extractor runs the selector judge (ADR-0080),
     defaulting to `DEFAULT_SELECTOR_JUDGE` (`False`) when the key is absent or
@@ -1759,6 +1776,7 @@ def parse_config(root: Path, text: str) -> Config:
     query_aware_excerpts = raw.get("query_aware_excerpts")
     transcript_decisions = raw.get("transcript_decisions")
     evidence_quote = raw.get("evidence_quote")
+    reasoning_effort = raw.get("reasoning_effort")
     attach_at_ingest = raw.get("attach_at_ingest")
     backend = raw.get("backend")
     base_url = raw.get("base_url")
@@ -2136,6 +2154,23 @@ def parse_config(root: Path, text: str) -> Config:
             f"{layout.config_path.name}: 'backend' names unrecognized value "
             f"{resolved_backend!r}; supported: {accepted}"
         )
+    if reasoning_effort is not None:
+        if not isinstance(reasoning_effort, str) or not re.fullmatch(
+            r"[a-z]+", reasoning_effort
+        ):
+            raise ValueError(
+                f"{layout.config_path.name}: 'reasoning_effort' must be a "
+                "non-empty lowercase word (for example 'low'), got "
+                f"{reasoning_effort!r}"
+            )
+        if resolved_backend != "openai-compatible":
+            # Ollama's native API has no such field, so the key could never
+            # take effect; fail loudly rather than silently ignore it.
+            raise ValueError(
+                f"{layout.config_path.name}: 'reasoning_effort' requires "
+                "'backend: openai-compatible'; the default 'ollama' backend "
+                "has no such request field -- unset it or change the backend"
+            )
     if resolved_backend == "openai-compatible" and base_url is None:
         # Unlike `ollama`, which has a packaged default endpoint, there is
         # no common default port across OpenAI-compatible servers
@@ -2282,6 +2317,7 @@ def parse_config(root: Path, text: str) -> Config:
         evidence_quote=(
             evidence_quote if evidence_quote is not None else DEFAULT_EVIDENCE_QUOTE
         ),
+        reasoning_effort=reasoning_effort,
     )
 
 

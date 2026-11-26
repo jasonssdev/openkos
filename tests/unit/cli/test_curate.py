@@ -180,6 +180,7 @@ class _FakeConfig:
         self.context_window = context_window
         self.temperature = temperature
         self.seed = seed
+        self.reasoning_effort = config.DEFAULT_REASONING_EFFORT
         self.models = models or {}
         # issue #1057 Phase 9: `resolve_endpoint` (called from the stage
         # loop's `application_backends.chat_client`) reads these three --

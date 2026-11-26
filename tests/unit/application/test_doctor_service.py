@@ -1052,6 +1052,44 @@ def test_doctor_shows_endpoint_and_source_when_not_default(
     assert "base_url" in check.detail
 
 
+def _reachable_detail(layout: config.WorkspaceLayout) -> str:
+    locality = BackendHostLocality(is_local=True, display_host="127.0.0.1:8000")
+    results = doctor_service.run_diagnostics(
+        layout.root,
+        build_client=lambda _cfg, _model: _FakeBackend(
+            tags=[config.DEFAULT_MODEL], locality=locality
+        ),
+        git_available=True,
+        filter_repo_available=True,
+        reset_point_available=lambda: True,
+    )
+    detail = _by_label(results, "OpenAI-compatible server reachable").detail
+    assert detail is not None
+    return detail
+
+
+def test_doctor_shows_the_configured_reasoning_effort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = _openai_compatible_cfg(tmp_path, monkeypatch)
+    real = config.read_config(layout.root)
+    monkeypatch.setattr(
+        config,
+        "read_config",
+        lambda _root: dataclasses.replace(real, reasoning_effort="low"),
+    )
+
+    assert "; reasoning effort: low" in _reachable_detail(layout)
+
+
+def test_doctor_omits_the_reasoning_effort_when_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = _openai_compatible_cfg(tmp_path, monkeypatch)
+
+    assert "reasoning effort" not in _reachable_detail(layout)
+
+
 def test_doctor_names_ollama_host_when_it_wins_precedence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

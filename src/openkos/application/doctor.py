@@ -530,6 +530,8 @@ def run_diagnostics(
         detail = f"{len(installed)} models"
         detail += _endpoint_detail_suffix(client.locality)
         detail += _key_status_suffix()
+        if backend_is_openai_compatible and cfg is not None and cfg.reasoning_effort:
+            detail += f"; reasoning effort: {cfg.reasoning_effort}"
         results.append(
             CheckResult(
                 reachable_label,
