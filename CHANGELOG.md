@@ -17,9 +17,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-26
+
+This release makes a hosted run's cost measurable: `openkos ingest` reports the tokens each source consumed. It also records that MVP 6 is complete by owner decision, without its exit session, and that the desktop app is parked.
+
 ### Added
 
 - `openkos ingest` now prints one `tokens:` line per ingested source (single and batch): the chat calls made and the summed prompt, completion and total tokens the backend reported, so a hosted run's cost can be computed from tokens instead of read off a billing dashboard. `total` is the backend's own total, so a reasoning model's hidden tokens are included; a length-capped or later-discarded response is counted because it is billed; a backend that reports nothing is shown as `not reported`, never as zeros, and partial reporting is named. The line also appears when extraction failed or the review was declined, and is absent when no model was contacted. Tokens only, never money; nothing is written to disk and no request changes (#1807).
+
+### Changed
+
+- The project status in the README, AGENTS.md and the roadmap now reads MVP 6 as complete by owner decision: its pre-registered exit session was withdrawn and never run (#1625), so its exit criteria were not measured. The desktop app stays in the repository and keeps shipping with each release, but is parked.
 
 ## [0.7.2] - 2026-11-25
 
@@ -3755,7 +3763,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/jasonssdev/openkos/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/jasonssdev/openkos/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/jasonssdev/openkos/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jasonssdev/openkos/compare/v0.6.0...v0.7.0
