@@ -9,4 +9,4 @@ Refs #1807. Strict TDD is ON, runner `uv run pytest`.
 - [x] 5. [IMPL] `application/backends.py`, `cli/main.py`.
 - [x] 6. [TEST] Mutation check on the sink wiring, the print path and the format branches.
 - [x] 7. [DOC] `docs/cli.md`, CHANGELOG.
-- [ ] 8. [GATE] ruff check, ruff format --check, mypy ., pytest --cov, evals self-tests.
+- [x] 8. [GATE] ruff check, ruff format --check, mypy ., pytest --cov, evals self-tests.
