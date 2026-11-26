@@ -44,6 +44,13 @@ context_window: 12288  # tokens the model holds at once (prompt + reply);
 # seed: 42                # sampling seed forwarded as options.seed. UNSET by default,
                           # same caveat as temperature: reduces variance, is not a
                           # determinism guarantee.
+# reasoning_effort: low   # how hard a reasoning model thinks, sent as the
+                          # reasoning_effort request field. UNSET by default: the
+                          # provider applies its own default. Only for
+                          # backend: openai-compatible (refused under ollama).
+                          # A lowercase word the provider defines (for example
+                          # minimal, low, medium, high); a provider that does not
+                          # take it refuses the request, naming this key.
 # volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
 #   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
 #   volatile: 7d
