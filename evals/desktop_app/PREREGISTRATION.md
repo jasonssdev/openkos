@@ -1,6 +1,6 @@
 # Pre-registration: MVP 6 exit criteria (The Desktop App)
 
-**Status: Registered; not run.** Written before any app stage starts. The bars below are binding as written, subject only to the amendment rule at the end. The arc is [MVP 6 in the roadmap](../../docs/roadmap.md#mvp-6--the-desktop-app); its record is [#1408](https://github.com/jasonssdev/openkos/issues/1408). There is no harness script: the measurement is one observed session with a person, and this document is its protocol.
+**Status: Registered; will not be run.** Withdrawn by owner decision on 2026-11-26 (#1625 closed as not planned); see Amendments. Written before any app stage started. The bars below are unchanged, and no session was ever held against them. The arc is [MVP 6 in the roadmap](../../docs/roadmap.md#mvp-6--the-desktop-app); its record is [#1408](https://github.com/jasonssdev/openkos/issues/1408). There is no harness script: the measurement is one observed session with a person, and this document is its protocol.
 
 ## Question
 
@@ -117,4 +117,4 @@ This document may be amended only **before the first binding session**. The dry 
 
 ### Amendments
 
-None.
+- **2026-11-26: withdrawn.** The owner declared MVP 6 complete without running this session and closed [#1625](https://github.com/jasonssdev/openkos/issues/1625) as not planned. No dry run or binding session was held, so the amendment rule's window was still open. The bars are not changed; they were never measured, and no result exists for this protocol. A future desktop effort would need a new, dated pre-registration.

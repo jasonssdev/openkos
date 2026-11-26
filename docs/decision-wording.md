@@ -20,7 +20,7 @@ The copy is **English first**. Spanish follows as a translation of this brief, w
 
 Each decision maps onto the curation surface of `openkos.api` ([ADR-0053](adr/0053-curation-decisions-are-a-two-phase-application-surface.md), [ADR-0060](adr/0060-the-stable-python-api-is-a-versioned-facade-with-one-error-root.md), [ADR-0072](adr/0072-contradictions-and-revisions-are-previewed-as-findings-and-applied-as-decisions.md)) and its judging service ([ADR-0059](adr/0059-judging-is-a-quote-bound-application-surface-that-persists-per-chunk-and-never-merges.md)). The engine terms appear here, in code, only so the app stage can find what each wording belongs to; none of them reaches the screen.
 
-Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../evals/desktop_app/PREREGISTRATION.md) checks the ones it reaches: the participant settles one decision and then says, in their own words, what it did, which is compared with the "what it does" line below. Hypotheses that session does not reach stay hypotheses until a later session does.
+Wording marked **(H)** is a hypothesis. The [MVP 6 exit-criteria session](../evals/desktop_app/PREREGISTRATION.md) would have checked the ones it reaches, but it was withdrawn and never run, so no (H) wording has been tested with a participant and every one stays a hypothesis until a session does.
 
 ## Rules
 
