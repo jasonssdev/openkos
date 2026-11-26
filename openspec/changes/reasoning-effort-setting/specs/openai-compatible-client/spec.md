@@ -35,7 +35,9 @@ WHEN the server answers HTTP 400 and the response body mentions
 message names `reasoning_effort` in `openkos.yaml`, says to unset it, and
 includes the server's own text. The call MUST NOT be retried and the message
 MUST NOT contain the API key. This follows the same mapping as `temperature`
-and `seed`.
+and `seed`. A 400 whose body mentions `reasoning` or `thinking` MUST be
+attributed the same way, but only when the client sent the field, because some
+providers name the effect rather than the field.
 
 #### Scenario: A refused reasoning effort names the key
 
@@ -43,3 +45,18 @@ and `seed`.
 - WHEN `chat(messages)` is called
 - THEN `OpenAICompatibleError` is raised naming `reasoning_effort` in
   `openkos.yaml` and saying to unset it, after exactly one attempt
+
+#### Scenario: A provider that names the effect, not the field
+
+- GIVEN a client constructed with `reasoning_effort="minimal"`
+- AND the server answers 400 `[{"error": {"code": 400, "message": "Thinking
+  level MINIMAL is not supported for this model."}}]`
+- WHEN `chat(messages)` is called
+- THEN `OpenAICompatibleError` is raised naming `reasoning_effort` in
+  `openkos.yaml`, after exactly one attempt
+
+#### Scenario: Not attributed when the field was not sent
+
+- GIVEN a client without `reasoning_effort` and the same 400
+- WHEN `chat(messages)` is called
+- THEN the error is the generic mapping and does not name `openkos.yaml`

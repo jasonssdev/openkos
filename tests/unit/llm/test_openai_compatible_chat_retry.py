@@ -390,3 +390,32 @@ def test_refused_reasoning_effort_names_the_config_key_and_is_not_retried() -> N
     assert _KEY not in message
     assert script.calls == 1
     assert sleeps == []
+
+
+_GOOGLE_THINKING_REFUSAL = (
+    b'[{"error": {"code": 400, "message": "Thinking level MINIMAL is not '
+    b'supported for this model.", "status": "INVALID_ARGUMENT"}}]'
+)
+
+
+def test_a_google_shaped_refusal_names_reasoning_effort_when_it_was_sent() -> None:
+    script = _Script(_http_error(400, _GOOGLE_THINKING_REFUSAL))
+    sleeps: list[float] = []
+
+    with pytest.raises(OpenAICompatibleError) as excinfo:
+        _client(script, sleeps, reasoning_effort="minimal").chat(_MESSAGES)
+
+    message = str(excinfo.value)
+    assert "`reasoning_effort` in openkos.yaml" in message
+    assert "Thinking level MINIMAL is not supported" in message
+    assert script.calls == 1
+    assert sleeps == []
+
+
+def test_a_thinking_400_is_not_attributed_when_no_effort_was_sent() -> None:
+    script = _Script(_http_error(400, _GOOGLE_THINKING_REFUSAL))
+
+    with pytest.raises(OpenAICompatibleError) as excinfo:
+        _client(script, []).chat(_MESSAGES)
+
+    assert "openkos.yaml" not in str(excinfo.value)

@@ -814,6 +814,18 @@ class OpenAICompatibleClient:
                         f"model; unset `{key}` there and retry. Server said: "
                         f"{detail}"
                     )
+            if self._reasoning_effort is not None and (
+                "reasoning" in detail_lower or "thinking" in detail_lower
+            ):
+                # Some providers name the effect, not the field (Google:
+                # "Thinking level MINIMAL is not supported for this model").
+                # Attributed only when this client actually sent the field.
+                return OpenAICompatibleError(
+                    f"OpenAI-compatible request failed ({exc.code}): the "
+                    "server refused the `reasoning_effort` in openkos.yaml "
+                    "for this model; change or unset `reasoning_effort` there "
+                    f"and retry. Server said: {detail}"
+                )
         return OpenAICompatibleError(
             f"OpenAI-compatible request failed ({exc.code}): {detail}"
         )
