@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal, NoReturn, TypedDict, TypeVar, cast
+from typing import Any, Final, Literal, NoReturn, TypedDict, TypeVar, cast
 
 import typer
 from rich.console import Console
@@ -272,6 +272,12 @@ def _maybe_warn_insecure_key(cfg: config.Config) -> None:
         typer.echo(f"openkos: {message}", err=True)
 
 
+def _usage_sink_kwargs(usage_sink: UsageSink | None) -> dict[str, Any]:
+    """`{"usage_sink": sink}` when one is given, else nothing, so every chat
+    verb but `ingest` calls the resolver with the keywords it always had."""
+    return {} if usage_sink is None else {"usage_sink": usage_sink}
+
+
 def _chat_client(
     cfg: config.Config,
     *,
@@ -295,12 +301,11 @@ def _chat_client(
     `usage_sink` (#1807) is forwarded only by `ingest`, which totals the
     tokens its responses report; every other caller omits it."""
     _maybe_warn_insecure_key(cfg)
-    if usage_sink is None:
-        return application_backends.chat_client(
-            cfg, factories=_backend_factories(), task=task
-        )
     return application_backends.chat_client(
-        cfg, factories=_backend_factories(), task=task, usage_sink=usage_sink
+        cfg,
+        factories=_backend_factories(),
+        task=task,
+        **_usage_sink_kwargs(usage_sink),
     )
 
 
