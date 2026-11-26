@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- `openkos ingest` now prints one `tokens:` line per ingested source (single and batch): the chat calls made and the summed prompt, completion and total tokens the backend reported, so a hosted run's cost can be computed from tokens instead of read off a billing dashboard. `total` is the backend's own total, so a reasoning model's hidden tokens are included; a length-capped or later-discarded response is counted because it is billed; a backend that reports nothing is shown as `not reported`, never as zeros, and partial reporting is named. The line also appears when extraction failed or the review was declined, and is absent when no model was contacted. Tokens only, never money; nothing is written to disk and no request changes (#1807).
+
 ## [0.7.2] - 2026-11-25
 
 A patch release that makes the opt-in `openai-compatible` backend usable with hosted providers (OpenAI, Anthropic and Google) and documents how. A transient failure is retried, OpenAI's reasoning models get `max_completion_tokens`, the chat key reaches only the endpoints it belongs to, and two new opt-in keys arrive: `reasoning_effort`, which lets a reasoning model think less (it is what lets Gemini finish an `ingest`), and `evidence_quote`, which asks a paraphrasing model for a verbatim supporting line. The README and `docs/cli.md` now describe the hosted path, which models were measured against the local default, and the limits that come from the providers. Nothing changes for a workspace that stays local: the defaults are still Ollama and `qwen3:8b`, and no hosted provider is ever used unless you configure it.
