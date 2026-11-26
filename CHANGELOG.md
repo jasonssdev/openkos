@@ -16,6 +16,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-25
+
+A patch release that makes the opt-in `openai-compatible` backend usable with hosted providers (OpenAI, Anthropic and Google) and documents how. A transient failure is retried, OpenAI's reasoning models get `max_completion_tokens`, the chat key reaches only the endpoints it belongs to, and two new opt-in keys arrive: `reasoning_effort`, which lets a reasoning model think less (it is what lets Gemini finish an `ingest`), and `evidence_quote`, which asks a paraphrasing model for a verbatim supporting line. The README and `docs/cli.md` now describe the hosted path, which models were measured against the local default, and the limits that come from the providers. Nothing changes for a workspace that stays local: the defaults are still Ollama and `qwen3:8b`, and no hosted provider is ever used unless you configure it.
+
 ### Changed
 
 - With `backend: openai-compatible`, `OPENKOS_OPENAI_API_KEY` is now sent to the embedding endpoint only when `embedding_base_url` is unset or has the same origin as `base_url`; a different host used to receive the chat provider's key on every embedding request. A remote embedding provider that needs a key reads it from the new opt-in `OPENKOS_OPENAI_EMBEDDING_API_KEY` environment variable, and without it that endpoint receives none. `doctor`'s `API key destination` line and the remote-key notice now state which endpoint receives which key, including an embedding endpoint that receives none. A workspace without `embedding_base_url` behaves as before (#1765).
@@ -3746,7 +3750,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/jasonssdev/openkos/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/jasonssdev/openkos/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jasonssdev/openkos/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jasonssdev/openkos/compare/v0.5.5...v0.6.0
