@@ -437,3 +437,41 @@ def test_context_window_property_readable() -> None:
     )
 
     assert client.context_window == 8192
+
+
+# --- reasoning_effort: top-level on chat only, None-means-omit (#1800) ------
+
+
+def test_reasoning_effort_is_sent_top_level_when_set() -> None:
+    captured: list[urllib.request.Request] = []
+    client = OpenAICompatibleClient(
+        model="m",
+        base_url="http://127.0.0.1:8080",
+        reasoning_effort="low",
+        urlopen=_fake_urlopen(_ok_body("hi"), captured),
+    )
+
+    client.chat([{"role": "user", "content": "hi"}])
+    client.chat([{"role": "user", "content": "again"}])
+
+    assert [_sent_body(r)["reasoning_effort"] for r in captured] == ["low", "low"]
+
+
+def test_the_request_is_byte_identical_when_reasoning_effort_is_unset() -> None:
+    plain: list[urllib.request.Request] = []
+    unset: list[urllib.request.Request] = []
+    messages: list[Message] = [{"role": "user", "content": "hi"}]
+    OpenAICompatibleClient(
+        model="m",
+        base_url="http://127.0.0.1:8080",
+        urlopen=_fake_urlopen(_ok_body("hi"), plain),
+    ).chat(messages)
+    OpenAICompatibleClient(
+        model="m",
+        base_url="http://127.0.0.1:8080",
+        reasoning_effort=None,
+        urlopen=_fake_urlopen(_ok_body("hi"), unset),
+    ).chat(messages)
+
+    assert plain[0].data == unset[0].data
+    assert b"reasoning_effort" not in plain[0].data  # type: ignore[operator]

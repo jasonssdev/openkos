@@ -322,6 +322,7 @@ def chat_client(
                 context_window=cfg.context_window,
                 temperature=cfg.temperature,
                 seed=cfg.seed,
+                reasoning_effort=cfg.reasoning_effort,
                 base_url=endpoint.url,
                 api_key=_read_api_key(environ),
             ),

@@ -118,9 +118,10 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-# The `openkos.yaml` keys sent as sampling fields; a 400 naming one means the
-# model does not accept it (OpenAI reasoning models, Anthropic's endpoint).
-_SAMPLING_CONFIG_KEYS = ("temperature", "seed")
+# The `openkos.yaml` keys sent as request fields a model may refuse; a 400
+# naming one means the model does not accept it (OpenAI reasoning models,
+# Anthropic's endpoint, a provider with no `reasoning_effort`).
+_SAMPLING_CONFIG_KEYS = ("temperature", "seed", "reasoning_effort")
 
 
 def _redact_location_query(location: str) -> str:
@@ -244,6 +245,7 @@ class OpenAICompatibleClient:
         max_generation_tokens: int | None = None,
         temperature: float | None = None,
         seed: int | None = None,
+        reasoning_effort: str | None = None,
         context_window: int | None = None,
         api_key: str | None = None,
         urlopen: Callable[..., Any] | None = None,
@@ -292,6 +294,7 @@ class OpenAICompatibleClient:
         self._max_generation_tokens = max_generation_tokens
         self._temperature = temperature
         self._seed = seed
+        self._reasoning_effort = reasoning_effort
         self._context_window = context_window
         self._api_key = api_key
         self._urlopen = urlopen or build_backend_opener(
@@ -409,6 +412,9 @@ class OpenAICompatibleClient:
             request_body["temperature"] = self._temperature
         if self._seed is not None:
             request_body["seed"] = self._seed
+        if self._reasoning_effort is not None:
+            # Chat only: `embed()` builds its own body and never carries it.
+            request_body["reasoning_effort"] = self._reasoning_effort
         payload = json.dumps(request_body).encode("utf-8")
         request = self._build_request(url, payload, method="POST")
         try:

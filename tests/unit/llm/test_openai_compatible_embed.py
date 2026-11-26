@@ -149,6 +149,24 @@ def test_embed_never_sends_context_window() -> None:
     assert "context_window" not in sent
 
 
+def test_embed_never_sends_reasoning_effort() -> None:
+    """`reasoning_effort` is a chat-only field (#1800): a client constructed
+    with it still sends an embedding request without it."""
+    captured: list[urllib.request.Request] = []
+    client = OpenAICompatibleClient(
+        model="bge-m3",
+        base_url="http://127.0.0.1:8080",
+        reasoning_effort="low",
+        urlopen=_fake_urlopen(
+            _embed_body([{"embedding": _row(1.0), "index": 0}]), captured
+        ),
+    )
+
+    client.embed(["hello"])
+
+    assert "reasoning_effort" not in _sent_body(captured[0])
+
+
 def test_embed_empty_input_returns_empty_list_without_network_call() -> None:
     """An empty `texts` sequence short-circuits to `[]`, no HTTP call."""
     captured: list[urllib.request.Request] = []
