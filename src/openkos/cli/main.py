@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal, NoReturn, TypedDict, TypeVar, cast
+from typing import Any, Final, Literal, NoReturn, TypedDict, TypeVar, cast
 
 import typer
 from rich.console import Console
@@ -104,6 +104,9 @@ from openkos.llm.base import (
     BackendUnavailable,
     Embedder,
     LLMBackend,
+    UsageSink,
+    UsageSummary,
+    UsageTally,
 )
 from openkos.llm.ollama import (
     BackendHostLocality,
@@ -269,7 +272,18 @@ def _maybe_warn_insecure_key(cfg: config.Config) -> None:
         typer.echo(f"openkos: {message}", err=True)
 
 
-def _chat_client(cfg: config.Config, *, task: str | None = None) -> LLMBackend:
+def _usage_sink_kwargs(usage_sink: UsageSink | None) -> dict[str, Any]:
+    """`{"usage_sink": sink}` when one is given, else nothing, so every chat
+    verb but `ingest` calls the resolver with the keywords it always had."""
+    return {} if usage_sink is None else {"usage_sink": usage_sink}
+
+
+def _chat_client(
+    cfg: config.Config,
+    *,
+    task: str | None = None,
+    usage_sink: UsageSink | None = None,
+) -> LLMBackend:
     """One-line delegator (mcp-read-surface slice 8, design Decision 7; issue
     #1057 Phase 9, design Decision 4): the real definition, and its full
     docstring, now live in `application/backends.py` -- moved there so a
@@ -282,10 +296,16 @@ def _chat_client(cfg: config.Config, *, task: str | None = None) -> LLMBackend:
 
     Also prints the once-per-process insecure-key warning (issue #1057
     Phase 13b) before construction -- the warning is about how the client
-    about to be built will send its key, not about the client itself."""
+    about to be built will send its key, not about the client itself.
+
+    `usage_sink` (#1807) is forwarded only by `ingest`, which totals the
+    tokens its responses report; every other caller omits it."""
     _maybe_warn_insecure_key(cfg)
     return application_backends.chat_client(
-        cfg, factories=_backend_factories(), task=task
+        cfg,
+        factories=_backend_factories(),
+        task=task,
+        **_usage_sink_kwargs(usage_sink),
     )
 
 
@@ -5411,6 +5431,32 @@ def _confirm_ingest(
     return "proceed"
 
 
+def _format_token_usage(summary: UsageSummary) -> str | None:
+    """The one `tokens:` line an `ingest` prints per source (#1807), or `None`
+    when no chat response was received (a converged re-ingest contacts no
+    model). Tokens only, never money: the cost is computed downstream.
+
+    `calls` counts chat responses received, a length-capped one included (it
+    is billed); `total` is the backend's own total, so a reasoning model's
+    hidden tokens are in it though not in `completion`. A call whose response
+    carried no usage is never shown as zeros: all-silent says so, and a
+    partial report names how many calls reported."""
+    if summary.calls == 0:
+        return None
+    noun = "call" if summary.calls == 1 else "calls"
+    if summary.reported_calls == 0:
+        return f"  tokens: not reported by the backend ({summary.calls} {noun})"
+    counted = (
+        f"{summary.calls} {noun}"
+        if summary.reported_calls == summary.calls
+        else f"{summary.reported_calls} of {summary.calls} {noun} reported"
+    )
+    return (
+        f"  tokens: {counted}, prompt {summary.prompt_tokens}, "
+        f"completion {summary.completion_tokens}, total {summary.total_tokens}"
+    )
+
+
 def _ingest_single(
     src: Path,
     *,
@@ -5454,8 +5500,13 @@ def _ingest_single(
             commit_section=section,
         )
 
+    # One tally per source: extraction may fan out over threads against one
+    # client, and every response it receives is billed (#1807).
+    usage = UsageTally()
     ports = ingest_service.IngestPorts(
-        chat_client=lambda cfg: _chat_client(cfg, task="extraction"),
+        chat_client=lambda cfg: _chat_client(
+            cfg, task="extraction", usage_sink=usage.record
+        ),
         autocommit=lambda root, paths, message: _autocommit(root, paths, message),
         after_commit=_after_commit,
         snapshot_read=lambda path: _snapshot_read(path),
@@ -5469,14 +5520,22 @@ def _ingest_single(
         skip_confirmation=auto,
     )
     try:
-        return ingest_service.ingest_source(
-            Path.cwd(),
-            src,
-            policy,
-            ports=ports,
-            observer=_CliIngestObserver(),
-            confirm=_confirm_ingest,
-        )
+        try:
+            return ingest_service.ingest_source(
+                Path.cwd(),
+                src,
+                policy,
+                ports=ports,
+                observer=_CliIngestObserver(),
+                confirm=_confirm_ingest,
+            )
+        finally:
+            # Printed on every way out -- written, source-only, declined or
+            # refused -- because the calls were made, and billed, before any
+            # of those was decided.
+            usage_line = _format_token_usage(usage.snapshot())
+            if usage_line is not None:
+                typer.echo(usage_line)
     except ingest_service.ConfirmationDeclined as exc:
         raise typer.Abort() from exc
     except ingest_service.ConfirmationUnavailable as exc:

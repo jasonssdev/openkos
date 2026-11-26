@@ -44,9 +44,12 @@ from openkos.llm.base import (
     BackendGenerationCapped,
     BackendModelNotFound,
     BackendUnavailable,
+    ChatUsage,
     Message,
     PullEvent,
+    UsageSink,
     build_backend_opener,
+    chat_usage_of,
 )
 from openkos.llm.base import (
     BackendHostLocality as BackendHostLocality,
@@ -231,6 +234,13 @@ def _diagnostics_of(data: Any, content: str) -> ChatDiagnostics:
     )
 
 
+def _usage_of(data: Any) -> ChatUsage:
+    """Fail-open reading of a validated response into `ChatUsage` (#1807)."""
+    if not isinstance(data, dict):
+        return ChatUsage()
+    return chat_usage_of(data.get("prompt_eval_count"), data.get("eval_count"), None)
+
+
 def _normalize_host(host: str) -> str:
     """Prepend `http://` to a bare `host:port` value (D2 risk note)."""
     if host.startswith(("http://", "https://")):
@@ -256,6 +266,7 @@ class OllamaClient:
         embed_retry_backoff_base: float = DEFAULT_EMBED_RETRY_BACKOFF_BASE,
         sleep: Callable[[float], None] = time.sleep,
         diagnostics_sink: Callable[[ChatDiagnostics], None] | None = None,
+        usage_sink: UsageSink | None = None,
     ) -> None:
         """Resolve `host` (arg > `OLLAMA_HOST` env > default) and store config (D2).
 
@@ -300,8 +311,15 @@ class OllamaClient:
         raises, so a capped call is observable too. It is a constructor-
         injected callable rather than instance state because `chat` must
         stay safe under concurrent calls; `None` (the default) changes
-        nothing."""
+        nothing.
+
+        `usage_sink` (#1807) is the same kind of observer for token usage:
+        handed one `ChatUsage` per parsed response (`prompt_eval_count`,
+        `eval_count`, their sum as the total), BEFORE a length cap raises,
+        because a capped reply is generated and costs the same. It never
+        alters the request."""
         self._model = model
+        self._usage_sink = usage_sink
         self._diagnostics_sink = diagnostics_sink
         self._timeout = timeout
         self._max_generation_tokens = max_generation_tokens
@@ -464,6 +482,9 @@ class OllamaClient:
         sink = self._diagnostics_sink
         if sink is not None:
             sink(_diagnostics_of(data, content))
+        usage_sink = self._usage_sink
+        if usage_sink is not None:
+            usage_sink(_usage_of(data))
 
         # `done_reason` is read AFTER the malformed-response guard above, on
         # the already-validated `data` dict, so a response missing it

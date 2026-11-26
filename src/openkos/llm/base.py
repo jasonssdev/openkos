@@ -30,6 +30,7 @@ in `ollama.py` -- that is about how to derive a value from Ollama's own wire
 shapes, not a shared, backend-agnostic value or check.
 """
 
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
@@ -488,6 +489,98 @@ def build_backend_opener(
     if locality.is_local:
         extra.insert(0, urllib.request.ProxyHandler({}))
     return urllib.request.build_opener(*extra).open
+
+
+@dataclass(frozen=True, slots=True)
+class ChatUsage:
+    """The token counters ONE chat response reported (#1807), each `None`
+    when the response did not carry a trustworthy value.
+
+    `total_tokens` is the backend's own total when it reports one (an
+    OpenAI-compatible `usage.total_tokens`, which for a reasoning model
+    includes hidden reasoning that `completion_tokens` leaves out), else the
+    sum of prompt and completion when both are known, else `None`. Tokens
+    only, never money: prices differ per provider and change."""
+
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+
+
+UsageSink = Callable[[ChatUsage], None]
+"""An observer handed one `ChatUsage` per parsed chat response, including a
+length-capped one (billed even though the call then raises)."""
+
+
+def _counter(value: object) -> int | None:
+    """A token counter iff it is a non-negative, non-bool `int`."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def chat_usage_of(prompt: object, completion: object, total: object) -> ChatUsage:
+    """Build a `ChatUsage` from raw response fields, fail-open per field.
+
+    A reported total wins; otherwise the total is prompt plus completion, and
+    only when BOTH are known -- one counter alone is not a total."""
+    prompt_tokens = _counter(prompt)
+    completion_tokens = _counter(completion)
+    total_tokens = _counter(total)
+    if (
+        total_tokens is None
+        and prompt_tokens is not None
+        and completion_tokens is not None
+    ):
+        total_tokens = prompt_tokens + completion_tokens
+    return ChatUsage(prompt_tokens, completion_tokens, total_tokens)
+
+
+@dataclass(frozen=True, slots=True)
+class UsageSummary:
+    """What a `UsageTally` holds: `calls` responses seen, `reported_calls` of
+    them carrying a total, and the sums of whatever each reported."""
+
+    calls: int
+    reported_calls: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class UsageTally:
+    """A thread-safe accumulator of `ChatUsage`, shared by every call a run
+    makes (extraction fans out over threads against one client). Its
+    `record` is the `UsageSink` handed to a client."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._calls = 0
+        self._reported = 0
+        self._prompt = 0
+        self._completion = 0
+        self._total = 0
+
+    def record(self, usage: ChatUsage) -> None:
+        with self._lock:
+            self._calls += 1
+            if usage.total_tokens is not None:
+                self._reported += 1
+                self._total += usage.total_tokens
+            if usage.prompt_tokens is not None:
+                self._prompt += usage.prompt_tokens
+            if usage.completion_tokens is not None:
+                self._completion += usage.completion_tokens
+
+    def snapshot(self) -> UsageSummary:
+        with self._lock:
+            return UsageSummary(
+                self._calls,
+                self._reported,
+                self._prompt,
+                self._completion,
+                self._total,
+            )
 
 
 def measured_counters(
