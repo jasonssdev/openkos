@@ -390,16 +390,17 @@ for the same one-root-cause reason as the embedding-model check.
 #### Scenario: A missing per-task model is reported without failing the run
 
 - GIVEN Ollama is reachable and the packaged judge model `gemma4:26b-a4b`
-  (the default for `adjudication` and `contradiction`) is not installed
+  (the default for `adjudication`, `contradiction` and `sufficiency`) is not
+  installed
 - WHEN `openkos doctor` runs
-- THEN the task-models check prints `[FAIL]`, names the task and its
+- THEN the task-models check prints `[FAIL]`, names the tasks and their
   model, and offers a pull command for that exact tag, and the process
   still exits 0 if every critical check otherwise passes
 
 #### Scenario: Declining a packaged default leaves nothing to check
 
-- GIVEN `models.adjudication` and `models.contradiction` are explicit nulls
-  and no other task resolves a differing model
+- GIVEN `models.adjudication`, `models.contradiction` and `models.sufficiency`
+  are explicit nulls and no other task resolves a differing model
 - WHEN `openkos doctor` runs
 - THEN the task-models check prints `[PASS]`
 
@@ -409,6 +410,7 @@ for the same one-root-cause reason as the embedding-model check.
 - WHEN `openkos doctor` runs
 - THEN the task-models check prints `[SKIP]` with a
   blocked-by-unreachable detail, not `[FAIL]`
+
 ### Requirement: Vector-Extension-Loadable Check
 
 `doctor` MUST report whether the `sqlite-vec` extension is loadable on the
