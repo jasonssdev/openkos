@@ -41,7 +41,9 @@ from openkos.llm.base import (
     BackendUnavailable,
     InstalledModel,
     Message,
+    UsageSink,
     build_backend_opener,
+    chat_usage_of,
     classify_backend_host,
     measured_counters,
 )
@@ -254,6 +256,7 @@ class OpenAICompatibleClient:
         chat_retry_attempts: int = DEFAULT_CHAT_RETRY_ATTEMPTS,
         chat_retry_backoff_base: float = DEFAULT_CHAT_RETRY_BACKOFF_BASE,
         sleep: Callable[[float], None] = time.sleep,
+        usage_sink: UsageSink | None = None,
     ) -> None:
         """Store every constructor argument; no I/O, no environment read.
 
@@ -287,8 +290,18 @@ class OpenAICompatibleClient:
         see its docstring for why the plain default would forward the
         `Authorization` header to whatever host a 3xx `Location` names. A
         loopback host additionally never consults environment proxy
-        settings (issue #1127)."""
+        settings (issue #1127).
+
+        `usage_sink` (#1807) is an opt-in observer handed one `ChatUsage` per
+        parsed chat response -- `usage.prompt_tokens`/`completion_tokens`, and
+        `usage.total_tokens` when present (a reasoning model's hidden tokens
+        are in the total but not in the completion), else their sum -- BEFORE
+        a length cap raises, because a capped reply is billed. A retried
+        attempt that received a response is observed too. It is injected
+        rather than stored per call, so `chat` stays thread-safe, and it
+        never alters the request."""
         self._model = model
+        self._usage_sink = usage_sink
         self._base_url = base_url
         self._timeout = timeout
         self._max_generation_tokens = max_generation_tokens
@@ -477,6 +490,19 @@ class OpenAICompatibleClient:
                 f"{type(content)!r}"
             )
 
+        # Observed BEFORE the length check: a capped reply is billed too.
+        usage = data.get("usage") if isinstance(data, dict) else None
+        usage_fields = usage if isinstance(usage, dict) else {}
+        usage_sink = self._usage_sink
+        if usage_sink is not None:
+            usage_sink(
+                chat_usage_of(
+                    usage_fields.get("prompt_tokens"),
+                    usage_fields.get("completion_tokens"),
+                    usage_fields.get("total_tokens"),
+                )
+            )
+
         # `finish_reason` is read AFTER the malformed-response guard above,
         # on the already-validated `choice` dict, so a response missing it
         # entirely never raises here -- `.get` returns `None`, which simply
@@ -486,12 +512,12 @@ class OpenAICompatibleClient:
             choice.get("finish_reason") if isinstance(choice, dict) else None
         )
         if finish_reason == "length":
-            usage = data.get("usage") if isinstance(data, dict) else None
             counters = (
                 measured_counters(
-                    usage.get("prompt_tokens"), usage.get("completion_tokens")
+                    usage_fields.get("prompt_tokens"),
+                    usage_fields.get("completion_tokens"),
                 )
-                if isinstance(usage, dict)
+                if usage_fields
                 else None
             )
             raise self._generation_capped(counters)
